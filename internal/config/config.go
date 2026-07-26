@@ -16,6 +16,7 @@ import (
 // Config holds the resolved server configuration.
 type Config struct {
 	ConfigVersion   string
+	ConfigFile      string
 	Port            int
 	MetricsPort     int
 	HostKeyPath     string
@@ -448,6 +449,7 @@ func New(opts ...Option) (Config, error) {
 // no error is returned and the config is unchanged.
 func WithConfigFile(path string) Option {
 	return func(cfg *Config) error {
+		cfg.ConfigFile = path
 		data, err := os.ReadFile(path)
 		if err != nil {
 			if os.IsNotExist(err) {

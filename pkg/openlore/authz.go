@@ -367,15 +367,17 @@ func (s *Server) grantsForPath(id Identity, p string) (config.DocsetSpec, []Gran
 	return ds, grants, len(grants) > 0
 }
 
-// allDocsetRoots returns the display roots of every configured docset — the full
-// set of access boundaries used to carve nested docsets out of ancestor grants
-// during read scoping.
-func (s *Server) allDocsetRoots() []string {
+// readBoundaries returns every path that carves its subtree out of an ancestor
+// docset grant. This includes all docsets and the admin-only config directory.
+func (s *Server) readBoundaries() []string {
 	var roots []string
 	for _, ds := range s.auth.Docsets {
 		for _, pm := range ds.Paths {
 			roots = append(roots, displayPath(pm))
 		}
+	}
+	if _, ok := s.merge.mounts["opt"]; ok {
+		roots = append(roots, "/opt/openlore")
 	}
 	return roots
 }
@@ -447,6 +449,15 @@ func (s *Server) readableRoots(id Identity) []string {
 		}
 	}
 	roots = append(roots, s.merge.SystemMountPaths()...)
+	var policy AuthorizationPolicy
+	if id.policySnapshot != nil {
+		policy = *id.policySnapshot
+	} else if current, err := s.currentPolicy(id); err == nil {
+		policy = current
+	}
+	if s.hasCapabilityForPolicy(policy, "admin") {
+		roots = append(roots, "/opt/openlore")
+	}
 	return roots
 }
 

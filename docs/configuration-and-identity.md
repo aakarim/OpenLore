@@ -111,6 +111,13 @@ Docsets grant exact role names:
 Multiple roles contribute grants independently. Any matching docset deny wins.
 Capability allows form a union across roles, while any capability deny wins.
 
+The `admin` capability grants access to administrative commands and exposes the
+active configuration files at `/opt/openlore/lore.json` and
+`/opt/openlore/openlore.yml`. These mounted files are always read-only; use the
+corresponding OpenLore administration commands to modify configuration. The
+`/opt/openlore` directory is hidden from identities without `admin`, and the
+host configuration filenames are excluded from the ordinary lore tree.
+
 ## Docset paths
 
 Each docset exposes one or more virtual paths. A path may directly mount the

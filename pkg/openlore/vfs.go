@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
@@ -622,6 +623,94 @@ func (d *DirFS) ReadFile(p string) ([]byte, error) {
 
 	full := d.resolve(p)
 	return os.ReadFile(full)
+}
+
+// configFilesFS exposes the active host configuration files under the fixed
+// /openlore directory of its mount. It deliberately implements only
+// vfs.FileSystem: configuration remains read-only through the VFS while the
+// dedicated administration commands continue to update the host files.
+type configFilesFS struct {
+	files map[string]string
+}
+
+func newConfigFilesFS(loreFile, serverFile string) *configFilesFS {
+	files := map[string]string{}
+	if loreFile != "" {
+		files["lore.json"] = loreFile
+	}
+	if serverFile != "" {
+		files["openlore.yml"] = serverFile
+	}
+	return &configFilesFS{files: files}
+}
+
+func (c *configFilesFS) Stat(p string) (*vfs.FileInfo, error) {
+	clean := vfs.CleanPath(p)
+	if clean == "/" || clean == "/openlore" {
+		name := "/"
+		if clean == "/openlore" {
+			name = "openlore"
+		}
+		return &vfs.FileInfo{FileName: name, FilePath: clean, Dir: true}, nil
+	}
+	name, hostPath, ok := c.resolve(clean)
+	if !ok {
+		return nil, os.ErrNotExist
+	}
+	info, err := os.Stat(hostPath)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, os.ErrNotExist
+	}
+	return &vfs.FileInfo{
+		FileName:    name,
+		FilePath:    clean,
+		FileSize:    info.Size(),
+		FileModTime: info.ModTime(),
+	}, nil
+}
+
+func (c *configFilesFS) ReadDir(p string) ([]vfs.FileInfo, error) {
+	clean := vfs.CleanPath(p)
+	switch clean {
+	case "/":
+		return []vfs.FileInfo{{FileName: "openlore", FilePath: "/openlore", Dir: true}}, nil
+	case "/openlore":
+		var entries []vfs.FileInfo
+		for name := range c.files {
+			info, err := c.Stat("/openlore/" + name)
+			if err == nil {
+				entries = append(entries, *info)
+			}
+		}
+		sort.Slice(entries, func(i, j int) bool { return entries[i].FileName < entries[j].FileName })
+		return entries, nil
+	default:
+		return nil, os.ErrNotExist
+	}
+}
+
+func (c *configFilesFS) ReadFile(p string) ([]byte, error) {
+	_, hostPath, ok := c.resolve(vfs.CleanPath(p))
+	if !ok {
+		return nil, os.ErrNotExist
+	}
+	return os.ReadFile(hostPath)
+}
+
+func (c *configFilesFS) resolve(p string) (string, string, bool) {
+	const prefix = "/openlore/"
+	if !strings.HasPrefix(p, prefix) {
+		return "", "", false
+	}
+	name := strings.TrimPrefix(p, prefix)
+	if name == "" || strings.Contains(name, "/") {
+		return "", "", false
+	}
+	hostPath, ok := c.files[name]
+	return name, hostPath, ok
 }
 
 // MergeFS merges multiple filesystems under named mount points.
