@@ -2,12 +2,14 @@ package openlore
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 
 	"github.com/aakarim/go-openlore/internal/config"
+	"github.com/aakarim/go-openlore/pkg/shell/cmds"
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
 
@@ -236,5 +238,87 @@ func TestRBACCapabilityDenyAndRuntimeLookup(t *testing.T) {
 	store.policy.Roles = []string{"reader"}
 	if !s.hasCurrentCapability(id, "spawn") {
 		t.Fatal("capability checks must observe current role membership")
+	}
+}
+
+func TestAdminConfigMountIsRestrictedAndReadOnly(t *testing.T) {
+	root := t.TempDir()
+	loreFile := filepath.Join(root, "lore.json")
+	serverFile := filepath.Join(root, "openlore.yml")
+	lore := `{
+  "roles": {
+    "admins": {"allow": {"capabilities": ["admin"]}},
+    "members": {}
+  },
+  "docsets": {
+    "root": {
+      "paths": ["/"],
+      "access": {"allow": {"admins": "ro", "members": "ro"}}
+    }
+  },
+  "identities": [
+    {"name": "alice", "roles": ["admins"]},
+    {"name": "bob", "roles": ["members"]}
+  ]
+}`
+	if err := os.WriteFile(loreFile, []byte(lore), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(serverFile, []byte("version: \"1\"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := NewServer(root, WithConfigFile(serverFile), WithAuthFile(loreFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := func(name string) Identity {
+		return Identity{
+			IdentityName: name,
+			Principal:    AuthenticatedPrincipal{IdentityName: name},
+			Scopes:       []string{ScopeFull},
+		}
+	}
+
+	adminFS := s.buildSessionFS(identity("alice"))
+	for path, want := range map[string]string{
+		"/opt/openlore/lore.json":    lore,
+		"/opt/openlore/openlore.yml": "version: \"1\"\n",
+	} {
+		got, err := adminFS.ReadFile(path)
+		if err != nil || string(got) != want {
+			t.Fatalf("admin ReadFile(%s) = %q, %v", path, got, err)
+		}
+	}
+	if _, err := adminFS.ReadFile("/lore.json"); err == nil {
+		t.Fatal("host lore.json remained accessible through the ordinary lore tree")
+	}
+	if _, err := adminFS.ReadFile("/openlore.yml"); err == nil {
+		t.Fatal("host openlore.yml remained accessible through the ordinary lore tree")
+	}
+
+	nonAdminFS := s.buildSessionFS(identity("bob"))
+	for _, path := range []string{"/opt", "/opt/openlore", "/opt/openlore/lore.json", "/opt/openlore/openlore.yml"} {
+		if _, err := nonAdminFS.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("non-admin Stat(%s) error = %v, want not exist", path, err)
+		}
+	}
+
+	writable := adminFS.(vfs.WritableFS)
+	if _, err := writable.WriteFileAtomic("/opt/openlore/lore.json", []byte("{}"), vfs.WriteOpts{}); !errors.Is(err, vfs.ErrReadOnly) {
+		t.Fatalf("admin config write error = %v, want read-only", err)
+	}
+	if err := os.WriteFile(serverFile, []byte("version: \"2\"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := adminFS.ReadFile("/opt/openlore/openlore.yml"); err != nil || string(got) != "version: \"2\"\n" {
+		t.Fatalf("mounted config did not reflect command-path update: %q, %v", got, err)
+	}
+
+	if !s.buildSessionShell(identity("alice")).ActionAllowed(cmds.ActionAdmin) {
+		t.Fatal("admin capability did not expose administrative commands")
+	}
+	if s.buildSessionShell(identity("bob")).ActionAllowed(cmds.ActionAdmin) {
+		t.Fatal("non-admin identity can invoke administrative commands")
 	}
 }

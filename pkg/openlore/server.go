@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -238,20 +239,30 @@ func newServerWithRoot(rootDir string, rootFS, lowerFS vfs.FileSystem, opts ...c
 		}
 	}
 
+	// Keep the host configuration files out of the ordinary lore tree. Their
+	// canonical VFS location is the admin-only, read-only /opt/openlore mount.
+	servedFiles := cfg.Files
+	servedFiles.Denied = append([]string(nil), cfg.Files.Denied...)
+	for _, configFile := range []string{cfg.AuthFile, cfg.ConfigFile} {
+		if configFile != "" {
+			servedFiles.Denied = append(servedFiles.Denied, filepath.Base(configFile))
+		}
+	}
+
 	// Set up root directory. A caller-supplied rootFS wins (installed before the
 	// writable block so the write log has a live substrate); otherwise serve
 	// rootDir via a DirFS.
 	if rootFS != nil {
 		s.merge.SetRoot(rootFS)
 	} else if rootDir != "" {
-		dirFS := NewDirFS(rootDir, cfg.Files).WithDocsetRoots(docsetRoots)
+		dirFS := NewDirFS(rootDir, servedFiles).WithDocsetRoots(docsetRoots)
 		s.merge.SetRoot(dirFS)
 	} else if cfg.WritableDir != "" {
 		info, err := os.Stat(cfg.WritableDir)
 		if err != nil || !info.IsDir() {
 			return nil, fmt.Errorf("writable_dir %q is not a directory", cfg.WritableDir)
 		}
-		upper := NewDirFS(cfg.WritableDir, cfg.Files).WithDocsetRoots(docsetRoots)
+		upper := NewDirFS(cfg.WritableDir, servedFiles).WithDocsetRoots(docsetRoots)
 		if lowerFS != nil {
 			s.merge.SetRoot(NewOverlayFS(upper, lowerFS))
 		} else {
@@ -259,6 +270,15 @@ func newServerWithRoot(rootDir string, rootFS, lowerFS vfs.FileSystem, opts ...c
 		}
 	} else if lowerFS != nil {
 		s.merge.SetRoot(lowerFS)
+	}
+
+	// Expose the active identity policy and server configuration at the
+	// conventional /opt/openlore path. The mount itself is physically read-only;
+	// admin commands modify the host files through their dedicated code paths.
+	// Session read scoping below makes the mount visible only to identities with
+	// the explicit "admin" capability.
+	if s.authEnforced && (cfg.AuthFile != "" || cfg.ConfigFile != "") {
+		s.merge.Mount("opt", newConfigFilesFS(cfg.AuthFile, cfg.ConfigFile))
 	}
 
 	// Enable the experimental writable substrate when the global lock is open.
@@ -797,7 +817,7 @@ func (s *Server) buildCanonicalSessionFS(id Identity) vfs.FileSystem {
 	// unenforced/trusted mode the session sees the whole merge FS (all mounts).
 	sessionFS := vfs.FileSystem(s.merge)
 	if s.authEnforced {
-		sessionFS = newScopedReadFS(sessionFS, s.readableRoots(id), s.allDocsetRoots())
+		sessionFS = newScopedReadFS(sessionFS, s.readableRoots(id), s.readBoundaries())
 	}
 	// Read (before-read) gate: run the read middleware chain in front of every
 	// Stat/ReadDir/ReadFile so a plugin can (e.g.) refresh the substrate or
@@ -897,21 +917,26 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 	// an unrecognized/guest identity is read-only; a recognized
 	// identity may write and publish within its docsets.
 	if s.authEnforced {
+		allowed := []cmds.Action{}
 		if canWrite {
-			allowed := []cmds.Action{cmds.ActionWrite, cmds.ActionPublish}
+			allowed = append(allowed, cmds.ActionWrite, cmds.ActionPublish)
 			// spawn runs an external command as the OpenLore service
 			// user, so it's gated on an explicit `spawn` capability
 			// (Part D) — never granted to ordinary writers.
 			if s.hasCapabilityForPolicy(*id.policySnapshot, "spawn") {
 				allowed = append(allowed, cmds.ActionSpawn)
 			}
-			sh.SetAllowedActions(allowed)
-		} else {
-			sh.SetAllowedActions(nil) // read-only (ActionRead implied)
 		}
+		if s.hasCapabilityForPolicy(*id.policySnapshot, "admin") {
+			allowed = append(allowed, cmds.ActionAdmin)
+		}
+		sh.SetAllowedActions(allowed)
 		sh.SetActionAuthorizer(func(action cmds.Action) bool {
-			if action == cmds.ActionSpawn {
+			switch action {
+			case cmds.ActionSpawn:
 				return s.hasCurrentCapability(id, "spawn")
+			case cmds.ActionAdmin:
+				return s.hasCurrentCapability(id, "admin")
 			}
 			return true
 		})
