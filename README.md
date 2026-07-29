@@ -23,6 +23,37 @@ you need a live knowledge base, you can add identity-scoped access, controlled
 publishing, atomic writes, validation, and human approval without changing how
 agents read or navigate the content.
 
+## Quick Start
+
+The fastest path is to let your agent set up OpenLore:
+
+```bash
+# Teach your agent how to install, configure, and bundle OpenLore
+ssh openlore.sh teach | your-agent-cli
+
+# Add documentation access instructions to AGENTS.md
+ssh openlore.sh agents >> AGENTS.md
+```
+
+Or install and run it directly:
+
+```bash
+go install github.com/aakarim/go-openlore/cmd/openlore@latest
+
+openlore ./docs
+
+ssh -p 2222 localhost
+ssh -p 2222 localhost "grep -r 'authentication' /docs"
+```
+
+By default this starts:
+
+- SSH on `localhost:2222`
+- the human-facing web view on `http://localhost:8080`
+- MCP over HTTP on `http://localhost:8080/mcp`
+
+See [Installation](#installation) for more ways to install and package OpenLore.
+
 ## Features
 
 - **Agent-native retrieval** — Agents use the shell tools and composition
@@ -72,38 +103,6 @@ agents read or navigate the content.
 - **Validated knowledge catalogs** — Enforce frontmatter and bundle conventions,
   inspect metadata cheaply, and stop malformed knowledge at admission time.
 
-## Quick Start
-
-The fastest path is to let your agent set up OpenLore:
-
-```bash
-# Teach your agent how to install, configure, and bundle OpenLore
-ssh openlore.sh teach | your-agent-cli
-
-# Add documentation access instructions to AGENTS.md
-ssh openlore.sh agents >> AGENTS.md
-```
-
-Or install and run it directly:
-
-```bash
-go install github.com/aakarim/go-openlore/cmd/openlore@latest
-
-openlore ./docs
-
-ssh -p 2222 localhost
-ssh -p 2222 localhost "grep -r 'authentication' /docs"
-```
-
-By default this starts:
-
-- SSH on `localhost:2222`
-- the human-facing web view on `http://localhost:8080`
-- MCP over HTTP on `http://localhost:8080/mcp`
-
-See [Ways to use OpenLore](docs/usage.md) for embedded binaries, MCP stdio,
-MCPB packaging, SSHFS, the GitHub Action, and Go library usage.
-
 ## How It Works
 
 OpenLore is built on [Wish](https://github.com/charmbracelet/wish) for SSH
@@ -140,6 +139,48 @@ produce reviewable changesets under `/requests` instead of committing directly.
 
 See [Writing and publishing](docs/writing.md) for user-facing setup and
 [Write system internals](docs/write-system.md) for the implementation model.
+
+## Installation
+
+### Install with Go
+
+Requires Go 1.26 or later:
+
+```bash
+go install github.com/aakarim/go-openlore/cmd/openlore@latest
+```
+
+### Build from source
+
+```bash
+git clone https://github.com/aakarim/go-openlore.git
+cd go-openlore
+go build -o openlore ./cmd/openlore
+```
+
+### Embed docs in a binary
+
+Place documentation in `assets/lore/` and build. The resulting binary contains
+the docs and serves them read-only at `/docs` when run with no directory
+argument:
+
+```bash
+go build -o my-docs ./cmd/openlore
+```
+
+### Build with the GitHub Action
+
+Produce cross-platform binaries with your docs embedded:
+
+```yaml
+- uses: aakarim/openlore@v1
+  with:
+    docs-dir: ./docs
+    config: ./openlore.yml
+```
+
+See [Ways to use OpenLore](docs/usage.md) for MCP stdio, MCPB desktop
+packaging, SSHFS, and Go library usage.
 
 ## Documentation
 
