@@ -23,6 +23,18 @@ you need a live knowledge base, you can add identity-scoped access, controlled
 publishing, atomic writes, validation, and human approval without changing how
 agents read or navigate the content.
 
+### Store and retrieve Markdown
+
+Put documentation, runbooks, project context, or agent-authored notes in
+ordinary Markdown files. There is no ingestion pipeline: point OpenLore at a
+directory and it serves the existing hierarchy directly. Organize documents
+with folders, connect them with standard Markdown links, and group them into
+docsets when different people or agents need different access. OpenLore is
+read-only by default; enable writing when you want agents to create and update
+Markdown too.
+
+<video src="assets/demo/v0.3.0/openlore-okf-demo.mp4" controls width="100%"></video>
+
 ## Quick Start
 
 The fastest path is to let your agent set up OpenLore:
