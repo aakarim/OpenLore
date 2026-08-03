@@ -26,13 +26,62 @@ type Actor struct {
 //	defer  → return WriteResult{}, &vfs.PendingChangeError{...}   (park; do NOT call next)
 //	reject → return WriteResult{}, err                            (refuse)
 //
-// Middleware MUST treat op.ChangeSet as immutable — inspect and decide only,
+// Middleware MUST inspect every op.Leaves() entry (a ChangeSet may be
+// a batch) and treat the ChangeSet as immutable — inspect and decide only,
 // never rewrite the proposed bytes or snapshot.
 
 // WriteOp is the input to the admission chain.
 type WriteOp struct {
-	ChangeSet vfs.ChangeSet
+	changeSet vfs.ChangeSet
 	Actor     Actor
+}
+
+// NewWriteOp constructs an immutable admission operation. The changeset is
+// intentionally not exposed: policy middleware must inspect every leaf.
+func NewWriteOp(actor Actor, cs vfs.ChangeSet) WriteOp {
+	return WriteOp{changeSet: cloneWriteChangeSet(cs), Actor: actor}
+}
+
+// Leaves returns every proposed mutation in execution order.
+func (op WriteOp) Leaves() []vfs.Change { return cloneWriteChangeSet(op.changeSet).Leaves() }
+
+// Pending captures the complete operation for durable deferred processing.
+func (op WriteOp) Pending(ref string) *vfs.PendingChangeError {
+	return &vfs.PendingChangeError{ChangeSet: cloneWriteChangeSet(op.changeSet), Ref: ref}
+}
+
+// persistenceChangeSet is restricted to package-owned commit/persistence seams.
+func (op WriteOp) persistenceChangeSet() vfs.ChangeSet { return cloneWriteChangeSet(op.changeSet) }
+
+func cloneWriteChangeSet(cs vfs.ChangeSet) vfs.ChangeSet {
+	cloneLeaf := func(leaf vfs.Change) vfs.Change {
+		out := leaf
+		if leaf.Write != nil {
+			write := *leaf.Write
+			write.Bytes = append([]byte(nil), leaf.Write.Bytes...)
+			out.Write = &write
+		}
+		if leaf.RemoveAll != nil {
+			remove := *leaf.RemoveAll
+			if remove.Opts.Expected != nil {
+				snapshot := *remove.Opts.Expected
+				snapshot.Ops = append([]vfs.TreeOp(nil), snapshot.Ops...)
+				remove.Opts.Expected = &snapshot
+			}
+			out.RemoveAll = &remove
+		}
+		return out
+	}
+	out := cs
+	leaf := cloneLeaf(vfs.Change{Target: cs.Target, Action: cs.Action, Write: cs.Write, RemoveAll: cs.RemoveAll})
+	out.Write, out.RemoveAll = leaf.Write, leaf.RemoveAll
+	if cs.Changes != nil {
+		out.Changes = make([]vfs.Change, len(cs.Changes))
+		for i, change := range cs.Changes {
+			out.Changes[i] = cloneLeaf(change)
+		}
+	}
+	return out
 }
 
 // WriteResult is the outcome of a committed mutation.

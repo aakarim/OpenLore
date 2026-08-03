@@ -562,6 +562,17 @@ func main() {
 				fmt.Fprintf(os.Stderr, "Unknown token command: %s\n", os.Args[2])
 				os.Exit(1)
 			}
+
+		case "inbox":
+			if len(os.Args) < 4 || os.Args[2] != "token" {
+				fmt.Fprintln(os.Stderr, "Usage: openlore inbox token <create|list|revoke>")
+				os.Exit(1)
+			}
+			if err := inboxTokenCommand(os.Args[3:], os.Stdout, os.Stderr, time.Now); err != nil {
+				fmt.Fprintln(os.Stderr, "error:", err)
+				os.Exit(1)
+			}
+			os.Exit(0)
 		}
 	}
 
@@ -738,6 +749,114 @@ func main() {
 		slog.Error("server exited with error", "error", err)
 		os.Exit(1)
 	}
+}
+
+func inboxTokenCommand(args []string, stdout, stderr io.Writer, now func() time.Time) error {
+	if len(args) == 0 {
+		return fmt.Errorf("missing inbox token command")
+	}
+	command := args[0]
+	flags := flag.NewFlagSet("inbox token "+command, flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	configPath := flags.String("config", "./openlore.yml", "path to openlore.yml")
+	var identity, label *string
+	var ttl *time.Duration
+	parseArgs := args[1:]
+	switch command {
+	case "create":
+		identity = flags.String("identity", "", "identity name")
+		label = flags.String("label", "", "credential label")
+		ttl = flags.Duration("ttl", 0, "credential lifetime (zero means no expiry)")
+	case "list":
+	case "revoke":
+		// The documented TOKEN_ID-before-flags form is normalized for flag.FlagSet,
+		// which otherwise stops parsing at the first positional argument.
+		if len(parseArgs) > 0 && !strings.HasPrefix(parseArgs[0], "-") {
+			parseArgs = append(append([]string{}, parseArgs[1:]...), parseArgs[0])
+		}
+	default:
+		return fmt.Errorf("unknown inbox token command: %s", command)
+	}
+	if err := flags.Parse(parseArgs); err != nil {
+		return err
+	}
+	if command != "revoke" && flags.NArg() != 0 {
+		return fmt.Errorf("unexpected argument %q", flags.Arg(0))
+	}
+	cfg, err := config.New(config.WithConfigFile(*configPath))
+	if err != nil {
+		return err
+	}
+	store, err := openlore.NewInboxTokenStore(cfg.DataDir)
+	if err != nil {
+		return err
+	}
+	switch command {
+	case "create":
+		if *identity == "" {
+			return fmt.Errorf("--identity is required")
+		}
+		if cfg.AuthFile == "" {
+			return fmt.Errorf("auth_file is required to validate the inbox token identity")
+		}
+		if *ttl < 0 {
+			return fmt.Errorf("ttl must not be negative")
+		}
+		{
+			auth, err := config.LoadAuthConfig(cfg.AuthFile)
+			if err != nil {
+				return err
+			}
+			found := false
+			for _, id := range auth.Identities {
+				if id.Name == *identity {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return fmt.Errorf("identity %q not found", *identity)
+			}
+		}
+		var expires *time.Time
+		if *ttl > 0 {
+			t := now().UTC().Add(*ttl)
+			expires = &t
+		}
+		t, err := store.Create(*identity, *label, expires)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(stdout, t.Credential())
+		fmt.Fprintf(stderr, "id=%s identity=%s expires=%v\n", t.ID, t.Identity, t.ExpiresAt)
+	case "list":
+		tokens, err := store.List()
+		if err != nil {
+			return err
+		}
+		for _, t := range tokens {
+			fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", t.ID, t.Identity, t.Label, expiryText(t.ExpiresAt))
+		}
+	case "revoke":
+		if flags.NArg() != 1 {
+			return fmt.Errorf("revoke requires TOKEN_ID")
+		}
+		ok, err := store.Delete(flags.Arg(0))
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("token not found")
+		}
+	}
+	return nil
+}
+
+func expiryText(t *time.Time) string {
+	if t == nil {
+		return "never"
+	}
+	return t.Format(time.RFC3339)
 }
 
 func isFlagSet(name string) bool {

@@ -111,6 +111,40 @@ Docsets grant exact role names:
 Multiple roles contribute grants independently. Any matching docset deny wins.
 Capability allows form a union across roles, while any capability deny wins.
 
+## HTTP inbox credentials
+
+Inbox upload credentials are not OAuth tokens. OAuth authenticates the token
+management endpoints (`POST/GET /inbox/tokens`, `DELETE /inbox/tokens/{id}`),
+while a generated `olin_...` bearer or HMAC authenticates
+`POST /inbox/{docset}`. The CLI equivalents are:
+
+```bash
+openlore inbox token create --identity alice --ttl 24h --config openlore.yml
+openlore inbox token list --config openlore.yml
+openlore inbox token revoke TOKEN_ID --config openlore.yml
+```
+
+Creation requires `auth_file`. At upload time the token must still exist, be
+unexpired, and be bound to an exact, currently existing identity; aliases,
+unknown-identity fallback, and deleted identities are rejected. That identity's
+live docset grants are evaluated for every upload.
+
+`inbox.max_upload_size` is the bounded in-memory raw HTTP body/multipart cap,
+and `inbox.allowed_types` independently controls extension/MIME pairs. This
+policy does not widen ordinary shell, MCP, or DirFS content/size policy.
+Multipart parsing retains aggregate file-part copies no larger than the raw
+body and releases the raw body before commit.
+
+HMAC signs the exact raw body as `HMAC-SHA256(secret, "timestamp." + body)`.
+Replay state is process-local, bounded to 1,000 signatures per token with a
+separate 10,000-signature global guard. One full token cannot block another,
+but multi-instance deployments need sticky routing or shared replay protection.
+
+Multipart files form one ordered batch. Commits are in request order with no
+rollback: if a later leaf fails, the HTTP 500 JSON includes `committed_paths`
+for the durable prefix, and post-commit audit receives that exact prefix and
+the actor.
+
 ## Docset paths
 
 Each docset exposes one or more virtual paths. A path may directly mount the

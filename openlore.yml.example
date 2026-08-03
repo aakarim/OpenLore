@@ -160,6 +160,19 @@ host_key_path: .ssh/openlore_ed25519
 #     jwks:
 #       mode: discovery
 
+# ── Inbox HTTP uploads ────────────────────────────────
+# Inbox credentials are separate, revocable webhook secrets. They may only
+# publish to a docset inbox allowed by the credential identity's live grants.
+# `auth_file` is mandatory for CLI credential creation. This bounded in-memory
+# policy is independent and does not permit these types/sizes via shell or MCP.
+inbox:
+  max_upload_size: 10MB
+  allowed_types:
+    - extensions: [".md", ".markdown"]
+      mime: text/markdown
+#     - extensions: [".m4a"]
+#       mime: audio/mp4
+
 # ── Content ───────────────────────────────────────────
 
 # Only serve files matching these glob patterns.

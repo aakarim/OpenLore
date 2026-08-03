@@ -135,6 +135,29 @@ func TestWriteLog_ApplyErrorSkipsPostCommit(t *testing.T) {
 	}
 }
 
+func TestWriteLog_PartialBatchPostsExactCommittedPrefix(t *testing.T) {
+	boom := errors.New("second failed")
+	fs := &wlRecordingFS{errFor: map[string]error{"/second": boom}}
+	seen := make(chan CommitInfo, 1)
+	l := newWriteLog(fs, func(_ context.Context, info CommitInfo) error { seen <- info; return nil }, nil, 1)
+	defer l.Close(context.Background())
+	actor := Actor{ID: "alice"}
+	cs := vfs.ChangeSet{Changes: []vfs.Change{writeCS("/first").Leaves()[0], writeCS("/second").Leaves()[0]}}
+	_, err := l.Submit(context.Background(), actor, cs)
+	var partial *PartialCommitError
+	if !errors.As(err, &partial) || len(partial.Committed.Changes) != 1 || partial.Committed.Changes[0].Target != "/first" {
+		t.Fatalf("partial result=%+v err=%v", partial, err)
+	}
+	select {
+	case info := <-seen:
+		if info.Actor.ID != "alice" || len(info.ChangeSet.Changes) != 1 || info.ChangeSet.Changes[0].Target != "/first" {
+			t.Fatalf("post commit=%+v", info)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("partial prefix post-commit not invoked")
+	}
+}
+
 func TestWriteLog_ApplyErrorPropagates(t *testing.T) {
 	boom := errors.New("cas drift")
 	fs := &wlRecordingFS{errFor: map[string]error{"/x": boom}}

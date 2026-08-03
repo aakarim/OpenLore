@@ -26,11 +26,23 @@ type fakeWritableFS struct {
 	removeErr   error
 }
 
-func (f *fakeWritableFS) SetWriteable() error       { return nil }
-func (f *fakeWritableFS) SetReadonly() error        { return nil }
-func (f *fakeWritableFS) Mkdir(p string) error      { f.mkdirPath = p; return nil }
-func (f *fakeWritableFS) MkdirAll(p string) error   { f.mkdirAllPath = p; return nil }
-func (f *fakeWritableFS) Remove(p string) error     { f.removePath = p; return nil }
+type prefixFailFS struct {
+	fakeWritableFS
+	errFor map[string]error
+}
+
+func (f *prefixFailFS) WriteFileAtomic(name string, data []byte, opts WriteOpts) (string, error) {
+	if err := f.errFor[name]; err != nil {
+		return "", err
+	}
+	return f.fakeWritableFS.WriteFileAtomic(name, data, opts)
+}
+
+func (f *fakeWritableFS) SetWriteable() error     { return nil }
+func (f *fakeWritableFS) SetReadonly() error      { return nil }
+func (f *fakeWritableFS) Mkdir(p string) error    { f.mkdirPath = p; return nil }
+func (f *fakeWritableFS) MkdirAll(p string) error { f.mkdirAllPath = p; return nil }
+func (f *fakeWritableFS) Remove(p string) error   { f.removePath = p; return nil }
 
 func (f *fakeWritableFS) WriteFileAtomic(name string, data []byte, opts WriteOpts) (string, error) {
 	f.wrotePath, f.wroteData, f.wroteOpts = name, data, opts
@@ -54,8 +66,8 @@ func TestCommitChangeSet_WriteCarriesOptsVerbatim(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got != "newhash" {
-		t.Fatalf("newHash = %q, want newhash", got)
+	if got.Hash != "newhash" {
+		t.Fatalf("newHash = %q, want newhash", got.Hash)
 	}
 	if fs.wrotePath != "/wiki/a.md" || string(fs.wroteData) != "hi" {
 		t.Fatalf("wrote (%q,%q)", fs.wrotePath, fs.wroteData)
@@ -65,6 +77,19 @@ func TestCommitChangeSet_WriteCarriesOptsVerbatim(t *testing.T) {
 	}
 	if fs.wroteOpts.IfNoneMatch {
 		t.Fatalf("IfNoneMatch must be false")
+	}
+}
+
+func TestCommitChangeSetReturnsExactCommittedPrefix(t *testing.T) {
+	boom := errors.New("second failed")
+	fs := &prefixFailFS{errFor: map[string]error{"/second": boom}}
+	cs := ChangeSet{Changes: []Change{
+		{Target: "/first", Action: ChangeActionWrite, Write: &WriteChange{Bytes: []byte("1")}},
+		{Target: "/second", Action: ChangeActionWrite, Write: &WriteChange{Bytes: []byte("2")}},
+	}}
+	result, err := CommitChangeSet(fs, cs)
+	if !errors.Is(err, boom) || !result.HasCommitted() || len(result.Committed.Changes) != 1 || result.Committed.Changes[0].Target != "/first" {
+		t.Fatalf("result=%+v err=%v", result, err)
 	}
 }
 
@@ -183,5 +208,21 @@ func TestCommitChangeSet_MissingPayloadErrors(t *testing.T) {
 	}
 	if _, err := CommitChangeSet(fs, ChangeSet{Target: "/a", Action: "bogus"}); err == nil {
 		t.Fatal("want error for unknown action")
+	}
+}
+
+func TestValidateChangeSetBatchRejectsEmptyMixedMalformed(t *testing.T) {
+	valid := Change{Target: "/a", Action: ChangeActionWrite, Write: &WriteChange{Bytes: []byte("a")}}
+	for _, cs := range []ChangeSet{
+		{},
+		{Target: "/batch", Changes: []Change{valid}},
+		{Changes: []Change{{Target: "/a", Action: ChangeActionWrite}}},
+	} {
+		if err := ValidateChangeSet(cs); err == nil {
+			t.Fatalf("accepted invalid changeset: %+v", cs)
+		}
+	}
+	if err := ValidateChangeSet(ChangeSet{Changes: []Change{valid}}); err != nil {
+		t.Fatalf("valid batch: %v", err)
 	}
 }

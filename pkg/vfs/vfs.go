@@ -93,6 +93,12 @@ type WriteOpts struct {
 	// IfNoneMatch, when true, requires the target to not already exist
 	// (create-only). Fails with a conflict if it does.
 	IfNoneMatch bool
+
+	// ContentPolicyValidated is set only by trusted, narrowly scoped ingress
+	// adapters after they enforce their own extension/MIME and request limits.
+	// Substrates bypass their ordinary extension and per-write size policies for
+	// this leaf; admission and precondition checks still apply.
+	ContentPolicyValidated bool
 }
 
 // WritableFS is the read+write filesystem interface. A backend only satisfies

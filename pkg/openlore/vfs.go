@@ -57,6 +57,13 @@ func NewDirFS(root string, files config.FilesConfig) *DirFS {
 	return &DirFS{root: root, files: files}
 }
 
+// WithMaxWriteBytes sets the substrate cap for one atomic write. A zero value
+// retains the 8 MiB default. Configure before sharing the DirFS.
+func (d *DirFS) WithMaxWriteBytes(max int64) *DirFS {
+	d.maxWriteBytes = max
+	return d
+}
+
 // WithDocsetRoots sets the Mkdir boundary to the given logical docset roots — a
 // folder may only be created strictly below one of them — and returns the
 // receiver for chaining. Configure before the DirFS is shared across
@@ -99,13 +106,13 @@ func (d *DirFS) WriteFileAtomic(p string, content []byte, opts vfs.WriteOpts) (s
 	if max == 0 {
 		max = defaultMaxWriteBytes
 	}
-	if int64(len(content)) > max {
+	if !opts.ContentPolicyValidated && int64(len(content)) > max {
 		return "", fmt.Errorf("write rejected: %d bytes exceeds limit of %d", len(content), max)
 	}
 	if isTrashPath(vfs.CleanPath(p)) {
 		return "", fmt.Errorf("access denied: %s", p)
 	}
-	if !isAllowed(path.Base(p), d.files) {
+	if !opts.ContentPolicyValidated && !isAllowed(path.Base(p), d.files) {
 		return "", fmt.Errorf("access denied: %s", p)
 	}
 	if isIgnored(p, d.files) {

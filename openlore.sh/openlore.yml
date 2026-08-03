@@ -60,3 +60,14 @@ tokens:
   audience: https://openlore.sh
   access_ttl: 30m
   refresh_ttl: 720h
+
+# Dedicated HTTP inbox policy. This does not widen shell or MCP writes: inbox
+# uploads are independently authenticated and validated before entering the
+# normal grant-checked write pipeline.
+inbox:
+  max_upload_size: 10MB
+  allowed_types:
+    - extensions: [".md", ".markdown"]
+      mime: text/markdown
+    - extensions: [".m4a"]
+      mime: audio/mp4

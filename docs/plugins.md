@@ -18,6 +18,12 @@ commands continue to own the user-facing shell surface.
 Built-in plugins include `shellexec`, `inbox`, and `okf`. Go consumers register
 additional plugins through `Server.RegisterPlugin`.
 
+Admission middleware receives an immutable `WriteOp`. It **must** use
+`WriteOp.Leaves()` and inspect every leaf; batches are one policy decision and
+the first leaf is not representative. Construct operations with `NewWriteOp`.
+Middleware that defers an operation uses `op.Pending(ref)`, which captures the
+complete immutable batch for persistence and later replay.
+
 ```text
 INFO plugin registered name=shellexec version=1.0.0
 INFO plugin registered name=okf version=0.1.0

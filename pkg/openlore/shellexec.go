@@ -2,6 +2,7 @@ package openlore
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -146,7 +147,7 @@ func (p *shellexecPlugin) WriteMiddleware() []WriteMiddleware {
 		name := fmt.Sprintf("pre_commit[%d]", i)
 		mws = append(mws, func(next WriteHandler) WriteHandler {
 			return func(ctx context.Context, op WriteOp) (WriteResult, error) {
-				if err := p.exec(ctx, name, c, p.writeEnv(op.ChangeSet, op.Actor, "pre_commit"), true); err != nil {
+				if err := p.exec(ctx, name, c, p.writeLeavesEnv(op.Leaves(), op.Actor, "pre_commit"), true); err != nil {
 					return WriteResult{}, err
 				}
 				return next(ctx, op)
@@ -235,9 +236,45 @@ func (p *shellexecPlugin) readEnv(op ReadOp) []string {
 }
 
 func (p *shellexecPlugin) writeEnv(cs vfs.ChangeSet, actor Actor, event string) []string {
-	env := append(p.baseEnv(event, cs.Target, actor), "OPENLORE_ACTION="+string(cs.Action))
-	if cs.Write != nil {
-		env = append(env, "OPENLORE_BYTES="+strconv.Itoa(len(cs.Write.Bytes)))
+	return p.writeLeavesEnv(cs.Leaves(), actor, event)
+}
+
+func (p *shellexecPlugin) writeLeavesEnv(leaves []vfs.Change, actor Actor, event string) []string {
+	if len(leaves) == 0 {
+		return nil
+	}
+	path, action := leaves[0].Target, string(leaves[0].Action)
+	if len(leaves) > 1 {
+		path, action = "", "batch"
+	}
+	env := append(p.baseEnv(event, path, actor), "OPENLORE_ACTION="+action)
+	// OPENLORE_CHANGES_JSON is always present and is the stable, inspectable
+	// leaf list. Batch hooks run once, preserving one admission/log operation.
+	type leafSummary struct {
+		Target string           `json:"target"`
+		Action vfs.ChangeAction `json:"action"`
+		Bytes  int              `json:"bytes"`
+	}
+	summaries := make([]leafSummary, 0, len(leaves))
+	for _, leaf := range leaves {
+		n := 0
+		if leaf.Write != nil {
+			n = len(leaf.Write.Bytes)
+		}
+		summaries = append(summaries, leafSummary{Target: leaf.Target, Action: leaf.Action, Bytes: n})
+	}
+	b, _ := json.Marshal(summaries)
+	env = append(env, "OPENLORE_CHANGES_JSON="+string(b), "OPENLORE_CHANGE_COUNT="+strconv.Itoa(len(leaves)))
+	if len(leaves) == 1 && leaves[0].Write != nil {
+		env = append(env, "OPENLORE_BYTES="+strconv.Itoa(len(leaves[0].Write.Bytes)))
+	} else if len(leaves) > 1 {
+		total := 0
+		for _, change := range leaves {
+			if change.Write != nil {
+				total += len(change.Write.Bytes)
+			}
+		}
+		env = append(env, "OPENLORE_BYTES="+strconv.Itoa(total))
 	}
 	return env
 }

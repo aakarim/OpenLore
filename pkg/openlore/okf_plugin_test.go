@@ -28,7 +28,7 @@ func runOKF(p *okfPlugin, cs vfs.ChangeSet) (reachedTerminal bool, err error) {
 		return WriteResult{Hash: "ok"}, nil
 	}
 	h := mws[0](terminal)
-	_, err = h(context.Background(), WriteOp{ChangeSet: cs})
+	_, err = h(context.Background(), NewWriteOp(Actor{}, cs))
 	return reachedTerminal, err
 }
 
@@ -61,6 +61,17 @@ func TestOKFPlugin_RejectsNonConformantMarkdown(t *testing.T) {
 	}
 	if reached {
 		t.Fatal("terminal handler should not be reached when a write is rejected")
+	}
+}
+
+func TestOKFPlugin_RejectsForbiddenLaterBatchLeaf(t *testing.T) {
+	cs := vfs.ChangeSet{Changes: []vfs.Change{
+		{Target: "/docs/good.md", Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: []byte(validDoc)}},
+		{Target: "/docs/bad.md", Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: []byte(invalidDoc)}},
+	}}
+	reached, err := runOKF(pluginWith(docsWithOKF()), cs)
+	if err == nil || reached {
+		t.Fatalf("later invalid leaf was not rejected: reached=%v err=%v", reached, err)
 	}
 }
 

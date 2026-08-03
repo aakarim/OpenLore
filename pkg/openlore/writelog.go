@@ -19,6 +19,15 @@ type applyResult struct {
 	err  error
 }
 
+// PartialCommitError reports a failed ordered batch whose prefix is durable.
+type PartialCommitError struct {
+	Committed vfs.ChangeSet
+	Err       error
+}
+
+func (e *PartialCommitError) Error() string { return e.Err.Error() }
+func (e *PartialCommitError) Unwrap() error { return e.Err }
+
 // logEntry is one queued mutation plus the buffered channel its submitter blocks
 // on. reply is buffered (cap 1) so the applier never blocks delivering it. actor
 // is the (non-durable) principal that triggered the mutation; it never enters
@@ -90,7 +99,7 @@ func newWriteLog(substrate vfs.WritableFS, postCommit PostCommitHandler, logger 
 func (l *writeLog) run() {
 	defer close(l.done)
 	for e := range l.ch {
-		var h string
+		var committed vfs.CommitResult
 		var err error
 		l.mu.RLock()
 		pre := l.preApply
@@ -99,10 +108,13 @@ func (l *writeLog) run() {
 			err = pre(e.cs)
 		}
 		if err == nil {
-			h, err = vfs.CommitChangeSet(l.substrate, e.cs)
+			committed, err = vfs.CommitChangeSet(l.substrate, e.cs)
 		}
-		e.reply <- applyResult{hash: h, err: err}
-		if err != nil {
+		if err != nil && committed.HasCommitted() {
+			err = &PartialCommitError{Committed: committed.Committed, Err: err}
+		}
+		e.reply <- applyResult{hash: committed.Hash, err: err}
+		if !committed.HasCommitted() {
 			continue
 		}
 		l.mu.RLock()
@@ -111,7 +123,7 @@ func (l *writeLog) run() {
 		if pc == nil {
 			continue
 		}
-		if perr := pc(context.Background(), CommitInfo{ChangeSet: e.cs, Hash: h, Actor: e.actor}); perr != nil {
+		if perr := pc(context.Background(), CommitInfo{ChangeSet: committed.Committed, Hash: committed.Hash, Actor: e.actor}); perr != nil {
 			l.logger.Error("post-commit chain failed; log continues",
 				"target", e.cs.Target, "action", e.cs.Action, "err", perr)
 		}

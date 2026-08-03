@@ -111,16 +111,17 @@ func (p *okfPlugin) WriteMiddleware() []WriteMiddleware {
 	return []WriteMiddleware{
 		func(next WriteHandler) WriteHandler {
 			return func(ctx context.Context, op WriteOp) (WriteResult, error) {
-				cs := op.ChangeSet
-				if cs.Action == vfs.ChangeActionWrite && cs.Write != nil {
-					if oc := p.resolve(cs.Target); oc != nil && matchesOKFPatterns(cs.Target, oc.Patterns) {
-						if err := okf.Validate(cs.Target, cs.Write.Bytes); err != nil {
-							enforce := oc.Enforce == nil || *oc.Enforce
-							if enforce {
-								return WriteResult{}, fmt.Errorf("okf: %s: %w", cs.Target, err)
+				for _, leaf := range op.Leaves() {
+					if leaf.Action == vfs.ChangeActionWrite && leaf.Write != nil {
+						if oc := p.resolve(leaf.Target); oc != nil && matchesOKFPatterns(leaf.Target, oc.Patterns) {
+							if err := okf.Validate(leaf.Target, leaf.Write.Bytes); err != nil {
+								enforce := oc.Enforce == nil || *oc.Enforce
+								if enforce {
+									return WriteResult{}, fmt.Errorf("okf: %s: %w", leaf.Target, err)
+								}
+								p.logger.Warn("okf validation failed (non-enforcing)",
+									"path", leaf.Target, "err", err)
 							}
-							p.logger.Warn("okf validation failed (non-enforcing)",
-								"path", cs.Target, "err", err)
 						}
 					}
 				}

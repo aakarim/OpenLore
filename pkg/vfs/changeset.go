@@ -26,9 +26,9 @@ const (
 	ChangeActionRemoveAll ChangeAction = "remove_all"
 )
 
-// ChangeSet is an immutable, serializable description of one atomic mutation —
-// everything needed to commit it later via the applier, independent of what
-// happens to the target in the meantime.
+// ChangeSet is an immutable, serializable description of either one mutation
+// or an ordered batch of mutations. Batch leaves commit in order without
+// rollback; their aggregate committed hash is empty.
 //
 // It is the single primitive a consumer persists (e.g. while a write awaits
 // human approval) and later replays with CommitChangeSet. It deliberately
@@ -43,6 +43,64 @@ type ChangeSet struct {
 	Action    ChangeAction     `json:"action"`
 	Write     *WriteChange     `json:"write,omitempty"`
 	RemoveAll *RemoveAllChange `json:"remove_all,omitempty"`
+	Changes   []Change         `json:"changes,omitempty"`
+}
+
+// Change is a non-recursive leaf in a batch ChangeSet.
+type Change struct {
+	Target    string           `json:"target"`
+	Action    ChangeAction     `json:"action"`
+	Write     *WriteChange     `json:"write,omitempty"`
+	RemoveAll *RemoveAllChange `json:"remove_all,omitempty"`
+}
+
+// Leaves returns the changes in execution order, presenting a singleton as a
+// one-element slice so authorization and plugin middleware can inspect both
+// forms uniformly. Callers must treat the returned values as immutable.
+func (cs ChangeSet) Leaves() []Change {
+	if len(cs.Changes) != 0 {
+		return cs.Changes
+	}
+	return []Change{{Target: cs.Target, Action: cs.Action, Write: cs.Write, RemoveAll: cs.RemoveAll}}
+}
+
+// ValidateChangeSet rejects empty, mixed, and malformed singleton/batch values.
+func ValidateChangeSet(cs ChangeSet) error {
+	if len(cs.Changes) != 0 {
+		if cs.Target != "" || cs.Action != "" || cs.Write != nil || cs.RemoveAll != nil {
+			return fmt.Errorf("changeset: batch cannot contain singleton fields")
+		}
+		for i, change := range cs.Changes {
+			if err := validateChange(change); err != nil {
+				return fmt.Errorf("changeset leaf %d: %w", i, err)
+			}
+		}
+		return nil
+	}
+	return validateChange(Change{Target: cs.Target, Action: cs.Action, Write: cs.Write, RemoveAll: cs.RemoveAll})
+}
+
+func validateChange(c Change) error {
+	if c.Target == "" {
+		return fmt.Errorf("missing target")
+	}
+	switch c.Action {
+	case ChangeActionWrite:
+		if c.Write == nil || c.RemoveAll != nil {
+			return fmt.Errorf("write requires only write payload")
+		}
+	case ChangeActionRemoveAll:
+		if c.RemoveAll == nil || c.Write != nil {
+			return fmt.Errorf("remove_all requires only remove_all payload")
+		}
+	case ChangeActionMkdir, ChangeActionMkdirAll, ChangeActionRemove:
+		if c.Write != nil || c.RemoveAll != nil {
+			return fmt.Errorf("%s accepts no payload", c.Action)
+		}
+	default:
+		return fmt.Errorf("unknown action %q", c.Action)
+	}
+	return nil
 }
 
 // WriteChange is the write payload of a ChangeSet: the exact proposed bytes plus
@@ -70,34 +128,79 @@ type RemoveAllChange struct {
 // (unconditional / IfMatch / IfNoneMatch); a remove_all replays its whole-tree
 // removal under its RemoveOpts; mkdir / mkdir_all / remove replay their
 // namespace mutation. Compare-and-swap drift fails with *PreconditionError
-// (write) or *TreeStaleError (remove_all) and commits nothing.
+// (write) or *TreeStaleError (remove_all). A batch is ordered and has no
+// rollback: leaves committed before a later failure remain committed.
 //
 // It performs no authorization and captures no approver — the caller is
 // responsible for deciding a ChangeSet may commit before calling this. For a
-// write it returns the hex SHA-256 of the committed bytes; every other action
-// returns an empty hash.
-func CommitChangeSet(fs WritableFS, cs ChangeSet) (newHash string, err error) {
+// singleton write it returns the hex SHA-256 of the committed bytes; every
+// other action and every batch returns an empty hash.
+type CommitResult struct {
+	Hash      string
+	Committed ChangeSet
+}
+
+// HasCommitted reports whether at least one mutation was durably applied.
+func (r CommitResult) HasCommitted() bool {
+	return r.Committed.Target != "" || len(r.Committed.Changes) != 0
+}
+
+func CommitChangeSet(fs WritableFS, cs ChangeSet) (result CommitResult, err error) {
+	if err := ValidateChangeSet(cs); err != nil {
+		return CommitResult{}, err
+	}
+	if len(cs.Changes) > 0 {
+		committed := make([]Change, 0, len(cs.Changes))
+		for _, change := range cs.Changes {
+			leaf := ChangeSet{Target: change.Target, Action: change.Action, Write: change.Write, RemoveAll: change.RemoveAll}
+			if _, err := CommitChangeSet(fs, leaf); err != nil {
+				return CommitResult{Committed: ChangeSet{Changes: committed}}, err
+			}
+			committed = append(committed, change)
+		}
+		return CommitResult{Committed: cs}, nil
+	}
 	switch cs.Action {
 	case ChangeActionWrite:
 		w := cs.Write
 		if w == nil {
-			return "", fmt.Errorf("changeset %s: missing write payload", cs.Target)
+			return CommitResult{}, fmt.Errorf("changeset %s: missing write payload", cs.Target)
 		}
-		return fs.WriteFileAtomic(cs.Target, w.Bytes, w.Opts)
+		h, err := fs.WriteFileAtomic(cs.Target, w.Bytes, w.Opts)
+		if err != nil {
+			return CommitResult{}, err
+		}
+		return CommitResult{Hash: h, Committed: cs}, nil
 	case ChangeActionMkdir:
-		return "", fs.Mkdir(cs.Target)
+		err := fs.Mkdir(cs.Target)
+		if err != nil {
+			return CommitResult{}, err
+		}
+		return CommitResult{Committed: cs}, nil
 	case ChangeActionMkdirAll:
-		return "", fs.MkdirAll(cs.Target)
+		err := fs.MkdirAll(cs.Target)
+		if err != nil {
+			return CommitResult{}, err
+		}
+		return CommitResult{Committed: cs}, nil
 	case ChangeActionRemove:
-		return "", fs.Remove(cs.Target)
+		err := fs.Remove(cs.Target)
+		if err != nil {
+			return CommitResult{}, err
+		}
+		return CommitResult{Committed: cs}, nil
 	case ChangeActionRemoveAll:
 		r := cs.RemoveAll
 		if r == nil {
-			return "", fmt.Errorf("changeset %s: missing remove_all payload", cs.Target)
+			return CommitResult{}, fmt.Errorf("changeset %s: missing remove_all payload", cs.Target)
 		}
-		return "", fs.RemoveAll(cs.Target, r.Opts)
+		err := fs.RemoveAll(cs.Target, r.Opts)
+		if err != nil {
+			return CommitResult{}, err
+		}
+		return CommitResult{Committed: cs}, nil
 	default:
-		return "", fmt.Errorf("changeset %s: unknown action %q", cs.Target, cs.Action)
+		return CommitResult{}, fmt.Errorf("changeset %s: unknown action %q", cs.Target, cs.Action)
 	}
 }
 

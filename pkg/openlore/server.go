@@ -93,6 +93,7 @@ type Server struct {
 	// the applier after a durable commit (feed emit, post_write hooks) in
 	// registration order. Empty in core go-openlore.
 	postCommitMW []PostCommitMiddleware
+	httpRoutes   []HTTPRouteProvider
 
 	// Bearer-token auth for the MCP + HTTP API (docs/mcp-bearer-auth.md).
 	// identityStore is always set (resolves claims → Identity). The rest are
@@ -666,6 +667,29 @@ func (s *Server) CommitChangeSet(ctx context.Context, actor Actor, cs vfs.Change
 	return WriteResult{Hash: h}, err
 }
 
+func (s *Server) AdmitChangeSet(ctx context.Context, id Identity, cs vfs.ChangeSet) (WriteResult, error) {
+	if s.writeLog == nil {
+		return WriteResult{}, vfs.ErrReadOnly
+	}
+	if err := vfs.ValidateChangeSet(cs); err != nil {
+		return WriteResult{}, err
+	}
+	for _, change := range cs.Leaves() {
+		if !s.identityCanWrite(id, change.Action, change.Target) {
+			return WriteResult{}, vfs.ErrReadOnly
+		}
+	}
+	return s.writeChain()(ctx, NewWriteOp(Actor{ID: id.IdentityName}, cs))
+}
+
+type HTTPRouteProvider interface {
+	PrepareHTTPRoutes(*Server) (HTTPRouteRegistrar, error)
+}
+type HTTPRouteRegistrar func(*http.ServeMux)
+type routeExtender struct{ register HTTPRouteRegistrar }
+
+func (e routeExtender) RegisterHTTPHandlers(mux *http.ServeMux) { e.register(mux) }
+
 func (s *Server) canonicalChangeSet(cs vfs.ChangeSet) vfs.ChangeSet {
 	cs.Target = s.canonicalPath(cs.Target)
 	if cs.RemoveAll != nil && cs.RemoveAll.Opts.Expected != nil {
@@ -729,6 +753,9 @@ func (s *Server) registerPlugin(p any) error {
 		info := ip.Info()
 		s.logger.Info("plugin registered", "name", info.Name, "version", info.Version)
 	}
+	if hp, ok := p.(HTTPRouteProvider); ok {
+		s.httpRoutes = append(s.httpRoutes, hp)
+	}
 	return nil
 }
 
@@ -740,7 +767,7 @@ func (s *Server) registerPlugin(p any) error {
 // chain is just the terminal submit.
 func (s *Server) writeChain() WriteHandler {
 	terminal := func(ctx context.Context, op WriteOp) (WriteResult, error) {
-		h, err := s.writeLog.Submit(ctx, op.Actor, op.ChangeSet)
+		h, err := s.writeLog.Submit(ctx, op.Actor, op.persistenceChangeSet())
 		return WriteResult{Hash: h}, err
 	}
 	return chainWrite(terminal, s.writeMW...)
@@ -1179,6 +1206,16 @@ func (s *Server) ListenAndServe() error {
 	if err := s.validateGrants(); err != nil {
 		return err
 	}
+	preparedRoutes := make([]HTTPRouteRegistrar, 0, len(s.httpRoutes))
+	if s.config.HTTPPort > 0 {
+		for _, provider := range s.httpRoutes {
+			register, err := provider.PrepareHTTPRoutes(s)
+			if err != nil {
+				return err
+			}
+			preparedRoutes = append(preparedRoutes, register)
+		}
+	}
 	opts := []ssh.Option{
 		wish.WithAddress(fmt.Sprintf(":%d", s.config.Port)),
 		wish.WithHostKeyPath(s.config.HostKeyPath),
@@ -1356,6 +1393,9 @@ func (s *Server) ListenAndServe() error {
 				s.logger.Info("authorize endpoint mounted", "path", authorizePath, "http_port", s.config.HTTPPort)
 				s.logger.Info("client registration mounted", "path", registrationPath, "http_port", s.config.HTTPPort)
 				s.logger.Info("oauth metadata mounted", "path", protectedResourceMetadataPath, "http_port", s.config.HTTPPort)
+			}
+			for _, register := range preparedRoutes {
+				httpCfg.Extenders = append(httpCfg.Extenders, routeExtender{register: register})
 			}
 
 			if s.passkeys != nil {

@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
+	"mime"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/aakarim/go-openlore/pkg/vfs"
@@ -79,6 +82,7 @@ type Config struct {
 	// alongside passkeys, not in lore.json. When nil, token auth is disabled
 	// and the MCP/HTTP endpoints behave as anonymous callers (Phase 0).
 	Tokens *AuthTokensConfig
+	Inbox  InboxConfig
 
 	// OIDCIssuers are external IdPs whose JWTs may be exchanged for OpenLore
 	// tokens at the token endpoint via the jwt-bearer grant (workload identity
@@ -90,6 +94,74 @@ type Config struct {
 	// Track sources for conflict detection.
 	configFileLoaded   bool
 	embeddedConfigUsed bool
+}
+
+const DefaultInboxMaxUploadSize int64 = 10 * 1024 * 1024
+
+type InboxConfig struct {
+	MaxUploadSize int64
+	AllowedTypes  map[string]string
+}
+type inboxAllowedYAML struct {
+	Extensions []string `yaml:"extensions"`
+	MIME       string   `yaml:"mime"`
+}
+type inboxYAML struct {
+	MaxUploadSize string             `yaml:"max_upload_size"`
+	AllowedTypes  []inboxAllowedYAML `yaml:"allowed_types"`
+}
+
+func parseByteSize(value string) (int64, error) {
+	s := strings.ToUpper(strings.TrimSpace(value))
+	multiplier := int64(1)
+	for suffix, m := range map[string]int64{"KB": 1024, "MB": 1024 * 1024, "GB": 1024 * 1024 * 1024} {
+		if strings.HasSuffix(s, suffix) {
+			multiplier = m
+			s = strings.TrimSpace(strings.TrimSuffix(s, suffix))
+			break
+		}
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil || n <= 0 || n > math.MaxInt64/multiplier {
+		return 0, fmt.Errorf("invalid inbox max_upload_size %q", value)
+	}
+	return n * multiplier, nil
+}
+
+func applyInboxConfig(cfg *Config, in *inboxYAML) error {
+	if in == nil {
+		return nil
+	}
+	if in.MaxUploadSize != "" {
+		n, err := parseByteSize(in.MaxUploadSize)
+		if err != nil {
+			return err
+		}
+		cfg.Inbox.MaxUploadSize = n
+	}
+	if in.AllowedTypes != nil {
+		cfg.Inbox.AllowedTypes = map[string]string{}
+		for _, item := range in.AllowedTypes {
+			mt, _, err := mime.ParseMediaType(item.MIME)
+			if err != nil || mt == "" || mt != strings.ToLower(item.MIME) {
+				return fmt.Errorf("invalid inbox MIME %q", item.MIME)
+			}
+			if len(item.Extensions) == 0 {
+				return fmt.Errorf("inbox allowed type has no extensions")
+			}
+			for _, raw := range item.Extensions {
+				ext := strings.ToLower(strings.TrimSpace(raw))
+				if len(ext) < 2 || ext[0] != '.' || strings.ContainsAny(ext, "/\\\x00") || ext == "." || strings.ContainsAny(ext[1:], ". ") {
+					return fmt.Errorf("unsafe inbox extension %q", raw)
+				}
+				if old, ok := cfg.Inbox.AllowedTypes[ext]; ok {
+					return fmt.Errorf("duplicate/conflicting inbox extension %q (%s, %s)", ext, old, mt)
+				}
+				cfg.Inbox.AllowedTypes[ext] = mt
+			}
+		}
+	}
+	return nil
 }
 
 // ShellexecConfig is the openlore.yml `shellexec:` block: external commands run
@@ -366,6 +438,7 @@ type fileConfig struct {
 	// the MCP + HTTP API), hence configured here rather than in lore.json.
 	Tokens      *AuthTokensConfig `yaml:"tokens"`
 	OIDCIssuers []OIDCIssuer      `yaml:"oidc_issuers"`
+	Inbox       *inboxYAML        `yaml:"inbox"`
 }
 
 type mcpYAML struct {
@@ -413,6 +486,7 @@ func New(opts ...Option) (Config, error) {
 		Readonly:            true,                           // safe default: read-only substrate
 		WriteConflictPolicy: vfs.DefaultWriteConflictPolicy, // "hash": overwrites are compare-and-swap
 		MaxJobs:             8,                              // bound concurrent async spawn jobs
+		Inbox:               InboxConfig{MaxUploadSize: DefaultInboxMaxUploadSize, AllowedTypes: map[string]string{".md": "text/markdown", ".markdown": "text/markdown"}},
 		Files: FilesConfig{
 			Allowed: []string{
 				"*.md", "*.markdown", "*.txt",
@@ -548,6 +622,9 @@ func WithConfigFile(path string) Option {
 		applyMCPConfig(cfg, fc.MCP)
 		applyAPIConfig(cfg, fc.API)
 		applyTokensConfig(cfg, fc.Tokens, fc.OIDCIssuers)
+		if err := applyInboxConfig(cfg, fc.Inbox); err != nil {
+			return err
+		}
 
 		return nil
 	}
@@ -660,6 +737,9 @@ func WithEmbeddedConfig(data []byte, motdFallback string) Option {
 			applyMCPConfig(cfg, fc.MCP)
 			applyAPIConfig(cfg, fc.API)
 			applyTokensConfig(cfg, fc.Tokens, fc.OIDCIssuers)
+			if err := applyInboxConfig(cfg, fc.Inbox); err != nil {
+				return err
+			}
 		}
 
 		// MOTD fallback: only set if nothing else has set it yet

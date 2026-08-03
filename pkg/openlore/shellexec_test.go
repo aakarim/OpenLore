@@ -1,10 +1,13 @@
 package openlore
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -81,7 +84,7 @@ func TestShellexec_PreCommitPassesEnvAndAllows(t *testing.T) {
 	}
 	h := chainWrite(terminal, p.WriteMiddleware()...)
 
-	res, err := h(context.Background(), WriteOp{ChangeSet: writeCSBytes("/w/x", "hello"), Actor: Actor{ID: "agent-1"}})
+	res, err := h(context.Background(), NewWriteOp(Actor{ID: "agent-1"}, writeCSBytes("/w/x", "hello")))
 	if err != nil || res.Hash != "h" {
 		t.Fatalf("res=%+v err=%v", res, err)
 	}
@@ -93,6 +96,30 @@ func TestShellexec_PreCommitPassesEnvAndAllows(t *testing.T) {
 		env["OPENLORE_AGENT"] != "agent-1" || env["OPENLORE_ACTION"] != "write" ||
 		env["OPENLORE_BYTES"] != "5" || env["OPENLORE_DATA_DIR"] != "/data" {
 		t.Fatalf("env = %v", env)
+	}
+}
+
+func TestShellexecBatchChangesJSONOmitsWriteBytes(t *testing.T) {
+	p := &shellexecPlugin{}
+	large := bytes.Repeat([]byte("x"), 1024*1024)
+	cs := vfs.ChangeSet{Changes: []vfs.Change{{Target: "/large", Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: large}}}}
+	env := map[string]string{}
+	for _, entry := range p.writeEnv(cs, Actor{}, "pre_commit") {
+		key, value, _ := strings.Cut(entry, "=")
+		env[key] = value
+	}
+	if len(env["OPENLORE_CHANGES_JSON"]) > 200 || strings.Contains(env["OPENLORE_CHANGES_JSON"], strings.Repeat("x", 100)) {
+		t.Fatalf("changes JSON embeds content: length=%d", len(env["OPENLORE_CHANGES_JSON"]))
+	}
+	var summaries []struct {
+		Target, Action string
+		Bytes          int
+	}
+	if err := json.Unmarshal([]byte(env["OPENLORE_CHANGES_JSON"]), &summaries); err != nil {
+		t.Fatal(err)
+	}
+	if len(summaries) != 1 || summaries[0].Target != "/large" || summaries[0].Action != "write" || summaries[0].Bytes != len(large) || env["OPENLORE_BYTES"] != strconv.Itoa(len(large)) {
+		t.Fatalf("summaries=%+v env=%v", summaries, env)
 	}
 }
 
@@ -109,7 +136,7 @@ func TestShellexec_PreCommitFailOnErrorRejects(t *testing.T) {
 	}
 	h := chainWrite(terminal, p.WriteMiddleware()...)
 
-	if _, err := h(context.Background(), WriteOp{ChangeSet: writeCSBytes("/w", "x")}); err == nil {
+	if _, err := h(context.Background(), NewWriteOp(Actor{}, writeCSBytes("/w", "x"))); err == nil {
 		t.Fatal("want reject error from pre_commit")
 	}
 	if terminalCalled {
@@ -130,7 +157,7 @@ func TestShellexec_PreCommitNonFatalAllows(t *testing.T) {
 	}
 	h := chainWrite(terminal, p.WriteMiddleware()...)
 
-	if _, err := h(context.Background(), WriteOp{ChangeSet: writeCSBytes("/w", "x")}); err != nil {
+	if _, err := h(context.Background(), NewWriteOp(Actor{}, writeCSBytes("/w", "x"))); err != nil {
 		t.Fatalf("non-fatal pre_commit must not abort: %v", err)
 	}
 	if !terminalCalled {
@@ -211,7 +238,7 @@ func TestShellexec_AsyncDoesNotAbort(t *testing.T) {
 	}
 	h := chainWrite(terminal, p.WriteMiddleware()...)
 
-	if _, err := h(context.Background(), WriteOp{ChangeSet: writeCSBytes("/w", "x")}); err != nil {
+	if _, err := h(context.Background(), NewWriteOp(Actor{}, writeCSBytes("/w", "x"))); err != nil {
 		t.Fatalf("async pre_commit must never abort: %v", err)
 	}
 	if !terminalCalled {

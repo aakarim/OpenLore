@@ -36,7 +36,7 @@ func newMiddlewareFS(readView vfs.FileSystem, actor Actor, admit WriteHandler) *
 // hash (empty for non-write actions) or the chain's error. A deferred write
 // surfaces as *vfs.PendingChangeError; a rejected one as the middleware's error.
 func (m *middlewareFS) run(cs vfs.ChangeSet) (string, error) {
-	res, err := m.admit(context.Background(), WriteOp{ChangeSet: cs, Actor: m.actor})
+	res, err := m.admit(context.Background(), NewWriteOp(m.actor, cs))
 	return res.Hash, err
 }
 

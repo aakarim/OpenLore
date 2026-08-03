@@ -151,7 +151,7 @@ func TestAliasFS_CanonicalizesMiddlewarePaths(t *testing.T) {
 
 	var changePath string
 	writeView := newMiddlewareFS(base, Actor{}, func(_ context.Context, op WriteOp) (WriteResult, error) {
-		changePath = op.ChangeSet.Target
+		changePath = op.Leaves()[0].Target
 		return WriteResult{}, nil
 	})
 	writeAlias := newAliasFS(writeView, []pathAlias{{Alias: "/knowledge", Target: "/channel/general"}})
@@ -244,7 +244,7 @@ func TestAliasFS_CanonicalizesRemoveSnapshotWithoutMutatingCaller(t *testing.T) 
 	snapshot := &vfs.TreeSnapshot{Root: "/knowledge/old", Ops: []vfs.TreeOp{{RelPath: ".", Kind: "dir"}}}
 	var got vfs.ChangeSet
 	writeView := newMiddlewareFS(failingReadFS{err: os.ErrNotExist}, Actor{}, func(_ context.Context, op WriteOp) (WriteResult, error) {
-		got = op.ChangeSet
+		got = op.persistenceChangeSet()
 		return WriteResult{}, nil
 	})
 	fsys := newAliasFS(writeView, []pathAlias{{Alias: "/knowledge", Target: "/channel/general"}})

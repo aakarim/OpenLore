@@ -38,6 +38,21 @@ func TestAgentSkillsAdmissionRootFilesAndNestedRoots(t *testing.T) {
 	}
 }
 
+func TestAgentSkillsRejectsForbiddenLaterBatchLeaf(t *testing.T) {
+	p := newAgentSkills(map[string]config.DocsetSpec{
+		"skills": {Paths: []config.PathMapping{{Source: "/skills", Display: "/skills"}}, AgentSkills: true},
+	}, failingReadFS{err: os.ErrNotExist}, nil, slog.Default())
+	cs := vfs.ChangeSet{Changes: []vfs.Change{
+		{Target: "/README.md", Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: []byte("safe")}},
+		{Target: "/skills/bad/SKILL.md", Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: skillBytes("wrong")}},
+	}}
+	reached := false
+	h := p.WriteMiddleware()[0](func(context.Context, WriteOp) (WriteResult, error) { reached = true; return WriteResult{}, nil })
+	if _, err := h(context.Background(), NewWriteOp(Actor{}, cs)); err == nil || reached {
+		t.Fatalf("later invalid leaf was not rejected: reached=%v err=%v", reached, err)
+	}
+}
+
 func TestAgentSkillsAnnotationsAndAuthoritativePreApply(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "skills", "valid"), 0o755); err != nil {

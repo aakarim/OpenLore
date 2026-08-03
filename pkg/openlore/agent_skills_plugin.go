@@ -120,8 +120,11 @@ func (p *agentSkillsPlugin) validateMutation(cs vfs.ChangeSet) error {
 func (p *agentSkillsPlugin) WriteMiddleware() []WriteMiddleware {
 	return []WriteMiddleware{func(next WriteHandler) WriteHandler {
 		return func(ctx context.Context, op WriteOp) (WriteResult, error) {
-			if err := p.validateMutation(op.ChangeSet); err != nil {
-				return WriteResult{}, err
+			for _, leaf := range op.Leaves() {
+				cs := vfs.ChangeSet{Target: leaf.Target, Action: leaf.Action, Write: leaf.Write, RemoveAll: leaf.RemoveAll}
+				if err := p.validateMutation(cs); err != nil {
+					return WriteResult{}, err
+				}
 			}
 			return next(ctx, op)
 		}
