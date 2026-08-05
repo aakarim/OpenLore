@@ -2,6 +2,7 @@ package passkeys
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"html"
 	"mime"
@@ -34,6 +35,10 @@ func (p *Passkeys) LoreBrowserHandler(fsForIdentity func(identity string) vfs.Fi
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if servePWAAsset(w, r, lorePath) {
+			return
+		}
+
 		session, ok := p.sessions.ValidateRequest(r)
 		if !ok {
 			redirect := url.QueryEscape(r.URL.Path)
@@ -114,6 +119,7 @@ func (p *Passkeys) renderFile(w http.ResponseWriter, r *http.Request, lorePath, 
 	var b strings.Builder
 	b.WriteString(`<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">`)
 	b.WriteString(`<meta name="viewport" content="width=device-width, initial-scale=1">`)
+	b.WriteString(pwaHead(lorePath))
 	fmt.Fprintf(&b, "<title>%s — OpenLore</title>", html.EscapeString(name))
 	b.WriteString(`<style>*{box-sizing:border-box}html,body{height:100%;margin:0}body{display:flex;flex-direction:column;background:#0d1117;color:#c9d1d9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}.bar{height:3rem;flex:none;display:flex;align-items:center;gap:.65rem;padding:0 .85rem;border-bottom:1px solid #30363d;background:#161b22}.breadcrumbs{display:flex;align-items:center;gap:.5rem;min-width:0;overflow:hidden;white-space:nowrap;font-size:.9rem}.breadcrumbs a{color:#58a6ff;text-decoration:none}.breadcrumbs a:hover{text-decoration:underline}.breadcrumbs span[aria-current=page]{overflow:hidden;text-overflow:ellipsis;color:#c9d1d9}.separator{color:#6e7681}.close{display:grid;place-items:center;width:2rem;height:2rem;margin-left:auto;flex:none;border-radius:6px;color:#8b949e;text-decoration:none;font-size:1.35rem;line-height:1}.close:hover{background:#30363d;color:#f0f6fc}iframe{width:100%;flex:1;border:0;background:#fff}</style></head><body>`)
 	fmt.Fprintf(&b, `<nav class="bar" aria-label="File navigation"><div class="breadcrumbs">%s</div><a class="close" href="%s" aria-label="Close file and return to folder" title="Close">×</a></nav>`, crumbs.String(), html.EscapeString(parentURL))
@@ -167,12 +173,15 @@ func (p *Passkeys) renderDir(w http.ResponseWriter, fsys vfs.FileSystem, lorePat
 	var b strings.Builder
 	b.WriteString("<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">")
 	b.WriteString("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">")
+	b.WriteString(pwaHead(lorePath))
 	b.WriteString("<title>OpenLore</title><style>")
 	b.WriteString("*{box-sizing:border-box;margin:0;padding:0}body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0d1117;color:#c9d1d9;padding:2rem;max-width:820px;margin:0 auto}")
 	b.WriteString("h1{font-size:1.2rem;margin-bottom:1rem;color:#c9d1d9}a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}")
-	b.WriteString("ul{list-style:none}li{padding:0.35rem 0;border-bottom:1px solid #21262d}.dir{color:#79c0ff}.crumb{color:#8b949e;margin-bottom:1.5rem;font-size:0.9rem}</style></head><body>")
+	b.WriteString("ul{list-style:none}li{padding:0.35rem 0;border-bottom:1px solid #21262d}.dir{color:#79c0ff}.crumb{color:#8b949e;margin-bottom:1.5rem;font-size:0.9rem}.ios-install{display:none;margin:0 0 1.5rem;padding:.85rem 1rem;border:1px solid #30363d;border-radius:8px;background:#161b22;color:#c9d1d9;font-size:.9rem;line-height:1.45}.ios-install strong{display:block;margin-bottom:.2rem;color:#f0f6fc}.share-icon{display:inline-block;color:#58a6ff;font-size:1.15rem;line-height:1;vertical-align:-.08rem}</style></head><body>")
 
 	fmt.Fprintf(&b, "<h1>📜 %s</h1>", html.EscapeString(fsPath))
+	b.WriteString(`<aside class="ios-install" id="ios-install" aria-label="Install OpenLore"><strong>Add OpenLore to your Home Screen</strong>In Safari, tap Share <span class="share-icon" aria-hidden="true">□<span style="position:relative;left:-.72em;top:-.28em">↑</span></span>, then tap <b>Add to Home Screen</b>. OpenLore will then launch in its own app window.</aside>`)
+	b.WriteString(`<script>(()=>{const standalone=window.matchMedia('(display-mode: standalone)').matches||navigator.standalone===true;const ua=navigator.userAgent;const ios=/iPad|iPhone|iPod/.test(ua)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);const safari=/Safari/.test(ua)&&!/CriOS|FxiOS|EdgiOS|OPiOS/.test(ua);if(ios&&safari&&!standalone)document.getElementById('ios-install').style.display='block'})()</script>`)
 
 	if fsPath != "/" {
 		parent := path.Dir(fsPath)
@@ -194,4 +203,48 @@ func (p *Passkeys) renderDir(w http.ResponseWriter, fsys vfs.FileSystem, lorePat
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write([]byte(b.String()))
+}
+
+func pwaHead(lorePath string) string {
+	manifestURL := html.EscapeString(lorePath + "/manifest.webmanifest")
+	iconURL := html.EscapeString(lorePath + "/app-icon.svg")
+	serviceWorkerURL, _ := json.Marshal(lorePath + "/service-worker.js")
+	return fmt.Sprintf(`<link rel="manifest" href="%s"><link rel="apple-touch-icon" href="%s"><meta name="theme-color" content="#0d1117"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="OpenLore"><script>if('serviceWorker'in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register(%s))</script>`, manifestURL, iconURL, serviceWorkerURL)
+}
+
+func servePWAAsset(w http.ResponseWriter, r *http.Request, lorePath string) bool {
+	switch r.URL.Path {
+	case lorePath + "/manifest.webmanifest":
+		w.Header().Set("Content-Type", "application/manifest+json")
+		w.Header().Set("Cache-Control", "public, max-age=3600")
+		json.NewEncoder(w).Encode(map[string]any{
+			"name":             "OpenLore",
+			"short_name":       "OpenLore",
+			"description":      "Browse your OpenLore knowledge filesystem.",
+			"start_url":        lorePath + "/",
+			"scope":            lorePath + "/",
+			"display":          "standalone",
+			"background_color": "#0d1117",
+			"theme_color":      "#0d1117",
+			"icons": []map[string]string{{
+				"src":     lorePath + "/app-icon.svg",
+				"sizes":   "any",
+				"type":    "image/svg+xml",
+				"purpose": "any maskable",
+			}},
+		})
+		return true
+	case lorePath + "/service-worker.js":
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache")
+		fmt.Fprint(w, `self.addEventListener('install',()=>self.skipWaiting());self.addEventListener('activate',event=>event.waitUntil(self.clients.claim()));`)
+		return true
+	case lorePath + "/app-icon.svg":
+		w.Header().Set("Content-Type", "image/svg+xml")
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		fmt.Fprint(w, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="96" fill="#0d1117"/><path d="M145 104h222v304H145z" fill="#f0f6fc"/><path d="M181 164h150M181 218h150M181 272h112M181 326h132" stroke="#0d1117" stroke-width="24" stroke-linecap="round"/><path d="M122 81h222v304" fill="none" stroke="#58a6ff" stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/></svg>`)
+		return true
+	default:
+		return false
+	}
 }

@@ -1,6 +1,8 @@
 package passkeys
 
 import (
+	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -15,6 +17,9 @@ func TestRenderFileIncludesBreadcrumbsIframeAndParentCloseLink(t *testing.T) {
 
 	body := rec.Body.String()
 	for _, want := range []string{
+		`rel="manifest" href="/lore/manifest.webmanifest"`,
+		`apple-mobile-web-app-capable`,
+		`navigator.serviceWorker.register("/lore/service-worker.js")`,
 		`href="/lore/"`,
 		`href="/lore/guides/"`,
 		`aria-current="page">setup.md`,
@@ -25,6 +30,41 @@ func TestRenderFileIncludesBreadcrumbsIframeAndParentCloseLink(t *testing.T) {
 			t.Errorf("file view missing %q", want)
 		}
 	}
+}
+
+func TestLoreBrowserServesPWAAssetsWithoutAuthentication(t *testing.T) {
+	pk := &Passkeys{cfg: Config{LorePath: "/knowledge"}}
+	handler := pk.LoreBrowserHandler(nil)
+
+	t.Run("manifest", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/knowledge/manifest.webmanifest", nil))
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d", rec.Code)
+		}
+		if got := rec.Header().Get("Content-Type"); got != "application/manifest+json" {
+			t.Errorf("Content-Type = %q", got)
+		}
+		var manifest map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &manifest); err != nil {
+			t.Fatalf("manifest JSON: %v", err)
+		}
+		if got := manifest["display"]; got != "standalone" {
+			t.Errorf("display = %q", got)
+		}
+		if got := manifest["start_url"]; got != "/knowledge/" {
+			t.Errorf("start_url = %q", got)
+		}
+	})
+
+	t.Run("service worker", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/knowledge/service-worker.js", nil))
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "clients.claim") {
+			t.Fatalf("service worker response: status=%d body=%q", rec.Code, rec.Body.String())
+		}
+	})
 }
 
 func TestRenderMarkdownFormatsGFMAndDoesNotRenderRawHTML(t *testing.T) {
