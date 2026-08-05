@@ -2,6 +2,7 @@ package openlore
 
 import (
 	"github.com/aakarim/go-openlore/pkg/vfs"
+	"syscall"
 )
 
 // writeAuthorizer decides whether a session may perform a mutation action on a
@@ -72,6 +73,60 @@ func (s *scopedWriteFS) RemoveAll(p string, opts vfs.RemoveOpts) error {
 		return vfs.ErrReadOnly
 	}
 	return s.inner.RemoveAll(p, opts)
+}
+func (s *scopedWriteFS) GetXattr(p, name string) ([]byte, error) {
+	x, ok := s.FileSystem.(vfs.XattrReader)
+	if !ok {
+		return nil, syscall.ENOTSUP
+	}
+	return x.GetXattr(p, name)
+}
+func (s *scopedWriteFS) ListXattrs(p string) ([]string, error) {
+	x, ok := s.FileSystem.(vfs.XattrReader)
+	if !ok {
+		return nil, syscall.ENOTSUP
+	}
+	return x.ListXattrs(p)
+}
+func (s *scopedWriteFS) SetXattr(p, name string, value []byte, flags vfs.XattrFlags) error {
+	if s.inner == nil || !s.authorize(vfs.ChangeActionSetXattr, p) {
+		return syscall.EPERM
+	}
+	x, ok := s.inner.(vfs.XattrWriter)
+	if !ok {
+		return syscall.ENOTSUP
+	}
+	return x.SetXattr(p, name, value, flags)
+}
+func (s *scopedWriteFS) RemoveXattr(p, name string) error {
+	if s.inner == nil || !s.authorize(vfs.ChangeActionRemoveXattr, p) {
+		return syscall.EPERM
+	}
+	x, ok := s.inner.(vfs.XattrWriter)
+	if !ok {
+		return syscall.ENOTSUP
+	}
+	return x.RemoveXattr(p, name)
+}
+func (s *scopedWriteFS) PreserveAndRecreateXattrs(p string, attrs map[string][]byte) error {
+	if s.inner == nil || !s.authorize(vfs.ChangeActionPreserveAndRecreateXattrs, p) {
+		return syscall.EPERM
+	}
+	x, ok := s.inner.(vfs.XattrMaintenance)
+	if !ok {
+		return syscall.ENOTSUP
+	}
+	return x.PreserveAndRecreateXattrs(p, attrs)
+}
+func (s *scopedWriteFS) MigrateXattrs(p string, m vfs.XattrMigration) error {
+	if s.inner == nil || !s.authorize(vfs.ChangeActionMigrateXattrs, p) {
+		return syscall.EPERM
+	}
+	x, ok := s.inner.(vfs.XattrMaintenance)
+	if !ok {
+		return syscall.ENOTSUP
+	}
+	return x.MigrateXattrs(p, m)
 }
 
 // SetWriteable / SetReadonly are no-ops: a session must not be able to toggle

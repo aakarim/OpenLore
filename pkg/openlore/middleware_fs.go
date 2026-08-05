@@ -2,6 +2,7 @@ package openlore
 
 import (
 	"context"
+	"syscall"
 
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
@@ -69,6 +70,37 @@ func (m *middlewareFS) RemoveAll(p string, opts vfs.RemoveOpts) error {
 		Action:    vfs.ChangeActionRemoveAll,
 		RemoveAll: &vfs.RemoveAllChange{Opts: opts},
 	})
+	return err
+}
+
+func (m *middlewareFS) GetXattr(p, name string) ([]byte, error) {
+	x, ok := m.FileSystem.(vfs.XattrReader)
+	if !ok {
+		return nil, syscall.ENOTSUP
+	}
+	return x.GetXattr(p, name)
+}
+func (m *middlewareFS) ListXattrs(p string) ([]string, error) {
+	x, ok := m.FileSystem.(vfs.XattrReader)
+	if !ok {
+		return nil, syscall.ENOTSUP
+	}
+	return x.ListXattrs(p)
+}
+func (m *middlewareFS) SetXattr(p, name string, value []byte, flags vfs.XattrFlags) error {
+	_, err := m.run(vfs.ChangeSet{Target: p, Action: vfs.ChangeActionSetXattr, Xattr: &vfs.XattrChange{Name: name, Value: append([]byte(nil), value...), Flags: flags}})
+	return err
+}
+func (m *middlewareFS) RemoveXattr(p, name string) error {
+	_, err := m.run(vfs.ChangeSet{Target: p, Action: vfs.ChangeActionRemoveXattr, Xattr: &vfs.XattrChange{Name: name}})
+	return err
+}
+func (m *middlewareFS) PreserveAndRecreateXattrs(p string, attrs map[string][]byte) error {
+	_, err := m.run(vfs.ChangeSet{Target: p, Action: vfs.ChangeActionPreserveAndRecreateXattrs, XattrRepair: &vfs.XattrRepairChange{Attributes: attrs}})
+	return err
+}
+func (m *middlewareFS) MigrateXattrs(p string, migration vfs.XattrMigration) error {
+	_, err := m.run(vfs.ChangeSet{Target: p, Action: vfs.ChangeActionMigrateXattrs, XattrMigration: &migration})
 	return err
 }
 

@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"sort"
 	"strings"
+	"syscall"
 
 	"github.com/aakarim/go-openlore/internal/config"
 	"github.com/aakarim/go-openlore/pkg/vfs"
@@ -410,6 +411,14 @@ func (s *Server) identityCanWrite(id Identity, action vfs.ChangeAction, p string
 	if ds.Readonly != nil && *ds.Readonly {
 		return false // per-docset lock can only further restrict
 	}
+	if action == vfs.ChangeActionSetXattr || action == vfs.ChangeActionRemoveXattr || action == vfs.ChangeActionPreserveAndRecreateXattrs {
+		for _, grant := range grants {
+			if grant.Name() == "rw" {
+				return true
+			}
+		}
+		return false
+	}
 	for _, grant := range grants {
 		if grant.CanWrite(ds, action, p) {
 			return true
@@ -519,6 +528,40 @@ func (s *scopedReadFS) RemoveAll(p string, opts vfs.RemoveOpts) error {
 		return vfs.ErrReadOnly
 	}
 	return s.writable.RemoveAll(p, opts)
+}
+func (s *scopedReadFS) GetXattr(p, name string) ([]byte, error) {
+	if !s.within(p) {
+		return nil, syscall.ENOENT
+	}
+	x, ok := s.FileSystem.(vfs.XattrReader)
+	if !ok {
+		return nil, syscall.ENOTSUP
+	}
+	return x.GetXattr(p, name)
+}
+func (s *scopedReadFS) ListXattrs(p string) ([]string, error) {
+	if !s.within(p) {
+		return nil, syscall.ENOENT
+	}
+	x, ok := s.FileSystem.(vfs.XattrReader)
+	if !ok {
+		return nil, syscall.ENOTSUP
+	}
+	return x.ListXattrs(p)
+}
+func (s *scopedReadFS) SetXattr(p, name string, value []byte, flags vfs.XattrFlags) error {
+	x, ok := s.writable.(vfs.XattrWriter)
+	if !ok {
+		return syscall.ENOTSUP
+	}
+	return x.SetXattr(p, name, value, flags)
+}
+func (s *scopedReadFS) RemoveXattr(p, name string) error {
+	x, ok := s.writable.(vfs.XattrWriter)
+	if !ok {
+		return syscall.ENOTSUP
+	}
+	return x.RemoveXattr(p, name)
 }
 
 // within reports whether p is readable: some readable root covers it, and no

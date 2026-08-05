@@ -157,6 +157,7 @@ func (c *frozenContext) WriteConflictPolicy(string) vfs.WriteConflictPolicy {
 	return c.policy
 }
 func (c *frozenContext) Docsets() []DocsetInfo              { return nil }
+func (c *frozenContext) SkillsManagementEnabled() bool      { return false }
 func (c *frozenContext) PublishTargets() []PublishTarget    { return nil }
 func (c *frozenContext) MetaExtenders() []meta.Extender     { return nil }
 func (c *frozenContext) MetaFilters() []meta.Filter         { return nil }

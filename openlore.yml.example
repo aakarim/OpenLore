@@ -9,6 +9,10 @@
 # Config file version. Used for migration between config formats.
 version: "1"
 
+plugins:
+  skills:
+    enabled: false
+
 # Optional disk-backed content root. When the binary includes embedded docs,
 # this directory is overlaid at the same virtual root: its filesystem hierarchy
 # defines paths, while lore.json independently defines docsets and access.

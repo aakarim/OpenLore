@@ -81,8 +81,9 @@ type Config struct {
 	// key, TTLs) — not per-lore access policy — so it lives in openlore.yml
 	// alongside passkeys, not in lore.json. When nil, token auth is disabled
 	// and the MCP/HTTP endpoints behave as anonymous callers (Phase 0).
-	Tokens *AuthTokensConfig
-	Inbox  InboxConfig
+	Tokens  *AuthTokensConfig
+	Inbox   InboxConfig
+	Plugins PluginsConfig
 
 	// OIDCIssuers are external IdPs whose JWTs may be exchanged for OpenLore
 	// tokens at the token endpoint via the jwt-bearer grant (workload identity
@@ -95,6 +96,9 @@ type Config struct {
 	configFileLoaded   bool
 	embeddedConfigUsed bool
 }
+
+type PluginsConfig struct{ Skills SkillsPluginConfig }
+type SkillsPluginConfig struct{ Enabled bool }
 
 const DefaultInboxMaxUploadSize int64 = 10 * 1024 * 1024
 
@@ -293,8 +297,8 @@ type JWKSSpec struct {
 type DocsetSpec struct {
 	Paths  []PathMapping `json:"paths"`
 	Access DocsetAccess  `json:"access,omitempty"`
-	// AgentSkills treats each canonical path as an Agent Skills collection.
-	AgentSkills bool `json:"agent_skills,omitempty"`
+	// AgentSkills is ignored. Collections are selected dynamically by xattr.
+	AgentSkills bool `json:"-"`
 	// Aliases are alternate display roots for the first path. They expose the
 	// same content while the first path remains canonical for home, inbox,
 	// policy, hooks, and changesets.
@@ -439,6 +443,14 @@ type fileConfig struct {
 	Tokens      *AuthTokensConfig `yaml:"tokens"`
 	OIDCIssuers []OIDCIssuer      `yaml:"oidc_issuers"`
 	Inbox       *inboxYAML        `yaml:"inbox"`
+	Plugins     pluginsYAML       `yaml:"plugins"`
+}
+
+type pluginsYAML struct {
+	Skills skillsPluginYAML `yaml:"skills"`
+}
+type skillsPluginYAML struct {
+	Enabled bool `yaml:"enabled"`
 }
 
 type mcpYAML struct {
@@ -618,6 +630,7 @@ func WithConfigFile(path string) Option {
 		if fc.MaxJobs > 0 {
 			cfg.MaxJobs = fc.MaxJobs
 		}
+		cfg.Plugins.Skills.Enabled = fc.Plugins.Skills.Enabled
 		applyPasskeysConfig(cfg, fc.Passkeys)
 		applyMCPConfig(cfg, fc.MCP)
 		applyAPIConfig(cfg, fc.API)
@@ -723,6 +736,7 @@ func WithEmbeddedConfig(data []byte, motdFallback string) Option {
 			if fc.Readonly != nil {
 				cfg.Readonly = *fc.Readonly
 			}
+			cfg.Plugins.Skills.Enabled = fc.Plugins.Skills.Enabled
 			if fc.WriteConflictPolicy != "" {
 				p, err := vfs.ParseWriteConflictPolicy(fc.WriteConflictPolicy)
 				if err != nil {

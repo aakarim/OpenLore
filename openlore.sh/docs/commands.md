@@ -33,3 +33,35 @@
 - Loops: `for x in a b c; do echo $x; done`
 - Variables: `FOO=bar; echo $FOO`
 - Command substitution: `echo $(wc -l file.md)`
+## Skills collections
+
+With `plugins.skills.enabled: true`, directories can be managed as recursive
+Agent Skills collections:
+
+```text
+skills status [folder]
+skills enable [folder]
+skills disable [folder]
+skills validate [scope]
+skills enable --recreate-xattrs [folder]
+skills disable --recreate-xattrs [folder]
+```
+
+Folders and scopes default to the current directory. Management commands emit
+NDJSON; bare `skills` retains the human-readable installed-command listing.
+Enabling validates every descendant `SKILL.md` before atomically queuing the
+zero-length `user.lore.plugins.openlore.skills.v1` directory marker. Collection
+inheritance stops at nested docset boundaries. Enabling and disabling require
+the named `rw` grant; status and validation require read access.
+
+`.lore` is reserved and hidden through OpenLore. It contains portable folder
+metadata and travels with host-level copies, Git, Syncthing, archives, and
+backups; do not edit it directly. Deleting metadata outside OpenLore cannot be
+distinguished from metadata that never existed, so retain repository or backup
+history. `--recreate-xattrs` is an explicit corruption-recovery operation: it
+preserves the unreadable bytes as `self.conflicted.<sha256>`, then recreates only
+the requested Skills marker state. It cannot recover unrelated attributes.
+
+OpenLore's xattr errors follow a normalized Linux-shaped contract, but the
+metadata is synthetic canonical CBOR rather than native host xattrs. Backend
+support is detected by attempting the operation, never from the kernel version.

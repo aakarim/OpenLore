@@ -1,6 +1,9 @@
 package vfs
 
-import "fmt"
+import (
+	"fmt"
+	"syscall"
+)
 
 // ChangeAction discriminates the kind of mutation a ChangeSet describes. Every
 // mutating WritableFS method has a corresponding action, so every namespace
@@ -23,7 +26,11 @@ const (
 	// ChangeActionRemove removes a single file or empty directory (Remove).
 	ChangeActionRemove ChangeAction = "remove"
 	// ChangeActionRemoveAll is an atomic whole-tree removal (RemoveAll).
-	ChangeActionRemoveAll ChangeAction = "remove_all"
+	ChangeActionRemoveAll                 ChangeAction = "remove_all"
+	ChangeActionSetXattr                  ChangeAction = "set_xattr"
+	ChangeActionRemoveXattr               ChangeAction = "remove_xattr"
+	ChangeActionPreserveAndRecreateXattrs ChangeAction = "preserve_and_recreate_xattrs"
+	ChangeActionMigrateXattrs             ChangeAction = "migrate_xattrs"
 )
 
 // ChangeSet is an immutable, serializable description of either one mutation
@@ -39,19 +46,25 @@ const (
 // precondition contract; a remove_all carries the delete precondition. mkdir /
 // mkdir_all / remove need only Target.
 type ChangeSet struct {
-	Target    string           `json:"target"`
-	Action    ChangeAction     `json:"action"`
-	Write     *WriteChange     `json:"write,omitempty"`
-	RemoveAll *RemoveAllChange `json:"remove_all,omitempty"`
-	Changes   []Change         `json:"changes,omitempty"`
+	Target         string             `json:"target"`
+	Action         ChangeAction       `json:"action"`
+	Write          *WriteChange       `json:"write,omitempty"`
+	RemoveAll      *RemoveAllChange   `json:"remove_all,omitempty"`
+	Xattr          *XattrChange       `json:"xattr,omitempty"`
+	XattrRepair    *XattrRepairChange `json:"xattr_repair,omitempty"`
+	XattrMigration *XattrMigration    `json:"xattr_migration,omitempty"`
+	Changes        []Change           `json:"changes,omitempty"`
 }
 
 // Change is a non-recursive leaf in a batch ChangeSet.
 type Change struct {
-	Target    string           `json:"target"`
-	Action    ChangeAction     `json:"action"`
-	Write     *WriteChange     `json:"write,omitempty"`
-	RemoveAll *RemoveAllChange `json:"remove_all,omitempty"`
+	Target         string             `json:"target"`
+	Action         ChangeAction       `json:"action"`
+	Write          *WriteChange       `json:"write,omitempty"`
+	RemoveAll      *RemoveAllChange   `json:"remove_all,omitempty"`
+	Xattr          *XattrChange       `json:"xattr,omitempty"`
+	XattrRepair    *XattrRepairChange `json:"xattr_repair,omitempty"`
+	XattrMigration *XattrMigration    `json:"xattr_migration,omitempty"`
 }
 
 // Leaves returns the changes in execution order, presenting a singleton as a
@@ -59,15 +72,21 @@ type Change struct {
 // forms uniformly. Callers must treat the returned values as immutable.
 func (cs ChangeSet) Leaves() []Change {
 	if len(cs.Changes) != 0 {
-		return cs.Changes
+		out := append([]Change(nil), cs.Changes...)
+		for i := range out {
+			out[i].Xattr = cloneXattr(out[i].Xattr)
+			out[i].XattrRepair = cloneRepair(out[i].XattrRepair)
+			out[i].XattrMigration = cloneMigration(out[i].XattrMigration)
+		}
+		return out
 	}
-	return []Change{{Target: cs.Target, Action: cs.Action, Write: cs.Write, RemoveAll: cs.RemoveAll}}
+	return []Change{{Target: cs.Target, Action: cs.Action, Write: cs.Write, RemoveAll: cs.RemoveAll, Xattr: cloneXattr(cs.Xattr), XattrRepair: cloneRepair(cs.XattrRepair), XattrMigration: cloneMigration(cs.XattrMigration)}}
 }
 
 // ValidateChangeSet rejects empty, mixed, and malformed singleton/batch values.
 func ValidateChangeSet(cs ChangeSet) error {
 	if len(cs.Changes) != 0 {
-		if cs.Target != "" || cs.Action != "" || cs.Write != nil || cs.RemoveAll != nil {
+		if cs.Target != "" || cs.Action != "" || cs.Write != nil || cs.RemoveAll != nil || cs.Xattr != nil || cs.XattrRepair != nil || cs.XattrMigration != nil {
 			return fmt.Errorf("changeset: batch cannot contain singleton fields")
 		}
 		for i, change := range cs.Changes {
@@ -77,30 +96,103 @@ func ValidateChangeSet(cs ChangeSet) error {
 		}
 		return nil
 	}
-	return validateChange(Change{Target: cs.Target, Action: cs.Action, Write: cs.Write, RemoveAll: cs.RemoveAll})
+	return validateChange(Change{Target: cs.Target, Action: cs.Action, Write: cs.Write, RemoveAll: cs.RemoveAll, Xattr: cs.Xattr, XattrRepair: cs.XattrRepair, XattrMigration: cs.XattrMigration})
 }
 
 func validateChange(c Change) error {
 	if c.Target == "" {
 		return fmt.Errorf("missing target")
 	}
+	payloads := 0
+	if c.Write != nil {
+		payloads++
+	}
+	if c.RemoveAll != nil {
+		payloads++
+	}
+	if c.Xattr != nil {
+		payloads++
+	}
+	if c.XattrRepair != nil {
+		payloads++
+	}
+	if c.XattrMigration != nil {
+		payloads++
+	}
 	switch c.Action {
 	case ChangeActionWrite:
-		if c.Write == nil || c.RemoveAll != nil {
+		if c.Write == nil || payloads != 1 {
 			return fmt.Errorf("write requires only write payload")
 		}
 	case ChangeActionRemoveAll:
-		if c.RemoveAll == nil || c.Write != nil {
+		if c.RemoveAll == nil || payloads != 1 {
 			return fmt.Errorf("remove_all requires only remove_all payload")
 		}
 	case ChangeActionMkdir, ChangeActionMkdirAll, ChangeActionRemove:
-		if c.Write != nil || c.RemoveAll != nil {
+		if payloads != 0 {
 			return fmt.Errorf("%s accepts no payload", c.Action)
+		}
+	case ChangeActionSetXattr:
+		if c.Xattr == nil || c.Xattr.Name == "" || !c.Xattr.Flags.Valid() || payloads != 1 {
+			return fmt.Errorf("set_xattr requires a valid xattr payload")
+		}
+	case ChangeActionRemoveXattr:
+		if c.Xattr == nil || c.Xattr.Name == "" || len(c.Xattr.Value) != 0 || c.Xattr.Flags != 0 || payloads != 1 {
+			return fmt.Errorf("remove_xattr requires a name-only xattr payload")
+		}
+	case ChangeActionPreserveAndRecreateXattrs:
+		if c.XattrRepair == nil || c.Write != nil || c.RemoveAll != nil || c.Xattr != nil || c.XattrMigration != nil {
+			return fmt.Errorf("preserve_and_recreate_xattrs requires only repair payload")
+		}
+	case ChangeActionMigrateXattrs:
+		if c.XattrMigration == nil || c.XattrMigration.NamespacePrefix == "" || len(c.XattrMigration.ExpectedEnvelopeSHA256) != 32 || len(c.XattrMigration.Edits) == 0 || c.Write != nil || c.RemoveAll != nil || c.Xattr != nil || c.XattrRepair != nil {
+			return fmt.Errorf("migrate_xattrs requires valid migration payload")
 		}
 	default:
 		return fmt.Errorf("unknown action %q", c.Action)
 	}
 	return nil
+}
+
+type XattrChange struct {
+	Name  string     `json:"name"`
+	Value []byte     `json:"value,omitempty"`
+	Flags XattrFlags `json:"flags,omitempty"`
+}
+type XattrRepairChange struct {
+	Attributes map[string][]byte `json:"attributes"`
+}
+
+func cloneRepair(r *XattrRepairChange) *XattrRepairChange {
+	if r == nil {
+		return nil
+	}
+	c := &XattrRepairChange{Attributes: map[string][]byte{}}
+	for k, v := range r.Attributes {
+		c.Attributes[k] = append([]byte(nil), v...)
+	}
+	return c
+}
+func cloneMigration(m *XattrMigration) *XattrMigration {
+	if m == nil {
+		return nil
+	}
+	c := *m
+	c.ExpectedEnvelopeSHA256 = append([]byte(nil), m.ExpectedEnvelopeSHA256...)
+	c.Edits = append([]XattrEdit(nil), m.Edits...)
+	for i := range c.Edits {
+		c.Edits[i].Value = append([]byte(nil), m.Edits[i].Value...)
+	}
+	return &c
+}
+
+func cloneXattr(x *XattrChange) *XattrChange {
+	if x == nil {
+		return nil
+	}
+	c := *x
+	c.Value = append([]byte(nil), x.Value...)
+	return &c
 }
 
 // WriteChange is the write payload of a ChangeSet: the exact proposed bytes plus
@@ -152,7 +244,7 @@ func CommitChangeSet(fs WritableFS, cs ChangeSet) (result CommitResult, err erro
 	if len(cs.Changes) > 0 {
 		committed := make([]Change, 0, len(cs.Changes))
 		for _, change := range cs.Changes {
-			leaf := ChangeSet{Target: change.Target, Action: change.Action, Write: change.Write, RemoveAll: change.RemoveAll}
+			leaf := ChangeSet{Target: change.Target, Action: change.Action, Write: change.Write, RemoveAll: change.RemoveAll, Xattr: cloneXattr(change.Xattr), XattrRepair: cloneRepair(change.XattrRepair), XattrMigration: cloneMigration(change.XattrMigration)}
 			if _, err := CommitChangeSet(fs, leaf); err != nil {
 				return CommitResult{Committed: ChangeSet{Changes: committed}}, err
 			}
@@ -195,6 +287,34 @@ func CommitChangeSet(fs WritableFS, cs ChangeSet) (result CommitResult, err erro
 			return CommitResult{}, fmt.Errorf("changeset %s: missing remove_all payload", cs.Target)
 		}
 		err := fs.RemoveAll(cs.Target, r.Opts)
+		if err != nil {
+			return CommitResult{}, err
+		}
+		return CommitResult{Committed: cs}, nil
+	case ChangeActionSetXattr, ChangeActionRemoveXattr:
+		xw, ok := fs.(XattrWriter)
+		if !ok {
+			return CommitResult{}, syscall.ENOTSUP
+		}
+		if cs.Action == ChangeActionSetXattr {
+			err = xw.SetXattr(cs.Target, cs.Xattr.Name, append([]byte(nil), cs.Xattr.Value...), cs.Xattr.Flags)
+		} else {
+			err = xw.RemoveXattr(cs.Target, cs.Xattr.Name)
+		}
+		if err != nil {
+			return CommitResult{}, err
+		}
+		return CommitResult{Committed: cs}, nil
+	case ChangeActionPreserveAndRecreateXattrs, ChangeActionMigrateXattrs:
+		xm, ok := fs.(XattrMaintenance)
+		if !ok {
+			return CommitResult{}, syscall.ENOTSUP
+		}
+		if cs.Action == ChangeActionPreserveAndRecreateXattrs {
+			err = xm.PreserveAndRecreateXattrs(cs.Target, cloneRepair(cs.XattrRepair).Attributes)
+		} else {
+			err = xm.MigrateXattrs(cs.Target, *cloneMigration(cs.XattrMigration))
+		}
 		if err != nil {
 			return CommitResult{}, err
 		}

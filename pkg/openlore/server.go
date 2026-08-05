@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -222,7 +223,7 @@ func newServerWithRoot(rootDir string, rootFS, lowerFS vfs.FileSystem, opts ...c
 	// from the docset that owns the target path. Only registered when at least
 	// one docset carries OKF config.
 	var agentSkills *agentSkillsPlugin
-	if anyDocsetHasAgentSkills(s.auth.Docsets) {
+	if cfg.Plugins.Skills.Enabled {
 		agentSkills = newAgentSkills(s.auth.Docsets, s.merge, s.canonicalPath, logger)
 		if err := s.registerPlugin(agentSkills); err != nil {
 			return nil, err
@@ -947,6 +948,7 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 	// Per-session docset views for `lore docsets` and publish inboxes for
 	// `publish`. Computed once here, where the access authority lives.
 	sh.SetDocsets(s.sessionDocsets(id))
+	sh.SetSkillsManagementEnabled(s.config.Plugins.Skills.Enabled)
 	sh.SetMetaFilters(s.sessionMetaFilters(id))
 	sh.SetPublishTargets(s.sessionPublishTargets(id))
 	sh.SetMetaExtenders(s.metaExtenders)
@@ -1000,7 +1002,7 @@ func (s *Server) sessionDocsets(id Identity) []cmds.DocsetInfo {
 				Writable:    writable[name],
 				Home:        i == 0 && name == id.HomeDocset,
 				Inbox:       inboxPath(ds) != "",
-				AgentSkills: ds.AgentSkills,
+				AgentSkills: directMarker(s.merge, s.canonicalPath(displayPath(pm))),
 			})
 		}
 		target := primaryDisplayPath(ds)
@@ -1012,12 +1014,24 @@ func (s *Server) sessionDocsets(id Identity) []cmds.DocsetInfo {
 				Grants:      grantNames,
 				Grant:       legacyGrant,
 				Writable:    writable[name],
-				AgentSkills: ds.AgentSkills,
+				AgentSkills: directMarker(s.merge, s.canonicalPath(target)),
 			})
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
+}
+
+func directMarker(fsys vfs.FileSystem, p string) bool {
+	if fsys == nil || (reflect.ValueOf(fsys).Kind() == reflect.Ptr && reflect.ValueOf(fsys).IsNil()) {
+		return false
+	}
+	x, ok := fsys.(vfs.XattrReader)
+	if !ok {
+		return false
+	}
+	b, err := x.GetXattr(p, agentSkillsMarker)
+	return err == nil && len(b) == 0
 }
 
 func (s *Server) sessionMetaFilters(id Identity) []meta.Filter {

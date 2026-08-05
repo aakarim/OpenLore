@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/aakarim/go-openlore/internal/config"
 	"github.com/aakarim/go-openlore/pkg/vfs"
@@ -109,7 +111,7 @@ func (d *DirFS) WriteFileAtomic(p string, content []byte, opts vfs.WriteOpts) (s
 	if !opts.ContentPolicyValidated && int64(len(content)) > max {
 		return "", fmt.Errorf("write rejected: %d bytes exceeds limit of %d", len(content), max)
 	}
-	if isTrashPath(vfs.CleanPath(p)) {
+	if isTrashPath(vfs.CleanPath(p)) || hasReservedPath(p) || hasTraversal(p) {
 		return "", fmt.Errorf("access denied: %s", p)
 	}
 	if !opts.ContentPolicyValidated && !isAllowed(path.Base(p), d.files) {
@@ -168,7 +170,7 @@ func (d *DirFS) Mkdir(p string) error {
 	if clean == "/" {
 		return fmt.Errorf("cannot create docset root: %s", p)
 	}
-	if isTrashPath(clean) || isIgnored(p, d.files) {
+	if isTrashPath(clean) || hasReservedPath(p) || hasTraversal(p) || isIgnored(p, d.files) {
 		return fmt.Errorf("access denied: %s", p)
 	}
 	if !d.insideDocset(clean) {
@@ -228,6 +230,24 @@ func isTrashPath(clean string) bool {
 	return clean == "/"+trashDirName || strings.HasPrefix(clean, "/"+trashDirName+"/")
 }
 
+func hasReservedPath(p string) bool {
+	for _, part := range strings.Split(strings.ReplaceAll(p, "\\", "/"), "/") {
+		if part == ".lore" {
+			return true
+		}
+	}
+	return false
+}
+
+func hasTraversal(p string) bool {
+	for _, part := range strings.Split(strings.ReplaceAll(p, "\\", "/"), "/") {
+		if part == ".." {
+			return true
+		}
+	}
+	return false
+}
+
 // docsetRootFor returns the docset root that clean sits strictly below, and
 // whether one exists. With no docset roots configured the whole DirFS is one
 // docset rooted at "/" (which always exists).
@@ -257,7 +277,7 @@ func (d *DirFS) docsetRootFor(clean string) (string, bool) {
 // already established that the virtual directory is valid and visible.
 func (d *DirFS) materializeDir(p string) error {
 	clean := vfs.CleanPath(p)
-	if isTrashPath(clean) || isIgnored(clean, d.files) {
+	if isTrashPath(clean) || hasReservedPath(p) || hasTraversal(p) || isIgnored(clean, d.files) {
 		return fmt.Errorf("access denied: %s", p)
 	}
 	d.stateMu.RLock()
@@ -279,7 +299,7 @@ func (d *DirFS) MkdirAll(p string) error {
 	if clean == "/" {
 		return fmt.Errorf("cannot create docset root: %s", p)
 	}
-	if isTrashPath(clean) || isIgnored(p, d.files) {
+	if isTrashPath(clean) || hasReservedPath(p) || hasTraversal(p) || isIgnored(p, d.files) {
 		return fmt.Errorf("access denied: %s", p)
 	}
 	root, ok := d.docsetRootFor(clean)
@@ -316,7 +336,7 @@ func (d *DirFS) Remove(p string) error {
 	if clean == "/" {
 		return fmt.Errorf("cannot delete docset root: %s", p)
 	}
-	if isTrashPath(clean) || isIgnored(p, d.files) {
+	if isTrashPath(clean) || hasReservedPath(p) || hasTraversal(p) || isIgnored(p, d.files) {
 		return fmt.Errorf("access denied: %s", p)
 	}
 	if !d.insideDocset(clean) {
@@ -355,7 +375,7 @@ func (d *DirFS) RemoveAll(p string, opts vfs.RemoveOpts) error {
 	if clean == "/" {
 		return fmt.Errorf("cannot delete docset root: %s", p)
 	}
-	if isTrashPath(clean) || isIgnored(p, d.files) {
+	if isTrashPath(clean) || hasReservedPath(p) || hasTraversal(p) || isIgnored(p, d.files) {
 		return fmt.Errorf("access denied: %s", p)
 	}
 	if !d.insideDocset(clean) {
@@ -417,6 +437,9 @@ func (d *DirFS) rawSnapshot(clean, full string) (*vfs.TreeSnapshot, error) {
 			return rerr
 		}
 		rel = filepath.ToSlash(rel)
+		if entry.IsDir() && entry.Name() == ".lore" {
+			return filepath.SkipDir
+		}
 		logical := clean
 		if rel != "." {
 			logical = path.Join(clean, rel)
@@ -425,7 +448,14 @@ func (d *DirFS) rawSnapshot(clean, full string) (*vfs.TreeSnapshot, error) {
 			if rel != "." && isIgnored(logical, d.files) {
 				return fmt.Errorf("refusing delete: %s contains hidden directory %s", clean, logical)
 			}
-			snap.Ops = append(snap.Ops, vfs.TreeOp{RelPath: rel, Kind: "dir"})
+			op := vfs.TreeOp{RelPath: rel, Kind: "dir"}
+			if data, err := os.ReadFile(filepath.Join(fp, ".lore", "xattrs", "self")); err == nil {
+				sum := sha256.Sum256(data)
+				op.Hash = hex.EncodeToString(sum[:])
+			} else if !errors.Is(err, fs.ErrNotExist) {
+				return err
+			}
+			snap.Ops = append(snap.Ops, op)
 			return nil
 		}
 		if !isAllowed(entry.Name(), d.files) || isIgnored(logical, d.files) {
@@ -469,6 +499,9 @@ func snapshotsEqual(want, got *vfs.TreeSnapshot) (string, bool) {
 		}
 		if gop.Kind != wop.Kind {
 			return fmt.Sprintf("%s changed kind", rel), false
+		}
+		if wop.Kind == "dir" && gop.Hash != wop.Hash {
+			return fmt.Sprintf("%s changed attributes", rel), false
 		}
 		if wop.Kind == "file" && gop.Hash != wop.Hash {
 			return fmt.Sprintf("%s changed content", rel), false
@@ -548,7 +581,7 @@ func atomicWrite(full string, content []byte) error {
 }
 
 func (d *DirFS) Stat(p string) (*vfs.FileInfo, error) {
-	if isTrashPath(vfs.CleanPath(p)) {
+	if isTrashPath(vfs.CleanPath(p)) || hasReservedPath(p) || hasTraversal(p) {
 		return nil, os.ErrNotExist
 	}
 	full := d.resolve(p)
@@ -575,7 +608,7 @@ func (d *DirFS) Stat(p string) (*vfs.FileInfo, error) {
 }
 
 func (d *DirFS) ReadDir(p string) ([]vfs.FileInfo, error) {
-	if isTrashPath(vfs.CleanPath(p)) {
+	if isTrashPath(vfs.CleanPath(p)) || hasReservedPath(p) || hasTraversal(p) {
 		return nil, os.ErrNotExist
 	}
 	if isIgnored(p, d.files) {
@@ -590,6 +623,9 @@ func (d *DirFS) ReadDir(p string) ([]vfs.FileInfo, error) {
 
 	var result []vfs.FileInfo
 	for _, e := range entries {
+		if e.Name() == ".lore" {
+			continue
+		}
 		childPath := path.Join(p, e.Name())
 		if isTrashPath(vfs.CleanPath(childPath)) {
 			continue
@@ -620,7 +656,7 @@ func (d *DirFS) ReadDir(p string) ([]vfs.FileInfo, error) {
 }
 
 func (d *DirFS) ReadFile(p string) ([]byte, error) {
-	if isTrashPath(vfs.CleanPath(p)) {
+	if isTrashPath(vfs.CleanPath(p)) || hasReservedPath(p) || hasTraversal(p) {
 		return nil, os.ErrNotExist
 	}
 	if !isAllowed(path.Base(p), d.files) {
@@ -751,6 +787,85 @@ func (m *MergeFS) WriteFileAtomic(p string, content []byte, opts vfs.WriteOpts) 
 		return "", fmt.Errorf("%w: %s", vfs.ErrReadOnly, p)
 	}
 	return w.WriteFileAtomic(subPath, content, opts)
+}
+
+func (m *MergeFS) GetXattr(p, name string) ([]byte, error) {
+	sub, backend, err := m.resolve(p)
+	if err != nil {
+		return nil, err
+	}
+	if backend == nil {
+		return nil, syscall.ENOTSUP
+	}
+	x, ok := backend.(vfs.XattrReader)
+	if !ok {
+		return nil, syscall.ENOTSUP
+	}
+	return x.GetXattr(sub, name)
+}
+func (m *MergeFS) ListXattrs(p string) ([]string, error) {
+	sub, backend, err := m.resolve(p)
+	if err != nil {
+		return nil, err
+	}
+	if backend == nil {
+		return nil, syscall.ENOTSUP
+	}
+	x, ok := backend.(vfs.XattrReader)
+	if !ok {
+		return nil, syscall.ENOTSUP
+	}
+	return x.ListXattrs(sub)
+}
+func (m *MergeFS) SetXattr(p, name string, value []byte, flags vfs.XattrFlags) error {
+	sub, backend, err := m.resolve(p)
+	if err != nil {
+		return err
+	}
+	if backend == nil {
+		return syscall.ENOTSUP
+	}
+	x, ok := backend.(vfs.XattrWriter)
+	if !ok {
+		return syscall.ENOTSUP
+	}
+	return x.SetXattr(sub, name, value, flags)
+}
+func (m *MergeFS) RemoveXattr(p, name string) error {
+	sub, backend, err := m.resolve(p)
+	if err != nil {
+		return err
+	}
+	if backend == nil {
+		return syscall.ENOTSUP
+	}
+	x, ok := backend.(vfs.XattrWriter)
+	if !ok {
+		return syscall.ENOTSUP
+	}
+	return x.RemoveXattr(sub, name)
+}
+func (m *MergeFS) PreserveAndRecreateXattrs(p string, attrs map[string][]byte) error {
+	sub, b, e := m.resolve(p)
+	if e != nil {
+		return e
+	}
+	x, ok := b.(vfs.XattrMaintenance)
+	if !ok {
+		return syscall.ENOTSUP
+	}
+	return x.PreserveAndRecreateXattrs(sub, attrs)
+}
+func (m *MergeFS) MigrateXattrs(p string, migration vfs.XattrMigration) error {
+	sub, b, e := m.resolve(p)
+	if e != nil {
+		return e
+	}
+	x, ok := b.(vfs.XattrMaintenance)
+	if !ok {
+		return syscall.ENOTSUP
+	}
+	return x.MigrateXattrs(sub, migration)
 }
 
 // Mkdir routes the folder creation to the resolved mount. Creating a docset

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
@@ -90,6 +91,48 @@ func (f *readTrackingFS) CanWrite(p string) bool {
 		return sc.CanWrite(p)
 	}
 	return true
+}
+func (f *readTrackingFS) GetXattr(p, name string) ([]byte, error) {
+	x, ok := f.WritableFS.(vfs.XattrReader)
+	if !ok {
+		return nil, syscall.ENOTSUP
+	}
+	return x.GetXattr(p, name)
+}
+func (f *readTrackingFS) ListXattrs(p string) ([]string, error) {
+	x, ok := f.WritableFS.(vfs.XattrReader)
+	if !ok {
+		return nil, syscall.ENOTSUP
+	}
+	return x.ListXattrs(p)
+}
+func (f *readTrackingFS) SetXattr(p, name string, value []byte, flags vfs.XattrFlags) error {
+	x, ok := f.WritableFS.(vfs.XattrWriter)
+	if !ok {
+		return syscall.ENOTSUP
+	}
+	return x.SetXattr(p, name, value, flags)
+}
+func (f *readTrackingFS) RemoveXattr(p, name string) error {
+	x, ok := f.WritableFS.(vfs.XattrWriter)
+	if !ok {
+		return syscall.ENOTSUP
+	}
+	return x.RemoveXattr(p, name)
+}
+func (f *readTrackingFS) PreserveAndRecreateXattrs(p string, attrs map[string][]byte) error {
+	x, ok := f.WritableFS.(vfs.XattrMaintenance)
+	if !ok {
+		return syscall.ENOTSUP
+	}
+	return x.PreserveAndRecreateXattrs(p, attrs)
+}
+func (f *readTrackingFS) MigrateXattrs(p string, m vfs.XattrMigration) error {
+	x, ok := f.WritableFS.(vfs.XattrMaintenance)
+	if !ok {
+		return syscall.ENOTSUP
+	}
+	return x.MigrateXattrs(p, m)
 }
 
 func (f *readTrackingFS) note(p, hash string) {

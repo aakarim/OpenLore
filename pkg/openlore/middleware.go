@@ -70,11 +70,32 @@ func cloneWriteChangeSet(cs vfs.ChangeSet) vfs.ChangeSet {
 			}
 			out.RemoveAll = &remove
 		}
+		if leaf.Xattr != nil {
+			xattr := *leaf.Xattr
+			xattr.Value = append([]byte(nil), leaf.Xattr.Value...)
+			out.Xattr = &xattr
+		}
+		if leaf.XattrRepair != nil {
+			r := &vfs.XattrRepairChange{Attributes: map[string][]byte{}}
+			for k, v := range leaf.XattrRepair.Attributes {
+				r.Attributes[k] = append([]byte(nil), v...)
+			}
+			out.XattrRepair = r
+		}
+		if leaf.XattrMigration != nil {
+			m := *leaf.XattrMigration
+			m.ExpectedEnvelopeSHA256 = append([]byte(nil), m.ExpectedEnvelopeSHA256...)
+			m.Edits = append([]vfs.XattrEdit(nil), m.Edits...)
+			for i := range m.Edits {
+				m.Edits[i].Value = append([]byte(nil), m.Edits[i].Value...)
+			}
+			out.XattrMigration = &m
+		}
 		return out
 	}
 	out := cs
-	leaf := cloneLeaf(vfs.Change{Target: cs.Target, Action: cs.Action, Write: cs.Write, RemoveAll: cs.RemoveAll})
-	out.Write, out.RemoveAll = leaf.Write, leaf.RemoveAll
+	leaf := cloneLeaf(vfs.Change{Target: cs.Target, Action: cs.Action, Write: cs.Write, RemoveAll: cs.RemoveAll, Xattr: cs.Xattr, XattrRepair: cs.XattrRepair, XattrMigration: cs.XattrMigration})
+	out.Write, out.RemoveAll, out.Xattr, out.XattrRepair, out.XattrMigration = leaf.Write, leaf.RemoveAll, leaf.Xattr, leaf.XattrRepair, leaf.XattrMigration
 	if cs.Changes != nil {
 		out.Changes = make([]vfs.Change, len(cs.Changes))
 		for i, change := range cs.Changes {

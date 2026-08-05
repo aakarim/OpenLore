@@ -19,6 +19,10 @@ writable_dir: ./published
 # scoping still applies on top of this).
 readonly: false
 
+plugins:
+  skills:
+    enabled: true
+
 # How whole-file overwrites (>, tee, sed -i, publish) defend against concurrent
 # writers. "hash" (the default) makes them compare-and-swap: a write that would
 # clobber a change made since the file was read is rejected. "last_write_wins"

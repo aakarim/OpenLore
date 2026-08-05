@@ -9,6 +9,7 @@ import (
 	"path"
 	"sort"
 	"sync"
+	"syscall"
 
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
@@ -96,6 +97,72 @@ func (o *OverlayFS) ReadDir(p string) ([]vfs.FileInfo, error) {
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].FileName < entries[j].FileName })
 	return entries, nil
+}
+
+func (o *OverlayFS) GetXattr(p, name string) ([]byte, error) {
+	if _, err := o.upper.Stat(p); err == nil {
+		return o.upper.GetXattr(p, name)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return nil, err
+	}
+	x, ok := o.lower.(vfs.XattrReader)
+	if !ok {
+		return nil, syscall.ENOTSUP
+	}
+	return x.GetXattr(p, name)
+}
+func (o *OverlayFS) ListXattrs(p string) ([]string, error) {
+	if _, err := o.upper.Stat(p); err == nil {
+		return o.upper.ListXattrs(p)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return nil, err
+	}
+	x, ok := o.lower.(vfs.XattrReader)
+	if !ok {
+		return nil, syscall.ENOTSUP
+	}
+	return x.ListXattrs(p)
+}
+func (o *OverlayFS) SetXattr(p, name string, value []byte, flags vfs.XattrFlags) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if _, err := o.upper.Stat(p); err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		info, err := o.Stat(p)
+		if err != nil {
+			return err
+		}
+		if !info.Dir {
+			return syscall.ENOTSUP
+		}
+		if err := o.materializeDocsetRoot(p); err != nil {
+			return err
+		}
+		if err := o.upper.materializeDir(p); err != nil {
+			return err
+		}
+	}
+	return o.upper.SetXattr(p, name, value, flags)
+}
+func (o *OverlayFS) RemoveXattr(p, name string) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if _, err := o.upper.Stat(p); err != nil {
+		return syscall.ENODATA
+	}
+	return o.upper.RemoveXattr(p, name)
+}
+func (o *OverlayFS) PreserveAndRecreateXattrs(p string, attrs map[string][]byte) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.upper.PreserveAndRecreateXattrs(p, attrs)
+}
+func (o *OverlayFS) MigrateXattrs(p string, m vfs.XattrMigration) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.upper.MigrateXattrs(p, m)
 }
 
 func (o *OverlayFS) WriteFileAtomic(p string, content []byte, opts vfs.WriteOpts) (string, error) {

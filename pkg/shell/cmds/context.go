@@ -45,6 +45,7 @@ type CmdContext interface {
 	MetaFilters() []meta.Filter
 	// Validators reports plugin-contributed checks used by `lore validate`.
 	Validators() []validation.Validator
+	SkillsManagementEnabled() bool
 }
 
 // DocsetInfo describes one docset a session can access. It is the per-session

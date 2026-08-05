@@ -26,6 +26,40 @@ type fakeWritableFS struct {
 	removeErr   error
 }
 
+type fakeXattrFS struct {
+	fakeWritableFS
+	path, name string
+	value      []byte
+	flags      XattrFlags
+	removed    bool
+}
+
+func (f *fakeXattrFS) SetXattr(p, n string, v []byte, flags XattrFlags) error {
+	f.path, f.name, f.value, f.flags = p, n, append([]byte(nil), v...), flags
+	return nil
+}
+func (f *fakeXattrFS) RemoveXattr(p, n string) error {
+	f.path, f.name, f.removed = p, n, true
+	return nil
+}
+
+func TestCommitChangeSetXattrsAndImmutableLeaves(t *testing.T) {
+	f := &fakeXattrFS{}
+	value := []byte("v")
+	cs := ChangeSet{Target: "/d", Action: ChangeActionSetXattr, Xattr: &XattrChange{Name: "user.lore.x", Value: value, Flags: XattrCreate}}
+	leaves := cs.Leaves()
+	leaves[0].Xattr.Value[0] = 'z'
+	if _, err := CommitChangeSet(f, cs); err != nil {
+		t.Fatal(err)
+	}
+	if string(f.value) != "v" || f.path != "/d" || f.flags != XattrCreate {
+		t.Fatalf("dispatch: %#v", f)
+	}
+	if _, err := CommitChangeSet(f, ChangeSet{Target: "/d", Action: ChangeActionRemoveXattr, Xattr: &XattrChange{Name: "user.lore.x"}}); err != nil || !f.removed {
+		t.Fatalf("remove: %v", err)
+	}
+}
+
 type prefixFailFS struct {
 	fakeWritableFS
 	errFor map[string]error

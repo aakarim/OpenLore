@@ -41,7 +41,8 @@ type Shell struct {
 	metaExtenders []meta.Extender
 	metaFilters   []meta.Filter
 	// validators are plugin-contributed checks applied by `lore validate`.
-	validators []validation.Validator
+	validators       []validation.Validator
+	skillsManagement bool
 }
 
 // NewShell creates a new Shell backed by the given vfs.FileSystem.
@@ -120,7 +121,9 @@ func (s *Shell) MetaFilters() []meta.Filter     { return s.metaFilters }
 func (s *Shell) SetValidators(validators []validation.Validator) { s.validators = validators }
 
 // Validators reports this shell's plugin-contributed validation checks.
-func (s *Shell) Validators() []validation.Validator { return s.validators }
+func (s *Shell) Validators() []validation.Validator      { return s.validators }
+func (s *Shell) SetSkillsManagementEnabled(enabled bool) { s.skillsManagement = enabled }
+func (s *Shell) SkillsManagementEnabled() bool           { return s.skillsManagement }
 
 // --- CmdContext interface implementation ---
 

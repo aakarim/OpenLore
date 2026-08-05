@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"path"
 	"sort"
+	"syscall"
 
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
@@ -142,6 +143,23 @@ func (a *aliasFS) ReadFile(p string) ([]byte, error) {
 	return a.FileSystem.ReadFile(canonical)
 }
 
+func (a *aliasFS) GetXattr(p, name string) ([]byte, error) {
+	x, ok := a.FileSystem.(vfs.XattrReader)
+	if !ok {
+		return nil, syscall.ENOTSUP
+	}
+	canonical, _ := a.canonical(p)
+	return x.GetXattr(canonical, name)
+}
+func (a *aliasFS) ListXattrs(p string) ([]string, error) {
+	x, ok := a.FileSystem.(vfs.XattrReader)
+	if !ok {
+		return nil, syscall.ENOTSUP
+	}
+	canonical, _ := a.canonical(p)
+	return x.ListXattrs(canonical)
+}
+
 func (a *aliasFS) hasAliasDescendant(parent string) bool {
 	parent = vfs.CleanPath(parent)
 	for _, alias := range a.aliases {
@@ -226,6 +244,38 @@ func (a *writableAliasFS) RemoveAll(p string, opts vfs.RemoveOpts) error {
 	canonical, _ := a.canonical(p)
 	opts = a.canonicalRemoveOpts(opts)
 	return a.inner.RemoveAll(canonical, opts)
+}
+func (a *writableAliasFS) SetXattr(p, name string, value []byte, flags vfs.XattrFlags) error {
+	x, ok := a.inner.(vfs.XattrWriter)
+	if !ok {
+		return syscall.ENOTSUP
+	}
+	canonical, _ := a.canonical(p)
+	return x.SetXattr(canonical, name, value, flags)
+}
+func (a *writableAliasFS) RemoveXattr(p, name string) error {
+	x, ok := a.inner.(vfs.XattrWriter)
+	if !ok {
+		return syscall.ENOTSUP
+	}
+	canonical, _ := a.canonical(p)
+	return x.RemoveXattr(canonical, name)
+}
+func (a *writableAliasFS) PreserveAndRecreateXattrs(p string, attrs map[string][]byte) error {
+	x, ok := a.inner.(vfs.XattrMaintenance)
+	if !ok {
+		return syscall.ENOTSUP
+	}
+	c, _ := a.canonical(p)
+	return x.PreserveAndRecreateXattrs(c, attrs)
+}
+func (a *writableAliasFS) MigrateXattrs(p string, m vfs.XattrMigration) error {
+	x, ok := a.inner.(vfs.XattrMaintenance)
+	if !ok {
+		return syscall.ENOTSUP
+	}
+	c, _ := a.canonical(p)
+	return x.MigrateXattrs(c, m)
 }
 
 func (a *aliasFS) canonicalRemoveOpts(opts vfs.RemoveOpts) vfs.RemoveOpts {
