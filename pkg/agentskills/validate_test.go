@@ -32,6 +32,8 @@ func TestValidateStrictFieldsAndRuneLimits(t *testing.T) {
 		{"unknown field", base("surprise: true\n"), true},
 		{"non-string license", base("license: 7\n"), true},
 		{"non-string tools", base("allowed-tools: [cat]\n"), true},
+		{"disable model invocation", base("disable-model-invocation: true\n"), false},
+		{"non-boolean disable model invocation", base("disable-model-invocation: yes-please\n"), true},
 		{"non-map metadata", base("metadata: owner\n"), true},
 		{"non-string metadata value", base("metadata:\n  owner: 7\n"), true},
 		{"directory mismatch", []byte("---\nname: other\ndescription: useful\n---\n"), true},

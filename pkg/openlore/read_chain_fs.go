@@ -2,6 +2,7 @@ package openlore
 
 import (
 	"context"
+	"syscall"
 
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
@@ -51,4 +52,55 @@ func (r *readChainFS) ReadFile(p string) ([]byte, error) {
 	return r.FileSystem.ReadFile(p)
 }
 
+func (r *readChainFS) GetXattr(p, name string) ([]byte, error) {
+	x, ok := r.FileSystem.(vfs.XattrReader)
+	if !ok {
+		return nil, syscall.ENOTSUP
+	}
+	return x.GetXattr(p, name)
+}
+
+func (r *readChainFS) ListXattrs(p string) ([]string, error) {
+	x, ok := r.FileSystem.(vfs.XattrReader)
+	if !ok {
+		return nil, syscall.ENOTSUP
+	}
+	return x.ListXattrs(p)
+}
+
+func (r *readChainFS) SetXattr(p, name string, value []byte, flags vfs.XattrFlags) error {
+	x, ok := r.FileSystem.(vfs.XattrWriter)
+	if !ok {
+		return syscall.ENOTSUP
+	}
+	return x.SetXattr(p, name, value, flags)
+}
+
+func (r *readChainFS) RemoveXattr(p, name string) error {
+	x, ok := r.FileSystem.(vfs.XattrWriter)
+	if !ok {
+		return syscall.ENOTSUP
+	}
+	return x.RemoveXattr(p, name)
+}
+
+func (r *readChainFS) PreserveAndRecreateXattrs(p string, attrs map[string][]byte) error {
+	x, ok := r.FileSystem.(vfs.XattrMaintenance)
+	if !ok {
+		return syscall.ENOTSUP
+	}
+	return x.PreserveAndRecreateXattrs(p, attrs)
+}
+
+func (r *readChainFS) MigrateXattrs(p string, migration vfs.XattrMigration) error {
+	x, ok := r.FileSystem.(vfs.XattrMaintenance)
+	if !ok {
+		return syscall.ENOTSUP
+	}
+	return x.MigrateXattrs(p, migration)
+}
+
 var _ vfs.FileSystem = (*readChainFS)(nil)
+var _ vfs.XattrReader = (*readChainFS)(nil)
+var _ vfs.XattrWriter = (*readChainFS)(nil)
+var _ vfs.XattrMaintenance = (*readChainFS)(nil)

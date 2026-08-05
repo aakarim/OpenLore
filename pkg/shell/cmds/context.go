@@ -2,6 +2,7 @@ package cmds
 
 import (
 	"io"
+	"time"
 
 	"github.com/aakarim/go-openlore/pkg/openlore/meta"
 	"github.com/aakarim/go-openlore/pkg/openlore/validation"
@@ -46,6 +47,8 @@ type CmdContext interface {
 	// Validators reports plugin-contributed checks used by `lore validate`.
 	Validators() []validation.Validator
 	SkillsManagementEnabled() bool
+	SkillsRemoteTimeout() time.Duration
+	SkillsRemoteMaxBytes() int64
 }
 
 // DocsetInfo describes one docset a session can access. It is the per-session

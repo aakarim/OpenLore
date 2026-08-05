@@ -281,4 +281,13 @@ func TestServerCanonicalChangeSetCopiesRemoveSnapshot(t *testing.T) {
 	if got.RemoveAll.Opts.Expected.Ops[0].Kind != "dir" {
 		t.Fatal("canonical changeset shares the caller's snapshot operations")
 	}
+
+	batchSnapshot := &vfs.TreeSnapshot{Root: "/alfie/batch", Ops: []vfs.TreeOp{{RelPath: ".", Kind: "dir"}}}
+	batch := s.canonicalChangeSet(vfs.ChangeSet{Changes: []vfs.Change{
+		{Target: "/alfie/new.md", Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: []byte("new")}},
+		{Target: "/alfie/batch", Action: vfs.ChangeActionRemoveAll, RemoveAll: &vfs.RemoveAllChange{Opts: vfs.RemoveOpts{Expected: batchSnapshot}}},
+	}})
+	if batch.Changes[0].Target != "/user/alfie/new.md" || batch.Changes[1].Target != "/user/alfie/batch" || batch.Changes[1].RemoveAll.Opts.Expected.Root != "/user/alfie/batch" {
+		t.Fatalf("canonical batch = %+v", batch)
+	}
 }

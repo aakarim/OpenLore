@@ -41,6 +41,19 @@ func (s *scopedWriteFS) WriteFileAtomic(p string, data []byte, opts vfs.WriteOpt
 	return s.inner.WriteFileAtomic(p, data, opts)
 }
 
+func (s *scopedWriteFS) AdmitChangeSet(cs vfs.ChangeSet) error {
+	a, ok := s.inner.(vfs.ChangeSetAdmitter)
+	if !ok || vfs.ValidateChangeSet(cs) != nil {
+		return vfs.ErrReadOnly
+	}
+	for _, change := range cs.Leaves() {
+		if !s.authorize(change.Action, change.Target) {
+			return vfs.ErrReadOnly
+		}
+	}
+	return a.AdmitChangeSet(cs)
+}
+
 // CanWrite reports whether a whole-file write to p is authorized in this session
 // (vfs.WriteScopeFS). It enables fail-fast checks (e.g. `spawn`) without writing.
 func (s *scopedWriteFS) CanWrite(p string) bool {
@@ -136,3 +149,4 @@ func (s *scopedWriteFS) SetWriteable() error { return nil }
 func (s *scopedWriteFS) SetReadonly() error  { return nil }
 
 var _ vfs.WritableFS = (*scopedWriteFS)(nil)
+var _ vfs.ChangeSetAdmitter = (*scopedWriteFS)(nil)

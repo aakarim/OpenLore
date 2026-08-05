@@ -82,7 +82,9 @@ type Server struct {
 	// readMW is the read (before-read) middleware contributed by plugins, run in
 	// front of Stat/ReadDir/ReadFile in registration order. Empty in core
 	// go-openlore; when empty no read wrapper is installed (zero read overhead).
-	readMW []ReadMiddleware
+	readMW            []ReadMiddleware
+	contentTransforms []ContentTransform
+	agentSkills       *agentSkillsPlugin
 
 	// metaExtenders are the `lore meta` extenders contributed by plugins,
 	// installed per session in buildSessionShell.
@@ -224,7 +226,8 @@ func newServerWithRoot(rootDir string, rootFS, lowerFS vfs.FileSystem, opts ...c
 	// one docset carries OKF config.
 	var agentSkills *agentSkillsPlugin
 	if cfg.Plugins.Skills.Enabled {
-		agentSkills = newAgentSkills(s.auth.Docsets, s.merge, s.canonicalPath, logger)
+		agentSkills = newAgentSkills(s.auth.Docsets, s.merge, s.canonicalPath, logger, cfg.Plugins.Skills)
+		s.agentSkills = agentSkills
 		if err := s.registerPlugin(agentSkills); err != nil {
 			return nil, err
 		}
@@ -277,6 +280,10 @@ func newServerWithRoot(rootDir string, rootFS, lowerFS vfs.FileSystem, opts ...c
 		// applier runs the post-commit chain after each durable commit.
 		s.writeLog = newWriteLog(s.merge, s.postCommitChain(), logger, 0)
 		if agentSkills != nil {
+			agentSkills.submit = func(ctx context.Context, cs vfs.ChangeSet) error {
+				_, err := s.CommitChangeSet(ctx, Actor{ID: "agent_skills_remote", internal: true}, cs)
+				return err
+			}
 			s.writeLog.SetPreApply(agentSkills.validateMutation)
 		}
 
@@ -672,6 +679,7 @@ func (s *Server) AdmitChangeSet(ctx context.Context, id Identity, cs vfs.ChangeS
 	if s.writeLog == nil {
 		return WriteResult{}, vfs.ErrReadOnly
 	}
+	cs = s.canonicalChangeSet(cs)
 	if err := vfs.ValidateChangeSet(cs); err != nil {
 		return WriteResult{}, err
 	}
@@ -692,11 +700,21 @@ type routeExtender struct{ register HTTPRouteRegistrar }
 func (e routeExtender) RegisterHTTPHandlers(mux *http.ServeMux) { e.register(mux) }
 
 func (s *Server) canonicalChangeSet(cs vfs.ChangeSet) vfs.ChangeSet {
-	cs.Target = s.canonicalPath(cs.Target)
-	if cs.RemoveAll != nil && cs.RemoveAll.Opts.Expected != nil {
-		remove := *cs.RemoveAll
-		remove.Opts.Expected = copyCanonicalSnapshot(remove.Opts.Expected, s.canonicalPath)
-		cs.RemoveAll = &remove
+	if len(cs.Changes) == 0 {
+		cs.Target = s.canonicalPath(cs.Target)
+		if cs.RemoveAll != nil && cs.RemoveAll.Opts.Expected != nil {
+			remove := *cs.RemoveAll
+			remove.Opts.Expected = copyCanonicalSnapshot(remove.Opts.Expected, s.canonicalPath)
+			cs.RemoveAll = &remove
+		}
+	}
+	for i := range cs.Changes {
+		cs.Changes[i].Target = s.canonicalPath(cs.Changes[i].Target)
+		if cs.Changes[i].RemoveAll != nil && cs.Changes[i].RemoveAll.Opts.Expected != nil {
+			remove := *cs.Changes[i].RemoveAll
+			remove.Opts.Expected = copyCanonicalSnapshot(remove.Opts.Expected, s.canonicalPath)
+			cs.Changes[i].RemoveAll = &remove
+		}
 	}
 	return cs
 }
@@ -729,6 +747,9 @@ func (s *Server) registerPlugin(p any) error {
 	}
 	if rp, ok := p.(ReadMiddlewareProvider); ok {
 		s.readMW = append(s.readMW, rp.ReadMiddleware()...)
+	}
+	if tp, ok := p.(ContentTransformProvider); ok {
+		s.contentTransforms = append(s.contentTransforms, tp.ContentTransforms()...)
 	}
 	if pc, ok := p.(PostCommitProvider); ok {
 		s.postCommitMW = append(s.postCommitMW, pc.PostCommitMiddleware()...)
@@ -877,6 +898,23 @@ func (s *Server) buildCanonicalSessionFS(id Identity) vfs.FileSystem {
 			sessionFS = newReadTrackingFS(w)
 		}
 	}
+	// Presentation-only transforms must be outside tracking: tracked hashes are
+	// hashes of durable bytes, never injected status annotations.
+	if len(s.contentTransforms) > 0 {
+		if writable, ok := sessionFS.(vfs.WritableFS); ok {
+			sessionFS = &writableReadTransformFS{WritableFS: writable, transforms: s.contentTransforms}
+		} else {
+			sessionFS = &readTransformFS{FileSystem: sessionFS, transforms: s.contentTransforms}
+		}
+		if s.agentSkills != nil {
+			switch transformed := sessionFS.(type) {
+			case *writableReadTransformFS:
+				transformed.updateRemoteSkill = s.agentSkills.updateRemoteSkill
+			case *readTransformFS:
+				transformed.updateRemoteSkill = s.agentSkills.updateRemoteSkill
+			}
+		}
+	}
 	return sessionFS
 }
 
@@ -949,6 +987,7 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 	// `publish`. Computed once here, where the access authority lives.
 	sh.SetDocsets(s.sessionDocsets(id))
 	sh.SetSkillsManagementEnabled(s.config.Plugins.Skills.Enabled)
+	sh.SetSkillsRemoteConfig(s.config.Plugins.Skills.RemoteTimeout, s.config.Plugins.Skills.RemoteMaxBytes)
 	sh.SetMetaFilters(s.sessionMetaFilters(id))
 	sh.SetPublishTargets(s.sessionPublishTargets(id))
 	sh.SetMetaExtenders(s.metaExtenders)

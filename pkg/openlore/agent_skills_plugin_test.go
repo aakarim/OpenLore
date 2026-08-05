@@ -1,14 +1,23 @@
 package openlore
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
+	"fmt"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/aakarim/go-openlore/internal/config"
+	"github.com/aakarim/go-openlore/pkg/agentskills"
 	"github.com/aakarim/go-openlore/pkg/openlore/meta"
+	"github.com/aakarim/go-openlore/pkg/openlore/skillsremote"
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
 
@@ -59,7 +68,7 @@ func TestAgentSkillsUsesDynamicMarkersForDiscoveryAndAdmission(t *testing.T) {
 func TestAgentSkillsDeletionAllowedAndDisabledExcluded(t *testing.T) {
 	d := markedSkillsFS(t)
 	p := newAgentSkills(map[string]config.DocsetSpec{"skills": {Paths: []config.PathMapping{{Source: "/skills", Display: "/skills"}}}}, d, nil, slog.Default())
-	if err := p.validateMutation(vfs.ChangeSet{Target: "/skills/valid/SKILL.md", Action: vfs.ChangeActionRemove}); err != nil {
+	if err := p.validateMutation(Actor{}, vfs.ChangeSet{Target: "/skills/valid/SKILL.md", Action: vfs.ChangeActionRemove}); err != nil {
 		t.Fatalf("deletion rejected: %v", err)
 	}
 	disabled := []byte("---\nname: valid\ndescription: useful\nmetadata:\n  agent_skill: disable\n---\n")
@@ -81,14 +90,228 @@ func TestAgentSkillsMarkerSetValidatesEntireTreeAtPreApply(t *testing.T) {
 	}
 	p := newAgentSkills(map[string]config.DocsetSpec{"skills": {Paths: []config.PathMapping{{Source: "/skills", Display: "/skills"}}}}, d, nil, slog.Default())
 	cs := vfs.ChangeSet{Target: "/skills", Action: vfs.ChangeActionSetXattr, Xattr: &vfs.XattrChange{Name: agentSkillsMarker}}
-	if err := p.validateMutation(cs); err == nil {
+	if err := p.validateMutation(Actor{}, cs); err == nil {
 		t.Fatal("invalid recursive collection accepted before marker commit")
 	}
 	if err := os.WriteFile(filepath.Join(d.root, "skills", "bad", "SKILL.md"), skillBytes("bad"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.validateMutation(cs); err != nil {
+	if err := p.validateMutation(Actor{}, cs); err != nil {
 		t.Fatalf("valid recursive collection rejected: %v", err)
+	}
+}
+
+func TestAgentSkillsNormalizesSurgicalRemoteEditBeforeAdmission(t *testing.T) {
+	d := markedSkillsFS(t)
+	stored, err := agentskills.GraftRemote(skillBytes("valid"), agentskills.Remote{
+		Repo: "owner/repo", Ref: "main", Commit: strings.Repeat("a", 40), Kind: "tracking",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(d.root, "skills", "valid", "SKILL.md"), stored, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	incoming, err := agentskills.GraftRemote(stored, agentskills.Remote{
+		Repo: "owner/repo", Ref: "next", Commit: strings.Repeat("a", 40), Kind: "tracking",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	incoming, err = agentskills.InjectRemoteStatus(incoming, "offline")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := newAgentSkills(map[string]config.DocsetSpec{"skills": {Paths: []config.PathMapping{{Source: "/skills", Display: "/skills"}}}}, d, nil, slog.Default())
+	var committed []byte
+	h := p.WriteMiddleware()[0](func(_ context.Context, op WriteOp) (WriteResult, error) {
+		committed = op.Leaves()[0].Write.Bytes
+		return WriteResult{}, nil
+	})
+	cs := vfs.ChangeSet{Target: "/skills/valid/SKILL.md", Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: incoming}}
+	if _, err := h(context.Background(), NewWriteOp(Actor{}, cs)); err != nil {
+		t.Fatal(err)
+	}
+	remote, linked, err := agentskills.ReadRemote(committed)
+	if err != nil || !linked || remote.Ref != "next" || remote.Commit != "" || remote.Kind != "" {
+		t.Fatalf("normalized remote=%+v linked=%v err=%v", remote, linked, err)
+	}
+	if bytes.Contains(committed, []byte("remote-status")) {
+		t.Fatalf("remote-status persisted: %s", committed)
+	}
+}
+
+func TestAgentSkillsRejectsInvalidSurgicalRemote(t *testing.T) {
+	d := markedSkillsFS(t)
+	stored, err := agentskills.GraftRemote(skillBytes("valid"), agentskills.Remote{Repo: "owner/repo", Ref: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(d.root, "skills", "valid", "SKILL.md"), stored, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	incoming := bytes.Replace(stored, []byte("  ref: main\n"), []byte("  ref: main\n  unexpected: value\n"), 1)
+	p := newAgentSkills(map[string]config.DocsetSpec{"skills": {Paths: []config.PathMapping{{Source: "/skills", Display: "/skills"}}}}, d, nil, slog.Default())
+	reached := false
+	h := p.WriteMiddleware()[0](func(_ context.Context, _ WriteOp) (WriteResult, error) {
+		reached = true
+		return WriteResult{}, nil
+	})
+	cs := vfs.ChangeSet{Target: "/skills/valid/SKILL.md", Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: incoming}}
+	if _, err := h(context.Background(), NewWriteOp(Actor{}, cs)); err == nil || reached {
+		t.Fatalf("invalid remote reached terminal: reached=%v err=%v", reached, err)
+	}
+}
+
+func TestAgentSkillsLinkedProtectionRequiresEffectiveCollection(t *testing.T) {
+	d := markedSkillsFS(t)
+	stored, err := agentskills.GraftRemote(skillBytes("valid"), agentskills.Remote{Repo: "owner/repo", Ref: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(d.root, "skills", "valid", "SKILL.md"), stored, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.RemoveXattr("/skills", agentSkillsMarker); err != nil {
+		t.Fatal(err)
+	}
+	p := newAgentSkills(map[string]config.DocsetSpec{"skills": {Paths: []config.PathMapping{{Source: "/skills", Display: "/skills"}}}}, d, nil, slog.Default())
+	cs := vfs.ChangeSet{Target: "/skills/valid/local.md", Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: []byte("local")}}
+	reached := false
+	h := p.WriteMiddleware()[0](func(_ context.Context, _ WriteOp) (WriteResult, error) {
+		reached = true
+		return WriteResult{}, nil
+	})
+	if _, err := h(context.Background(), NewWriteOp(Actor{}, cs)); err != nil || !reached {
+		t.Fatalf("ineffective linked skill stayed protected: reached=%v err=%v", reached, err)
+	}
+}
+
+func TestAgentSkillsEmptyChangesSingletonStaysValid(t *testing.T) {
+	d := markedSkillsFS(t)
+	p := newAgentSkills(map[string]config.DocsetSpec{"skills": {Paths: []config.PathMapping{{Source: "/skills", Display: "/skills"}}}}, d, nil, slog.Default())
+	cs := vfs.ChangeSet{Target: "/skills/valid/SKILL.md", Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: skillBytes("valid")}, Changes: []vfs.Change{}}
+	h := p.WriteMiddleware()[0](func(_ context.Context, op WriteOp) (WriteResult, error) {
+		return WriteResult{}, vfs.ValidateChangeSet(op.persistenceChangeSet())
+	})
+	if _, err := h(context.Background(), NewWriteOp(Actor{}, cs)); err != nil {
+		t.Fatalf("singleton with empty changes rejected: %v", err)
+	}
+}
+
+func remoteSyncClient(t *testing.T, files map[string]string) (*skillsremote.Client, string) {
+	t.Helper()
+	oldSHA := strings.Repeat("a", 40)
+	newSHA := strings.Repeat("b", 40)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/owner/repo/info/refs", func(w http.ResponseWriter, _ *http.Request) {
+		packet := func(s string) string { return fmt.Sprintf("%04x%s", len(s)+4, s) }
+		fmt.Fprint(w, packet("# service=git-upload-pack\n")+"0000"+packet(newSHA+" HEAD\x00symref=HEAD:refs/heads/main\n")+packet(newSHA+" refs/heads/main\n")+"0000")
+	})
+	mux.HandleFunc("/owner/repo/tar.gz/"+newSHA, func(w http.ResponseWriter, _ *http.Request) {
+		gz := gzip.NewWriter(w)
+		archive := tar.NewWriter(gz)
+		for name, content := range files {
+			fullName := "repo-x/valid/" + name
+			_ = archive.WriteHeader(&tar.Header{Name: fullName, Size: int64(len(content)), Typeflag: tar.TypeReg})
+			_, _ = archive.Write([]byte(content))
+		}
+		_ = archive.Close()
+		_ = gz.Close()
+	})
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	return &skillsremote.Client{HTTP: server.Client(), GitHubBase: server.URL, CodeloadBase: server.URL}, oldSHA
+}
+
+func TestAgentSkillsSyncHandlesFileDirectoryTransitions(t *testing.T) {
+	for _, tc := range []struct {
+		name, oldKind string
+		remoteFiles   map[string]string
+		wantDir       bool
+	}{
+		{name: "file to directory", oldKind: "file", remoteFiles: map[string]string{"SKILL.md": string(skillBytes("valid")), "assets.md/icon.md": "icon"}, wantDir: true},
+		{name: "directory to file", oldKind: "dir", remoteFiles: map[string]string{"SKILL.md": string(skillBytes("valid")), "assets.md": "asset"}, wantDir: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := markedSkillsFS(t)
+			target := filepath.Join(d.root, "skills", "valid", "assets.md")
+			if tc.oldKind == "file" {
+				if err := os.WriteFile(target, []byte("old"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if err := os.MkdirAll(target, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(target, "old.md"), []byte("old"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			client, oldSHA := remoteSyncClient(t, tc.remoteFiles)
+			stored, err := agentskills.GraftRemote(skillBytes("valid"), agentskills.Remote{Repo: "owner/repo", Path: "valid", Ref: "main", Commit: oldSHA, Kind: "tracking"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(d.root, "skills", "valid", "SKILL.md"), stored, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			p := newAgentSkills(map[string]config.DocsetSpec{"skills": {Paths: []config.PathMapping{{Source: "/skills", Display: "/skills"}}}}, d, nil, slog.Default())
+			p.remote = client
+			p.submit = func(_ context.Context, cs vfs.ChangeSet) error {
+				_, err := vfs.CommitChangeSet(d, cs)
+				return err
+			}
+			p.syncSkill(context.Background(), "/skills/valid", true)
+			info, err := d.Stat("/skills/valid/assets.md")
+			if err != nil || info.IsDir() != tc.wantDir {
+				t.Fatalf("transition result: info=%+v err=%v", info, err)
+			}
+		})
+	}
+}
+
+func TestAgentSkillsPreApplyBypassIsActorScoped(t *testing.T) {
+	d := markedSkillsFS(t)
+	stored, err := agentskills.GraftRemote(skillBytes("valid"), agentskills.Remote{Repo: "owner/repo", Ref: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(d.root, "skills", "valid", "SKILL.md"), stored, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p := newAgentSkills(map[string]config.DocsetSpec{"skills": {Paths: []config.PathMapping{{Source: "/skills", Display: "/skills"}}}}, d, nil, slog.Default())
+	change := vfs.ChangeSet{Target: "/skills/valid/local.md", Action: vfs.ChangeActionRemove}
+	if err := p.validateMutation(Actor{ID: "user"}, change); err == nil {
+		t.Fatal("user mutation bypassed linked-skill protection")
+	}
+	if err := p.validateMutation(Actor{ID: "agent_skills_remote", internal: true}, change); err != nil {
+		t.Fatalf("internal actor was not trusted: %v", err)
+	}
+	if err := p.validateMutation(Actor{ID: "agent_skills_remote"}, change); err == nil {
+		t.Fatal("spoofed internal actor ID bypassed protection")
+	}
+}
+
+func TestAgentSkillsStaleFailureDoesNotFollowChangedRemote(t *testing.T) {
+	d := markedSkillsFS(t)
+	remote := agentskills.Remote{Repo: "owner/new", Ref: "v1", Commit: strings.Repeat("c", 40), Kind: "pinned"}
+	stored, err := agentskills.GraftRemote(skillBytes("valid"), remote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(d.root, "skills", "valid", "SKILL.md"), stored, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p := newAgentSkills(map[string]config.DocsetSpec{"skills": {Paths: []config.PathMapping{{Source: "/skills", Display: "/skills"}}}}, d, nil, slog.Default())
+	p.failures["/skills/valid"] = remoteState{fingerprint: "old-link", message: "offline"}
+	p.syncSkill(context.Background(), "/skills/./valid", false)
+	if _, exists := p.failures["/skills/valid"]; exists {
+		t.Fatal("stale failure survived canonical pinned read")
+	}
+	got := p.ContentTransforms()[0]("/skills/valid/SKILL.md", stored)
+	if bytes.Contains(got, []byte("remote-status")) {
+		t.Fatalf("stale status injected:\n%s", got)
 	}
 }
 

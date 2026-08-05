@@ -1,7 +1,12 @@
 package vfs
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
+	"path"
+	"sort"
+	"strings"
 	"syscall"
 )
 
@@ -34,8 +39,8 @@ const (
 )
 
 // ChangeSet is an immutable, serializable description of either one mutation
-// or an ordered batch of mutations. Batch leaves commit in order without
-// rollback; their aggregate committed hash is empty.
+// or an ordered, rollback-protected batch. A batch's aggregate committed hash
+// is empty.
 //
 // It is the single primitive a consumer persists (e.g. while a write awaits
 // human approval) and later replays with CommitChangeSet. It deliberately
@@ -54,6 +59,18 @@ type ChangeSet struct {
 	XattrRepair    *XattrRepairChange `json:"xattr_repair,omitempty"`
 	XattrMigration *XattrMigration    `json:"xattr_migration,omitempty"`
 	Changes        []Change           `json:"changes,omitempty"`
+}
+
+// ChangeSetAdmitter is an optional session-filesystem capability for submitting
+// one ordered batch through the same scope and admission pipeline as writes.
+type ChangeSetAdmitter interface {
+	AdmitChangeSet(ChangeSet) error
+}
+
+// ChangePreflighter optionally rejects deterministic substrate-policy failures
+// before an ordered batch applies its first leaf. It must not mutate state.
+type ChangePreflighter interface {
+	PreflightChange(Change) error
 }
 
 // Change is a non-recursive leaf in a batch ChangeSet.
@@ -220,8 +237,9 @@ type RemoveAllChange struct {
 // (unconditional / IfMatch / IfNoneMatch); a remove_all replays its whole-tree
 // removal under its RemoveOpts; mkdir / mkdir_all / remove replay their
 // namespace mutation. Compare-and-swap drift fails with *PreconditionError
-// (write) or *TreeStaleError (remove_all). A batch is ordered and has no
-// rollback: leaves committed before a later failure remain committed.
+// (write) or *TreeStaleError (remove_all). Before applying a batch, it snapshots
+// every affected namespace root. If any leaf fails, prior leaves are rolled
+// back before the error is returned.
 //
 // It performs no authorization and captures no approver — the caller is
 // responsible for deciding a ChangeSet may commit before calling this. For a
@@ -242,13 +260,21 @@ func CommitChangeSet(fs WritableFS, cs ChangeSet) (result CommitResult, err erro
 		return CommitResult{}, err
 	}
 	if len(cs.Changes) > 0 {
-		committed := make([]Change, 0, len(cs.Changes))
-		for _, change := range cs.Changes {
+		snapshots, err := captureBatch(fs, cs.Changes)
+		if err != nil {
+			return CommitResult{}, fmt.Errorf("changeset snapshot: %w", err)
+		}
+		for i, change := range cs.Changes {
 			leaf := ChangeSet{Target: change.Target, Action: change.Action, Write: change.Write, RemoveAll: change.RemoveAll, Xattr: cloneXattr(change.Xattr), XattrRepair: cloneRepair(change.XattrRepair), XattrMigration: cloneMigration(change.XattrMigration)}
 			if _, err := CommitChangeSet(fs, leaf); err != nil {
-				return CommitResult{Committed: ChangeSet{Changes: committed}}, err
+				if i == 0 {
+					return CommitResult{}, err
+				}
+				if rollbackErr := restoreBatch(fs, snapshots); rollbackErr != nil {
+					return CommitResult{}, &RollbackError{CommitErr: err, RollbackErr: rollbackErr}
+				}
+				return CommitResult{}, err
 			}
-			committed = append(committed, change)
 		}
 		return CommitResult{Committed: cs}, nil
 	}
@@ -323,6 +349,261 @@ func CommitChangeSet(fs WritableFS, cs ChangeSet) (result CommitResult, err erro
 		return CommitResult{}, fmt.Errorf("changeset %s: unknown action %q", cs.Target, cs.Action)
 	}
 }
+
+// RollbackError reports both the leaf failure and a failure restoring the
+// pre-batch snapshot. Callers can still use errors.Is/As for the commit error.
+type RollbackError struct {
+	CommitErr   error
+	RollbackErr error
+}
+
+func (e *RollbackError) Error() string {
+	return fmt.Sprintf("batch commit failed: %v; rollback failed: %v", e.CommitErr, e.RollbackErr)
+}
+func (e *RollbackError) Unwrap() error { return e.CommitErr }
+
+type rollbackEntry struct {
+	path   string
+	dir    bool
+	data   []byte
+	xattrs map[string][]byte
+}
+
+type rollbackSnapshot struct {
+	root    string
+	existed bool
+	entries []rollbackEntry
+}
+
+type rollbackAttrs struct {
+	path  string
+	attrs map[string][]byte
+}
+
+type batchSnapshot struct {
+	roots []rollbackSnapshot
+	attrs []rollbackAttrs
+}
+
+func captureBatch(fsys WritableFS, changes []Change) (batchSnapshot, error) {
+	var roots []string
+	attrTargets := map[string]bool{}
+	for _, change := range changes {
+		switch change.Action {
+		case ChangeActionWrite, ChangeActionMkdir, ChangeActionMkdirAll, ChangeActionRemove, ChangeActionRemoveAll:
+			root, err := highestMissingRoot(fsys, CleanPath(change.Target))
+			if err != nil {
+				return batchSnapshot{}, err
+			}
+			roots = append(roots, root)
+		case ChangeActionSetXattr, ChangeActionRemoveXattr, ChangeActionPreserveAndRecreateXattrs, ChangeActionMigrateXattrs:
+			attrTargets[CleanPath(change.Target)] = true
+		}
+	}
+	sort.Slice(roots, func(i, j int) bool {
+		if pathDepth(roots[i]) == pathDepth(roots[j]) {
+			return roots[i] < roots[j]
+		}
+		return pathDepth(roots[i]) < pathDepth(roots[j])
+	})
+	minimal := roots[:0]
+	for _, root := range roots {
+		covered := false
+		for _, parent := range minimal {
+			if root == parent || parent == "/" || strings.HasPrefix(root, parent+"/") {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			minimal = append(minimal, root)
+		}
+	}
+	snapshot := batchSnapshot{roots: make([]rollbackSnapshot, 0, len(minimal))}
+	for _, root := range minimal {
+		rootSnapshot, err := captureRoot(fsys, root)
+		if err != nil {
+			return batchSnapshot{}, err
+		}
+		snapshot.roots = append(snapshot.roots, rootSnapshot)
+	}
+	if len(attrTargets) > 0 {
+		reader, readOK := fsys.(XattrReader)
+		_, restoreOK := fsys.(XattrWriter)
+		if !readOK || !restoreOK {
+			return batchSnapshot{}, syscall.ENOTSUP
+		}
+		for target := range attrTargets {
+			attrs, err := readXattrs(reader, target)
+			if err != nil {
+				return batchSnapshot{}, err
+			}
+			snapshot.attrs = append(snapshot.attrs, rollbackAttrs{path: target, attrs: attrs})
+		}
+		sort.Slice(snapshot.attrs, func(i, j int) bool { return snapshot.attrs[i].path < snapshot.attrs[j].path })
+	}
+	return snapshot, nil
+}
+
+func highestMissingRoot(fsys FileSystem, target string) (string, error) {
+	if _, err := fsys.Stat(target); err == nil {
+		return target, nil
+	} else if !missingPath(err) {
+		return "", err
+	}
+	root := target
+	for parent := path.Dir(root); parent != root; parent = path.Dir(root) {
+		if _, err := fsys.Stat(parent); err == nil {
+			return root, nil
+		} else if !missingPath(err) {
+			return "", err
+		}
+		root = parent
+	}
+	return root, nil
+}
+
+func missingPath(err error) bool {
+	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR)
+}
+
+func captureRoot(fsys FileSystem, root string) (rollbackSnapshot, error) {
+	if _, err := fsys.Stat(root); err != nil {
+		if missingPath(err) {
+			return rollbackSnapshot{root: root}, nil
+		}
+		return rollbackSnapshot{}, err
+	}
+	snapshot := rollbackSnapshot{root: root, existed: true}
+	err := WalkDir(fsys, root, func(target string, info *FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		entry := rollbackEntry{path: target, dir: info.IsDir()}
+		if !entry.dir {
+			data, err := fsys.ReadFile(target)
+			if err != nil {
+				return err
+			}
+			entry.data = append([]byte(nil), data...)
+		}
+		if reader, ok := fsys.(XattrReader); ok {
+			attrs, err := readXattrs(reader, target)
+			if err != nil && !errors.Is(err, syscall.ENOTSUP) {
+				return err
+			}
+			if err == nil {
+				if len(attrs) > 0 {
+					if _, ok := fsys.(XattrWriter); !ok {
+						return syscall.ENOTSUP
+					}
+				}
+				entry.xattrs = attrs
+			}
+		}
+		snapshot.entries = append(snapshot.entries, entry)
+		return nil
+	})
+	return snapshot, err
+}
+
+func readXattrs(reader XattrReader, target string) (map[string][]byte, error) {
+	names, err := reader.ListXattrs(target)
+	if err != nil {
+		return nil, err
+	}
+	attrs := map[string][]byte{}
+	for _, name := range names {
+		value, err := reader.GetXattr(target, name)
+		if err != nil {
+			return nil, err
+		}
+		attrs[name] = append([]byte(nil), value...)
+	}
+	return attrs, nil
+}
+
+func restoreBatch(fsys WritableFS, snapshot batchSnapshot) error {
+	for i := len(snapshot.roots) - 1; i >= 0; i-- {
+		root := snapshot.roots[i].root
+		info, err := fsys.Stat(root)
+		if err != nil {
+			if missingPath(err) {
+				continue
+			}
+			return err
+		}
+		if info.IsDir() {
+			if err := fsys.RemoveAll(root, RemoveOpts{}); err != nil {
+				return err
+			}
+		} else if err := fsys.Remove(root); err != nil {
+			return err
+		}
+	}
+	for _, rootSnapshot := range snapshot.roots {
+		if !rootSnapshot.existed {
+			continue
+		}
+		for _, entry := range rootSnapshot.entries {
+			if entry.dir {
+				if err := fsys.MkdirAll(entry.path); err != nil {
+					return err
+				}
+				continue
+			}
+			if _, err := fsys.WriteFileAtomic(entry.path, entry.data, WriteOpts{ContentPolicyValidated: true}); err != nil {
+				return err
+			}
+		}
+		if _, ok := fsys.(XattrWriter); ok {
+			for _, entry := range rootSnapshot.entries {
+				if entry.xattrs != nil {
+					if err := restoreXattrs(fsys, entry.path, entry.xattrs); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
+	if len(snapshot.attrs) > 0 {
+		for _, attrs := range snapshot.attrs {
+			if err := restoreXattrs(fsys, attrs.path, attrs.attrs); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func restoreXattrs(fsys WritableFS, target string, snapshot map[string][]byte) error {
+	reader := fsys.(XattrReader)
+	writer := fsys.(XattrWriter)
+	current, err := reader.ListXattrs(target)
+	if err != nil {
+		return err
+	}
+	for _, name := range current {
+		if _, ok := snapshot[name]; !ok {
+			if err := writer.RemoveXattr(target, name); err != nil {
+				return err
+			}
+		}
+	}
+	names := make([]string, 0, len(snapshot))
+	for name := range snapshot {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if err := writer.SetXattr(target, name, snapshot[name], 0); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func pathDepth(p string) int { return strings.Count(strings.Trim(p, "/"), "/") }
 
 // PendingChangeError is returned by a mutating operation that an admission
 // middleware intercepted and handed off instead of committing — for example,

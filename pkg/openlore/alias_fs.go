@@ -1,6 +1,7 @@
 package openlore
 
 import (
+	"context"
 	"errors"
 	"io/fs"
 	"path"
@@ -52,6 +53,17 @@ func (a *aliasFS) canonical(p string) (string, *pathAlias) {
 func (a *aliasFS) CanonicalPath(p string) string {
 	canonical, _ := a.canonical(p)
 	return canonical
+}
+
+func (a *aliasFS) UpdateRemoteSkill(ctx context.Context, skillDir string) (string, string, error) {
+	updater, ok := a.FileSystem.(interface {
+		UpdateRemoteSkill(context.Context, string) (string, string, error)
+	})
+	if !ok {
+		return "", "", syscall.ENOTSUP
+	}
+	canonical, _ := a.canonical(skillDir)
+	return updater.UpdateRemoteSkill(ctx, canonical)
 }
 
 func replacePathRoot(p, from, to string) string {
@@ -225,6 +237,18 @@ func (a *writableAliasFS) WriteFileAtomic(p string, data []byte, opts vfs.WriteO
 	return a.inner.WriteFileAtomic(canonical, data, opts)
 }
 
+func (a *writableAliasFS) AdmitChangeSet(cs vfs.ChangeSet) error {
+	admitter, ok := a.inner.(vfs.ChangeSetAdmitter)
+	if !ok {
+		return syscall.ENOTSUP
+	}
+	for i := range cs.Changes {
+		cs.Changes[i].Target, _ = a.canonical(cs.Changes[i].Target)
+	}
+	cs.Target, _ = a.canonical(cs.Target)
+	return admitter.AdmitChangeSet(cs)
+}
+
 func (a *writableAliasFS) Mkdir(p string) error {
 	canonical, _ := a.canonical(p)
 	return a.inner.Mkdir(canonical)
@@ -318,4 +342,5 @@ var (
 	_ vfs.WritableFS        = (*writableAliasFS)(nil)
 	_ vfs.WriteScopeFS      = (*writableAliasFS)(nil)
 	_ vfs.ReadTracker       = (*writableAliasFS)(nil)
+	_ vfs.ChangeSetAdmitter = (*writableAliasFS)(nil)
 )

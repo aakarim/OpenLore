@@ -42,6 +42,10 @@ func (o *OverlayFS) SetReadonly() error {
 	return o.upper.SetReadonly()
 }
 
+func (o *OverlayFS) PreflightChange(change vfs.Change) error {
+	return o.upper.PreflightChange(change)
+}
+
 func (o *OverlayFS) Stat(p string) (*vfs.FileInfo, error) {
 	info, err := o.upper.Stat(p)
 	if err == nil || !errors.Is(err, fs.ErrNotExist) || o.lower == nil {

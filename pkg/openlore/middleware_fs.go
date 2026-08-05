@@ -41,6 +41,11 @@ func (m *middlewareFS) run(cs vfs.ChangeSet) (string, error) {
 	return res.Hash, err
 }
 
+func (m *middlewareFS) AdmitChangeSet(cs vfs.ChangeSet) error {
+	_, err := m.run(cs)
+	return err
+}
+
 func (m *middlewareFS) WriteFileAtomic(p string, data []byte, opts vfs.WriteOpts) (string, error) {
 	return m.run(vfs.ChangeSet{
 		Target: p,
@@ -111,3 +116,4 @@ func (m *middlewareFS) SetWriteable() error { return nil }
 func (m *middlewareFS) SetReadonly() error  { return nil }
 
 var _ vfs.WritableFS = (*middlewareFS)(nil)
+var _ vfs.ChangeSetAdmitter = (*middlewareFS)(nil)

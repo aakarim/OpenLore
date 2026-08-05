@@ -470,16 +470,7 @@ func (p *InboxPlugin) uploadHandler(s *Server, store *InboxTokenStore) http.Hand
 			if errors.Is(err, vfs.ErrReadOnly) {
 				http.Error(w, "forbidden", 403)
 			} else {
-				var partial *PartialCommitError
-				if errors.As(err, &partial) {
-					committedPaths := make([]string, 0, len(partial.Committed.Leaves()))
-					for _, leaf := range partial.Committed.Leaves() {
-						committedPaths = append(committedPaths, leaf.Target)
-					}
-					writeInboxJSON(w, http.StatusInternalServerError, map[string]any{"error": "upload failed", "committed_paths": committedPaths})
-				} else {
-					http.Error(w, "upload failed", 500)
-				}
+				http.Error(w, "upload failed", 500)
 			}
 			return
 		}

@@ -19,15 +19,6 @@ type applyResult struct {
 	err  error
 }
 
-// PartialCommitError reports a failed ordered batch whose prefix is durable.
-type PartialCommitError struct {
-	Committed vfs.ChangeSet
-	Err       error
-}
-
-func (e *PartialCommitError) Error() string { return e.Err.Error() }
-func (e *PartialCommitError) Unwrap() error { return e.Err }
-
 // logEntry is one queued mutation plus the buffered channel its submitter blocks
 // on. reply is buffered (cap 1) so the applier never blocks delivering it. actor
 // is the (non-durable) principal that triggered the mutation; it never enters
@@ -58,7 +49,7 @@ type writeLog struct {
 
 	mu         sync.RWMutex      // guards closed + postCommit + serializes sends against Close
 	postCommit PostCommitHandler // optional; runs at the applier after a durable commit
-	preApply   func(vfs.ChangeSet) error
+	preApply   func(Actor, vfs.ChangeSet) error
 	closed     bool
 	ch         chan logEntry
 
@@ -101,17 +92,21 @@ func (l *writeLog) run() {
 	for e := range l.ch {
 		var committed vfs.CommitResult
 		var err error
+		if preflight, ok := l.substrate.(vfs.ChangePreflighter); ok {
+			for _, change := range e.cs.Leaves() {
+				if err = preflight.PreflightChange(change); err != nil {
+					break
+				}
+			}
+		}
 		l.mu.RLock()
 		pre := l.preApply
 		l.mu.RUnlock()
-		if pre != nil {
-			err = pre(e.cs)
+		if err == nil && pre != nil {
+			err = pre(e.actor, e.cs)
 		}
 		if err == nil {
 			committed, err = vfs.CommitChangeSet(l.substrate, e.cs)
-		}
-		if err != nil && committed.HasCommitted() {
-			err = &PartialCommitError{Committed: committed.Committed, Err: err}
 		}
 		e.reply <- applyResult{hash: committed.Hash, err: err}
 		if !committed.HasCommitted() {
@@ -130,7 +125,7 @@ func (l *writeLog) run() {
 	}
 }
 
-func (l *writeLog) SetPreApply(h func(vfs.ChangeSet) error) {
+func (l *writeLog) SetPreApply(h func(Actor, vfs.ChangeSet) error) {
 	l.mu.Lock()
 	l.preApply = h
 	l.mu.Unlock()

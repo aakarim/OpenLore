@@ -16,9 +16,11 @@ import (
 	"net/http/httptest"
 	"net/textproto"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -449,6 +451,7 @@ func TestMultipartAggregateCopiesDoNotExceedRawBody(t *testing.T) {
 type failSecondWriteFS struct {
 	wlRecordingFS
 	writes int
+	files  map[string][]byte
 }
 
 func (f *failSecondWriteFS) WriteFileAtomic(name string, data []byte, opts vfs.WriteOpts) (string, error) {
@@ -456,15 +459,38 @@ func (f *failSecondWriteFS) WriteFileAtomic(name string, data []byte, opts vfs.W
 	if f.writes == 2 {
 		return "", errors.New("second failed")
 	}
-	return f.wlRecordingFS.WriteFileAtomic(name, data, opts)
+	hash, err := f.wlRecordingFS.WriteFileAtomic(name, data, opts)
+	if err == nil {
+		f.files[name] = append([]byte(nil), data...)
+	}
+	return hash, err
 }
 
-func TestInboxHTTPPartialBatchReturnsCommittedPaths(t *testing.T) {
+func (f *failSecondWriteFS) Stat(name string) (*vfs.FileInfo, error) {
+	if name == "/" || name == "/docs" || name == "/docs/inbox" {
+		return &vfs.FileInfo{FileName: path.Base(name), FilePath: name, Dir: true}, nil
+	}
+	data, ok := f.files[name]
+	if !ok {
+		return nil, syscall.ENOENT
+	}
+	return &vfs.FileInfo{FileName: path.Base(name), FilePath: name, FileSize: int64(len(data))}, nil
+}
+
+func (f *failSecondWriteFS) Remove(name string) error {
+	if _, ok := f.files[name]; !ok {
+		return syscall.ENOENT
+	}
+	delete(f.files, name)
+	return nil
+}
+
+func TestInboxHTTPFailedBatchRollsBackWithoutCommittedPaths(t *testing.T) {
 	f := newInboxHTTPFixture(t)
 	if err := f.s.writeLog.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	fs := &failSecondWriteFS{}
+	fs := &failSecondWriteFS{files: map[string][]byte{}}
 	f.s.writeLog = newWriteLog(fs, nil, nil, 1)
 	body, ct := multipartInboxBody(t, "one.md", "two.md")
 	// Remove metadata so exactly the two file leaves are committed.
@@ -480,11 +506,8 @@ func TestInboxHTTPPartialBatchReturnsCommittedPaths(t *testing.T) {
 	_ = w.Close()
 	body, ct = plain.Bytes(), w.FormDataContentType()
 	rec := f.request(http.MethodPost, "/inbox/docs", ct, body, f.tokens["alice"])
-	var response struct {
-		Committed []string `json:"committed_paths"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil || rec.Code != 500 || len(response.Committed) != 1 || len(fs.order()) != 1 || response.Committed[0] != fs.order()[0] {
-		t.Fatalf("status=%d response=%+v applied=%v err=%v", rec.Code, response, fs.order(), err)
+	if rec.Code != 500 || rec.Body.String() != "upload failed\n" || len(fs.files) != 0 {
+		t.Fatalf("status=%d body=%q files=%v applied=%v", rec.Code, rec.Body.String(), fs.files, fs.order())
 	}
 }
 

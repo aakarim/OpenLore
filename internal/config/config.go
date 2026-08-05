@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/aakarim/go-openlore/pkg/vfs"
 	"golang.org/x/crypto/ssh"
@@ -98,7 +99,12 @@ type Config struct {
 }
 
 type PluginsConfig struct{ Skills SkillsPluginConfig }
-type SkillsPluginConfig struct{ Enabled bool }
+type SkillsPluginConfig struct {
+	Enabled        bool
+	RemoteCheckTTL time.Duration
+	RemoteTimeout  time.Duration
+	RemoteMaxBytes int64
+}
 
 const DefaultInboxMaxUploadSize int64 = 10 * 1024 * 1024
 
@@ -450,7 +456,36 @@ type pluginsYAML struct {
 	Skills skillsPluginYAML `yaml:"skills"`
 }
 type skillsPluginYAML struct {
-	Enabled bool `yaml:"enabled"`
+	Enabled        bool   `yaml:"enabled"`
+	RemoteCheckTTL string `yaml:"remote_check_ttl"`
+	RemoteTimeout  string `yaml:"remote_timeout"`
+	RemoteMaxBytes string `yaml:"remote_max_bytes"`
+}
+
+func applySkillsConfig(cfg *Config, in skillsPluginYAML) error {
+	cfg.Plugins.Skills.Enabled = in.Enabled
+	for _, setting := range []struct {
+		value  string
+		target *time.Duration
+	}{{in.RemoteCheckTTL, &cfg.Plugins.Skills.RemoteCheckTTL}, {in.RemoteTimeout, &cfg.Plugins.Skills.RemoteTimeout}} {
+		value, target := setting.value, setting.target
+		if value == "" {
+			continue
+		}
+		d, err := time.ParseDuration(value)
+		if err != nil || d < 0 {
+			return fmt.Errorf("invalid skills remote duration %q", value)
+		}
+		*target = d
+	}
+	if in.RemoteMaxBytes != "" {
+		n, err := parseByteSize(in.RemoteMaxBytes)
+		if err != nil {
+			return fmt.Errorf("invalid skills remote_max_bytes: %w", err)
+		}
+		cfg.Plugins.Skills.RemoteMaxBytes = n
+	}
+	return nil
 }
 
 type mcpYAML struct {
@@ -498,6 +533,7 @@ func New(opts ...Option) (Config, error) {
 		Readonly:            true,                           // safe default: read-only substrate
 		WriteConflictPolicy: vfs.DefaultWriteConflictPolicy, // "hash": overwrites are compare-and-swap
 		MaxJobs:             8,                              // bound concurrent async spawn jobs
+		Plugins:             PluginsConfig{Skills: SkillsPluginConfig{RemoteCheckTTL: 60 * time.Second, RemoteTimeout: 3 * time.Second, RemoteMaxBytes: 10 * 1024 * 1024}},
 		Inbox:               InboxConfig{MaxUploadSize: DefaultInboxMaxUploadSize, AllowedTypes: map[string]string{".md": "text/markdown", ".markdown": "text/markdown"}},
 		Files: FilesConfig{
 			Allowed: []string{
@@ -630,7 +666,9 @@ func WithConfigFile(path string) Option {
 		if fc.MaxJobs > 0 {
 			cfg.MaxJobs = fc.MaxJobs
 		}
-		cfg.Plugins.Skills.Enabled = fc.Plugins.Skills.Enabled
+		if err := applySkillsConfig(cfg, fc.Plugins.Skills); err != nil {
+			return err
+		}
 		applyPasskeysConfig(cfg, fc.Passkeys)
 		applyMCPConfig(cfg, fc.MCP)
 		applyAPIConfig(cfg, fc.API)
@@ -736,7 +774,9 @@ func WithEmbeddedConfig(data []byte, motdFallback string) Option {
 			if fc.Readonly != nil {
 				cfg.Readonly = *fc.Readonly
 			}
-			cfg.Plugins.Skills.Enabled = fc.Plugins.Skills.Enabled
+			if err := applySkillsConfig(cfg, fc.Plugins.Skills); err != nil {
+				return err
+			}
 			if fc.WriteConflictPolicy != "" {
 				p, err := vfs.ParseWriteConflictPolicy(fc.WriteConflictPolicy)
 				if err != nil {

@@ -6,13 +6,18 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net/http"
 	"path"
+	"sort"
 	"strings"
+	"sync"
 	"syscall"
+	"time"
 
 	"github.com/aakarim/go-openlore/internal/config"
 	"github.com/aakarim/go-openlore/pkg/agentskills"
 	"github.com/aakarim/go-openlore/pkg/openlore/meta"
+	"github.com/aakarim/go-openlore/pkg/openlore/skillsremote"
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
 
@@ -21,12 +26,34 @@ type agentSkillsPlugin struct {
 	fs           vfs.FileSystem
 	canonicalize func(string) string
 	logger       *slog.Logger
+	remote       *skillsremote.Client
+	ttl          time.Duration
+	timeout      time.Duration
+	mu           sync.Mutex
+	checks       map[string]remoteState
+	failures     map[string]remoteState
+	syncLocks    map[string]*sync.Mutex
+	submit       func(context.Context, vfs.ChangeSet) error
+}
+
+type remoteState struct {
+	fingerprint string
+	at          time.Time
+	message     string
+}
+
+func remoteFingerprint(r agentskills.Remote) string {
+	return strings.Join([]string{r.Repo, r.Path, r.Ref, r.Commit}, "\x00")
 }
 
 const agentSkillsMarker = "user.lore.plugins.openlore.skills.v1"
 
-func newAgentSkills(ds map[string]config.DocsetSpec, fsys vfs.FileSystem, canonicalize func(string) string, logger *slog.Logger) *agentSkillsPlugin {
-	return &agentSkillsPlugin{docsets: ds, fs: fsys, canonicalize: canonicalize, logger: logger}
+func newAgentSkills(ds map[string]config.DocsetSpec, fsys vfs.FileSystem, canonicalize func(string) string, logger *slog.Logger, configs ...config.SkillsPluginConfig) *agentSkillsPlugin {
+	cfg := config.SkillsPluginConfig{RemoteCheckTTL: 60 * time.Second, RemoteTimeout: 3 * time.Second, RemoteMaxBytes: 10 * 1024 * 1024}
+	if len(configs) > 0 {
+		cfg = configs[0]
+	}
+	return &agentSkillsPlugin{docsets: ds, fs: fsys, canonicalize: canonicalize, logger: logger, remote: &skillsremote.Client{HTTP: &http.Client{Timeout: cfg.RemoteTimeout}, GitHubBase: "https://github.com", CodeloadBase: "https://codeload.github.com", MaxBytes: cfg.RemoteMaxBytes, MaxFiles: skillsremote.MaxFiles}, ttl: cfg.RemoteCheckTTL, timeout: cfg.RemoteTimeout, checks: map[string]remoteState{}, failures: map[string]remoteState{}, syncLocks: map[string]*sync.Mutex{}}
 }
 
 func (p *agentSkillsPlugin) canonical(pth string) string {
@@ -131,6 +158,22 @@ func (p *agentSkillsPlugin) validateChange(cs vfs.ChangeSet) error {
 		return nil
 	}
 	target := p.canonical(cs.Target)
+	if linkedDir, linked := p.effectiveLinkedSkill(target); linked {
+		if (cs.Action == vfs.ChangeActionRemoveAll || cs.Action == vfs.ChangeActionRemove) && target == linkedDir {
+			return nil
+		}
+		if cs.Action == vfs.ChangeActionWrite && target == path.Join(linkedDir, "SKILL.md") && cs.Write != nil {
+			stored, _ := p.fs.ReadFile(target)
+			normalized, allowed, err := agentskills.SurgicalRemoteEdit(stored, cs.Write.Bytes, path.Base(linkedDir))
+			if err == nil && allowed && string(normalized) == string(cs.Write.Bytes) {
+				if _, err := agentskills.Validate(path.Base(linkedDir), normalized); err != nil {
+					return fmt.Errorf("agent_skills: %s: %w", linkedDir, err)
+				}
+				return nil
+			}
+		}
+		return fmt.Errorf("remote is set; change it upstream or run 'skills remove-remote'")
+	}
 	if cs.Action == vfs.ChangeActionSetXattr && cs.Xattr != nil && cs.Xattr.Name == agentSkillsMarker {
 		if len(cs.Xattr.Value) != 0 {
 			return fmt.Errorf("agent_skills: marker value must be empty")
@@ -180,10 +223,311 @@ func (p *agentSkillsPlugin) validateChange(cs vfs.ChangeSet) error {
 	return nil
 }
 
+func (p *agentSkillsPlugin) linkedSkill(target string) (string, bool) {
+	root := p.governingRoot(target)
+	if root == "" {
+		return "", false
+	}
+	for cur := target; ; cur = path.Dir(cur) {
+		if info, err := p.fs.Stat(cur); err == nil && !info.IsDir() {
+			cur = path.Dir(cur)
+		}
+		b, err := p.fs.ReadFile(path.Join(cur, "SKILL.md"))
+		if err == nil {
+			_, ok, _ := agentskills.ReadRemote(b)
+			if ok {
+				return cur, true
+			}
+		}
+		if cur == root {
+			break
+		}
+	}
+	return "", false
+}
+
+func (p *agentSkillsPlugin) effectiveLinkedSkill(target string) (string, bool) {
+	dir, linked := p.linkedSkill(target)
+	return dir, linked && p.effective(dir)
+}
+
+func (p *agentSkillsPlugin) syncSkill(ctx context.Context, skillDir string, force bool) {
+	skillDir = p.canonical(skillDir)
+	p.mu.Lock()
+	lock := p.syncLocks[skillDir]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		p.syncLocks[skillDir] = lock
+	}
+	p.mu.Unlock()
+	lock.Lock()
+	defer lock.Unlock()
+
+	skillFile := path.Join(skillDir, "SKILL.md")
+	b, err := p.fs.ReadFile(skillFile)
+	if err != nil {
+		return
+	}
+	baseHash := hashBytes(b)
+	r, linked, err := agentskills.ReadRemote(b)
+	if err != nil || !linked {
+		return
+	}
+	fingerprint := remoteFingerprint(r)
+	p.mu.Lock()
+	check := p.checks[skillDir]
+	if failure := p.failures[skillDir]; failure.fingerprint != "" && failure.fingerprint != fingerprint {
+		delete(p.failures, skillDir)
+	}
+	p.mu.Unlock()
+	if !force && r.Commit != "" && r.Kind == "pinned" {
+		return
+	}
+	if !force && r.Commit != "" && check.fingerprint == fingerprint && time.Since(check.at) < p.ttl {
+		return
+	}
+	p.mu.Lock()
+	p.checks[skillDir] = remoteState{fingerprint: fingerprint, at: time.Now()}
+	p.mu.Unlock()
+	refs, err := p.remote.Resolve(ctx, r.Repo)
+	if err != nil {
+		p.setRemoteFailure(skillDir, fingerprint, fmt.Sprintf("remote unreachable; serving stored version (commit %.7s)", r.Commit))
+		return
+	}
+	sha, kind, resolvedRef, err := refs.Resolve(r.Ref)
+	if err != nil {
+		p.setRemoteFailure(skillDir, fingerprint, err.Error())
+		return
+	}
+	if r.Ref == "" {
+		r.Ref = resolvedRef
+	}
+	if sha == r.Commit && r.Kind == kind {
+		p.setRemoteFailure(skillDir, fingerprint, "")
+		return
+	}
+	files, err := p.remote.Fetch(ctx, r.Repo, sha, r.Path)
+	if err != nil {
+		p.setRemoteFailure(skillDir, fingerprint, fmt.Sprintf("upstream at %.7s is not a valid skill; update refused, serving stored version (commit %.7s)", sha, r.Commit))
+		return
+	}
+	if err := skillsremote.ValidateFiles(files); err != nil {
+		p.setRemoteFailure(skillDir, fingerprint, err.Error())
+		return
+	}
+	upstream, ok := files["SKILL.md"]
+	if !ok {
+		p.setRemoteFailure(skillDir, fingerprint, "upstream has no SKILL.md; update refused")
+		return
+	}
+	r.Commit = sha
+	r.Kind = kind
+	files["SKILL.md"], err = agentskills.GraftRemote(upstream, r)
+	if err != nil {
+		p.setRemoteFailure(skillDir, fingerprint, err.Error())
+		return
+	}
+	validation, err := agentskills.Validate(path.Base(skillDir), files["SKILL.md"])
+	if err != nil || validation.Disabled {
+		if err == nil {
+			err = fmt.Errorf("remote skill cannot be disabled")
+		}
+		p.setRemoteFailure(skillDir, fingerprint, err.Error())
+		return
+	}
+	desiredDirs := map[string]bool{}
+	for rel := range files {
+		for dir := path.Dir(rel); dir != "."; dir = path.Dir(dir) {
+			desiredDirs[dir] = true
+		}
+	}
+	type entry struct {
+		target, rel string
+		dir         bool
+	}
+	var existing []entry
+	if err := vfs.WalkDir(p.fs, skillDir, func(target string, info *vfs.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if target != skillDir {
+			existing = append(existing, entry{target: target, rel: strings.TrimPrefix(target, skillDir+"/"), dir: info.IsDir()})
+		}
+		return nil
+	}); err != nil {
+		p.setRemoteFailure(skillDir, fingerprint, err.Error())
+		return
+	}
+	sort.Slice(existing, func(i, j int) bool { return strings.Count(existing[i].rel, "/") < strings.Count(existing[j].rel, "/") })
+	var removals []vfs.Change
+	removedRoots := map[string]bool{}
+	for _, e := range existing {
+		stale := false
+		if e.dir {
+			_, stale = files[e.rel]
+			stale = stale || !desiredDirs[e.rel]
+		} else {
+			_, keep := files[e.rel]
+			stale = !keep || desiredDirs[e.rel]
+		}
+		if !stale {
+			continue
+		}
+		covered := false
+		for root := range removedRoots {
+			if pathWithinRoot(root, e.target) {
+				covered = true
+				break
+			}
+		}
+		if covered {
+			continue
+		}
+		if e.dir {
+			removals = append(removals, vfs.Change{Target: e.target, Action: vfs.ChangeActionRemoveAll, RemoveAll: &vfs.RemoveAllChange{Opts: vfs.RemoveOpts{}}})
+			removedRoots[e.target] = true
+		} else {
+			removals = append(removals, vfs.Change{Target: e.target, Action: vfs.ChangeActionRemove})
+		}
+	}
+	sort.Slice(removals, func(i, j int) bool {
+		return strings.Count(removals[i].Target, "/") > strings.Count(removals[j].Target, "/")
+	})
+	dirs := map[string]bool{}
+	var rels []string
+	for rel := range files {
+		rels = append(rels, rel)
+		if dir := path.Dir(rel); dir != "." {
+			dirs[path.Join(skillDir, dir)] = true
+		}
+	}
+	var orderedDirs []string
+	for dir := range dirs {
+		orderedDirs = append(orderedDirs, dir)
+	}
+	sort.Slice(orderedDirs, func(i, j int) bool {
+		if strings.Count(orderedDirs[i], "/") == strings.Count(orderedDirs[j], "/") {
+			return orderedDirs[i] < orderedDirs[j]
+		}
+		return strings.Count(orderedDirs[i], "/") < strings.Count(orderedDirs[j], "/")
+	})
+	sort.Slice(rels, func(i, j int) bool {
+		if rels[i] == "SKILL.md" {
+			return false
+		}
+		if rels[j] == "SKILL.md" {
+			return true
+		}
+		return rels[i] < rels[j]
+	})
+	changes := make([]vfs.Change, 0, 1+len(orderedDirs)+len(rels)+len(removals))
+	changes = append(changes, vfs.Change{Target: skillFile, Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: b, Opts: vfs.WriteOpts{IfMatch: &baseHash}}})
+	changes = append(changes, removals...)
+	for _, dir := range orderedDirs {
+		changes = append(changes, vfs.Change{Target: dir, Action: vfs.ChangeActionMkdirAll})
+	}
+	for _, rel := range rels {
+		data := files[rel]
+		changes = append(changes, vfs.Change{Target: path.Join(skillDir, rel), Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: data}})
+	}
+	if p.submit == nil {
+		p.setRemoteFailure(skillDir, fingerprint, "remote sync unavailable")
+		return
+	}
+	current, err := p.fs.ReadFile(skillFile)
+	if err != nil || hashBytes(current) != baseHash {
+		p.setRemoteFailure(skillDir, fingerprint, "SKILL.md changed during remote sync; update refused")
+		return
+	}
+	err = p.submit(ctx, vfs.ChangeSet{Changes: changes})
+	if err != nil {
+		p.setRemoteFailure(skillDir, fingerprint, err.Error())
+		return
+	}
+	p.setRemoteFailure(skillDir, remoteFingerprint(r), "")
+}
+
+func (p *agentSkillsPlugin) updateRemoteSkill(ctx context.Context, skillDir string) (string, string, error) {
+	skillDir = p.canonical(skillDir)
+	before, err := p.fs.ReadFile(path.Join(skillDir, "SKILL.md"))
+	if err != nil {
+		return "", "", err
+	}
+	oldRemote, linked, err := agentskills.ReadRemote(before)
+	if err != nil {
+		return "", "", err
+	}
+	if !linked {
+		return "", "", fmt.Errorf("skill is not linked to a remote")
+	}
+	p.syncSkill(ctx, skillDir, true)
+	after, err := p.fs.ReadFile(path.Join(skillDir, "SKILL.md"))
+	if err != nil {
+		return oldRemote.Commit, "", err
+	}
+	newRemote, linked, err := agentskills.ReadRemote(after)
+	if err != nil || !linked {
+		return oldRemote.Commit, "", fmt.Errorf("skill remote changed during update")
+	}
+	p.mu.Lock()
+	failure := p.failures[skillDir]
+	p.mu.Unlock()
+	if failure.fingerprint == remoteFingerprint(newRemote) && failure.message != "" {
+		return oldRemote.Commit, newRemote.Commit, errors.New(failure.message)
+	}
+	return oldRemote.Commit, newRemote.Commit, nil
+}
+
+func (p *agentSkillsPlugin) setRemoteFailure(dir, fingerprint, msg string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if msg == "" {
+		delete(p.failures, dir)
+	} else {
+		p.failures[dir] = remoteState{fingerprint: fingerprint, message: msg}
+	}
+}
+
+func (p *agentSkillsPlugin) ReadMiddleware() []ReadMiddleware {
+	return []ReadMiddleware{func(next ReadHandler) ReadHandler {
+		return func(ctx context.Context, op ReadOp) error {
+			if op.Kind == ReadKindFile && path.Base(op.Path) == "SKILL.md" && p.effective(path.Dir(op.Path)) {
+				p.syncSkill(ctx, path.Dir(op.Path), false)
+			}
+			return next(ctx, op)
+		}
+	}}
+}
+func (p *agentSkillsPlugin) ContentTransforms() []ContentTransform {
+	return []ContentTransform{func(target string, content []byte) []byte {
+		if path.Base(target) != "SKILL.md" {
+			return content
+		}
+		_, linked, _ := agentskills.ReadRemote(content)
+		if !linked {
+			p.setRemoteFailure(path.Dir(p.canonical(target)), "", "")
+			return content
+		}
+		p.mu.Lock()
+		failure := p.failures[path.Dir(p.canonical(target))]
+		p.mu.Unlock()
+		remote, _, _ := agentskills.ReadRemote(content)
+		if failure.message != "" && failure.fingerprint == remoteFingerprint(remote) {
+			if b, err := agentskills.InjectRemoteStatus(content, failure.message); err == nil {
+				return b
+			}
+		}
+		return content
+	}}
+}
+
 // validateMutation is used both by admission middleware and by the serialized
 // applier immediately before commit. The latter closes the validation-to-marker
 // race for `skills enable`.
-func (p *agentSkillsPlugin) validateMutation(cs vfs.ChangeSet) error {
+func (p *agentSkillsPlugin) validateMutation(actor Actor, cs vfs.ChangeSet) error {
+	if actor.internal && actor.ID == "agent_skills_remote" {
+		return nil
+	}
 	for _, leaf := range cs.Leaves() {
 		if err := p.validateChange(vfs.ChangeSet{
 			Target: leaf.Target, Action: leaf.Action, Write: leaf.Write,
@@ -199,6 +543,39 @@ func (p *agentSkillsPlugin) validateMutation(cs vfs.ChangeSet) error {
 func (p *agentSkillsPlugin) WriteMiddleware() []WriteMiddleware {
 	return []WriteMiddleware{func(next WriteHandler) WriteHandler {
 		return func(ctx context.Context, op WriteOp) (WriteResult, error) {
+			normalized := cloneWriteChangeSet(op.changeSet)
+			leaves := normalized.Leaves()
+			for i := range leaves {
+				leaf := &leaves[i]
+				target := p.canonical(leaf.Target)
+				linkedDir, linked := p.effectiveLinkedSkill(target)
+				if !linked || leaf.Action != vfs.ChangeActionWrite || leaf.Write == nil || target != path.Join(linkedDir, "SKILL.md") {
+					continue
+				}
+				stored, err := p.fs.ReadFile(target)
+				if err != nil {
+					return WriteResult{}, err
+				}
+				content, allowed, err := agentskills.SurgicalRemoteEdit(stored, leaf.Write.Bytes, path.Base(linkedDir))
+				if err != nil {
+					return WriteResult{}, err
+				}
+				if !allowed {
+					continue
+				}
+				if _, err := agentskills.Validate(path.Base(linkedDir), content); err != nil {
+					return WriteResult{}, err
+				}
+				write := *leaf.Write
+				write.Bytes = content
+				leaf.Write = &write
+			}
+			if len(normalized.Changes) > 0 {
+				normalized.Changes = leaves
+			} else if len(leaves) == 1 {
+				normalized.Write = leaves[0].Write
+			}
+			op = NewWriteOp(op.Actor, normalized)
 			for _, leaf := range op.Leaves() {
 				cs := vfs.ChangeSet{Target: leaf.Target, Action: leaf.Action, Write: leaf.Write, RemoveAll: leaf.RemoveAll, Xattr: leaf.Xattr, XattrRepair: leaf.XattrRepair, XattrMigration: leaf.XattrMigration}
 				if err := p.validateChange(cs); err != nil {

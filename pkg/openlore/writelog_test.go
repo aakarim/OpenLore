@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/aakarim/go-openlore/internal/config"
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
 
@@ -135,29 +138,6 @@ func TestWriteLog_ApplyErrorSkipsPostCommit(t *testing.T) {
 	}
 }
 
-func TestWriteLog_PartialBatchPostsExactCommittedPrefix(t *testing.T) {
-	boom := errors.New("second failed")
-	fs := &wlRecordingFS{errFor: map[string]error{"/second": boom}}
-	seen := make(chan CommitInfo, 1)
-	l := newWriteLog(fs, func(_ context.Context, info CommitInfo) error { seen <- info; return nil }, nil, 1)
-	defer l.Close(context.Background())
-	actor := Actor{ID: "alice"}
-	cs := vfs.ChangeSet{Changes: []vfs.Change{writeCS("/first").Leaves()[0], writeCS("/second").Leaves()[0]}}
-	_, err := l.Submit(context.Background(), actor, cs)
-	var partial *PartialCommitError
-	if !errors.As(err, &partial) || len(partial.Committed.Changes) != 1 || partial.Committed.Changes[0].Target != "/first" {
-		t.Fatalf("partial result=%+v err=%v", partial, err)
-	}
-	select {
-	case info := <-seen:
-		if info.Actor.ID != "alice" || len(info.ChangeSet.Changes) != 1 || info.ChangeSet.Changes[0].Target != "/first" {
-			t.Fatalf("post commit=%+v", info)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("partial prefix post-commit not invoked")
-	}
-}
-
 func TestWriteLog_ApplyErrorPropagates(t *testing.T) {
 	boom := errors.New("cas drift")
 	fs := &wlRecordingFS{errFor: map[string]error{"/x": boom}}
@@ -227,6 +207,31 @@ func TestWriteLog_CloseDrainsInFlightAndQueued(t *testing.T) {
 	}
 	if got := fmt.Sprint(fs.order()); got != "[/a /b]" {
 		t.Fatalf("applied = %s, want [/a /b]", got)
+	}
+}
+
+func TestWriteLogPreflightsWholeBatchBeforeFirstMutation(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "skills"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dir := NewDirFS(root, config.FilesConfig{Allowed: []string{"*.md"}}).WithDocsetRoots([]string{"/skills"})
+	if err := dir.SetWriteable(); err != nil {
+		t.Fatal(err)
+	}
+	merged := NewMergeFS()
+	merged.SetRoot(dir)
+	log := newWriteLog(merged, nil, nil, 1)
+	t.Cleanup(func() { _ = log.Close(context.Background()) })
+	cs := vfs.ChangeSet{Changes: []vfs.Change{
+		{Target: "/skills/imported", Action: vfs.ChangeActionMkdir},
+		{Target: "/skills/imported/payload.exe", Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: []byte("bad")}},
+	}}
+	if _, err := log.Submit(context.Background(), Actor{}, cs); err == nil {
+		t.Fatal("policy-invalid batch accepted")
+	}
+	if _, err := dir.Stat("/skills/imported"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("batch partially created destination: %v", err)
 	}
 }
 

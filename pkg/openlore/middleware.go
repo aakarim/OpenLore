@@ -13,6 +13,9 @@ import (
 type Actor struct {
 	ID    string
 	Extra map[string]string
+	// internal is an unforgeable package capability. Public callers can set ID
+	// for attribution, but only OpenLore's own submission path can set this bit.
+	internal bool
 }
 
 // ── Admission (pre-commit write) chain ──────────────────────────────────────
@@ -204,6 +207,11 @@ type ReadMiddleware func(next ReadHandler) ReadHandler
 type ReadMiddlewareProvider interface {
 	ReadMiddleware() []ReadMiddleware
 }
+
+// ContentTransform changes bytes presented to a caller without changing stored
+// bytes. Transforms run outside read tracking so CAS always records storage.
+type ContentTransform func(path string, content []byte) []byte
+type ContentTransformProvider interface{ ContentTransforms() []ContentTransform }
 
 // chainRead composes mws around terminal. mws[0] is outermost.
 func chainRead(terminal ReadHandler, mws ...ReadMiddleware) ReadHandler {

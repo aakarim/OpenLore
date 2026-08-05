@@ -1,16 +1,21 @@
 package cmds
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"path"
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/aakarim/go-openlore/pkg/agentskills"
+	"github.com/aakarim/go-openlore/pkg/okf"
+	"github.com/aakarim/go-openlore/pkg/openlore/skillsremote"
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
 
@@ -66,6 +71,16 @@ type skillResult struct {
 	Ref             string `json:"ref,omitempty"`
 	EffectiveStatus string `json:"effective_status,omitempty"`
 	Source          string `json:"source,omitempty"`
+	OldCommit       string `json:"old_commit,omitempty"`
+	NewCommit       string `json:"new_commit,omitempty"`
+}
+
+type remoteSkillUpdater interface {
+	UpdateRemoteSkill(context.Context, string) (oldCommit, newCommit string, err error)
+}
+
+type remoteSkillClientProvider interface {
+	SkillsRemoteClient() *skillsremote.Client
 }
 
 type skillFinding struct {
@@ -77,6 +92,11 @@ type skillFinding struct {
 	Severity   string `json:"severity"`
 	Rule       string `json:"rule"`
 	Message    string `json:"message"`
+}
+
+type skillCandidate struct {
+	Type string `json:"type"`
+	Path string `json:"path"`
 }
 
 type skillCollection struct {
@@ -92,6 +112,15 @@ func emitSkill(w io.Writer, v any) { _ = json.NewEncoder(w).Encode(v) }
 
 func manageSkills(ctx CmdContext, args []string, w io.Writer) int {
 	op := args[0]
+	if op == "import" {
+		return skillsImport(ctx, args[1:], w)
+	}
+	if op == "remove-remote" {
+		return skillsRemoveRemote(ctx, args[1:], w)
+	}
+	if op == "update" {
+		return skillsUpdate(ctx, args[1:], w)
+	}
 	if op != "status" && op != "enable" && op != "disable" && op != "validate" {
 		return finish(w, skillResult{Path: canonical(ctx, ctx.Cwd()), Operation: op, Status: "rejected"}, 2)
 	}
@@ -123,6 +152,43 @@ func manageSkills(ctx CmdContext, args []string, w io.Writer) int {
 		return finish(w, r, 1)
 	}
 	return skillsMutate(ctx.FS(), ctx.Docsets(), target, root, op, recreate, r, w)
+}
+
+func skillsUpdate(ctx CmdContext, args []string, w io.Writer) int {
+	target := ctx.Cwd()
+	if len(args) > 1 {
+		return finish(w, skillResult{Path: canonical(ctx, target), Operation: "update", Status: "rejected"}, 2)
+	}
+	if len(args) == 1 {
+		target = ctx.Resolve(args[0])
+	}
+	target = canonical(ctx, target)
+	r := skillResult{Path: target, Operation: "update"}
+	if !ctx.SkillsManagementEnabled() {
+		r.Status = "unsupported"
+		return finish(w, r, 1)
+	}
+	_, doc, accessible := governingDocset(ctx.Docsets(), target)
+	if !accessible || !doc.Writable || !hasNamedRW(doc) {
+		r.Status = "rejected"
+		return finish(w, r, 1)
+	}
+	updater, ok := ctx.FS().(remoteSkillUpdater)
+	if !ok {
+		r.Status = "unsupported"
+		return finish(w, r, 1)
+	}
+	oldCommit, newCommit, err := updater.UpdateRemoteSkill(context.Background(), target)
+	r.OldCommit, r.NewCommit = oldCommit, newCommit
+	if err != nil {
+		r.Status = "degraded"
+		return finish(w, r, 1)
+	}
+	r.Status = "updated"
+	if oldCommit == newCommit {
+		r.Status = "current"
+	}
+	return finish(w, r, 0)
 }
 
 func parseSkillsArgs(ctx CmdContext, op string, args []string) (string, bool, bool) {
@@ -188,10 +254,223 @@ func skillsStatus(f vfs.FileSystem, target, root string, r skillResult, w io.Wri
 	}
 	c := skillCollection{Type: "collection", Path: target, Status: status, Errors: boolInt(status == "degraded" || status == "conflict"), Direct: &direct, Source: source}
 	emitSkill(w, c)
+	_ = vfs.WalkDir(f, target, func(skillFile string, info *vfs.FileInfo, walkErr error) error {
+		if walkErr != nil || info.IsDir() || path.Base(skillFile) != "SKILL.md" {
+			return walkErr
+		}
+		b, e := f.ReadFile(skillFile)
+		if e != nil {
+			return nil
+		}
+		remote, linked, _ := agentskills.ReadRemote(b)
+		if !linked {
+			return nil
+		}
+		record := map[string]any{"type": "remote", "path": path.Dir(skillFile), "repo": remote.Repo, "ref": remote.Ref, "ref_type": remote.Kind, "commit": remote.Commit}
+		if frontmatter, _, ok, _ := okf.ParseFrontmatter(b); ok {
+			if outcome, ok := frontmatter["remote-status"].(string); ok {
+				record["last_check"] = outcome
+			}
+		}
+		emitSkill(w, record)
+		return nil
+	})
 	r.Status, r.Collections, r.Errors, r.Source = status, 1, c.Errors, source
 	if status == "unsupported" || status == "degraded" || status == "conflict" {
 		return finish(w, r, 1)
 	}
+	return finish(w, r, 0)
+}
+
+func skillsRemoveRemote(ctx CmdContext, args []string, w io.Writer) int {
+	target := ctx.Cwd()
+	if len(args) > 1 {
+		return finish(w, skillResult{Path: canonical(ctx, target), Operation: "remove-remote", Status: "rejected"}, 2)
+	}
+	if len(args) == 1 {
+		target = ctx.Resolve(args[0])
+	}
+	target = canonical(ctx, target)
+	r := skillResult{Path: target, Operation: "remove-remote"}
+	if !ctx.SkillsManagementEnabled() {
+		r.Status = "unsupported"
+		return finish(w, r, 1)
+	}
+	skillFile := path.Join(target, "SKILL.md")
+	b, err := ctx.FS().ReadFile(skillFile)
+	if err != nil {
+		r.Status = "rejected"
+		return finish(w, r, 1)
+	}
+	if _, linked, err := agentskills.ReadRemote(b); err != nil || !linked {
+		r.Status = "rejected"
+		return finish(w, r, 1)
+	}
+	clean, err := agentskills.StripRemote(b)
+	if err != nil {
+		r.Status = "rejected"
+		return finish(w, r, 1)
+	}
+	wfs, ok := ctx.FS().(vfs.WritableFS)
+	if !ok {
+		r.Status = "unsupported"
+		return finish(w, r, 1)
+	}
+	if _, err = wfs.WriteFileAtomic(skillFile, clean, overwriteOpts(ctx, skillFile, b, true)); err != nil {
+		return mutationError(w, r, err)
+	}
+	r.Status = "unlinked"
+	return finish(w, r, 0)
+}
+
+func skillsImport(ctx CmdContext, args []string, w io.Writer) int {
+	r := skillResult{Path: canonical(ctx, ctx.Cwd()), Operation: "import"}
+	if len(args) < 1 || len(args) > 2 {
+		return finish(w, r, 2)
+	}
+	if !ctx.SkillsManagementEnabled() {
+		r.Status = "unsupported"
+		return finish(w, r, 1)
+	}
+	spec, err := skillsremote.ParseSpec(args[0])
+	if err != nil {
+		r.Status = "rejected"
+		return finish(w, r, 1)
+	}
+	parent := ctx.Cwd()
+	if len(args) == 2 {
+		parent = ctx.Resolve(args[1])
+	}
+	parent = canonical(ctx, parent)
+	root, doc, ok := governingDocset(ctx.Docsets(), parent)
+	if !ok || !doc.Writable || !hasNamedRW(doc) {
+		r.Status = "rejected"
+		return finish(w, r, 1)
+	}
+	_, enabled, _, _, _ := markerStatus(ctx.FS(), parent, root)
+	if !enabled {
+		r.Status = "rejected"
+		return finish(w, r, 1)
+	}
+	timeout := ctx.SkillsRemoteTimeout()
+	if timeout == 0 {
+		timeout = 3 * time.Second
+	}
+	maxBytes := ctx.SkillsRemoteMaxBytes()
+	if maxBytes == 0 {
+		maxBytes = 10 * 1024 * 1024
+	}
+	client := skillsremote.Client{HTTP: &http.Client{Timeout: timeout}, GitHubBase: "https://github.com", CodeloadBase: "https://codeload.github.com", MaxBytes: maxBytes, MaxFiles: skillsremote.MaxFiles}
+	if provider, ok := ctx.FS().(remoteSkillClientProvider); ok && provider.SkillsRemoteClient() != nil {
+		client = *provider.SkillsRemoteClient()
+	}
+	refs, err := client.Resolve(context.Background(), spec.Repo)
+	if err != nil {
+		r.Status = "degraded"
+		return finish(w, r, 1)
+	}
+	sha, kind, ref, err := refs.Resolve(spec.Ref)
+	if err != nil {
+		r.Status = "rejected"
+		return finish(w, r, 1)
+	}
+	files, err := client.Fetch(context.Background(), spec.Repo, sha, spec.Path)
+	if err != nil {
+		r.Status = "rejected"
+		return finish(w, r, 1)
+	}
+	if err = skillsremote.ValidateFiles(files); err != nil {
+		r.Status = "rejected"
+		return finish(w, r, 1)
+	}
+	if spec.Path == "" {
+		candidates := []string{}
+		for name := range files {
+			if path.Base(name) == "SKILL.md" {
+				candidates = append(candidates, path.Dir(name))
+			}
+		}
+		sort.Strings(candidates)
+		if len(candidates) != 1 {
+			for _, candidate := range candidates {
+				emitSkill(w, skillCandidate{Type: "candidate", Path: candidate})
+			}
+			r.Status = "rejected"
+			r.Errors = len(candidates)
+			return finish(w, r, 1)
+		}
+		spec.Path = candidates[0]
+		if spec.Path == "." {
+			spec.Path = ""
+		} else {
+			files, err = client.Fetch(context.Background(), spec.Repo, sha, spec.Path)
+			if err != nil {
+				r.Status = "rejected"
+				return finish(w, r, 1)
+			}
+		}
+	}
+	skill := files["SKILL.md"]
+	name, err := agentskills.ExtractName(skill)
+	if err != nil {
+		r.Status = "rejected"
+		return finish(w, r, 1)
+	}
+	remote := agentskills.Remote{Repo: spec.Repo, Path: spec.Path, Ref: ref, Commit: sha, Kind: kind}
+	skill, err = agentskills.GraftRemote(skill, remote)
+	if err != nil {
+		r.Status = "rejected"
+		return finish(w, r, 1)
+	}
+	validation, err := agentskills.Validate(name, skill)
+	if err != nil || validation.Disabled {
+		r.Status = "rejected"
+		return finish(w, r, 1)
+	}
+	dest := path.Join(parent, name)
+	if path.Dir(dest) != parent || path.Base(dest) != name {
+		r.Status = "rejected"
+		return finish(w, r, 1)
+	}
+	r.Path = dest
+	if _, err := ctx.FS().Stat(dest); err == nil {
+		r.Status = "rejected"
+		return finish(w, r, 1)
+	}
+	admitter, ok := ctx.FS().(vfs.ChangeSetAdmitter)
+	if !ok {
+		r.Status = "unsupported"
+		return finish(w, r, 1)
+	}
+	changes := []vfs.Change{{Target: dest, Action: vfs.ChangeActionMkdir}}
+	dirs := map[string]bool{}
+	delete(files, "SKILL.md")
+	for rel, data := range files {
+		for dir := path.Dir(rel); dir != "."; dir = path.Dir(dir) {
+			dirs[path.Join(dest, dir)] = true
+		}
+		changes = append(changes, vfs.Change{Target: path.Join(dest, rel), Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: data, Opts: vfs.WriteOpts{IfNoneMatch: true}}})
+	}
+	orderedDirs := make([]string, 0, len(dirs))
+	for dir := range dirs {
+		orderedDirs = append(orderedDirs, dir)
+	}
+	sort.Slice(orderedDirs, func(i, j int) bool {
+		return strings.Count(orderedDirs[i], "/") < strings.Count(orderedDirs[j], "/") || strings.Count(orderedDirs[i], "/") == strings.Count(orderedDirs[j], "/") && orderedDirs[i] < orderedDirs[j]
+	})
+	sort.Slice(changes[1:], func(i, j int) bool { return changes[i+1].Target < changes[j+1].Target })
+	batch := []vfs.Change{changes[0]}
+	for _, dir := range orderedDirs {
+		batch = append(batch, vfs.Change{Target: dir, Action: vfs.ChangeActionMkdir})
+	}
+	batch = append(batch, changes[1:]...)
+	batch = append(batch, vfs.Change{Target: path.Join(dest, "SKILL.md"), Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: skill, Opts: vfs.WriteOpts{IfNoneMatch: true}}})
+	if err = admitter.AdmitChangeSet(vfs.ChangeSet{Changes: batch}); err != nil {
+		r.Status = "degraded"
+		return finish(w, r, 1)
+	}
+	r.Status = "imported"
+	r.Source = kind
 	return finish(w, r, 0)
 }
 

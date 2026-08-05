@@ -99,6 +99,47 @@ func (d *DirFS) SetReadonly() error {
 	return nil
 }
 
+// PreflightChange checks deterministic write policy without inspecting mutable
+// file/directory shape. Shape may intentionally change earlier in the batch.
+func (d *DirFS) PreflightChange(change vfs.Change) error {
+	d.stateMu.RLock()
+	writable := d.writeable
+	d.stateMu.RUnlock()
+	if !writable {
+		return vfs.ErrReadOnly
+	}
+	p := change.Target
+	clean := vfs.CleanPath(p)
+	if isTrashPath(clean) || hasReservedPath(p) || hasTraversal(p) || isIgnored(p, d.files) {
+		return fmt.Errorf("access denied: %s", p)
+	}
+	switch change.Action {
+	case vfs.ChangeActionWrite:
+		if change.Write == nil {
+			return fmt.Errorf("write missing payload: %s", p)
+		}
+		max := d.maxWriteBytes
+		if max == 0 {
+			max = defaultMaxWriteBytes
+		}
+		if !change.Write.Opts.ContentPolicyValidated && int64(len(change.Write.Bytes)) > max {
+			return fmt.Errorf("write rejected: %d bytes exceeds limit of %d", len(change.Write.Bytes), max)
+		}
+		if !change.Write.Opts.ContentPolicyValidated && !isAllowed(path.Base(p), d.files) {
+			return fmt.Errorf("access denied: %s", p)
+		}
+	case vfs.ChangeActionMkdir, vfs.ChangeActionMkdirAll:
+		if clean == "/" || !d.insideDocset(clean) {
+			return fmt.Errorf("cannot create folder outside a docset: %s", p)
+		}
+	case vfs.ChangeActionRemove, vfs.ChangeActionRemoveAll:
+		if clean == "/" || !d.insideDocset(clean) {
+			return fmt.Errorf("cannot delete outside a docset: %s", p)
+		}
+	}
+	return nil
+}
+
 // WriteFileAtomic commits content to p as a single atomic object. The
 // precondition (opts) is checked under the same lock that guards the commit, so
 // the read-current → check → swap sequence is atomic. Returns the hex SHA-256
@@ -787,6 +828,30 @@ func (m *MergeFS) WriteFileAtomic(p string, content []byte, opts vfs.WriteOpts) 
 		return "", fmt.Errorf("%w: %s", vfs.ErrReadOnly, p)
 	}
 	return w.WriteFileAtomic(subPath, content, opts)
+}
+
+func (m *MergeFS) PreflightChange(change vfs.Change) error {
+	subPath, fsys, err := m.resolve(change.Target)
+	if err != nil {
+		return err
+	}
+	if fsys == nil {
+		return fmt.Errorf("cannot mutate filesystem root: %s", change.Target)
+	}
+	if vfs.CleanPath(subPath) == "/" {
+		switch change.Action {
+		case vfs.ChangeActionMkdir, vfs.ChangeActionMkdirAll, vfs.ChangeActionRemove, vfs.ChangeActionRemoveAll:
+			return fmt.Errorf("cannot mutate docset root: %s", change.Target)
+		}
+	}
+	if _, ok := fsys.(vfs.WritableFS); !ok {
+		return fmt.Errorf("%w: %s", vfs.ErrReadOnly, change.Target)
+	}
+	change.Target = subPath
+	if preflight, ok := fsys.(vfs.ChangePreflighter); ok {
+		return preflight.PreflightChange(change)
+	}
+	return nil
 }
 
 func (m *MergeFS) GetXattr(p, name string) ([]byte, error) {

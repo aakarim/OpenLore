@@ -54,6 +54,14 @@ func (f *readTrackingFS) WriteFileAtomic(p string, data []byte, opts vfs.WriteOp
 	return h, err
 }
 
+func (f *readTrackingFS) AdmitChangeSet(cs vfs.ChangeSet) error {
+	a, ok := f.WritableFS.(vfs.ChangeSetAdmitter)
+	if !ok {
+		return syscall.ENOTSUP
+	}
+	return a.AdmitChangeSet(cs)
+}
+
 // Remove delegates the single-file/empty-dir delete and, on success, forgets
 // the tracked hash for the removed path.
 func (f *readTrackingFS) Remove(p string) error {
@@ -167,7 +175,8 @@ func hashBytes(b []byte) string {
 }
 
 var (
-	_ vfs.WritableFS   = (*readTrackingFS)(nil)
-	_ vfs.ReadTracker  = (*readTrackingFS)(nil)
-	_ vfs.WriteScopeFS = (*readTrackingFS)(nil)
+	_ vfs.WritableFS        = (*readTrackingFS)(nil)
+	_ vfs.ReadTracker       = (*readTrackingFS)(nil)
+	_ vfs.WriteScopeFS      = (*readTrackingFS)(nil)
+	_ vfs.ChangeSetAdmitter = (*readTrackingFS)(nil)
 )

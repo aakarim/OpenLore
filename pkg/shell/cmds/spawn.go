@@ -5,6 +5,7 @@ import (
 	"io"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/aakarim/go-openlore/pkg/openlore/meta"
 	"github.com/aakarim/go-openlore/pkg/openlore/validation"
@@ -158,6 +159,8 @@ func (c *frozenContext) WriteConflictPolicy(string) vfs.WriteConflictPolicy {
 }
 func (c *frozenContext) Docsets() []DocsetInfo              { return nil }
 func (c *frozenContext) SkillsManagementEnabled() bool      { return false }
+func (c *frozenContext) SkillsRemoteTimeout() time.Duration { return 0 }
+func (c *frozenContext) SkillsRemoteMaxBytes() int64        { return 0 }
 func (c *frozenContext) PublishTargets() []PublishTarget    { return nil }
 func (c *frozenContext) MetaExtenders() []meta.Extender     { return nil }
 func (c *frozenContext) MetaFilters() []meta.Filter         { return nil }
