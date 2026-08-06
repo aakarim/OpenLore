@@ -90,8 +90,11 @@ func TestRenderDirUsesSingleTapActionsAndDoubleTapNavigation(t *testing.T) {
 	for _, want := range []string{
 		`class="entry dir" href="/lore/docs/guides/" data-path="/docs/guides"`,
 		`class="entry" href="/lore/docs/README.md" data-path="/docs/README.md"`,
+		`class="action-hint">Double tap to open`,
+		`data-open>Open`,
 		`data-copy="url">Copy URL`,
 		`data-copy="path">Copy path`,
+		`window.location.assign(selected.href)`,
 		`setTimeout(()=>{tapTimer=null;show(link)},275)`,
 		`window.location.assign(link.href)`,
 	} {
