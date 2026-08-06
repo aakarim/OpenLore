@@ -236,6 +236,32 @@ The `publish` command takes two arguments (`<docset>` and `<path>`), reads conte
 | Writing executable content | Files are only served through the VFS with file type filtering. The server does not execute uploaded files |
 | Unauthorized writes | Requires SSH authentication. Use `unknown_identity: "deny"` to restrict connections |
 
+### 11. Remote Skill Imports (Outbound HTTPS)
+
+`skills import` and the Agent Skills sync path are the only features that make outbound network requests. They fetch public git repositories (ref advertisements and source archives) from GitHub, GitLab, Bitbucket, Codeberg, and self-hosted GitLab/Gitea/Forgejo instances.
+
+**SSRF protection (egress policy):**
+- All requests use a restricted HTTP client (`NewPublicHTTPClient`) whose dialer resolves DNS and connects only to public IP addresses — loopback, RFC 1918 private, link-local, CGNAT, and other special-purpose ranges are rejected
+- The vetted IP is dialed directly, so a DNS rebind between check and connect has no effect; TLS server name verification still applies
+- Redirects are followed only to HTTPS URLs, and every hop passes through the same public-IP dialer
+- Only `https://` repository URLs are accepted; userinfo, query strings, and fragments are rejected during spec parsing
+
+**Content handling:**
+- No credentials are ever sent — only public repositories are reachable
+- Archives are bounded by compressed-size, decompressed-size, file-count, and entry-count limits before extraction
+- Archive entries are checked for path traversal, duplicates, and file/directory conflicts; symlinks and hard links are skipped
+- Fetched `SKILL.md` content is normalized and fully validated before anything is written to a collection; advertised ref object IDs must be 40-hex SHAs
+
+**Threat considerations:**
+
+| Threat | Mitigation |
+|--------|-----------|
+| SSRF against internal services | Public-IP-only dialer applied to every connection and redirect hop |
+| Redirect to internal host or plain HTTP | `CheckRedirect` enforces HTTPS; dialer re-applies IP policy per hop |
+| Decompression bombs | Compressed and decompressed size limits, entry scan limits |
+| Malicious archive paths | Path cleaning, traversal rejection, duplicate detection, symlink/hardlink skipping |
+| Malicious skill content | Frontmatter normalization and strict validation before any write; skills are data, never executed by OpenLore |
+
 ## Known Limitations
 
 1. **No rate limiting** — must be handled externally
@@ -250,6 +276,7 @@ The `publish` command takes two arguments (`<docset>` and `<path>`), reads conte
 10. **No per-identity publish scoping** — any authenticated user can publish to any writable docset. If you need identity-level write restrictions, use separate server instances.
 11. **No aggregate publish quota** — individual files are capped by `max_publish_size` (default 2.5MB), but there is no limit on the total number or aggregate size of published files. Use OS-level disk quotas for untrusted environments.
 12. **No content validation** — the `publish` command writes any content. Malicious content will be served as-is if it matches the allowed file patterns.
+13. **No repository host allowlist** — `skills import` can fetch from any public HTTPS host. The egress policy blocks internal addresses, but if you need to restrict which forges are reachable, use network-level egress filtering. Conversely, repositories on private networks (e.g., internal GitHub Enterprise) are unreachable by design.
 
 ## Recommendations
 
@@ -265,3 +292,4 @@ The `publish` command takes two arguments (`<docset>` and `<path>`), reads conte
 - **Only enable `publish_dir` on docsets that should be writable** — leave it unset on read-only documentation collections.
 - **Set `unknown_identity: "deny"`** when `publish_dir` is enabled to ensure only known identities can write.
 - **Serve the lore browser over TLS** when serving HTML/JS content to prevent MITM tampering in transit.
+- **Review imported skills before enabling agents on them** — skill files are validated structurally, not semantically. Treat third-party skills like code: read `SKILL.md` and any referenced scripts, and prefer pinning imports to a tag or commit SHA over tracking a branch.

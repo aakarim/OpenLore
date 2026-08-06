@@ -43,12 +43,16 @@ skills status [folder]
 skills enable [folder]
 skills disable [folder]
 skills validate [scope]
+skills import <repo-spec> [parent-dir]
+skills update [skill-folder]
+skills remove-remote [skill-folder]
 skills enable --recreate-xattrs [folder]
 skills disable --recreate-xattrs [folder]
 ```
 
 Folders and scopes default to the current directory. Management commands emit
-NDJSON; bare `skills` retains the human-readable installed-command listing.
+NDJSON; bare `skills` prints import and tracking usage plus the installed
+instruction commands.
 Enabling validates every descendant `SKILL.md` before atomically queuing the
 zero-length `user.lore.plugins.openlore.skills.v1` directory marker. Collection
 inheritance stops at nested docset boundaries. Enabling and disabling require
@@ -65,3 +69,9 @@ the requested Skills marker state. It cannot recover unrelated attributes.
 OpenLore's xattr errors follow a normalized Linux-shaped contract, but the
 metadata is synthetic canonical CBOR rather than native host xattrs. Backend
 support is detected by attempting the operation, never from the kernel version.
+
+Imports accept `owner/repo` shorthand (GitHub) or an HTTPS repository URL on
+GitHub, GitLab, Bitbucket, Codeberg, or self-hosted GitLab/Gitea/Forgejo.
+Only public repositories are supported; fetches are restricted to HTTPS hosts
+resolving to public IP addresses. Run `skills` for import syntax, automatic
+branch tracking, pinning, status checks, and unlinking.

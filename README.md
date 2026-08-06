@@ -223,7 +223,7 @@ credentials are separate and revocable. See
 | [Command reference](docs/commands.md) | Complete shell, introspection, publishing, syntax, CLI command, and flag reference |
 | [Configuration and identity](docs/configuration-and-identity.md) | `openlore.yml`, authentication, roles, docsets, aliases, homes, and host verification |
 | [Writing and publishing](docs/writing.md) | Write modes, inboxes, conflict handling, approvals, and jobs |
-| [Plugins and knowledge formats](docs/plugins.md) | Plugin interfaces, OKF validation, `lore validate`, `lore meta`, and Agent Skills |
+| [Plugins and knowledge formats](docs/plugins.md) | Plugin installation, interfaces, OKF validation, `lore validate`, and `lore meta` |
 | [Write system internals](docs/write-system.md) | Filesystem layering, write seam, changesets, hooks, and async jobs |
 | [Security evaluation](SECURITY.md) | Threat model and security properties |
 

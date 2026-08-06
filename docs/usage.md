@@ -45,7 +45,8 @@ command list.
 
 OpenLore skills output instructions to stdout rather than appearing in the
 filesystem. Built-ins are `teach` for setup and `agents` for an `AGENTS.md`
-snippet. Run `skills` to list all built-in and configured runtime skills.
+snippet. Run `skills` for Agent Skills management instructions and a list of
+built-in and configured runtime instruction commands.
 
 ## Embed docs in a binary
 
