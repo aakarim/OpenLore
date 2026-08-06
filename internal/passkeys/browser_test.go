@@ -6,7 +6,20 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/aakarim/go-openlore/pkg/vfs"
 )
+
+type browserTestFS struct{}
+
+func (browserTestFS) Stat(string) (*vfs.FileInfo, error) { return nil, nil }
+func (browserTestFS) ReadFile(string) ([]byte, error)    { return nil, nil }
+func (browserTestFS) ReadDir(string) ([]vfs.FileInfo, error) {
+	return []vfs.FileInfo{
+		{FileName: "guides", Dir: true},
+		{FileName: "README.md"},
+	}, nil
+}
 
 func TestRenderFileIncludesBreadcrumbsIframeAndParentCloseLink(t *testing.T) {
 	pk := &Passkeys{}
@@ -65,6 +78,27 @@ func TestLoreBrowserServesPWAAssetsWithoutAuthentication(t *testing.T) {
 			t.Fatalf("service worker response: status=%d body=%q", rec.Code, rec.Body.String())
 		}
 	})
+}
+
+func TestRenderDirUsesSingleTapActionsAndDoubleTapNavigation(t *testing.T) {
+	pk := &Passkeys{}
+	rec := httptest.NewRecorder()
+
+	pk.renderDir(rec, browserTestFS{}, "/lore", "/docs")
+
+	body := rec.Body.String()
+	for _, want := range []string{
+		`class="entry dir" href="/lore/docs/guides/" data-path="/docs/guides"`,
+		`class="entry" href="/lore/docs/README.md" data-path="/docs/README.md"`,
+		`data-copy="url">Copy URL`,
+		`data-copy="path">Copy path`,
+		`setTimeout(()=>{tapTimer=null;show(link)},275)`,
+		`window.location.assign(link.href)`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("directory view missing %q", want)
+		}
+	}
 }
 
 func TestRenderMarkdownFormatsGFMAndDoesNotRenderRawHTML(t *testing.T) {
