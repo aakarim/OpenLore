@@ -36,7 +36,7 @@ docsets when different people or agents need different access. OpenLore is
 read-only by default; enable writing when you want agents to create and update
 Markdown too.
 
-[![OpenLore OKF demo](assets/demo/v0.3.0/openlore-okf-demo.gif)](assets/demo/v0.3.0/openlore-okf-demo.mp4)
+[![OpenLore Skills import demo](assets/demo/v0.4.0/openlore-skills-import.gif)](assets/demo/v0.4.0/openlore-skills-import.mp4)
 
 ## Quick Start
 
