@@ -38,26 +38,67 @@ func makeSkillCmd(content string) CmdFunc {
 	}
 }
 
-// CmdSkills keeps the historical human-readable bare command while all
-// management commands below use records exclusively.
+// CmdSkills prints agent-facing usage with no arguments while management
+// commands emit records exclusively.
 func CmdSkills(ctx CmdContext, args []string, w, errW io.Writer, stdin io.Reader) int {
-	if len(args) != 0 {
-		return manageSkills(ctx, args, w)
-	}
-	if len(Skills) == 0 {
-		fmt.Fprintln(w, "No skills installed.")
+	if len(args) == 0 || len(args) == 1 && (args[0] == "help" || args[0] == "-h" || args[0] == "--help") {
+		printSkillsUsage(w)
 		return 0
 	}
-	fmt.Fprintln(w, "Available skills:")
+	return manageSkills(ctx, args, w)
+}
+
+func printSkillsUsage(w io.Writer) {
+	fmt.Fprintln(w, "# Managing Agent Skills")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Use OpenLore to import public GitHub Agent Skills into a writable collection.")
+	fmt.Fprintln(w, "A branch import tracks upstream and checks for updates when SKILL.md is read.")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "## Find skills")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "    lore meta --filter skills")
+	fmt.Fprintln(w, "    lore meta --filter skills | jq -r 'select((.name + \" \" + .description) | test(\"pdf\"; \"i\")) | .path'")
+	fmt.Fprintln(w, "    cat <path>")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Records are SKILL.md frontmatter plus path. Pass a directory to scope the")
+	fmt.Fprintln(w, "scan. Only valid skills appear; run `skills validate` to surface broken ones.")
+	fmt.Fprintln(w, "Read the chosen SKILL.md and follow it, including any files it references.")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "## Import into your home")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "    skills enable \"$HOME\"")
+	fmt.Fprintln(w, "    skills import https://github.com/owner/repo \"$HOME\"")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "The destination defaults to the current directory. A repository containing one")
+	fmt.Fprintln(w, "SKILL.md imports directly. For a multi-skill repository, the first command makes")
+	fmt.Fprintln(w, "no changes and returns candidate paths; rerun with the selected path:")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "    skills import owner/repo/path/from/candidate@main \"$HOME\"")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "An omitted ref uses and tracks the default branch. A branch ref such as @main")
+	fmt.Fprintln(w, "tracks updates; a tag or full commit SHA is pinned.")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "## Manage")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "    skills status [collection]")
+	fmt.Fprintln(w, "    skills validate [scope]")
+	fmt.Fprintln(w, "    skills update [skill-folder]")
+	fmt.Fprintln(w, "    skills remove-remote [skill-folder]")
+	fmt.Fprintln(w, "    skills disable [collection]")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Linked skill files are read-only locally. Change them upstream or remove the")
+	fmt.Fprintln(w, "remote link. Management commands emit NDJSON for agents to parse.")
+	if len(Skills) == 0 {
+		return
+	}
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "## Installed instruction commands")
 	fmt.Fprintln(w)
 	sorted := append([]SkillEntry(nil), Skills...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
 	for _, s := range sorted {
 		fmt.Fprintf(w, "  %-16s %s\n", s.Name, s.Description)
 	}
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Run a skill name as a command to see its content.")
-	return 0
 }
 
 type skillResult struct {

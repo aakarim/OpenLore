@@ -106,6 +106,21 @@ func runSkills(t *testing.T, f *skillsFS, cwd, command string, enabled bool, gra
 	return result, out.String(), code
 }
 
+func TestSkillsBlankAndHelpShowImportInstructions(t *testing.T) {
+	for _, command := range []string{"skills", "skills help", "skills --help"} {
+		sh := shell.NewShell(newSkillsFS())
+		var out bytes.Buffer
+		if code := sh.ExecPipeline(command, &out, &bytes.Buffer{}, nil); code != 0 {
+			t.Fatalf("%s exit = %d", command, code)
+		}
+		for _, want := range []string{"# Managing Agent Skills", "lore meta --filter skills", "skills enable \"$HOME\"", "skills import https://github.com/owner/repo \"$HOME\"", "candidate@main", "tracks updates"} {
+			if !strings.Contains(out.String(), want) {
+				t.Errorf("%s missing %q:\n%s", command, want, out.String())
+			}
+		}
+	}
+}
+
 func TestSkillsDisabledResultHasRequiredFields(t *testing.T) {
 	r, _, code := runSkills(t, newSkillsFS(), "/docs/skills", "skills status", false, "rw")
 	if code == 0 || r["status"] != "unsupported" || r["path"] != "/docs/skills" || r["operation"] != "status" {

@@ -110,6 +110,31 @@ them.
 | `lore meta --filter skills [path]` | Discover Agent Skills collections without scanning unrelated docs |
 | `lore validate [bundle]` | Validate an OKF bundle, local links, and aliased-path portability |
 
+## Skills management
+
+These commands require `plugins.skills.enabled: true`. Mutating commands also
+require a named `rw` grant on the destination docset.
+
+| Command | Description |
+|---|---|
+| `skills status [folder]` | Report collection state and linked remote skills as NDJSON |
+| `skills enable [folder]` | Enable recursive Skills collection behavior |
+| `skills disable [folder]` | Disable collection behavior without deleting skills |
+| `skills validate [scope]` | Validate accessible Skills collections |
+| `skills import <github-spec> [parent-dir]` | Import and link a public GitHub skill |
+| `skills update [skill-folder]` | Force an imported skill to check and apply its remote |
+| `skills remove-remote [skill-folder]` | Keep imported files but stop tracking GitHub |
+
+Run bare `skills` for GitHub spec syntax, automatic branch tracking, pinning,
+and collection recovery.
+
+Discover installed skills with the `skills` metadata filter, then read the
+chosen `SKILL.md`:
+
+```bash
+lore meta --filter skills | jq -r 'select((.name + " " + .description) | test("pdf"; "i")) | .path'
+```
+
 Example `lore docsets` output:
 
 ```text

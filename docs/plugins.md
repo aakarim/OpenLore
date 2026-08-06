@@ -115,33 +115,42 @@ When OKF applies to a document, the plugin enriches its metadata record:
 lore meta | jq -r 'select(.okf.valid == false) | .path'
 ```
 
-## Agent Skills collections
+## Install the Agent Skills plugin
 
-Mark a docset as an [Agent Skills](https://agentskills.io/) collection:
+Enable Skills management in `openlore.yml`:
 
-```json
-{
-  "docsets": {
-    "skills": {
-      "paths": ["/skills"],
-      "aliases": ["/agent-skills"],
-      "agent_skills": true
-    }
-  }
-}
+```yaml
+plugins:
+  skills:
+    enabled: true
+    remote_check_ttl: 60s
+    remote_timeout: 3s
+    remote_max_bytes: 10MB
 ```
+
+The defaults shown above are used when the optional remote settings are
+omitted. The server must also have writing enabled, and each identity that
+manages skills needs the named `rw` grant on its destination docset. A home
+docset is implicitly `rw` for its owner.
+
+Docsets do not need a static `agent_skills` setting. After installation, an
+authorized user enables a directory as a collection with `skills enable`; the
+marker is portable with the directory and can be changed without restarting the
+server.
 
 Each immediate child directory is then a skill and must contain an exactly named
 `SKILL.md` with valid frontmatter. Writes are checked at admission and again
 before serialized commit. Set `metadata.agent_skill: disable` to treat a
 parseable `SKILL.md` as ordinary documentation.
 
-Discover enabled, accessible collections without scanning unrelated docs:
+Agents discover skills the same way they query OKF metadata. The `skills`
+filter scopes `lore meta` to Agent Skills collections and returns only valid
+`SKILL.md` records — frontmatter plus the skill's path:
 
 ```bash
-lore meta --filter agent_skills
-lore meta --filter skills /skills/deploy
+lore meta --filter skills
+lore meta --filter skills | jq -r 'select((.name + " " + .description) | test("pdf"; "i")) | .path'
 ```
 
-Accepted filter names are `agent_skills`, `agent_skill`, `skills`, and `skill`.
-Results use absolute canonical mounted paths.
+Run bare `skills` for collection management, importing and tracking remote
+skills, status checks, updates, and unlinking.
