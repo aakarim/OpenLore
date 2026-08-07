@@ -104,6 +104,7 @@ See [Installation](#installation) for more ways to install and package OpenLore.
   context across sessions.
 - **Skills sharing** — Publish Agent Skills into shared collections so every
   authorized agent can discover and use the same governed procedures.
+- **Agent Plugins repository** — Version-pin [Agent Plugins](https://agent-plugins.org) repos from GitHub and serve them to your team's agents. Skills packaged in the open standard stay current automatically.
 - **Governed knowledge contribution** — Let contributors publish into inboxes
   while reserving sensitive paths for approvers and preventing accidental
   overwrites.
