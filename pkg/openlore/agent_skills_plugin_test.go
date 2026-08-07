@@ -5,8 +5,10 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -42,6 +44,18 @@ func markedSkillsFS(t *testing.T) *DirFS {
 		t.Fatal(err)
 	}
 	return d
+}
+
+func TestAgentSkillsDefaultRemoteClientRejectsPrivateHosts(t *testing.T) {
+	d := markedSkillsFS(t)
+	p := newAgentSkills(map[string]config.DocsetSpec{"skills": {Paths: []config.PathMapping{{Source: "/skills", Display: "/skills"}}}}, d, nil, slog.Default())
+	transport, ok := p.remote.HTTP.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("unexpected transport %T", p.remote.HTTP.Transport)
+	}
+	if _, err := transport.DialContext(context.Background(), "tcp", net.JoinHostPort("127.0.0.1", "443")); err == nil || !strings.Contains(err.Error(), "no public IP") {
+		t.Fatalf("default sync client allowed private host: %v", err)
+	}
 }
 
 func TestAgentSkillsUsesDynamicMarkersForDiscoveryAndAdmission(t *testing.T) {
@@ -271,6 +285,39 @@ func TestAgentSkillsSyncHandlesFileDirectoryTransitions(t *testing.T) {
 	}
 }
 
+func TestAgentSkillsSyncNormalizesUpstreamAndCanonicalizesRemote(t *testing.T) {
+	d := markedSkillsFS(t)
+	client, oldSHA := remoteSyncClient(t, map[string]string{
+		"SKILL.md": "---\nname: Upstream Display Name\ndescription: useful\nargument-hint: 3\n---\n",
+	})
+	stored, err := agentskills.GraftRemote(skillBytes("valid"), agentskills.Remote{Repo: "owner/repo", Path: "valid", Ref: "main", Commit: oldSHA, Kind: "tracking"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(d.root, "skills", "valid", "SKILL.md"), stored, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p := newAgentSkills(map[string]config.DocsetSpec{"skills": {Paths: []config.PathMapping{{Source: "/skills", Display: "/skills"}}}}, d, nil, slog.Default())
+	p.remote = client
+	p.submit = func(_ context.Context, cs vfs.ChangeSet) error {
+		_, err := vfs.CommitChangeSet(d, cs)
+		return err
+	}
+	p.syncSkill(context.Background(), "/skills/valid", true)
+	got, err := d.ReadFile("/skills/valid/SKILL.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"name: valid", "display-name: Upstream Display Name", "argument-hint: \"3\"", "repo: https://github.com/owner/repo"} {
+		if !bytes.Contains(got, []byte(want)) {
+			t.Fatalf("missing %q:\n%s", want, got)
+		}
+	}
+	if _, err := agentskills.Validate("valid", got); err != nil {
+		t.Fatalf("synced skill invalid: %v", err)
+	}
+}
+
 func TestAgentSkillsPreApplyBypassIsActorScoped(t *testing.T) {
 	d := markedSkillsFS(t)
 	stored, err := agentskills.GraftRemote(skillBytes("valid"), agentskills.Remote{Repo: "owner/repo", Ref: "main"})
@@ -304,6 +351,10 @@ func TestAgentSkillsStaleFailureDoesNotFollowChangedRemote(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := newAgentSkills(map[string]config.DocsetSpec{"skills": {Paths: []config.PathMapping{{Source: "/skills", Display: "/skills"}}}}, d, nil, slog.Default())
+	p.submit = func(_ context.Context, cs vfs.ChangeSet) error {
+		_, err := vfs.CommitChangeSet(d, cs)
+		return err
+	}
 	p.failures["/skills/valid"] = remoteState{fingerprint: "old-link", message: "offline"}
 	p.syncSkill(context.Background(), "/skills/./valid", false)
 	if _, exists := p.failures["/skills/valid"]; exists {
@@ -312,6 +363,23 @@ func TestAgentSkillsStaleFailureDoesNotFollowChangedRemote(t *testing.T) {
 	got := p.ContentTransforms()[0]("/skills/valid/SKILL.md", stored)
 	if bytes.Contains(got, []byte("remote-status")) {
 		t.Fatalf("stale status injected:\n%s", got)
+	}
+}
+
+func TestAgentSkillsCanonicalizationFailureIsReported(t *testing.T) {
+	d := markedSkillsFS(t)
+	stored, err := agentskills.GraftRemote(skillBytes("valid"), agentskills.Remote{Repo: "owner/repo", Ref: "main", Commit: strings.Repeat("c", 40), Kind: "tracking"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(d.root, "skills", "valid", "SKILL.md"), stored, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p := newAgentSkills(map[string]config.DocsetSpec{"skills": {Paths: []config.PathMapping{{Source: "/skills", Display: "/skills"}}}}, d, nil, slog.Default())
+	p.submit = func(context.Context, vfs.ChangeSet) error { return errors.New("concurrent edit") }
+	_, _, err = p.updateRemoteSkill(context.Background(), "/skills/valid")
+	if err == nil || !strings.Contains(err.Error(), "canonicalization failed") {
+		t.Fatalf("canonicalization failure not reported: %v", err)
 	}
 }
 

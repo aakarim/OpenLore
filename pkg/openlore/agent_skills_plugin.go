@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
-	"net/http"
 	"path"
 	"sort"
 	"strings"
@@ -53,7 +52,7 @@ func newAgentSkills(ds map[string]config.DocsetSpec, fsys vfs.FileSystem, canoni
 	if len(configs) > 0 {
 		cfg = configs[0]
 	}
-	return &agentSkillsPlugin{docsets: ds, fs: fsys, canonicalize: canonicalize, logger: logger, remote: &skillsremote.Client{HTTP: &http.Client{Timeout: cfg.RemoteTimeout}, GitHubBase: "https://github.com", CodeloadBase: "https://codeload.github.com", MaxBytes: cfg.RemoteMaxBytes, MaxFiles: skillsremote.MaxFiles}, ttl: cfg.RemoteCheckTTL, timeout: cfg.RemoteTimeout, checks: map[string]remoteState{}, failures: map[string]remoteState{}, syncLocks: map[string]*sync.Mutex{}}
+	return &agentSkillsPlugin{docsets: ds, fs: fsys, canonicalize: canonicalize, logger: logger, remote: &skillsremote.Client{HTTP: skillsremote.NewPublicHTTPClient(cfg.RemoteTimeout), GitHubBase: "https://github.com", CodeloadBase: "https://codeload.github.com", MaxBytes: cfg.RemoteMaxBytes, MaxFiles: skillsremote.MaxFiles}, ttl: cfg.RemoteCheckTTL, timeout: cfg.RemoteTimeout, checks: map[string]remoteState{}, failures: map[string]remoteState{}, syncLocks: map[string]*sync.Mutex{}}
 }
 
 func (p *agentSkillsPlugin) canonical(pth string) string {
@@ -273,9 +272,32 @@ func (p *agentSkillsPlugin) syncSkill(ctx context.Context, skillDir string, forc
 	if err != nil || !linked {
 		return
 	}
+	originalRepo := r.Repo
+	originalFingerprint := remoteFingerprint(r)
+	canonicalRepo, err := agentskills.CanonicalRepoURL(originalRepo)
+	if err != nil {
+		p.setRemoteFailure(skillDir, originalFingerprint, fmt.Sprintf("invalid remote repository: %v", err))
+		return
+	}
+	r.Repo = canonicalRepo
 	fingerprint := remoteFingerprint(r)
 	p.mu.Lock()
 	check := p.checks[skillDir]
+	p.mu.Unlock()
+	if canonicalRepo != originalRepo {
+		canonical, err := agentskills.GraftRemote(b, r)
+		if err != nil || p.submit == nil {
+			p.setRemoteFailure(skillDir, originalFingerprint, "remote canonicalization failed")
+			return
+		}
+		if err := p.submit(ctx, vfs.ChangeSet{Target: skillFile, Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: canonical, Opts: vfs.WriteOpts{IfMatch: &baseHash}}}); err != nil {
+			p.setRemoteFailure(skillDir, originalFingerprint, fmt.Sprintf("remote canonicalization failed: %v", err))
+			return
+		}
+		b = canonical
+		baseHash = hashBytes(b)
+	}
+	p.mu.Lock()
 	if failure := p.failures[skillDir]; failure.fingerprint != "" && failure.fingerprint != fingerprint {
 		delete(p.failures, skillDir)
 	}
@@ -318,6 +340,11 @@ func (p *agentSkillsPlugin) syncSkill(ctx context.Context, skillDir string, forc
 	upstream, ok := files["SKILL.md"]
 	if !ok {
 		p.setRemoteFailure(skillDir, fingerprint, "upstream has no SKILL.md; update refused")
+		return
+	}
+	_, upstream, err = agentskills.Normalize(path.Base(skillDir), upstream)
+	if err != nil {
+		p.setRemoteFailure(skillDir, fingerprint, err.Error())
 		return
 	}
 	r.Commit = sha

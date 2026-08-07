@@ -92,6 +92,46 @@ func TestExtractNameRejectsDisabledTraversalName(t *testing.T) {
 	}
 }
 
+func TestNormalizeImportedSkill(t *testing.T) {
+	original := []byte("---\nname: My_Fancy.Skill\ndescription: Useful\ndisplay-name: Wrong\nargument-hint: 42\nmetadata:\n  count: 3\n---\nbody\n")
+	name, got, err := Normalize("", original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != "my-fancy-skill" {
+		t.Fatalf("name=%q", name)
+	}
+	for _, want := range []string{"name: my-fancy-skill", "display-name: My_Fancy.Skill", "argument-hint: \"42\"", "count: \"3\""} {
+		if !bytes.Contains(got, []byte(want)) {
+			t.Fatalf("missing %q:\n%s", want, got)
+		}
+	}
+	if _, err := Validate(name, got); err != nil {
+		t.Fatalf("normalized skill is invalid: %v\n%s", err, got)
+	}
+	if !bytes.HasSuffix(got, []byte("---\nbody\n")) {
+		t.Fatalf("normalization changed body bytes:\n%s", got)
+	}
+}
+
+func TestCanonicalRepoURL(t *testing.T) {
+	for raw, want := range map[string]string{
+		"owner/repo":                             "https://github.com/owner/repo",
+		"https://gitlab.com/owner/repo.git":      "https://gitlab.com/owner/repo",
+		"https://GitHub.COM:443/owner/repo.git/": "https://github.com/owner/repo",
+	} {
+		got, err := CanonicalRepoURL(raw)
+		if err != nil || got != want {
+			t.Fatalf("CanonicalRepoURL(%q)=%q, %v", raw, got, err)
+		}
+	}
+	for _, raw := range []string{"owner/.git", "https://host/../repo", "https://host/owner/..", "https://host/%2e%2e/repo", "https://:443/owner/repo"} {
+		if got, err := CanonicalRepoURL(raw); err == nil {
+			t.Fatalf("CanonicalRepoURL(%q) accepted as %q", raw, got)
+		}
+	}
+}
+
 func TestRemoteEditFailsClosedForFlowFrontmatter(t *testing.T) {
 	flow := []byte("---\n{name: pdf, description: PDFs, remote: {repo: owner/repo, ref: main}}\n---\nbody\n")
 	if _, err := StripRemote(flow); err == nil {

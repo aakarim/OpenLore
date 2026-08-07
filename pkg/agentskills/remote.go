@@ -200,7 +200,16 @@ func SurgicalRemoteEdit(stored, incoming []byte, dirName ...string) ([]byte, boo
 		return nil, false, nil
 	}
 	if nextLinked {
-		if old.Repo != next.Repo || old.Path != next.Path || old.Ref != next.Ref {
+		canonicalNext, err := CanonicalRepoURL(next.Repo)
+		if err != nil {
+			return nil, false, err
+		}
+		next.Repo = canonicalNext
+		canonicalOld, err := CanonicalRepoURL(old.Repo)
+		if err != nil {
+			return nil, false, err
+		}
+		if canonicalOld != next.Repo || old.Path != next.Path || old.Ref != next.Ref {
 			next.Commit = ""
 			next.Kind = ""
 		} else {

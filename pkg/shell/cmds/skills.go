@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"path"
 	"sort"
 	"strings"
@@ -51,8 +50,10 @@ func CmdSkills(ctx CmdContext, args []string, w, errW io.Writer, stdin io.Reader
 func printSkillsUsage(w io.Writer) {
 	fmt.Fprintln(w, "# Managing Agent Skills")
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Use OpenLore to import public GitHub Agent Skills into a writable collection.")
-	fmt.Fprintln(w, "A branch import tracks upstream and checks for updates when SKILL.md is read.")
+	fmt.Fprintln(w, "Use OpenLore to import public Agent Skills into a writable collection from")
+	fmt.Fprintln(w, "GitHub, GitLab, Bitbucket, Codeberg, or self-hosted GitLab/Gitea/Forgejo over")
+	fmt.Fprintln(w, "HTTPS. Shorthand owner/repo means GitHub. A branch import tracks upstream and")
+	fmt.Fprintln(w, "checks for updates when SKILL.md is read.")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "## Find skills")
 	fmt.Fprintln(w)
@@ -69,9 +70,10 @@ func printSkillsUsage(w io.Writer) {
 	fmt.Fprintln(w, "    skills enable \"$HOME\"")
 	fmt.Fprintln(w, "    skills import https://github.com/owner/repo \"$HOME\"")
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "The destination defaults to the current directory. A repository containing one")
-	fmt.Fprintln(w, "SKILL.md imports directly. For a multi-skill repository, the first command makes")
-	fmt.Fprintln(w, "no changes and returns candidate paths; rerun with the selected path:")
+	fmt.Fprintln(w, "The destination defaults to the current directory. A repository with a root")
+	fmt.Fprintln(w, "SKILL.md, or exactly one elsewhere, imports directly. Otherwise the command")
+	fmt.Fprintln(w, "makes no changes and returns candidates with their names and descriptions;")
+	fmt.Fprintln(w, "rerun with the selected path:")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "    skills import owner/repo/path/from/candidate@main \"$HOME\"")
 	fmt.Fprintln(w)
@@ -136,8 +138,10 @@ type skillFinding struct {
 }
 
 type skillCandidate struct {
-	Type string `json:"type"`
-	Path string `json:"path"`
+	Type        string `json:"type"`
+	Path        string `json:"path"`
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
 }
 
 type skillCollection struct {
@@ -401,7 +405,7 @@ func skillsImport(ctx CmdContext, args []string, w io.Writer) int {
 	if maxBytes == 0 {
 		maxBytes = 10 * 1024 * 1024
 	}
-	client := skillsremote.Client{HTTP: &http.Client{Timeout: timeout}, GitHubBase: "https://github.com", CodeloadBase: "https://codeload.github.com", MaxBytes: maxBytes, MaxFiles: skillsremote.MaxFiles}
+	client := skillsremote.Client{HTTP: skillsremote.NewPublicHTTPClient(timeout), GitHubBase: "https://github.com", CodeloadBase: "https://codeload.github.com", MaxBytes: maxBytes, MaxFiles: skillsremote.MaxFiles}
 	if provider, ok := ctx.FS().(remoteSkillClientProvider); ok && provider.SkillsRemoteClient() != nil {
 		client = *provider.SkillsRemoteClient()
 	}
@@ -425,34 +429,41 @@ func skillsImport(ctx CmdContext, args []string, w io.Writer) int {
 		return finish(w, r, 1)
 	}
 	if spec.Path == "" {
-		candidates := []string{}
-		for name := range files {
-			if path.Base(name) == "SKILL.md" {
-				candidates = append(candidates, path.Dir(name))
+		if files["SKILL.md"] == nil {
+			candidates := []string{}
+			for name := range files {
+				if path.Base(name) == "SKILL.md" {
+					candidates = append(candidates, path.Dir(name))
+				}
 			}
-		}
-		sort.Strings(candidates)
-		if len(candidates) != 1 {
-			for _, candidate := range candidates {
-				emitSkill(w, skillCandidate{Type: "candidate", Path: candidate})
+			sort.Strings(candidates)
+			if len(candidates) != 1 {
+				for _, candidate := range candidates {
+					item := skillCandidate{Type: "candidate", Path: candidate}
+					if fm, _, ok, _ := okf.ParseFrontmatter(files[path.Join(candidate, "SKILL.md")]); ok {
+						item.Name, _ = fm["name"].(string)
+						item.Description, _ = fm["description"].(string)
+					}
+					emitSkill(w, item)
+				}
+				r.Status = "rejected"
+				r.Errors = len(candidates)
+				return finish(w, r, 1)
 			}
-			r.Status = "rejected"
-			r.Errors = len(candidates)
-			return finish(w, r, 1)
-		}
-		spec.Path = candidates[0]
-		if spec.Path == "." {
-			spec.Path = ""
-		} else {
+			spec.Path = candidates[0]
 			files, err = client.Fetch(context.Background(), spec.Repo, sha, spec.Path)
 			if err != nil {
+				r.Status = "rejected"
+				return finish(w, r, 1)
+			}
+			if err = skillsremote.ValidateFiles(files); err != nil {
 				r.Status = "rejected"
 				return finish(w, r, 1)
 			}
 		}
 	}
 	skill := files["SKILL.md"]
-	name, err := agentskills.ExtractName(skill)
+	name, skill, err := agentskills.Normalize("", skill)
 	if err != nil {
 		r.Status = "rejected"
 		return finish(w, r, 1)

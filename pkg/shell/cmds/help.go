@@ -101,6 +101,9 @@ func CmdHelp(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 	fmt.Fprintln(w, "  help                                     Show this help")
 	fmt.Fprintln(w, "  exit / quit                              Close session")
 	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "AGENT SKILLS")
+	fmt.Fprintln(w, "  skills                                   Show Agent Skills usage and installed instructions")
+	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Pipes are supported: grep pattern /dir | head -5 | sort -u")
 	return 0
 }

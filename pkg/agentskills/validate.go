@@ -2,22 +2,179 @@
 package agentskills
 
 import (
+	"bytes"
 	"fmt"
+	"net"
+	"net/url"
 	"path"
 	"regexp"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/aakarim/go-openlore/pkg/okf"
+	"gopkg.in/yaml.v3"
 )
 
 var nameRE = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+var repoComponentRE = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 
 func ValidateName(name string) error {
 	if len(name) < 1 || len(name) > 64 || !nameRE.MatchString(name) {
 		return fmt.Errorf("name must be 1-64 characters matching [a-z0-9]+(?:-[a-z0-9]+)*")
 	}
 	return nil
+}
+
+// CanonicalRepoURL converts a legacy owner/repo value or validates an HTTPS
+// repository URL. Repository URLs intentionally identify the repository root,
+// not a web UI tree path.
+func CanonicalRepoURL(repo string) (string, error) {
+	if parts := strings.Split(repo, "/"); len(parts) == 2 && validRepoComponent(parts[0]) {
+		parts[1] = strings.TrimSuffix(parts[1], ".git")
+		if validRepoComponent(parts[1]) {
+			return "https://github.com/" + strings.Join(parts, "/"), nil
+		}
+	}
+	u, err := url.Parse(repo)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return "", fmt.Errorf("repository must be an HTTPS owner/repo URL")
+	}
+	parts := strings.Split(strings.Trim(u.EscapedPath(), "/"), "/")
+	if len(parts) != 2 {
+		return "", fmt.Errorf("repository URL must identify owner/repo")
+	}
+	for i, part := range parts {
+		decoded, err := url.PathUnescape(part)
+		if err != nil {
+			return "", fmt.Errorf("repository URL must identify owner/repo")
+		}
+		parts[i] = decoded
+	}
+	parts[1] = strings.TrimSuffix(parts[1], ".git")
+	if !validRepoComponent(parts[0]) || !validRepoComponent(parts[1]) {
+		return "", fmt.Errorf("repository URL must identify owner/repo")
+	}
+	hostName := strings.ToLower(u.Hostname())
+	if hostName == "" {
+		return "", fmt.Errorf("repository URL must have a hostname")
+	}
+	host := hostName
+	if strings.Contains(hostName, ":") {
+		host = "[" + hostName + "]"
+	}
+	if port := u.Port(); port != "" && port != "443" {
+		host = net.JoinHostPort(hostName, port)
+	}
+	u.Host = host
+	u.Path = "/" + strings.Join(parts, "/")
+	u.RawPath = ""
+	return strings.TrimSuffix(u.String(), "/"), nil
+}
+
+func validRepoComponent(component string) bool {
+	return component != "" && component != "." && component != ".." && repoComponentRE.MatchString(component)
+}
+
+// ValidateRemotePath accepts only canonical relative repository paths.
+func ValidateRemotePath(remotePath string) error {
+	if remotePath != "" && (path.IsAbs(remotePath) || remotePath == ".." || strings.HasPrefix(remotePath, "../") || strings.Contains(remotePath, "\\") || path.Clean(remotePath) != remotePath) {
+		return fmt.Errorf("remote path must be a clean relative path")
+	}
+	return nil
+}
+
+// Normalize converts imported skills to OpenLore's strict agentskills.io
+// representation. dirName fixes the identity during sync; when empty, the
+// destination name is derived from the upstream name.
+func Normalize(dirName string, content []byte) (string, []byte, error) {
+	parts, err := splitDocumentParts(content)
+	if err != nil {
+		return "", nil, err
+	}
+	var fm map[string]any
+	if err := yaml.Unmarshal(parts.frontmatter, &fm); err != nil || fm == nil {
+		return "", nil, fmt.Errorf("SKILL.md requires YAML frontmatter mapping")
+	}
+	original, ok := fm["name"].(string)
+	if !ok || strings.TrimSpace(original) == "" {
+		return "", nil, fmt.Errorf("name must be a nonblank string")
+	}
+	name := dirName
+	if name == "" {
+		name = slugName(original)
+	}
+	if err := ValidateName(name); err != nil {
+		return "", nil, err
+	}
+	fm["name"] = name
+
+	metadata := map[string]any{}
+	if existing, ok := fm["metadata"].(map[string]any); ok {
+		for key, value := range existing {
+			metadata[key] = stringifyMetadata(value)
+		}
+	}
+	allowed := map[string]bool{"name": true, "description": true, "license": true, "compatibility": true, "metadata": true, "allowed-tools": true, "disable-model-invocation": true, "remote": true}
+	for key, value := range fm {
+		if allowed[key] {
+			continue
+		}
+		metadata[key] = stringifyMetadata(value)
+		delete(fm, key)
+	}
+	if original != name {
+		metadata["display-name"] = original
+	}
+	if len(metadata) == 0 {
+		delete(fm, "metadata")
+	} else {
+		fm["metadata"] = metadata
+	}
+	encoded, err := yaml.Marshal(fm)
+	if err != nil {
+		return "", nil, err
+	}
+	encoded = bytes.TrimSuffix(encoded, []byte("\n"))
+	if bytes.Equal(parts.opening, []byte("---\r\n")) {
+		encoded = bytes.ReplaceAll(encoded, []byte("\n"), []byte("\r\n"))
+	}
+	out := append([]byte(nil), parts.opening...)
+	out = append(out, encoded...)
+	out = append(out, parts.closing...)
+	out = append(out, parts.body...)
+	return name, out, nil
+}
+
+func slugName(name string) string {
+	var b strings.Builder
+	separator := false
+	for _, r := range strings.ToLower(strings.TrimSpace(name)) {
+		if r <= unicode.MaxASCII && (r >= 'a' && r <= 'z' || r >= '0' && r <= '9') {
+			if separator && b.Len() > 0 && b.Len() < 63 {
+				b.WriteByte('-')
+			}
+			if b.Len() == 64 {
+				break
+			}
+			b.WriteRune(r)
+			separator = false
+		} else if b.Len() > 0 {
+			separator = true
+		}
+	}
+	return strings.Trim(strings.TrimSpace(b.String()), "-")
+}
+
+func stringifyMetadata(value any) string {
+	if s, ok := value.(string); ok {
+		return s
+	}
+	b, err := yaml.Marshal(value)
+	if err != nil {
+		return fmt.Sprint(value)
+	}
+	return strings.TrimSpace(string(b))
 }
 
 // ExtractName parses and validates the name independently of disabled-skill
@@ -130,14 +287,19 @@ func validateRemote(v any) error {
 	}
 	repo, repoOK := m["repo"].(string)
 	ref, refOK := m["ref"].(string)
-	if !repoOK || !regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`).MatchString(repo) {
-		return fmt.Errorf("remote.repo must be owner/repo")
+	if !repoOK {
+		return fmt.Errorf("remote.repo must be an HTTPS repository URL")
+	}
+	if _, err := CanonicalRepoURL(repo); err != nil {
+		return fmt.Errorf("remote.repo: %w", err)
 	}
 	if !refOK || ref == "" || strings.ContainsAny(ref, "\x00\r\n") {
 		return fmt.Errorf("remote.ref must be a nonempty string")
 	}
-	if p, ok := m["path"].(string); ok && (path.IsAbs(p) || p == ".." || strings.HasPrefix(p, "../") || strings.Contains(p, "\\") || path.Clean(p) != p) {
-		return fmt.Errorf("remote.path must be a clean relative path")
+	if p, ok := m["path"].(string); ok {
+		if err := ValidateRemotePath(p); err != nil {
+			return fmt.Errorf("remote.path must be a clean relative path")
+		}
 	}
 	if commit, ok := m["commit"].(string); ok && !regexp.MustCompile(`^[0-9a-fA-F]{40}$`).MatchString(commit) {
 		return fmt.Errorf("remote.commit must be a 40-hex commit SHA")

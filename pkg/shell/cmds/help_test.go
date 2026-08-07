@@ -13,6 +13,9 @@ func TestHelp(t *testing.T) {
 	if !strings.Contains(out, "jq") {
 		t.Error("help should list jq")
 	}
+	if !strings.Contains(out, "skills") {
+		t.Error("help should list skills")
+	}
 	for _, command := range []string{"mkdir", "mv", "rm"} {
 		if !strings.Contains(out, command) {
 			t.Errorf("help should list %s", command)

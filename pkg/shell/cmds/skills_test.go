@@ -243,7 +243,7 @@ func remoteSkillsTestClientFiles(t *testing.T, files map[string]string) *skillsr
 func TestSkillsImportRejectsUnsafeNameBeforeMutation(t *testing.T) {
 	f := newSkillsFS()
 	f.attrs["/docs/skills"] = map[string][]byte{cmds.SkillsMarker: {}}
-	f.remote = remoteSkillsTestClient(t, "---\nname: ../escape\ndescription: unsafe\n---\n")
+	f.remote = remoteSkillsTestClient(t, "---\nname: ../...\ndescription: unsafe\n---\n")
 	r, _, code := runSkills(t, f, "/docs/skills", "skills import owner/repo/skills/grill@main", true, "rw")
 	if code == 0 || r["status"] != "rejected" || len(f.admitted) != 0 {
 		t.Fatalf("result=%v code=%d admitted=%d", r, code, len(f.admitted))
@@ -281,12 +281,32 @@ func TestSkillsImportAmbiguousRemoteEmitsSortedCandidatesWithoutMutation(t *test
 		if err := json.Unmarshal([]byte(lines[i]), &candidate); err != nil {
 			t.Fatalf("candidate %d: %v", i, err)
 		}
-		if candidate["type"] != "candidate" || candidate["path"] != wantPath {
+		if candidate["type"] != "candidate" || candidate["path"] != wantPath || candidate["name"] != wantPath || candidate["description"] != wantPath {
 			t.Fatalf("candidate %d=%v, want path %q", i, candidate, wantPath)
 		}
 	}
 	if len(f.admitted) != 0 || len(f.Files) != filesBefore {
 		t.Fatalf("mutation occurred: admitted=%d files before=%d after=%d", len(f.admitted), filesBefore, len(f.Files))
+	}
+}
+
+func TestSkillsImportRootWinsAndNormalizesSkillsSHFrontmatter(t *testing.T) {
+	f := newSkillsFS()
+	f.attrs["/docs/skills"] = map[string][]byte{cmds.SkillsMarker: {}}
+	f.remote = remoteSkillsTestClientFiles(t, map[string]string{
+		"SKILL.md":         "---\nname: My Fancy_Skill\ndescription: useful\nargument-hint: 7\n---\n",
+		"example/SKILL.md": "---\nname: example\ndescription: nested\n---\n",
+	})
+	r, out, code := runSkills(t, f, "/docs/skills", "skills import owner/repo@main", true, "rw")
+	if code != 0 || r["status"] != "imported" || r["path"] != "/docs/skills/my-fancy-skill" || len(f.admitted) != 1 {
+		t.Fatalf("result=%v code=%d output=%s admitted=%d", r, code, out, len(f.admitted))
+	}
+	leaves := f.admitted[0].Leaves()
+	stored := leaves[len(leaves)-1].Write.Bytes
+	for _, want := range []string{"name: my-fancy-skill", "display-name: My Fancy_Skill", "argument-hint: \"7\"", "repo: https://github.com/owner/repo"} {
+		if !bytes.Contains(stored, []byte(want)) {
+			t.Fatalf("missing %q:\n%s", want, stored)
+		}
 	}
 }
 

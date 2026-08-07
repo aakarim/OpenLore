@@ -2,20 +2,45 @@ package skillsremote
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"path"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/aakarim/go-openlore/pkg/agentskills"
 )
 
 const MaxFiles = 1000
+
+var nonPublicPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("192.0.2.0/24"),
+	netip.MustParsePrefix("192.88.99.0/24"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("198.51.100.0/24"),
+	netip.MustParsePrefix("203.0.113.0/24"),
+	netip.MustParsePrefix("240.0.0.0/4"),
+	netip.MustParsePrefix("64:ff9b::/96"),
+	netip.MustParsePrefix("64:ff9b:1::/48"),
+	netip.MustParsePrefix("100::/64"),
+	netip.MustParsePrefix("100:0:0:1::/64"),
+	netip.MustParsePrefix("2001::/23"),
+	netip.MustParsePrefix("2001:db8::/32"),
+	netip.MustParsePrefix("2002::/16"),
+	netip.MustParsePrefix("3fff::/20"),
+	netip.MustParsePrefix("5f00::/16"),
+}
 
 type Spec struct{ Repo, Path, Ref string }
 type Refs struct {
@@ -27,25 +52,97 @@ type Client struct {
 	GitHubBase, CodeloadBase string
 	MaxBytes                 int64
 	MaxFiles                 int
+	MaxCompressedBytes       int64
 	MaxArchiveBytes          int64
 	MaxArchiveEntries        int
 }
 
+// NewPublicHTTPClient returns an HTTP client whose redirects and connections
+// are restricted to HTTPS endpoints resolving to public IP addresses.
+func NewPublicHTTPClient(timeout time.Duration) *http.Client {
+	dialer := &net.Dialer{Timeout: timeout}
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+			host, port, err := net.SplitHostPort(address)
+			if err != nil {
+				return nil, err
+			}
+			ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+			if err != nil {
+				return nil, err
+			}
+			var lastErr error
+			for _, ip := range ips {
+				if !isPublicIP(ip) {
+					continue
+				}
+				conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+				if err == nil {
+					return conn, nil
+				}
+				lastErr = err
+			}
+			if lastErr != nil {
+				return nil, lastErr
+			}
+			return nil, fmt.Errorf("remote host has no public IP address")
+		},
+	}
+	return &http.Client{
+		Transport: transport,
+		Timeout:   timeout,
+		CheckRedirect: func(req *http.Request, _ []*http.Request) error {
+			if req.URL.Scheme != "https" {
+				return fmt.Errorf("remote redirect must use HTTPS")
+			}
+			return nil
+		},
+	}
+}
+
+func isPublicIP(ip netip.Addr) bool {
+	ip = ip.Unmap()
+	if !ip.IsValid() || !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() {
+		return false
+	}
+	for _, prefix := range nonPublicPrefixes {
+		if prefix.Contains(ip) {
+			return false
+		}
+	}
+	return true
+}
+
 func ParseSpec(raw string) (Spec, error) {
 	if u, err := url.Parse(raw); err == nil && u.Scheme != "" {
-		if u.Scheme != "https" || u.Host != "github.com" {
-			return Spec{}, fmt.Errorf("remote must be a github.com HTTPS URL")
+		if u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+			return Spec{}, fmt.Errorf("remote must be an HTTPS repository URL")
 		}
 		parts := strings.Split(strings.Trim(u.Path, "/"), "/")
 		if len(parts) < 2 {
 			return Spec{}, fmt.Errorf("missing owner/repo")
 		}
-		s := Spec{Repo: parts[0] + "/" + strings.TrimSuffix(parts[1], ".git")}
-		if len(parts) >= 4 && parts[2] == "tree" {
+		repo, err := agentskills.CanonicalRepoURL("https://" + u.Host + "/" + parts[0] + "/" + parts[1])
+		if err != nil {
+			return Spec{}, err
+		}
+		s := Spec{Repo: repo}
+		canonicalURL, _ := url.Parse(repo)
+		authority := canonicalURL.Host
+		if authority == "github.com" && len(parts) >= 4 && parts[2] == "tree" {
+			s.Ref = parts[3]
+			s.Path = strings.Join(parts[4:], "/")
+		} else if len(parts) >= 5 && parts[2] == "-" && parts[3] == "tree" {
+			s.Ref = parts[4]
+			s.Path = strings.Join(parts[5:], "/")
+		} else if len(parts) >= 5 && parts[2] == "src" && (parts[3] == "branch" || parts[3] == "tag") {
+			s.Ref = parts[4]
+			s.Path = strings.Join(parts[5:], "/")
+		} else if authority == "bitbucket.org" && len(parts) >= 4 && parts[2] == "src" {
 			s.Ref = parts[3]
 			s.Path = strings.Join(parts[4:], "/")
 		} else if len(parts) != 2 {
-			return Spec{}, fmt.Errorf("unsupported GitHub URL")
+			return Spec{}, fmt.Errorf("unsupported repository URL")
 		}
 		return s, validateSpec(s)
 	}
@@ -64,16 +161,16 @@ func splitShort(raw string) Spec {
 	p := strings.Split(raw, "/")
 	s := Spec{}
 	if len(p) >= 2 {
-		s.Repo = p[0] + "/" + p[1]
+		s.Repo, _ = agentskills.CanonicalRepoURL(p[0] + "/" + p[1])
 		s.Path = strings.Join(p[2:], "/")
 	}
 	return s
 }
 func validateSpec(s Spec) error {
-	if !regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`).MatchString(s.Repo) {
-		return fmt.Errorf("repo must be owner/repo")
+	if _, err := agentskills.CanonicalRepoURL(s.Repo); err != nil {
+		return err
 	}
-	if s.Path != "" && (path.IsAbs(s.Path) || path.Clean(s.Path) != s.Path || strings.HasPrefix(s.Path, "../")) {
+	if err := agentskills.ValidateRemotePath(s.Path); err != nil {
 		return fmt.Errorf("unsafe remote path")
 	}
 	if strings.ContainsAny(s.Ref, "\x00\r\n") {
@@ -101,13 +198,24 @@ func (c *Client) defaults() {
 	if c.MaxArchiveBytes == 0 {
 		c.MaxArchiveBytes = c.MaxBytes * 10
 	}
+	if c.MaxCompressedBytes == 0 {
+		c.MaxCompressedBytes = c.MaxArchiveBytes
+	}
 	if c.MaxArchiveEntries == 0 {
 		c.MaxArchiveEntries = c.MaxFiles * 10
 	}
 }
 func (c *Client) Resolve(ctx context.Context, repo string) (Refs, error) {
 	c.defaults()
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, c.GitHubBase+"/"+repo+"/info/refs?service=git-upload-pack", nil)
+	repoURL, err := agentskills.CanonicalRepoURL(repo)
+	if err != nil {
+		return Refs{}, err
+	}
+	base := repoURL
+	if u, _ := url.Parse(repoURL); u.Host == "github.com" && c.GitHubBase != "https://github.com" {
+		base = strings.TrimSuffix(c.GitHubBase, "/") + u.Path
+	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base+"/info/refs?service=git-upload-pack", nil)
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
 		return Refs{}, err
@@ -150,6 +258,9 @@ func parseRefs(b []byte) (Refs, error) {
 			continue
 		}
 		sha, name := fields[0], fields[1]
+		if !regexp.MustCompile(`^[0-9a-fA-F]{40}$`).MatchString(sha) {
+			continue
+		}
 		if first {
 			first = false
 			caps := strings.SplitN(name, "\x00", 2)
@@ -195,16 +306,44 @@ func (r Refs) Resolve(ref string) (sha, kind, resolvedRef string, err error) {
 
 func (c *Client) Fetch(ctx context.Context, repo, sha, subtree string) (map[string][]byte, error) {
 	c.defaults()
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, c.CodeloadBase+"/"+repo+"/tar.gz/"+sha, nil)
-	resp, err := c.HTTP.Do(req)
+	archiveURLs, err := c.archiveURLs(repo, sha)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("codeload: %s", resp.Status)
+	var lastErr error
+	for _, archiveURL := range archiveURLs {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, archiveURL, nil)
+		resp, err := c.HTTP.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode != http.StatusOK {
+			lastErr = fmt.Errorf("%s: %s", archiveURL, resp.Status)
+			resp.Body.Close()
+			continue
+		}
+		compressed, readErr := io.ReadAll(io.LimitReader(resp.Body, c.MaxCompressedBytes+1))
+		resp.Body.Close()
+		if readErr != nil {
+			return nil, readErr
+		}
+		if int64(len(compressed)) > c.MaxCompressedBytes {
+			return nil, fmt.Errorf("remote archive exceeds compressed size limit")
+		}
+		files, extractErr := c.extractArchive(compressed, subtree)
+		if extractErr == nil {
+			return files, nil
+		}
+		lastErr = fmt.Errorf("%s: %w", archiveURL, extractErr)
 	}
-	gz, err := gzip.NewReader(resp.Body)
+	if lastErr == nil {
+		lastErr = fmt.Errorf("remote archive unavailable")
+	}
+	return nil, lastErr
+}
+
+func (c *Client) extractArchive(compressed []byte, subtree string) (map[string][]byte, error) {
+	gz, err := gzip.NewReader(bytes.NewReader(compressed))
 	if err != nil {
 		return nil, err
 	}
@@ -289,20 +428,35 @@ func (c *Client) Fetch(ctx context.Context, repo, sha, subtree string) (map[stri
 		}
 		files[rel] = data
 	}
-	if b := files["SKILL.md"]; b != nil {
-		dirName := path.Base(subtree)
-		if subtree == "" {
-			var err error
-			dirName, err = agentskills.ExtractName(b)
-			if err != nil {
-				return nil, err
-			}
-		}
-		if _, err := agentskills.Validate(dirName, b); err != nil {
-			return nil, err
-		}
-	}
 	return files, nil
+}
+
+func (c *Client) archiveURLs(repo, sha string) ([]string, error) {
+	repoURL, err := agentskills.CanonicalRepoURL(repo)
+	if err != nil {
+		return nil, err
+	}
+	u, _ := url.Parse(repoURL)
+	host := strings.ToLower(u.Host)
+	ownerRepo := strings.TrimPrefix(u.Path, "/")
+	repoName := path.Base(u.Path)
+	switch host {
+	case "github.com":
+		return []string{strings.TrimSuffix(c.CodeloadBase, "/") + "/" + ownerRepo + "/tar.gz/" + sha}, nil
+	case "gitlab.com":
+		return []string{repoURL + "/-/archive/" + sha + "/" + repoName + "-" + sha + ".tar.gz"}, nil
+	case "bitbucket.org":
+		return []string{repoURL + "/get/" + sha + ".tar.gz"}, nil
+	case "codeberg.org":
+		return []string{repoURL + "/archive/" + sha + ".tar.gz"}, nil
+	default:
+		// GitLab and Gitea/Forgejo expose distinct, stable archive endpoints.
+		// Trying both supports self-hosted installations without configuration.
+		return []string{
+			repoURL + "/-/archive/" + sha + "/" + repoName + "-" + sha + ".tar.gz",
+			repoURL + "/archive/" + sha + ".tar.gz",
+		}, nil
+	}
 }
 
 func hasPathComponent(p, component string) bool {
