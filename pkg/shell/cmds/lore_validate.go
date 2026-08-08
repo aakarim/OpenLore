@@ -33,7 +33,12 @@ func cmdLoreValidate(ctx CmdContext, args []string, w io.Writer, errW io.Writer,
 		return 1
 	}
 
-	diagnostics, err := validation.Scan(ctx.FS(), root, ctx.Validators()...)
+	validators := ctx.Validators()
+	if len(validators) == 0 {
+		fmt.Fprintln(errW, "lore validate: warning: no validators enabled")
+		return 0
+	}
+	diagnostics, err := validation.Scan(ctx.FS(), root, validators...)
 	if err != nil {
 		fmt.Fprintf(errW, "lore validate: %s\n", err)
 		return 1
