@@ -14,7 +14,7 @@ func TestPluginInfo_BuiltinsReportNameAndVersion(t *testing.T) {
 		plugin       PluginInfoProvider
 		name, semver string
 	}{
-		{pluginWith(docsWithOKF()), "okf", "0.1.0"},
+		{pluginWith(docsWithOKF()), "okf", "0.2.0"},
 		{NewInboxPlugin(), "inbox", "1.0.0"},
 		{&shellexecPlugin{}, "shellexec", "1.0.0"},
 	}
@@ -40,7 +40,7 @@ func TestRegisterPlugin_LogsNameAndVersion(t *testing.T) {
 	}
 
 	out := buf.String()
-	for _, want := range []string{`name=okf`, `version=0.1.0`, `name=inbox`, `version=1.0.0`} {
+	for _, want := range []string{`name=okf`, `version=0.2.0`, `name=inbox`, `version=1.0.0`} {
 		if !strings.Contains(out, want) {
 			t.Errorf("boot log missing %q; got:\n%s", want, out)
 		}

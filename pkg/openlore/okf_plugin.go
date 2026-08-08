@@ -238,10 +238,11 @@ func fromOKFDiagnostic(diagnostic okf.Diagnostic) validation.Diagnostic {
 	}
 }
 
-// Info implements PluginInfoProvider. The version tracks the OKF spec revision
-// the validator targets (OKF v0.1).
+// Info implements PluginInfoProvider. The version tracks the newest OKF spec
+// revision the validator targets (OKF v0.2); bundles declaring okf_version
+// "0.1" are still accepted and linted against v0.1 rules.
 func (p *okfPlugin) Info() PluginInfo {
-	return PluginInfo{Name: "okf", Version: "0.1.0"}
+	return PluginInfo{Name: "okf", Version: "0.2.0"}
 }
 
 var (

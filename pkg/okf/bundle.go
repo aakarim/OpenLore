@@ -46,11 +46,36 @@ type Link struct {
 	Column      int
 }
 
-// ValidateBundle checks the mandatory OKF v0.1 conformance rules for every
-// Markdown file in a bundle. It intentionally does not reject broken links:
-// OKF §5.3 requires consumers to tolerate them. OpenLore checks link
-// resolvability separately as an operational requirement.
+// ValidateBundle checks OKF conformance for every Markdown file in a bundle,
+// linting against the spec version the bundle declares in its root index.md
+// (Latest when absent; an unknown declaration is a warning, never a
+// rejection, per §12). Hard conformance violations (§11) are errors; shape
+// problems in the version's optional field families are warnings. It
+// intentionally does not reject broken links: OKF §6.1 requires consumers to
+// tolerate them. OpenLore checks link resolvability separately as an
+// operational requirement.
 func ValidateBundle(files []File) []Diagnostic {
+	version := Latest
+	var diagnostics []Diagnostic
+	if declared, ok := DeclaredVersion(files); ok {
+		var known bool
+		version, known = ResolveVersion(declared)
+		if !known {
+			diagnostics = append(diagnostics, warnDiagnostic(IndexFile, 1, "okf/version",
+				fmt.Sprintf("unknown okf_version %q; validating against OKF v%s", declared, version)))
+		}
+	}
+	diagnostics = append(diagnostics, ValidateBundleAs(version, files)...)
+	sortDiagnostics(diagnostics)
+	return diagnostics
+}
+
+// ValidateBundleAs is ValidateBundle pinned to a specific spec version,
+// bypassing detection. The hard conformance core is identical across
+// versions; the version selects which optional-family checks (FamilyChecks)
+// run as warnings.
+func ValidateBundleAs(version Version, files []File) []Diagnostic {
+	checks := FamilyChecks(version)
 	var diagnostics []Diagnostic
 	for _, file := range files {
 		name := strings.TrimPrefix(path.Clean("/"+file.Path), "/")
@@ -61,6 +86,12 @@ func ValidateBundle(files []File) []Diagnostic {
 		if !IsReserved(name) {
 			if err := Validate(name, file.Content); err != nil {
 				diagnostics = append(diagnostics, diagnostic(name, 1, "okf/concept", err.Error()))
+				continue
+			}
+			meta, body, _, _ := ParseFrontmatter(file.Content)
+			concept := Concept{Path: name, Meta: meta, Body: body}
+			for _, check := range checks {
+				diagnostics = append(diagnostics, check(concept)...)
 			}
 			continue
 		}
@@ -198,6 +229,10 @@ func LocalLinkPath(destination string) (string, bool) {
 
 func diagnostic(name string, line int, rule, message string) Diagnostic {
 	return Diagnostic{Path: name, Line: line, Column: 1, Severity: SeverityError, Rule: rule, Message: message}
+}
+
+func warnDiagnostic(name string, line int, rule, message string) Diagnostic {
+	return Diagnostic{Path: name, Line: line, Column: 1, Severity: SeverityWarning, Rule: rule, Message: message}
 }
 
 func sortDiagnostics(diagnostics []Diagnostic) {

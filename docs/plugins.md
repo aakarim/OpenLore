@@ -26,15 +26,20 @@ complete immutable batch for persistence and later replay.
 
 ```text
 INFO plugin registered name=shellexec version=1.0.0
-INFO plugin registered name=okf version=0.1.0
+INFO plugin registered name=okf version=0.2.0
 INFO plugin registered name=inbox version=1.0.0
 ```
 
 ## Open Knowledge Format validation
 
-The built-in OKF plugin validates knowledge against
-[Open Knowledge Format v0.1](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md).
-Enable it per docset:
+The built-in OKF plugin validates knowledge against the
+[Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md).
+It targets spec v0.2 and also accepts v0.1 bundles: a bundle declaring
+`okf_version: "0.1"` in its root `index.md` is linted against v0.1 rules,
+anything else against v0.2. Hard conformance violations are errors; shape
+problems in a version's optional field families (e.g. v0.2 `sources`,
+`generated`, `verified`, `status`, Attested Computation contracts) are
+warnings from `lore validate`. Enable it per docset:
 
 ```json
 {
