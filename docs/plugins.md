@@ -91,7 +91,9 @@ metrics/revenue.md:15:8: warning [openlore/alias-target] link targets aliased do
   be portable to a server with different aliases.
 
 The command does not fetch URLs. Errors produce a non-zero exit status; warnings
-alone do not.
+alone do not. If no validator plugin is enabled, the command exits non-zero with
+`lore validate: no validators enabled` rather than reporting an empty scan as
+valid.
 
 ## Metadata queries with `lore meta`
 

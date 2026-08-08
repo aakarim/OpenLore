@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aakarim/go-openlore/pkg/openlore/validation"
 	"github.com/aakarim/go-openlore/pkg/shell"
 	"github.com/aakarim/go-openlore/pkg/shell/cmds"
 )
@@ -95,5 +96,32 @@ func TestLoreDocsets_GrepByAttribute(t *testing.T) {
 	}
 	if !strings.Contains(out, "backend") || strings.Contains(out, "public ") {
 		t.Fatalf("grep inbox should return only the backend row, got:\n%s", out)
+	}
+}
+
+func TestLoreValidate_RequiresEnabledValidator(t *testing.T) {
+	sh := shell.NewShell(testFS())
+	var out, errOut bytes.Buffer
+	code := sh.ExecPipeline("lore validate /docs", &out, &errOut, nil)
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1", code)
+	}
+	if out.String() != "" || !strings.Contains(errOut.String(), "no validators enabled") {
+		t.Fatalf("stdout=%q stderr=%q", out.String(), errOut.String())
+	}
+}
+
+func TestLoreValidate_RunsEnabledValidator(t *testing.T) {
+	sh := shell.NewShell(testFS())
+	sh.SetValidators([]validation.Validator{func(validation.Bundle) []validation.Diagnostic {
+		return nil
+	}})
+	var out, errOut bytes.Buffer
+	code := sh.ExecPipeline("lore validate /docs", &out, &errOut, nil)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0; stderr=%q", code, errOut.String())
+	}
+	if out.String() != "0 errors, 0 warnings\n" {
+		t.Fatalf("stdout=%q", out.String())
 	}
 }
