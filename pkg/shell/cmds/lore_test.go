@@ -99,14 +99,14 @@ func TestLoreDocsets_GrepByAttribute(t *testing.T) {
 	}
 }
 
-func TestLoreValidate_RequiresEnabledValidator(t *testing.T) {
+func TestLoreValidate_WarnsWithoutEnabledValidator(t *testing.T) {
 	sh := shell.NewShell(testFS())
 	var out, errOut bytes.Buffer
 	code := sh.ExecPipeline("lore validate /docs", &out, &errOut, nil)
-	if code != 1 {
-		t.Fatalf("exit = %d, want 1", code)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0", code)
 	}
-	if out.String() != "" || !strings.Contains(errOut.String(), "no validators enabled") {
+	if out.String() != "" || !strings.Contains(errOut.String(), "warning: no validators enabled") {
 		t.Fatalf("stdout=%q stderr=%q", out.String(), errOut.String())
 	}
 }

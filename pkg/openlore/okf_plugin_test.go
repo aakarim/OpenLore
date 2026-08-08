@@ -455,10 +455,10 @@ func TestRegisterPlugin_ValidateCommandIsCoreAndValidatorsAreSessionLocal(t *tes
 		t.Fatalf("with plugin exit=%d, want 1: %s", code, withOut.String())
 	}
 	errOut.Reset()
-	if code := withoutShell.ExecPipeline("lore validate", &withoutOut, &errOut, nil); code != 1 {
-		t.Fatalf("without plugin exit=%d, want 1: %s", code, errOut.String())
+	if code := withoutShell.ExecPipeline("lore validate", &withoutOut, &errOut, nil); code != 0 {
+		t.Fatalf("without plugin exit=%d, want 0: %s", code, errOut.String())
 	}
-	if !strings.Contains(withOut.String(), "okf/concept") || withoutOut.String() != "" || !strings.Contains(errOut.String(), "no validators enabled") {
+	if !strings.Contains(withOut.String(), "okf/concept") || withoutOut.String() != "" || !strings.Contains(errOut.String(), "warning: no validators enabled") {
 		t.Fatalf("validators not session-local: with=%q without=%q stderr=%q", withOut.String(), withoutOut.String(), errOut.String())
 	}
 }
