@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+step() {
+  local label="$1"
+  shift
+  printf '[setup] %s\n' "$label"
+  time "$@"
+}
+
+missing_packages=()
+command -v curl >/dev/null 2>&1 || missing_packages+=(curl)
+command -v git >/dev/null 2>&1 || missing_packages+=(git)
+command -v xz >/dev/null 2>&1 || missing_packages+=(xz-utils)
+
+source_nix_profile() {
+  local nix_profile_script
+  for nix_profile_script in \
+    "$HOME/.nix-profile/etc/profile.d/nix.sh" \
+    /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh; do
+    if [[ -f "$nix_profile_script" ]]; then
+      # shellcheck disable=SC1090
+      source "$nix_profile_script"
+      return
+    fi
+  done
+}
+
+if ((${#missing_packages[@]})); then
+  if ((EUID == 0)); then
+    step "Updating apt metadata" apt-get update
+    step "Installing Nix bootstrap dependencies" apt-get install -y "${missing_packages[@]}"
+  else
+    step "Updating apt metadata" sudo apt-get update
+    step "Installing Nix bootstrap dependencies" sudo apt-get install -y "${missing_packages[@]}"
+  fi
+fi
+
+source_nix_profile
+if ! command -v nix >/dev/null 2>&1; then
+  installer="$(mktemp)"
+  trap 'rm -f "$installer"' EXIT
+  step "Downloading the Nix installer" curl -fsSL --retry 3 -o "$installer" https://nixos.org/nix/install
+  step "Installing Nix" sh "$installer" --no-daemon --yes
+  source_nix_profile
+fi
+
+nix_bin="$(command -v nix)"
+profile_marker="# OpenLore Nix development shell"
+touch "$HOME/.bash_profile"
+if ! grep -Fqx "$profile_marker" "$HOME/.bash_profile"; then
+  cat >>"$HOME/.bash_profile" <<EOF
+
+$profile_marker
+if [[ -z "\${OPENLORE_NIX_ENV:-}" && "\${PWD}" == "$repo_root" ]]; then
+  eval "\$("$nix_bin" --extra-experimental-features 'nix-command flakes' print-dev-env "$repo_root")"
+  export OPENLORE_NIX_ENV=1
+fi
+EOF
+fi
+
+export NIX_CONFIG="experimental-features = nix-command flakes"
+step "Downloading Go module dependencies" "$nix_bin" develop "$repo_root" --command go mod download
+
+printf '[setup] Complete\n'
