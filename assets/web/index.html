@@ -161,13 +161,13 @@
 
         <div class="hero-code">
             <pre><span class="comment"># Teach your agent how to use OpenLore</span>
-<span class="cmd">ssh</span> <span class="flag">openlore.sh</span> teach <span class="flag">|</span> your-agent-cli
+<span class="cmd">ssh</span><span data-ssh-port></span> <span class="flag" data-server-host></span> teach <span class="flag">|</span> your-agent-cli
 
 <span class="comment"># Add documentation access to your AGENTS.md</span>
-<span class="cmd">ssh</span> <span class="flag">openlore.sh</span> agents <span class="flag">>></span> AGENTS.md
+<span class="cmd">ssh</span><span data-ssh-port></span> <span class="flag" data-server-host></span> agents <span class="flag">>></span> AGENTS.md
 
 <span class="comment"># Explore documentation</span>
-<span class="cmd">ssh</span> <span class="flag">openlore.sh</span> <span class="cmd">tree</span> -L 2 /</pre>
+<span class="cmd">ssh</span><span data-ssh-port></span> <span class="flag" data-server-host></span> <span class="cmd">tree</span> -L 2 /</pre>
         </div>
 
         <section>
@@ -185,7 +185,7 @@
         <section>
             <h2>For Agent Developers</h2>
             <p>Pipe the <code>teach</code> skill directly to your agent to set up documentation access:</p>
-            <pre>ssh openlore.sh teach | your-agent-cli</pre>
+            <pre>ssh<span data-ssh-port></span> <span data-server-host></span> teach | your-agent-cli</pre>
             <p>The <code>teach</code> skill walks your agent through:</p>
             <div class="grid">
                 <div class="card">
@@ -295,6 +295,12 @@ openlore mcp ./docs</pre>
 
     <script>
     (function() {
+        var host = location.hostname;
+        var hostElements = document.querySelectorAll('[data-server-host]');
+        Array.prototype.forEach.call(hostElements, function(element) {
+            element.textContent = host;
+        });
+
         fetch('/host-key')
             .then(function(r) {
                 if (!r.ok) throw new Error();
@@ -304,9 +310,13 @@ openlore mcp ./docs</pre>
             .then(function(data) {
                 var key = data.key;
                 var sshPort = data.sshPort;
+                var portFlag = sshPort !== '22' ? ' -p ' + sshPort : '';
+                var portElements = document.querySelectorAll('[data-ssh-port]');
+                Array.prototype.forEach.call(portElements, function(element) {
+                    element.textContent = portFlag;
+                });
                 document.getElementById('host-key-section').style.display = '';
                 document.getElementById('host-key-value').textContent = key;
-                var host = location.hostname;
                 var entry;
                 if (sshPort !== '22') {
                     entry = '# Add to ~/.ssh/known_hosts\n[' + host + ']:' + sshPort + ' ' + key;
