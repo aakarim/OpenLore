@@ -1,10 +1,13 @@
 .ssh/
 *.db
+__pycache__/
+*.pyc
 
 # Built binaries
 /openlore
 /lix
 
-# Local recursive-search benchmark data
+# Local recursive-search experiment data and agent runs
 /.benchdata/
+/.experiment/
 /bench-results/
