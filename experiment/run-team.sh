@@ -14,6 +14,7 @@ run_id=$(date -u +%Y%m%dT%H%M%SZ)
 run_root="${TMPDIR:-/tmp}/openlore-rg-team-$run_id"
 board_lore="$repo_root/experiment/lore.sh"
 agent_timeout=${OPENLORE_AGENT_TIMEOUT_SECONDS:-900}
+dashboard_url="http://127.0.0.1:${OPENLORE_DASHBOARD_PORT:-18765}"
 agents=(coordinator benchmark profiler traversal scanner regex integrator)
 
 [[ "$agent_timeout" =~ ^[1-9][0-9]*$ ]] || {
@@ -25,7 +26,7 @@ agents=(coordinator benchmark profiler traversal scanner regex integrator)
   echo "Start the collaboration backend first: ./experiment/start-collab.sh" >&2
   exit 2
 }
-curl --fail --silent "http://127.0.0.1:${OPENLORE_DASHBOARD_PORT:-18765}/api/health" >/dev/null || {
+curl --fail --silent "$dashboard_url/api/health" >/dev/null || {
   echo "Start the dashboard/verifier first: ./experiment/start-dashboard.sh" >&2
   exit 2
 }
@@ -215,8 +216,28 @@ wait_batch() {
   return "$status"
 }
 
+wait_if_paused() {
+  local next_batch=$1
+  local state announced=false
+  while true; do
+    state=$(curl --fail --silent "$dashboard_url/api/control" | python3 -c \
+      'import json,sys; print("paused" if json.load(sys.stdin).get("paused") else "running")') || state=unknown
+    [[ "$state" == paused ]] || break
+    if [[ "$announced" == false ]]; then
+      echo "Team paused before $next_batch; resume it from the dashboard."
+      announced=true
+    fi
+    sleep 2
+  done
+  if [[ "$announced" == true ]]; then
+    echo "Team resumed; starting $next_batch."
+  fi
+}
+
+wait_if_paused coordinator
 run_agent coordinator "You are the coordinator. Read all channel READMEs and inspect the benchmark and rg contract. Post a diverse decomposition in /channels/coordination and create one thread per independent direction. Do not modify or commit product code. Explicitly counter early convergence and duplicated approaches." "read,bash,grep,find,ls" || true
 
+wait_if_paused first-specialist-batch
 run_agent benchmark "You own benchmarking. Audit corpus fidelity, stability, and anti-cheat coverage. You may improve tests or harness code, but do not optimize Ripgrep. Commit useful changes and post evidence in the benchmarking channel." &
 pid1=$!
 run_agent profiler "You own profiling. Establish CPU and allocation profiles of the committed naive baseline on both corpora, identify measured bottlenecks, and post evidence in the profiling channel. Make only profiling-oriented changes if essential." &
@@ -225,12 +246,14 @@ run_agent traversal "You own traversal. Implement one measured path/traversal op
 pid3=$!
 wait_batch "$pid1" "$pid2" "$pid3" || true
 
+wait_if_paused second-specialist-batch
 run_agent scanner "You own line scanning and allocations. Implement one measured strategy preserving CRLF, final-newline, empty-file, long-line, and atomic-error behavior. Coordinate in the matching channel." &
 pid4=$!
 run_agent regex "You own matching strategy. Explore literal/regex fast paths that remain correct for all Go RE2 patterns and case-insensitive mode. Coordinate in the matching channel and avoid duplicating scanner work." &
 pid5=$!
 wait_batch "$pid4" "$pid5" || true
 
+wait_if_paused integrator
 run_agent integrator "You are the integrator, not the verifier. Read every channel, relevant thread, and specialist branch. Cherry-pick compatible candidates, run focused checks, and commit the integrated candidate. Submit its hash to the trusted verifier with: curl -sS -H 'Content-Type: application/json' -d '{\"agent\":\"integrator\",\"candidate_commit\":\"<hash>\",\"base_commit\":\"$base_commit\",\"run_now\":true}' http://127.0.0.1:18765/api/submissions. You cannot write /trusted-results. Post the result ID in /channels/verification/posts/integrator/." || true
 
 cat <<EOF

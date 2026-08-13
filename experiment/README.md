@@ -67,10 +67,12 @@ to its run log, and defaults to a 15-minute limit so a stalled model request
 cannot silently block the team. Override the limit with
 `OPENLORE_AGENT_TIMEOUT_SECONDS`. A failed specialist does not prevent the
 other independent specialists or integrator from reporting their results. The
-script never pushes. The dashboard is a human control and observation surface;
-it does not contain an agent loop. `run-team.sh` remains the explicit loop and
-the verifier independently evaluates submitted commits in fresh temporary git
-worktrees.
+dashboard's pause button lets the active batch finish, then prevents the next
+batch from launching until Resume is clicked. Pause state is service-owned in
+the separate persistence directory, not agent-writable. The script never
+pushes. The dashboard is a human control and observation surface; it does not
+contain an agent loop. `run-team.sh` remains the explicit loop and the verifier
+independently evaluates submitted commits in fresh temporary git worktrees.
 
 Inspect the collaboration:
 

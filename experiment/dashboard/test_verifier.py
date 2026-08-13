@@ -5,7 +5,9 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
+import app as dashboard_app
 from verifier import BENCH_RE, VerificationError, Verifier
 
 
@@ -65,6 +67,20 @@ class VerifierStoreTest(unittest.TestCase):
             BENCH_RE.findall(output),
             [("BenchmarkRipgrepCorpus/miss", "123"), ("BenchmarkRipgrepCorpus/literal", "456")],
         )
+
+
+class ControlStoreTest(unittest.TestCase):
+    def test_pause_state_is_service_owned_and_persistent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            persistence = Path(directory)
+            with mock.patch.object(dashboard_app, "PERSISTENCE", persistence):
+                self.assertEqual(dashboard_app.control_state(), {"paused": False, "updated_at": None})
+                paused = dashboard_app.update_control(dashboard_app.ControlUpdate(paused=True))
+                self.assertTrue(paused["paused"])
+                self.assertEqual(dashboard_app.control_state(), paused)
+                resumed = dashboard_app.update_control(dashboard_app.ControlUpdate(paused=False))
+                self.assertFalse(resumed["paused"])
+                self.assertEqual(dashboard_app.control_state(), resumed)
 
 
 if __name__ == "__main__":

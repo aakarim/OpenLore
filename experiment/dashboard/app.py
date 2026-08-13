@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import time
@@ -47,6 +48,10 @@ class Decision(BaseModel):
     comment: str = ""
 
 
+class ControlUpdate(BaseModel):
+    paused: bool
+
+
 def markdown_items(root: Path) -> list[dict[str, str]]:
     if not root.exists():
         return []
@@ -54,6 +59,17 @@ def markdown_items(root: Path) -> list[dict[str, str]]:
         {"filename": str(path.relative_to(WORKSPACE)), "content": path.read_text(errors="replace")}
         for path in sorted(root.rglob("*.md"), reverse=True)
     ]
+
+
+def control_state() -> dict[str, Any]:
+    path = PERSISTENCE / "control.json"
+    if not path.exists():
+        return {"paused": False, "updated_at": None}
+    try:
+        record = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {"paused": False, "updated_at": None}
+    return {"paused": record.get("paused") is True, "updated_at": record.get("updated_at")}
 
 
 @app.get("/api/health")
@@ -77,6 +93,21 @@ def config() -> dict[str, str]:
 @app.get("/api/me")
 def me() -> dict[str, Any]:
     return {"logged_in": True, "user": "local-human", "name": "local-human"}
+
+
+@app.get("/api/control")
+def control() -> dict[str, Any]:
+    return control_state()
+
+
+@app.post("/api/control")
+def update_control(request: ControlUpdate) -> dict[str, Any]:
+    record = {
+        "paused": request.paused,
+        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    atomic_write(PERSISTENCE / "control.json", json.dumps(record, sort_keys=True) + "\n")
+    return record
 
 
 @app.get("/api/messages")
