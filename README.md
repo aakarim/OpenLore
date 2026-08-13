@@ -98,7 +98,7 @@ See [Installation](#installation) for more ways to install and package OpenLore.
 ## Use Cases
 
 - **Continuous Learning repository** - store sessions and learnings in one shared server. Add metrics so you can optimise. Allow agents to share learnings with each other while maintaining user isolation.
-- **Team Artifact Repository** - share documents you've created while maintaining access controls. Much more natural than git, more agent-nativr than Confluence/Notion. 
+- **Team Artifact Repository** - share markdown, HTML, JSON, Excel etc. documents you've created while maintaining access controls. Much more natural than git, more agent-native than Confluence/Notion. 
 - **Documentation for coding agents** — Put internal API docs, runbooks, product
   context, and architecture notes behind a familiar, greppable interface.
 - **A shared live memory for teams of agents** — Give agents separate or shared
