@@ -104,6 +104,7 @@ See [Installation](#installation) for more ways to install and package OpenLore.
 - **A shared live memory for teams of agents** — Give agents separate or shared
   docsets so they can publish findings, hand off work, and accumulate durable
   context across sessions.
+- **Public docs site** - add any files to your public docset, enable public access and it will be shown to any agent that stumbles across your site. Improves AEO/GEO with no need to edit your existing docs. 
 - **Skills sharing** — Publish Agent Skills into shared collections so every
   authorized agent can discover and use the same governed procedures.
 - **Agent Plugins repository** — Version-pin [Agent Plugins](https://agent-plugins.org) repos from GitHub and serve them to your team's agents. Skills packaged in the open standard stay current automatically.
