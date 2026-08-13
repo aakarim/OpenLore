@@ -128,20 +128,20 @@ post_lifecycle() {
   local agent=$1
   local state=$2
   local detail=$3
-  local channel stamp
+  local channel stamp content
   channel=$(agent_channel "$agent")
   stamp=$(date -u +%Y%m%dT%H%M%SZ)
-  AGENT_ID="$agent" TEAM_RUN_DIR="$runtime" "$board_lore" \
-    "cat > /channels/$channel/posts/$agent/$run_id-$state.md <<'OPENLORE_LIFECYCLE'
----
+  detail=${detail//\'/’}
+  content="---
 type: lifecycle
 agent: $agent
 state: $state
 timestamp: $stamp
 run: $run_id
 ---
-$detail
-OPENLORE_LIFECYCLE" >/dev/null
+$detail"
+  AGENT_ID="$agent" TEAM_RUN_DIR="$runtime" "$board_lore" \
+    "echo '$content' > /channels/$channel/posts/$agent/$run_id-$state.md" >/dev/null
 }
 
 run_with_timeout() {
@@ -200,7 +200,7 @@ $role_prompt" >"$run_root/logs/$agent.log" 2>&1
         "Agent process exited with status $status. Its draft worktree is preserved with $changes uncommitted path(s); last commit: \`$head\`."
     else
       post_lifecycle "$agent" finished \
-        "Agent process exited successfully. Worktree has $changes uncommitted path(s); last commit: \`$head\`. Consult this agent's evidence posts before integration."
+        "Agent process exited successfully. Worktree has $changes uncommitted path(s); last commit: \`$head\`. Consult this agent’s evidence posts before integration."
     fi
     return "$status"
   )
