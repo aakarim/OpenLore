@@ -23,6 +23,7 @@ Run `help` in a session for the command list available on that server.
 | Command | Description |
 |---|---|
 | `grep` | Search patterns (`-i`, `-n`, `-r`, `-v`, `-c`, `-l`, `-o`, `-L`, `-w`, `-x`, `-m`) |
+| `rg` | Recursively search files with deterministic output (`-i`, `-n`, `-l`) |
 | `find` | Find files (`-name`, `-type f\|d`) |
 
 ## Text processing

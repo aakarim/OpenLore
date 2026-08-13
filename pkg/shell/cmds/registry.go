@@ -18,6 +18,7 @@ func init() {
 	Register("tail", CmdTail)
 	Register("find", CmdFind)
 	Register("grep", CmdGrep)
+	Register("rg", CmdRg)
 	Register("wc", CmdWc)
 	Register("cd", CmdCd)
 	Register("tree", CmdTree)
