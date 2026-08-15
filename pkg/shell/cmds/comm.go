@@ -30,9 +30,7 @@ func CmdComm(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 			suppress1 = true
 			suppress3 = true
 		default:
-			if strings.HasPrefix(a, "-") {
-				ReportUnsupportedFlag(ctx, "comm", a)
-			} else {
+			if !strings.HasPrefix(a, "-") {
 				files = append(files, a)
 			}
 		}

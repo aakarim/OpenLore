@@ -60,9 +60,6 @@ type Config struct {
 	// event-bus `hooks` path with middleware on the read/write chains.
 	Shellexec ShellexecConfig
 	Logger    *slog.Logger
-	// LogUnsupportedShellUsage emits structured log events when a shell client
-	// invokes an unknown command or supplies a flag a command does not support.
-	LogUnsupportedShellUsage bool
 
 	// Readonly is the global write lock. Default true: the substrate is a
 	// read-only filesystem and no write verbs are available. Set false to
@@ -943,15 +940,6 @@ func WithIgnorePatterns(patterns []string) Option {
 func WithLogger(logger *slog.Logger) Option {
 	return func(cfg *Config) error {
 		cfg.Logger = logger
-		return nil
-	}
-}
-
-// WithUnsupportedShellUsageLogging enables structured telemetry for unknown
-// shell commands and unsupported command flags.
-func WithUnsupportedShellUsageLogging(enabled bool) Option {
-	return func(cfg *Config) error {
-		cfg.LogUnsupportedShellUsage = enabled
 		return nil
 	}
 }

@@ -24,9 +24,7 @@ func CmdUniq(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 		case "-u":
 			uniqOnly = true
 		default:
-			if strings.HasPrefix(a, "-") {
-				ReportUnsupportedFlag(ctx, "uniq", a)
-			} else {
+			if !strings.HasPrefix(a, "-") {
 				files = append(files, a)
 			}
 		}

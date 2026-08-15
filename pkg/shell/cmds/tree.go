@@ -16,9 +16,7 @@ func CmdTree(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 		if args[i] == "-L" && i+1 < len(args) {
 			fmt.Sscanf(args[i+1], "%d", &maxDepth)
 			i++
-		} else if strings.HasPrefix(args[i], "-") {
-			ReportUnsupportedFlag(ctx, "tree", args[i])
-		} else {
+		} else if !strings.HasPrefix(args[i], "-") {
 			root = ctx.Resolve(args[i])
 		}
 	}

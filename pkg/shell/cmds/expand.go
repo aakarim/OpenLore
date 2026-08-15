@@ -15,9 +15,7 @@ func CmdExpand(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin
 		if args[i] == "-t" && i+1 < len(args) {
 			tabstop, _ = strconv.Atoi(args[i+1])
 			i++
-		} else if strings.HasPrefix(args[i], "-") {
-			ReportUnsupportedFlag(ctx, "expand", args[i])
-		} else {
+		} else if !strings.HasPrefix(args[i], "-") {
 			files = append(files, args[i])
 		}
 	}
@@ -49,9 +47,7 @@ func CmdUnexpand(ctx CmdContext, args []string, w io.Writer, errW io.Writer, std
 		case "-a":
 			allFlag = true
 		default:
-			if strings.HasPrefix(args[i], "-") {
-				ReportUnsupportedFlag(ctx, "unexpand", args[i])
-			} else {
+			if !strings.HasPrefix(args[i], "-") {
 				files = append(files, args[i])
 			}
 		}

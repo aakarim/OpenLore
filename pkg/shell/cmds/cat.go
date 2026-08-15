@@ -16,9 +16,6 @@ func CmdCat(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io
 	}
 	exitCode := 0
 	for _, a := range args {
-		if len(a) > 1 && a[0] == '-' {
-			ReportUnsupportedFlag(ctx, "cat", a)
-		}
 		p := ctx.Resolve(a)
 		content, err := ctx.FS().ReadFile(p)
 		if err != nil {

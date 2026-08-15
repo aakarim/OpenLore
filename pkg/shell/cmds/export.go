@@ -86,7 +86,7 @@ func CmdSet(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io
 			setPositional = true
 			i = len(args) // break
 		case "-e", "-x", "-u", "+e", "+x", "+u":
-			ReportUnsupportedFlag(ctx, "set", args[i])
+			// Acknowledge without changing behavior
 		}
 	}
 	_ = setPositional

@@ -37,9 +37,7 @@ func CmdNl(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.
 				i++
 			}
 		default:
-			if strings.HasPrefix(args[i], "-") {
-				ReportUnsupportedFlag(ctx, "nl", args[i])
-			} else {
+			if !strings.HasPrefix(args[i], "-") {
 				files = append(files, args[i])
 			}
 		}

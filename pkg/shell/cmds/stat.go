@@ -11,9 +11,6 @@ func CmdStat(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 		return 1
 	}
 	for _, a := range args {
-		if len(a) > 1 && a[0] == '-' {
-			ReportUnsupportedFlag(ctx, "stat", a)
-		}
 		p := ctx.Resolve(a)
 		f, err := ctx.FS().Stat(p)
 		if err != nil {

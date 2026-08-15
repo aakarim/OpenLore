@@ -42,9 +42,6 @@ func CmdRead(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 				i++
 			}
 		default:
-			if len(args[i]) > 1 && args[i][0] == '-' {
-				ReportUnsupportedFlag(ctx, "read", args[i])
-			}
 			varNames = append(varNames, args[i])
 		}
 	}

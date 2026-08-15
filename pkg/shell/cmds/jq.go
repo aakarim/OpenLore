@@ -24,9 +24,6 @@ func CmdJq(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.
 
 	for i := 0; i < len(args); i++ {
 		a := args[i]
-		if strings.HasPrefix(a, "--") {
-			ReportUnsupportedFlag(ctx, "jq", a)
-		}
 		if strings.HasPrefix(a, "-") && len(a) > 1 && a[1] != '-' {
 			for _, ch := range a[1:] {
 				switch ch {
@@ -38,8 +35,6 @@ func CmdJq(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.
 					exitStatus = true
 				case 's':
 					slurp = true
-				default:
-					ReportUnsupportedFlag(ctx, "jq", "-"+string(ch))
 				}
 			}
 		} else if filter == "" {

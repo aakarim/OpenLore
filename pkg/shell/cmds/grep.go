@@ -23,9 +23,6 @@ func CmdGrep(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 
 	for i := 0; i < len(args); i++ {
 		a := args[i]
-		if strings.HasPrefix(a, "--") {
-			ReportUnsupportedFlag(ctx, "grep", a)
-		}
 		if strings.HasPrefix(a, "-") && len(a) > 1 && !strings.HasPrefix(a, "--") {
 			for _, ch := range a[1:] {
 				switch ch {
@@ -45,8 +42,6 @@ func CmdGrep(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 					invertMatch = true
 				case 'l':
 					filesWithMatches = true
-				default:
-					ReportUnsupportedFlag(ctx, "grep", "-"+string(ch))
 				}
 			}
 		} else if pattern == "" {

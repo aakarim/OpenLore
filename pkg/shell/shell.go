@@ -34,9 +34,8 @@ type Shell struct {
 	// docsets and publishTargets are the per-session views the host computes
 	// from the identity's lore. Read by `lore docsets` and `publish`
 	// respectively. nil for a standalone shell.
-	docsets                 []cmds.DocsetInfo
-	publishTargets          []cmds.PublishTarget
-	unsupportedUsageHandler func(UnsupportedUsage)
+	docsets        []cmds.DocsetInfo
+	publishTargets []cmds.PublishTarget
 	// metaExtenders are the plugin-contributed extenders applied by `lore meta`,
 	// installed by the host per session. nil for a standalone shell.
 	metaExtenders []meta.Extender
@@ -48,41 +47,12 @@ type Shell struct {
 	skillsRemoteMaxBytes int64
 }
 
-// UnsupportedUsage describes shell syntax that OpenLore did not implement.
-// Flag is empty for an unknown command.
-type UnsupportedUsage struct {
-	Command string
-	Flag    string
-}
-
 // NewShell creates a new Shell backed by the given vfs.FileSystem.
 func NewShell(fs vfs.FileSystem) *Shell {
 	return &Shell{
 		fs:  fs,
 		cwd: "/",
 	}
-}
-
-// SetUnsupportedUsageHandler installs optional telemetry for unknown commands
-// and unsupported flags. Command output and exit status are unaffected.
-func (s *Shell) SetUnsupportedUsageHandler(handler func(UnsupportedUsage)) {
-	s.unsupportedUsageHandler = handler
-}
-
-// ReportUnsupportedFlag implements the optional command telemetry interface.
-func (s *Shell) ReportUnsupportedFlag(command, flag string) {
-	if s.unsupportedUsageHandler == nil || flag == "" || flag == "-" {
-		return
-	}
-	if strings.HasPrefix(flag, "--") {
-		flag, _, _ = strings.Cut(flag, "=")
-	} else if strings.HasPrefix(flag, "-") {
-		runes := []rune(flag)
-		if len(runes) > 2 {
-			flag = string(runes[:2])
-		}
-	}
-	s.unsupportedUsageHandler(UnsupportedUsage{Command: command, Flag: flag})
 }
 
 // SetAllowedActions restricts the shell to the given capability classes
@@ -373,11 +343,6 @@ func (s *Shell) execCallInner(call *parser.CallExpr, w io.Writer, errW io.Writer
 	}
 
 	if cmdName == "pwd" {
-		for _, arg := range cmdArgs {
-			if len(arg) > 1 && arg[0] == '-' {
-				s.ReportUnsupportedFlag("pwd", arg)
-			}
-		}
 		fmt.Fprintln(w, s.cwd)
 		return 0
 	}
@@ -394,9 +359,6 @@ func (s *Shell) execCallInner(call *parser.CallExpr, w io.Writer, errW io.Writer
 		return fn(s, cmdArgs, w, errW, stdin)
 	}
 
-	if s.unsupportedUsageHandler != nil {
-		s.unsupportedUsageHandler(UnsupportedUsage{Command: cmdName})
-	}
 	fmt.Fprintf(errW, "%s: command not found\n", cmdName)
 	fmt.Fprintln(errW, "Type 'help' for available commands.")
 	return 127

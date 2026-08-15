@@ -27,9 +27,6 @@ func CmdSed(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io
 				i++
 			}
 		default:
-			if strings.HasPrefix(args[i], "-") {
-				ReportUnsupportedFlag(ctx, "sed", args[i])
-			}
 			if len(expressions) == 0 && !strings.HasPrefix(args[i], "-") && len(files) == 0 {
 				expressions = append(expressions, args[i])
 			} else {

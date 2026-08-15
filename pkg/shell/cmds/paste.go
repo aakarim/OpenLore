@@ -21,9 +21,7 @@ func CmdPaste(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin 
 		case "-s":
 			serial = true
 		default:
-			if strings.HasPrefix(args[i], "-") {
-				ReportUnsupportedFlag(ctx, "paste", args[i])
-			} else {
+			if !strings.HasPrefix(args[i], "-") {
 				files = append(files, args[i])
 			}
 		}

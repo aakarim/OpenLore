@@ -1,10 +1,8 @@
 package openlore
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -80,33 +78,6 @@ func TestNewServerWithRootFS_WriteLogLive(t *testing.T) {
 	}
 	if got := fs.order(); len(got) != 1 || got[0] != "/x" {
 		t.Fatalf("applied = %v, want [/x]", got)
-	}
-}
-
-func TestServerLogsUnsupportedShellUsageWhenEnabled(t *testing.T) {
-	var logs bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&logs, nil))
-	s, err := NewServer("", WithLogger(logger), WithUnsupportedShellUsageLogging(true))
-	if err != nil {
-		t.Fatalf("NewServer: %v", err)
-	}
-
-	sh := s.buildSessionShell(Identity{IdentityName: "agent-1"})
-	sh.ExecPipeline("missing-command", &bytes.Buffer{}, &bytes.Buffer{}, nil)
-	sh.ExecPipeline("grep -z pattern", &bytes.Buffer{}, &bytes.Buffer{}, nil)
-
-	got := logs.String()
-	for _, want := range []string{
-		`"msg":"unsupported shell usage"`,
-		`"command":"missing-command"`,
-		`"command":"grep"`,
-		`"flag":"-z"`,
-		`"kind":"unsupported_flag"`,
-		`"identity":"agent-1"`,
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("logs missing %q:\n%s", want, got)
-		}
 	}
 }
 

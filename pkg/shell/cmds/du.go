@@ -26,9 +26,7 @@ func CmdDu(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.
 		case "-c":
 			grandTotal = true
 		default:
-			if strings.HasPrefix(a, "-") {
-				ReportUnsupportedFlag(ctx, "du", a)
-			} else {
+			if !strings.HasPrefix(a, "-") {
 				targets = append(targets, a)
 			}
 		}

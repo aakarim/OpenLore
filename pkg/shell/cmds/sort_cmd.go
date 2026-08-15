@@ -30,10 +30,6 @@ func CmdSort(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 				i++
 			}
 		} else if strings.HasPrefix(a, "-") && len(a) > 1 {
-			longOption := strings.HasPrefix(a, "--")
-			if longOption {
-				ReportUnsupportedFlag(ctx, "sort", a)
-			}
 			for _, ch := range a[1:] {
 				switch ch {
 				case 'r':
@@ -44,10 +40,6 @@ func CmdSort(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 					unique = true
 				case 'f':
 					caseFold = true
-				default:
-					if !longOption {
-						ReportUnsupportedFlag(ctx, "sort", "-"+string(ch))
-					}
 				}
 			}
 		} else {
