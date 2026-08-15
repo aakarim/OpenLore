@@ -1,5 +1,9 @@
 version: "1"
 
+# Capture unsupported shell usage so production traffic can drive command and
+# syntax gap analysis. These events are emitted only at debug level.
+debug: true
+
 port: 2222
 external_ssh_port: 22
 http_port: 8080

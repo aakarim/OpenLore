@@ -20,6 +20,7 @@ import (
 // Config holds the resolved server configuration.
 type Config struct {
 	ConfigVersion   string
+	Debug           bool
 	Port            int
 	MetricsPort     int
 	HostKeyPath     string
@@ -420,6 +421,7 @@ type Option func(*Config) error
 // fileConfig mirrors Config for YAML deserialization.
 type fileConfig struct {
 	ConfigVersion       string           `yaml:"version"`
+	Debug               bool             `yaml:"debug"`
 	Port                int              `yaml:"port"`
 	MetricsPort         int              `yaml:"metrics_port"`
 	HostKeyPath         string           `yaml:"host_key_path"`
@@ -588,6 +590,7 @@ func WithConfigFile(path string) Option {
 		if fc.ConfigVersion != "" {
 			cfg.ConfigVersion = fc.ConfigVersion
 		}
+		cfg.Debug = fc.Debug
 		if fc.Port != 0 {
 			cfg.Port = fc.Port
 		}
@@ -706,6 +709,7 @@ func WithEmbeddedConfig(data []byte, motdFallback string) Option {
 			if fc.ConfigVersion != "" {
 				cfg.ConfigVersion = fc.ConfigVersion
 			}
+			cfg.Debug = fc.Debug
 			if fc.Port != 0 {
 				cfg.Port = fc.Port
 			}
@@ -940,6 +944,14 @@ func WithIgnorePatterns(patterns []string) Option {
 func WithLogger(logger *slog.Logger) Option {
 	return func(cfg *Config) error {
 		cfg.Logger = logger
+		return nil
+	}
+}
+
+// WithDebug enables debug-level server logging.
+func WithDebug(enabled bool) Option {
+	return func(cfg *Config) error {
+		cfg.Debug = enabled
 		return nil
 	}
 }

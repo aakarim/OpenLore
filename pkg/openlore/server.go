@@ -150,7 +150,11 @@ func newServerWithRoot(rootDir string, rootFS, lowerFS vfs.FileSystem, opts ...c
 
 	logger := cfg.Logger
 	if logger == nil {
-		logger = slog.Default()
+		if cfg.Debug {
+			logger = slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		} else {
+			logger = slog.Default()
+		}
 	}
 
 	s := &Server{
@@ -951,6 +955,21 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 	canWrite := s.authEnforced && id.IdentityName != "" && id.IdentityName != "guest" && len(s.writableDocsetNames(id)) > 0
 
 	sh := shell.NewShell(sessionFS)
+	if s.config.Debug {
+		sh.SetUnsupportedUsageHandler(func(usage shell.UnsupportedUsage) {
+			attrs := []any{"kind", usage.Kind}
+			if usage.Command != "" {
+				attrs = append(attrs, "command", usage.Command)
+			}
+			if usage.Syntax != "" {
+				attrs = append(attrs, "syntax", usage.Syntax, "error", usage.Error)
+			}
+			if id.IdentityName != "" {
+				attrs = append(attrs, "identity", id.IdentityName)
+			}
+			s.logger.Debug("unsupported shell usage", attrs...)
+		})
+	}
 	if s.config.DefaultCwd != "" {
 		sh.SetCwd(s.config.DefaultCwd)
 	}

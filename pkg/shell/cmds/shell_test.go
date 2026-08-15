@@ -228,3 +228,38 @@ func TestPromptFormat(t *testing.T) {
 	}
 	_ = out
 }
+
+func TestUnsupportedUsageHandlerReportsUnknownCommandsAndSyntax(t *testing.T) {
+	sh := shell.NewShell(testFS())
+	var got []shell.UnsupportedUsage
+	sh.SetUnsupportedUsageHandler(func(usage shell.UnsupportedUsage) {
+		got = append(got, usage)
+	})
+
+	sh.ExecPipeline("missing-command secret-argument", &bytes.Buffer{}, &bytes.Buffer{}, nil)
+	sh.ExecPipeline("| echo hello", &bytes.Buffer{}, &bytes.Buffer{}, nil)
+
+	if len(got) != 2 {
+		t.Fatalf("unsupported usage = %#v, want 2 events", got)
+	}
+	if got[0].Kind != "unknown_command" || got[0].Command != "missing-command" {
+		t.Errorf("unknown command event = %#v", got[0])
+	}
+	if got[0].Syntax != "" {
+		t.Errorf("unknown command event leaked arguments: %#v", got[0])
+	}
+	if got[1].Kind != "unknown_syntax" || got[1].Syntax != "| echo hello" || got[1].Error == "" {
+		t.Errorf("unknown syntax event = %#v", got[1])
+	}
+}
+
+func TestUnsupportedUsageHandlerIsOptional(t *testing.T) {
+	sh := shell.NewShell(testFS())
+	var out, errOut bytes.Buffer
+	if code := sh.ExecPipeline("missing-command", &out, &errOut, nil); code != 127 {
+		t.Fatalf("exit code = %d, want 127", code)
+	}
+	if !strings.Contains(errOut.String(), "command not found") {
+		t.Fatalf("stderr = %q", errOut.String())
+	}
+}

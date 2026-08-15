@@ -1,8 +1,10 @@
 package openlore
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -78,6 +80,54 @@ func TestNewServerWithRootFS_WriteLogLive(t *testing.T) {
 	}
 	if got := fs.order(); len(got) != 1 || got[0] != "/x" {
 		t.Fatalf("applied = %v, want [/x]", got)
+	}
+}
+
+func TestUnsupportedShellUsageIsLoggedOnlyInDebugMode(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		debug bool
+		want  bool
+	}{
+		{name: "debug", debug: true, want: true},
+		{name: "non-debug", debug: false, want: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			s, err := NewServer("", WithLogger(logger), WithDebug(tt.debug))
+			if err != nil {
+				t.Fatalf("NewServer: %v", err)
+			}
+
+			sh := s.buildSessionShell(Identity{IdentityName: "agent-1"})
+			sh.ExecPipeline("missing-command private-argument", &bytes.Buffer{}, &bytes.Buffer{}, nil)
+			sh.ExecPipeline("| echo hello", &bytes.Buffer{}, &bytes.Buffer{}, nil)
+
+			got := logs.String()
+			if (got != "") != tt.want {
+				t.Fatalf("logs = %q, want event: %t", got, tt.want)
+			}
+			if !tt.want {
+				return
+			}
+			for _, want := range []string{
+				`"level":"DEBUG"`,
+				`"msg":"unsupported shell usage"`,
+				`"kind":"unknown_command"`,
+				`"command":"missing-command"`,
+				`"kind":"unknown_syntax"`,
+				`"syntax":"| echo hello"`,
+				`"identity":"agent-1"`,
+			} {
+				if !strings.Contains(got, want) {
+					t.Errorf("logs missing %q:\n%s", want, got)
+				}
+			}
+			if strings.Contains(got, "private-argument") {
+				t.Fatalf("unknown-command arguments leaked into logs:\n%s", got)
+			}
+		})
 	}
 }
 

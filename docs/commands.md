@@ -206,6 +206,7 @@ Flags:
   --host-cert          CA-signed SSH host certificate
   --skills-dir         Runtime skills directory
   --readonly           Global write lock (default true; use --readonly=false to enable writes)
+  --debug              Enable debug-level server logging
 ```
 
 Run `openlore --help` or a subcommand with `--help` for its current flags.

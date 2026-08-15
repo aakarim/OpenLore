@@ -44,6 +44,7 @@ var (
 	WithAllowedPatterns = config.WithAllowedPatterns
 	WithIgnorePatterns  = config.WithIgnorePatterns
 	WithLogger          = config.WithLogger
+	WithDebug           = config.WithDebug
 	WithSkillsDir       = config.WithSkillsDir
 	WithWritableDir     = config.WithWritableDir
 	WithHTTPPort        = config.WithHTTPPort

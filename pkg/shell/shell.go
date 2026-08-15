@@ -34,8 +34,9 @@ type Shell struct {
 	// docsets and publishTargets are the per-session views the host computes
 	// from the identity's lore. Read by `lore docsets` and `publish`
 	// respectively. nil for a standalone shell.
-	docsets        []cmds.DocsetInfo
-	publishTargets []cmds.PublishTarget
+	docsets                 []cmds.DocsetInfo
+	publishTargets          []cmds.PublishTarget
+	unsupportedUsageHandler func(UnsupportedUsage)
 	// metaExtenders are the plugin-contributed extenders applied by `lore meta`,
 	// installed by the host per session. nil for a standalone shell.
 	metaExtenders []meta.Extender
@@ -47,12 +48,28 @@ type Shell struct {
 	skillsRemoteMaxBytes int64
 }
 
+// UnsupportedUsage describes a command or shell syntax that OpenLore does not
+// understand. Command is set for unknown commands; Syntax and Error are set for
+// parse failures.
+type UnsupportedUsage struct {
+	Kind    string
+	Command string
+	Syntax  string
+	Error   string
+}
+
 // NewShell creates a new Shell backed by the given vfs.FileSystem.
 func NewShell(fs vfs.FileSystem) *Shell {
 	return &Shell{
 		fs:  fs,
 		cwd: "/",
 	}
+}
+
+// SetUnsupportedUsageHandler installs optional telemetry for unsupported shell
+// usage. It does not change command output or exit status.
+func (s *Shell) SetUnsupportedUsageHandler(handler func(UnsupportedUsage)) {
+	s.unsupportedUsageHandler = handler
 }
 
 // SetAllowedActions restricts the shell to the given capability classes
@@ -190,6 +207,17 @@ func (s *Shell) execLine(line string, w io.Writer, errW io.Writer, stdin io.Read
 
 	f, err := parser.Parse(line)
 	if err != nil {
+		if s.unsupportedUsageHandler != nil {
+			syntax := line
+			if len(syntax) > 512 {
+				syntax = syntax[:512]
+			}
+			s.unsupportedUsageHandler(UnsupportedUsage{
+				Kind:   "unknown_syntax",
+				Syntax: syntax,
+				Error:  err.Error(),
+			})
+		}
 		fmt.Fprintf(errW, "parse error: %s\n", err)
 		return 2
 	}
@@ -373,6 +401,9 @@ func (s *Shell) execCallInner(call *parser.CallExpr, w io.Writer, errW io.Writer
 		return fn(s, cmdArgs, w, errW, stdin)
 	}
 
+	if s.unsupportedUsageHandler != nil {
+		s.unsupportedUsageHandler(UnsupportedUsage{Kind: "unknown_command", Command: cmdName})
+	}
 	fmt.Fprintf(errW, "%s: command not found\n", cmdName)
 	fmt.Fprintln(errW, "Type 'help' for available commands.")
 	return 127
