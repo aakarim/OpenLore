@@ -22,18 +22,19 @@ type CallExpr struct {
 	// MergeStderr is set when the command had a `2>&1` redirection,
 	// causing the shell to send the command's stderr down its stdout.
 	MergeStderr bool
-	// Redirect is set when the command's stdout is redirected to a file via
-	// `> file` or `>> file`. The shell buffers stdout and commits it as a
-	// single atomic whole-object write (never a stream).
+	// Redirect is set when the command's stdout or stderr is redirected to a
+	// file. The shell buffers the selected stream and commits it as a single
+	// atomic whole-object write (never a stream).
 	Redirect *Redirect
 }
 
 func (*CallExpr) isCommand() {}
 
-// Redirect represents a stdout-to-file redirection (`>` or `>>`).
+// Redirect represents a stdout- or stderr-to-file redirection.
 type Redirect struct {
 	Target *Word // the destination path
 	Append bool  // true for `>>`
+	Stderr bool  // true for `2>` or `2>>`
 }
 
 // Heredoc holds the body of a `<<DELIM` here-document. Body is captured
