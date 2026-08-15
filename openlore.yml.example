@@ -10,7 +10,7 @@
 version: "1"
 
 # Enable verbose server logs, including unknown command and syntax telemetry.
-# debug: true
+debug: false
 
 plugins:
   skills:
