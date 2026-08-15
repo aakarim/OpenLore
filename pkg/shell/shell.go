@@ -287,6 +287,9 @@ func (s *Shell) execCall(call *parser.CallExpr, w io.Writer, errW io.Writer, std
 		// /dev/null is a built-in sink, not a path in the virtual filesystem.
 		// It does not require write capability because it cannot mutate state.
 		if target == "/dev/null" {
+			if call.Redirect.Stderr {
+				return s.execCallInner(call, w, io.Discard, stdin)
+			}
 			return s.execCallInner(call, io.Discard, errW, stdin)
 		}
 		// A file redirect is a write; gate it at parse time (Part B) so a
@@ -296,6 +299,13 @@ func (s *Shell) execCall(call *parser.CallExpr, w io.Writer, errW io.Writer, std
 			return 1
 		}
 		var buf bytes.Buffer
+		if call.Redirect.Stderr {
+			code := s.execCallInner(call, w, &buf, stdin)
+			if redirectCode := cmds.WriteFileMsg(s, errW, "redirect", target, buf.Bytes(), call.Redirect.Append); redirectCode != 0 {
+				return redirectCode
+			}
+			return code
+		}
 		code := s.execCallInner(call, &buf, errW, stdin)
 		if code != 0 {
 			return code

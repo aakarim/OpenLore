@@ -72,14 +72,44 @@ func TestRedirect_DevNullDiscardsWithoutWriteCapability(t *testing.T) {
 	sh := shell.NewShell(d)
 	sh.SetAllowedActions(nil) // read-only session
 
-	for _, line := range []string{"echo discarded > /dev/null", "echo discarded >> /dev/null"} {
+	for _, line := range []string{
+		"echo discarded > /dev/null",
+		"echo discarded >> /dev/null",
+		"cat /missing 2>/dev/null",
+		"cat /missing 2>>/dev/null",
+	} {
 		out, errs, code := run(sh, line)
-		if code != 0 || out != "" || errs != "" {
+		if strings.HasPrefix(line, "echo") && code != 0 {
+			t.Errorf("%q: got code=%d", line, code)
+		}
+		if strings.HasPrefix(line, "cat") && code == 0 {
+			t.Errorf("%q: command failure was suppressed", line)
+		}
+		if out != "" || errs != "" {
 			t.Errorf("%q: got code=%d out=%q err=%q", line, code, out, errs)
 		}
 	}
 	if _, err := os.Stat(d.resolve("/dev/null")); !os.IsNotExist(err) {
 		t.Fatal("redirect to /dev/null must not create a virtual file")
+	}
+}
+
+func TestRedirect_StderrToFile(t *testing.T) {
+	sh, d, _ := newWritableShell(t)
+
+	out, errs, code := run(sh, "cat /first-missing 2>/errors.log")
+	if code == 0 || out != "" || errs != "" {
+		t.Fatalf("stderr redirect: got code=%d out=%q err=%q", code, out, errs)
+	}
+	first, err := d.ReadFile("/errors.log")
+	if err != nil || !strings.Contains(string(first), "first-missing") {
+		t.Fatalf("redirected stderr = %q, err=%v", first, err)
+	}
+
+	run(sh, "cat /second-missing 2>>/errors.log")
+	got, err := d.ReadFile("/errors.log")
+	if err != nil || !strings.Contains(string(got), "first-missing") || !strings.Contains(string(got), "second-missing") {
+		t.Fatalf("appended stderr = %q, err=%v", got, err)
 	}
 }
 

@@ -453,7 +453,7 @@ func parseSimpleCommand(t *tokenizer) (Command, error) {
 	}
 
 	// Parse command and arguments, plus interleaved redirections (`2>&1`,
-	// `<<DELIM`).
+	// `2>`, `2>>`, `<<DELIM`).
 	for {
 		tok := t.peek()
 		switch tok.kind {
@@ -469,15 +469,16 @@ func parseSimpleCommand(t *tokenizer) (Command, error) {
 		case tokRedirMerge:
 			t.next()
 			call.MergeStderr = true
-		case tokRedirOut, tokRedirAppend:
-			appendMode := tok.kind == tokRedirAppend
+		case tokRedirOut, tokRedirAppend, tokRedirErrOut, tokRedirErrAppend:
+			appendMode := tok.kind == tokRedirAppend || tok.kind == tokRedirErrAppend
+			stderr := tok.kind == tokRedirErrOut || tok.kind == tokRedirErrAppend
 			t.next()
 			tgt := t.peek()
 			if tgt.kind != tokWord {
 				return nil, fmt.Errorf("syntax error: expected filename after %s", redirOpString(appendMode))
 			}
 			t.next()
-			call.Redirect = &Redirect{Target: parseWordString(tgt.val), Append: appendMode}
+			call.Redirect = &Redirect{Target: parseWordString(tgt.val), Append: appendMode, Stderr: stderr}
 		default:
 			return finalizeCall(call), nil
 		}

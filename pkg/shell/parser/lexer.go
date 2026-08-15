@@ -10,23 +10,25 @@ type tokenKind int
 const (
 	tokEOF tokenKind = iota
 	tokNewline
-	tokSemi        // ;
-	tokAndIf       // &&
-	tokOrIf        // ||
-	tokPipe        // |
-	tokPipeAll     // |&
-	tokBang        // !
-	tokLParen      // (
-	tokRParen      // )
-	tokLBrace      // {
-	tokRBrace      // }
-	tokDblLBracket // [[
-	tokDblRBracket // ]]
-	tokHeredoc     // <<DELIM heredoc opener
-	tokRedirMerge  // 2>&1 stderr→stdout merge
-	tokRedirOut    // > stdout overwrite redirection
-	tokRedirAppend // >> stdout append redirection
-	tokWord        // everything else
+	tokSemi           // ;
+	tokAndIf          // &&
+	tokOrIf           // ||
+	tokPipe           // |
+	tokPipeAll        // |&
+	tokBang           // !
+	tokLParen         // (
+	tokRParen         // )
+	tokLBrace         // {
+	tokRBrace         // }
+	tokDblLBracket    // [[
+	tokDblRBracket    // ]]
+	tokHeredoc        // <<DELIM heredoc opener
+	tokRedirMerge     // 2>&1 stderr→stdout merge
+	tokRedirOut       // > stdout overwrite redirection
+	tokRedirAppend    // >> stdout append redirection
+	tokRedirErrOut    // 2> stderr overwrite redirection
+	tokRedirErrAppend // 2>> stderr append redirection
+	tokWord           // everything else
 )
 
 // token is a lexer token.
@@ -92,6 +94,23 @@ func (l *lexer) next() token {
 	}
 
 	ch := l.peek()
+	if ch == '2' && l.peekAt(1) == '>' {
+		l.advance()
+		l.advance()
+		if l.peek() == '&' {
+			l.advance()
+			if l.peek() == '1' {
+				l.advance()
+				return token{kind: tokRedirMerge, val: "2>&1"}
+			}
+			return token{kind: tokWord, val: "2>&"}
+		}
+		if l.peek() == '>' {
+			l.advance()
+			return token{kind: tokRedirErrAppend}
+		}
+		return token{kind: tokRedirErrOut}
+	}
 
 	switch ch {
 	case '\n':

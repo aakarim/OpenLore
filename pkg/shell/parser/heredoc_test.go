@@ -146,3 +146,26 @@ func TestStderrMergeBeforePipe(t *testing.T) {
 		t.Errorf("left side MergeStderr should be true")
 	}
 }
+
+func TestStderrFileRedirectTokens(t *testing.T) {
+	for _, tc := range []struct {
+		src    string
+		target string
+		append bool
+	}{
+		{src: "cat /missing 2>/dev/null", target: "/dev/null"},
+		{src: "cat /missing 2>> errors.log", target: "errors.log", append: true},
+	} {
+		f, err := parser.Parse(tc.src)
+		if err != nil {
+			t.Fatalf("parse %q: %v", tc.src, err)
+		}
+		call := f.Stmts[0].Cmd.(*parser.CallExpr)
+		if call.Redirect == nil || !call.Redirect.Stderr || call.Redirect.Append != tc.append {
+			t.Fatalf("%q: redirect = %#v", tc.src, call.Redirect)
+		}
+		if got := call.Redirect.Target.Parts[0].(*parser.Lit).Value; got != tc.target {
+			t.Errorf("%q: target = %q, want %q", tc.src, got, tc.target)
+		}
+	}
+}
