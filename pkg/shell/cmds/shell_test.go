@@ -2,14 +2,11 @@ package cmds_test
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
-	"io"
 	"strings"
 	"testing"
 
 	"github.com/aakarim/go-openlore/pkg/shell"
-	"github.com/aakarim/go-openlore/pkg/shell/cmds"
 )
 
 func TestSplitArgs(t *testing.T) {
@@ -299,79 +296,5 @@ func TestUnsupportedUsageHandlerDoesNotChangeCommandResult(t *testing.T) {
 	if withOut != withoutOut || withErr != withoutErr || withCode != withoutCode {
 		t.Fatalf("logging changed result: with=(%q, %q, %d) without=(%q, %q, %d)",
 			withOut, withErr, withCode, withoutOut, withoutErr, withoutCode)
-	}
-}
-
-func TestUnsupportedFlagUsesCommonErrorAndSkipsCommand(t *testing.T) {
-	original := cmds.Registry["cat"]
-	t.Cleanup(func() { cmds.Registry["cat"] = original })
-	called := false
-	cmds.Registry["cat"] = func(ctx cmds.CmdContext, args []string, w, errW io.Writer, stdin io.Reader) int {
-		called = true
-		return 0
-	}
-
-	sh := shell.NewShell(testFS())
-	var out, errOut bytes.Buffer
-	code := sh.ExecPipeline("cat --number /docs/readme.md", &out, &errOut, nil)
-
-	if code != 2 {
-		t.Fatalf("exit code = %d, want 2", code)
-	}
-	if called {
-		t.Fatal("command ran after argument validation failed")
-	}
-	if got, want := errOut.String(), "cat: unsupported option \"--number\"\n"; got != want {
-		t.Fatalf("stderr = %q, want %q", got, want)
-	}
-	var flagErr *cmds.UnsupportedFlagError
-	if err := cmds.ValidateInvocation("cat", []string{"--number"}); !errors.As(err, &flagErr) {
-		t.Fatalf("validation error = %T %v, want *UnsupportedFlagError", err, err)
-	}
-}
-
-func TestCentralFlagValidationAcceptsSupportedSyntax(t *testing.T) {
-	tests := []struct {
-		command string
-		args    []string
-	}{
-		{command: "awk", args: []string{"-v", "name=value", "{print name}"}},
-		{command: "base64", args: []string{"-"}},
-		{command: "grep", args: []string{"-in", "pattern"}},
-		{command: "seq", args: []string{"-1", "1"}},
-		{command: "xargs", args: []string{"-I", "{}", "echo", "-n", "{}"}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.command, func(t *testing.T) {
-			if err := cmds.ValidateInvocation(tt.command, tt.args); err != nil {
-				t.Fatalf("ValidateInvocation() error = %v", err)
-			}
-		})
-	}
-}
-
-func TestCentralFlagValidationRejectsAcceptedNoOp(t *testing.T) {
-	for _, flag := range []string{"-e", "+e", "+z"} {
-		err := cmds.ValidateInvocation("set", []string{flag})
-		var flagErr *cmds.UnsupportedFlagError
-		if !errors.As(err, &flagErr) || flagErr.Flag != flag {
-			t.Errorf("ValidateInvocation(set, %q) error = %#v, want unsupported %s", flag, err, flag)
-		}
-	}
-	if err := cmds.ValidateInvocation("set", []string{"--", "+z"}); err != nil {
-		t.Fatalf("set positional value after -- rejected: %v", err)
-	}
-}
-
-func TestMalformedNumericShorthandIsRejected(t *testing.T) {
-	for _, command := range []string{"head", "tail"} {
-		t.Run(command, func(t *testing.T) {
-			sh := shell.NewShell(testFS())
-			var errOut bytes.Buffer
-			code := sh.ExecPipeline(command+" --1 /docs/readme.md", &bytes.Buffer{}, &errOut, nil)
-			if code != 2 {
-				t.Fatalf("exit code = %d, want 2; stderr: %s", code, errOut.String())
-			}
-		})
 	}
 }

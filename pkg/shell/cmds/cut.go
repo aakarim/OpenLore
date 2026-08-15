@@ -34,7 +34,9 @@ func CmdCut(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io
 		case "-s":
 			suppress = true
 		default:
-			if !strings.HasPrefix(args[i], "-") {
+			if strings.HasPrefix(args[i], "-") {
+				ReportUnsupportedFlag(ctx, "cut", args[i])
+			} else {
 				files = append(files, args[i])
 			}
 		}

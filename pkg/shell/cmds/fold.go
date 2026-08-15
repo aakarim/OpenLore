@@ -22,7 +22,9 @@ func CmdFold(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 		case "-s":
 			breakSpaces = true
 		default:
-			if !strings.HasPrefix(args[i], "-") {
+			if strings.HasPrefix(args[i], "-") {
+				ReportUnsupportedFlag(ctx, "fold", args[i])
+			} else {
 				files = append(files, args[i])
 			}
 		}

@@ -28,7 +28,9 @@ func hashSum(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 	for _, a := range args {
 		if a == "-c" || a == "--check" {
 			checkMode = true
-		} else if !strings.HasPrefix(a, "-") {
+		} else if strings.HasPrefix(a, "-") {
+			ReportUnsupportedFlag(ctx, cmdName, a)
+		} else {
 			files = append(files, a)
 		}
 	}

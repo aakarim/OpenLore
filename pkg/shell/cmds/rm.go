@@ -36,6 +36,7 @@ func CmdRm(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.
 				recursive = true
 				force = true
 			default:
+				ReportUnsupportedFlag(ctx, "rm", a)
 				fmt.Fprintf(errW, "rm: unknown option %q\n", a)
 				return 1
 			}

@@ -28,6 +28,9 @@ func CmdAwk(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io
 				i++
 			}
 		default:
+			if len(args[i]) > 1 && args[i][0] == '-' {
+				ReportUnsupportedFlag(ctx, "awk", args[i])
+			}
 			if program == "" {
 				program = args[i]
 			} else {

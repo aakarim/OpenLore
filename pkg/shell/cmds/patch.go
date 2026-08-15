@@ -25,11 +25,11 @@ func CmdPatch(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin 
 	for _, a := range args {
 		switch {
 		case a == "-i":
-			// next handling not needed; -i FILE is unusual here
+			ReportUnsupportedFlag(ctx, "patch", a)
 		case strings.HasPrefix(a, "-p"), strings.HasPrefix(a, "--"):
-			// strip-count flags accepted and ignored (single-file form)
+			ReportUnsupportedFlag(ctx, "patch", a)
 		case strings.HasPrefix(a, "-"):
-			// ignore other flags
+			ReportUnsupportedFlag(ctx, "patch", a)
 		default:
 			if target == "" {
 				target = a

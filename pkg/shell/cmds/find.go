@@ -27,7 +27,9 @@ func CmdFind(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 				i++
 			}
 		default:
-			if !strings.HasPrefix(args[i], "-") {
+			if strings.HasPrefix(args[i], "-") {
+				ReportUnsupportedFlag(ctx, "find", args[i])
+			} else {
 				root = ctx.Resolve(args[i])
 			}
 		}

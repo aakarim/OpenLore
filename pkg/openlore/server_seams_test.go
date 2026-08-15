@@ -94,7 +94,6 @@ func TestServerLogsUnsupportedShellUsageWhenEnabled(t *testing.T) {
 	sh := s.buildSessionShell(Identity{IdentityName: "agent-1"})
 	sh.ExecPipeline("missing-command", &bytes.Buffer{}, &bytes.Buffer{}, nil)
 	sh.ExecPipeline("grep -z pattern", &bytes.Buffer{}, &bytes.Buffer{}, nil)
-	sh.ExecPipeline("set +token=secret", &bytes.Buffer{}, &bytes.Buffer{}, nil)
 
 	got := logs.String()
 	for _, want := range []string{
@@ -104,15 +103,10 @@ func TestServerLogsUnsupportedShellUsageWhenEnabled(t *testing.T) {
 		`"flag":"-z"`,
 		`"kind":"unsupported_flag"`,
 		`"identity":"agent-1"`,
-		`"command":"set"`,
-		`"flag":"+t"`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("logs missing %q:\n%s", want, got)
 		}
-	}
-	if strings.Contains(got, "secret") {
-		t.Fatalf("logs contain attached flag value:\n%s", got)
 	}
 }
 

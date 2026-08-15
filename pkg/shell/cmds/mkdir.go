@@ -25,6 +25,7 @@ func CmdMkdir(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin 
 			case "-p", "--parents":
 				parents = true
 			default:
+				ReportUnsupportedFlag(ctx, "mkdir", a)
 				fmt.Fprintf(errW, "mkdir: unknown option %q\n", a)
 				return 1
 			}

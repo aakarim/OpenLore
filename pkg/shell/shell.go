@@ -2,7 +2,6 @@ package shell
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"io"
 	"path"
@@ -70,14 +69,14 @@ func (s *Shell) SetUnsupportedUsageHandler(handler func(UnsupportedUsage)) {
 	s.unsupportedUsageHandler = handler
 }
 
-func (s *Shell) reportUnsupportedFlag(command, flag string) {
+// ReportUnsupportedFlag implements the optional command telemetry interface.
+func (s *Shell) ReportUnsupportedFlag(command, flag string) {
 	if s.unsupportedUsageHandler == nil || flag == "" || flag == "-" {
 		return
 	}
 	if strings.HasPrefix(flag, "--") {
 		flag, _, _ = strings.Cut(flag, "=")
-	} else if strings.HasPrefix(flag, "-") || strings.HasPrefix(flag, "+") {
-		flag, _, _ = strings.Cut(flag, "=")
+	} else if strings.HasPrefix(flag, "-") {
 		runes := []rune(flag)
 		if len(runes) > 2 {
 			flag = string(runes[:2])
@@ -374,8 +373,10 @@ func (s *Shell) execCallInner(call *parser.CallExpr, w io.Writer, errW io.Writer
 	}
 
 	if cmdName == "pwd" {
-		if err := cmds.ValidateInvocation(cmdName, cmdArgs); err != nil {
-			return s.unsupportedFlag(errW, err)
+		for _, arg := range cmdArgs {
+			if len(arg) > 1 && arg[0] == '-' {
+				s.ReportUnsupportedFlag("pwd", arg)
+			}
 		}
 		fmt.Fprintln(w, s.cwd)
 		return 0
@@ -390,9 +391,6 @@ func (s *Shell) execCallInner(call *parser.CallExpr, w io.Writer, errW io.Writer
 			fmt.Fprintln(errW, "Type 'help' for available commands.")
 			return 127
 		}
-		if err := cmds.ValidateInvocation(cmdName, cmdArgs); err != nil {
-			return s.unsupportedFlag(errW, err)
-		}
 		return fn(s, cmdArgs, w, errW, stdin)
 	}
 
@@ -402,16 +400,6 @@ func (s *Shell) execCallInner(call *parser.CallExpr, w io.Writer, errW io.Writer
 	fmt.Fprintf(errW, "%s: command not found\n", cmdName)
 	fmt.Fprintln(errW, "Type 'help' for available commands.")
 	return 127
-}
-
-func (s *Shell) unsupportedFlag(errW io.Writer, err error) int {
-	var flagErr *cmds.UnsupportedFlagError
-	if !errors.As(err, &flagErr) {
-		return 2
-	}
-	fmt.Fprintln(errW, flagErr)
-	s.reportUnsupportedFlag(flagErr.Command, flagErr.Flag)
-	return 2
 }
 
 func (s *Shell) execBinary(bc *parser.BinaryCmd, w io.Writer, errW io.Writer, stdin io.Reader) int {

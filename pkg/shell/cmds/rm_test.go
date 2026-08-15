@@ -69,7 +69,7 @@ func TestRmMissingOperand(t *testing.T) {
 }
 
 func TestRmUnknownFlag(t *testing.T) {
-	assertExitCode(t, testFS(), "rm -z /docs/notes.txt", 2)
+	assertExitCode(t, testFS(), "rm -z /docs/notes.txt", 1)
 }
 
 func TestRmMultipleIndependent(t *testing.T) {

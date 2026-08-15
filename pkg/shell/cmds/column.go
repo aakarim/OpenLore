@@ -21,7 +21,9 @@ func CmdColumn(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin
 				i++
 			}
 		default:
-			if !strings.HasPrefix(args[i], "-") {
+			if strings.HasPrefix(args[i], "-") {
+				ReportUnsupportedFlag(ctx, "column", args[i])
+			} else {
 				files = append(files, args[i])
 			}
 		}

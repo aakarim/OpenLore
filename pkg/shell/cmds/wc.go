@@ -15,6 +15,10 @@ func CmdWc(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.
 
 	for _, a := range args {
 		if strings.HasPrefix(a, "-") && len(a) > 1 {
+			longOption := strings.HasPrefix(a, "--")
+			if longOption {
+				ReportUnsupportedFlag(ctx, "wc", a)
+			}
 			for _, ch := range a[1:] {
 				switch ch {
 				case 'l':
@@ -25,6 +29,10 @@ func CmdWc(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.
 					showBytes = true
 				case 'm':
 					showChars = true
+				default:
+					if !longOption {
+						ReportUnsupportedFlag(ctx, "wc", "-"+string(ch))
+					}
 				}
 			}
 		} else {

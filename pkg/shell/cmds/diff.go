@@ -18,7 +18,9 @@ func CmdDiff(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 		case "-q":
 			brief = true
 		default:
-			if !strings.HasPrefix(a, "-") {
+			if strings.HasPrefix(a, "-") {
+				ReportUnsupportedFlag(ctx, "diff", a)
+			} else {
 				files = append(files, a)
 			}
 		}

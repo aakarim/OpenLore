@@ -13,7 +13,7 @@ func TestDu(t *testing.T) {
 }
 
 func TestDuHuman(t *testing.T) {
-	out, _, _ := execCmd(t, testFS(), "du -s -h /docs")
+	out, _, _ := execCmd(t, testFS(), "du -sh /docs")
 	// Should contain a unit suffix
 	if !strings.Contains(out, "/docs") {
 		t.Errorf("du -h: got %q", out)

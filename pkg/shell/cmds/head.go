@@ -14,7 +14,12 @@ func CmdHead(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 			fmt.Sscanf(args[i+1], "%d", &n)
 			i++
 		} else if strings.HasPrefix(args[i], "-") && len(args[i]) > 1 {
-			fmt.Sscanf(args[i][1:], "%d", &n)
+			var parsed int
+			if count, _ := fmt.Sscanf(args[i][1:], "%d", &parsed); count == 0 {
+				ReportUnsupportedFlag(ctx, "head", args[i])
+			} else {
+				n = parsed
+			}
 		} else {
 			files = append(files, args[i])
 		}

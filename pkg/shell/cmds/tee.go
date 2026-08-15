@@ -18,9 +18,9 @@ func CmdTee(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io
 		case a == "-a" || a == "--append":
 			appendMode = true
 		case a == "-i" || a == "--ignore-interrupts":
-			// accepted, no-op
+			ReportUnsupportedFlag(ctx, "tee", a)
 		case strings.HasPrefix(a, "-") && a != "-":
-			// ignore other flags
+			ReportUnsupportedFlag(ctx, "tee", a)
 		default:
 			files = append(files, a)
 		}

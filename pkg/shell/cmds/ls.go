@@ -19,6 +19,9 @@ func CmdLs(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.
 		case "-a":
 			allFlag = true
 		default:
+			if len(a) > 1 && a[0] == '-' {
+				ReportUnsupportedFlag(ctx, "ls", a)
+			}
 			targets = append(targets, a)
 		}
 	}

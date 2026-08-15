@@ -13,7 +13,9 @@ func CmdBase64(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin
 	for _, a := range args {
 		if a == "-d" || a == "--decode" {
 			decode = true
-		} else if !strings.HasPrefix(a, "-") {
+		} else if strings.HasPrefix(a, "-") {
+			ReportUnsupportedFlag(ctx, "base64", a)
+		} else {
 			files = append(files, a)
 		}
 	}

@@ -31,7 +31,9 @@ func CmdJoin(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 				i++
 			}
 		default:
-			if !strings.HasPrefix(args[i], "-") {
+			if strings.HasPrefix(args[i], "-") {
+				ReportUnsupportedFlag(ctx, "join", args[i])
+			} else {
 				files = append(files, args[i])
 			}
 		}

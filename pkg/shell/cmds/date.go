@@ -17,6 +17,8 @@ func CmdDate(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 			useUTC = true
 		} else if strings.HasPrefix(a, "+") {
 			format = a[1:]
+		} else if len(a) > 1 && a[0] == '-' {
+			ReportUnsupportedFlag(ctx, "date", a)
 		}
 	}
 
