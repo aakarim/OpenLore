@@ -66,6 +66,23 @@ func TestRedirect_ReadOnly_HardError(t *testing.T) {
 	}
 }
 
+func TestRedirect_DevNullDiscardsWithoutWriteCapability(t *testing.T) {
+	dir := t.TempDir()
+	d := NewDirFS(dir, config.FilesConfig{}) // read-only substrate
+	sh := shell.NewShell(d)
+	sh.SetAllowedActions(nil) // read-only session
+
+	for _, line := range []string{"echo discarded > /dev/null", "echo discarded >> /dev/null"} {
+		out, errs, code := run(sh, line)
+		if code != 0 || out != "" || errs != "" {
+			t.Errorf("%q: got code=%d out=%q err=%q", line, code, out, errs)
+		}
+	}
+	if _, err := os.Stat(d.resolve("/dev/null")); !os.IsNotExist(err) {
+		t.Fatal("redirect to /dev/null must not create a virtual file")
+	}
+}
+
 func TestRedirect_MidStreamError_CommitsNothing(t *testing.T) {
 	sh, d, _ := newWritableShell(t)
 

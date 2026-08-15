@@ -283,10 +283,15 @@ func (s *Shell) execCall(call *parser.CallExpr, w io.Writer, errW io.Writer, std
 	// commits it as a single atomic whole-object write. Nothing is committed
 	// unless the command succeeds (commit-on-success only — no half-files).
 	if call.Redirect != nil {
+		target := s.expandWord(call.Redirect.Target)
+		// /dev/null is a built-in sink, not a path in the virtual filesystem.
+		// It does not require write capability because it cannot mutate state.
+		if target == "/dev/null" {
+			return s.execCallInner(call, io.Discard, errW, stdin)
+		}
 		// A file redirect is a write; gate it at parse time (Part B) so a
 		// read-only session cannot use `>`/`>>` to mutate a docset.
 		if !s.ActionAllowed(cmds.ActionWrite) {
-			target := s.expandWord(call.Redirect.Target)
 			fmt.Fprintf(errW, "redirect: %s: read-only filesystem\n", target)
 			return 1
 		}
@@ -295,7 +300,6 @@ func (s *Shell) execCall(call *parser.CallExpr, w io.Writer, errW io.Writer, std
 		if code != 0 {
 			return code
 		}
-		target := s.expandWord(call.Redirect.Target)
 		return cmds.WriteFileMsg(s, errW, "redirect", target, buf.Bytes(), call.Redirect.Append)
 	}
 	return s.execCallInner(call, w, errW, stdin)
