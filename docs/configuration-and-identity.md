@@ -10,6 +10,10 @@ Create `openlore.yml` in the project root or pass `--config`:
 ```yaml
 version: "1"
 
+# Enables verbose logs. Unknown shell commands and parser failures are recorded
+# as structured debug events to support command/syntax gap analysis.
+debug: false
+
 port: 2222
 metrics_port: 3000
 http_port: 8080
@@ -41,6 +45,10 @@ files:
 # tls_cert: ./cert.pem
 # tls_key: ./key.pem
 ```
+
+Debug logging can also be enabled with `openlore --debug`. Unknown-command
+events include only the command name, not its arguments. Parser-failure events
+include a syntax sample capped at 512 bytes and the parser error.
 
 ## Authentication posture
 

@@ -595,6 +595,7 @@ func main() {
 	allowed := flag.String("allowed", "", "comma-separated file patterns to serve (e.g. '*.md,*.txt')")
 	ignore := flag.String("ignore", "", "comma-separated patterns to ignore (e.g. '.git,node_modules')")
 	readonly := flag.Bool("readonly", true, "global write lock; pass --readonly=false to enable the experimental writable substrate")
+	debug := flag.Bool("debug", false, "enable debug-level server logging")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: openlore [flags] [directory]\n\n")
@@ -606,12 +607,6 @@ func main() {
 	}
 
 	flag.Parse()
-
-	// Set up structured logging
-	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	}))
-	slog.SetDefault(logger)
 
 	// Determine directory to serve (if provided)
 	var rootDir string
@@ -639,7 +634,6 @@ func main() {
 	opts := []openlore.Option{
 		openlore.WithConfigFile(*configFile),
 		openlore.WithEmbeddedConfig(embeddedCfg, assets.DefaultMOTD()),
-		openlore.WithLogger(logger),
 	}
 
 	if *port != 0 {
@@ -687,12 +681,31 @@ func main() {
 	if isFlagSet("readonly") {
 		opts = append(opts, openlore.WithReadonly(*readonly))
 	}
+	if isFlagSet("debug") {
+		opts = append(opts, openlore.WithDebug(*debug))
+	}
+
+	// Resolve the effective debug setting before constructing the logger. The
+	// server resolves the same options when it starts; doing it here ensures a
+	// debug value from openlore.yml controls the handler's level too.
+	resolved, err := config.New(opts...)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: invalid config: %v\n", err)
+		os.Exit(1)
+	}
+	level := slog.LevelInfo
+	if resolved.Debug {
+		level = slog.LevelDebug
+	}
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+	slog.SetDefault(logger)
+	opts = append(opts, openlore.WithLogger(logger))
 
 	// Create server. Embedded docs are installed as the lower layer during
 	// construction so a configured writable_dir can be the upper layer before
 	// the ordered write log is initialized.
 	var srv *openlore.Server
-	var err error
+	err = nil
 	if rootDir == "" && assets.Lore() != nil {
 		srv, err = openlore.NewServerWithLowerFS(assets.Lore(), opts...)
 	} else {
