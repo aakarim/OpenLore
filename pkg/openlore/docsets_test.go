@@ -19,36 +19,42 @@ func enforcedDocsetServer() *Server {
 		grants:       newGrantRegistry(),
 		config:       config.Config{Readonly: false}, // global write lock open
 		auth: &config.AuthConfig{
+			Roles: map[string]config.RoleSpec{"agent": {}, "reader": {}, "publisher": {}},
 			Docsets: map[string]config.DocsetSpec{
-				"public": {Paths: []config.PathMapping{{Source: "/docs/public", Display: "/docs/public"}}},
+				"public": {Paths: []config.PathMapping{{Source: "/docs/public", Display: "/docs/public"}}, Access: config.DocsetAccess{Allow: map[string]string{"agent": "rw", "reader": "ro"}}},
 				"backend": {
 					Paths:        []config.PathMapping{{Source: "/docs/backend", Display: "/docs/backend"}},
 					Inbox:        "inbox",
 					MaxWriteSize: 5000,
+					Access:       config.DocsetAccess{Allow: map[string]string{"agent": "rw", "reader": "ro", "publisher": "publish"}},
 				},
 				"archive": {
 					Paths:    []config.PathMapping{{Source: "/docs/archive", Display: "/docs/archive"}},
 					Readonly: boolPtr(true),
+					Access:   config.DocsetAccess{Allow: map[string]string{"agent": "rw"}},
 				},
 				"home": {
-					Paths: []config.PathMapping{{Source: "/home/agent", Display: "/home/agent"}},
-					Inbox: "inbox",
+					Paths:   []config.PathMapping{{Source: "/home/agent", Display: "/home/agent"}},
+					Aliases: []string{"/agent"},
+					Inbox:   "inbox",
+					Access:  config.DocsetAccess{Allow: map[string]string{"agent": "rw"}},
 				},
 			},
 		},
 	}
-	s.registerPlugin(NewInboxPlugin())
+	s.authorizationStore = fileAuthorizationStore{auth: s.auth}
+	if err := s.registerPlugin(NewInboxPlugin()); err != nil {
+		panic(err)
+	}
 	return s
 }
 
 // agentIdentity is the full-authority identity used across the docset tests.
 func agentIdentity() Identity {
-	return Identity{
-		IdentityName: "agent",
-		Grants:       map[string]string{"public": "rw", "backend": "rw", "archive": "rw", "home": "rw"},
-		HomeDocset:   "home",
-		Scopes:       []string{ScopeFull},
-	}
+	id := identityWithPolicy("agent", "agent")
+	id.HomeDocset = "home"
+	id.policySnapshot.HomeDocset = "home"
+	return id
 }
 
 func docsetByName(ds []cmds.DocsetInfo, name string) (cmds.DocsetInfo, bool) {
@@ -65,7 +71,7 @@ func TestSessionDocsets_Enforced(t *testing.T) {
 	got := s.sessionDocsets(agentIdentity())
 
 	// Sorted by name.
-	wantOrder := []string{"archive", "backend", "home", "public"}
+	wantOrder := []string{"archive", "backend", "home", "home", "public"}
 	if len(got) != len(wantOrder) {
 		t.Fatalf("got %d docsets, want %d: %+v", len(got), len(wantOrder), got)
 	}
@@ -82,8 +88,8 @@ func TestSessionDocsets_Enforced(t *testing.T) {
 	if public.Home || public.Inbox {
 		t.Fatalf("public should carry no attributes: %+v", public)
 	}
-	if public.Grant != "rw" {
-		t.Fatalf("public grant = %q, want rw", public.Grant)
+	if len(public.Grants) != 1 || public.Grants[0] != "rw" {
+		t.Fatalf("public grants = %v, want [rw]", public.Grants)
 	}
 
 	backend, _ := docsetByName(got, "backend")
@@ -106,6 +112,10 @@ func TestSessionDocsets_Enforced(t *testing.T) {
 	if !home.Writable {
 		t.Fatalf("home should be writable")
 	}
+	alias := got[3]
+	if alias.Paths[0] != "/agent" || alias.AliasTarget != "/home/agent" || alias.Home || alias.Inbox {
+		t.Fatalf("home alias row = %+v", alias)
+	}
 }
 
 func TestSessionDocsets_GlobalReadonlyMakesAllRead(t *testing.T) {
@@ -122,7 +132,7 @@ func TestSessionDocsets_GlobalReadonlyMakesAllRead(t *testing.T) {
 func TestSessionDocsets_ReadOnlyGrantIsReadOnly(t *testing.T) {
 	s := enforcedDocsetServer()
 	// An identity with only ro grants (no identity name / not a writer).
-	id := Identity{Grants: map[string]string{"public": "ro", "backend": "ro"}}
+	id := identityWithPolicy("reader", "reader")
 
 	for _, d := range s.sessionDocsets(id) {
 		if d.Writable {
@@ -158,11 +168,7 @@ func TestSessionPublishTargets_OnlyWritableInboxDocsets(t *testing.T) {
 func TestSessionPublishTargets_PublishGrant(t *testing.T) {
 	s := enforcedDocsetServer()
 	// A publish grant on backend (which has an inbox) is a publish target.
-	id := Identity{
-		IdentityName: "miles",
-		Grants:       map[string]string{"backend": "publish"},
-		Scopes:       []string{ScopeFull},
-	}
+	id := identityWithPolicy("miles", "publisher")
 	targets := s.sessionPublishTargets(id)
 	if len(targets) != 1 || targets[0].Name != "backend" {
 		t.Fatalf("publish grant should yield backend as a target, got %+v", targets)
@@ -181,7 +187,7 @@ func TestSessionPublishTargets_UnenforcedHasNone(t *testing.T) {
 			},
 		},
 	}
-	id := Identity{Grants: map[string]string{"public": "rw"}, Scopes: []string{ScopeFull}}
+	id := Identity{Scopes: []string{ScopeFull}}
 	if targets := s.sessionPublishTargets(id); targets != nil {
 		t.Fatalf("unenforced mode has no publish inboxes, got %+v", targets)
 	}
@@ -199,7 +205,7 @@ func TestSessionDocsets_UnenforcedPublicIsWritable(t *testing.T) {
 			},
 		},
 	}
-	id := Identity{Grants: map[string]string{"public": "rw"}, Scopes: []string{ScopeFull}}
+	id := Identity{Scopes: []string{ScopeFull}}
 	got := s.sessionDocsets(id)
 	if len(got) != 1 || got[0].Name != "public" {
 		t.Fatalf("want single public docset, got %+v", got)

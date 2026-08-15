@@ -44,16 +44,22 @@ func newWIFTestServer(t *testing.T, verifier OIDCVerifier) *Server {
 		auth: &config.AuthConfig{
 			AllowKeyless:    &keyless,
 			UnknownIdentity: "allow",
+			Roles:           map[string]config.RoleSpec{"alice": {}, "ci-indexer": {}},
 			Docsets: map[string]config.DocsetSpec{
-				"public": {Paths: []config.PathMapping{{Source: "/public", Display: "/public"}}},
-				"secret": {Paths: []config.PathMapping{{Source: "/secret", Display: "/secret"}}},
+				"public": {
+					Paths:  []config.PathMapping{{Source: "/public", Display: "/public"}},
+					Access: config.DocsetAccess{Allow: map[string]string{"guest": "ro", "alice": "ro", "ci-indexer": "ro"}},
+				},
+				"secret": {
+					Paths:  []config.PathMapping{{Source: "/secret", Display: "/secret"}},
+					Access: config.DocsetAccess{Allow: map[string]string{"alice": "rw", "ci-indexer": "rw"}},
+				},
 			},
-			Default: map[string]string{"public": "ro"},
 			Identities: []config.AuthIdentity{
-				{Name: "alice", Docsets: map[string]string{"public": "ro", "secret": "rw"}},
+				{Name: "alice", Roles: []string{"alice"}},
 				{
-					Name:    "ci-indexer",
-					Docsets: map[string]string{"public": "ro", "secret": "rw"},
+					Name:  "ci-indexer",
+					Roles: []string{"ci-indexer"},
 					Match: []config.IdentityMatch{{
 						SubPrefix: "repo:my-org/my-repo:",
 						Aud:       "https://openlore.test",
@@ -72,6 +78,7 @@ func newWIFTestServer(t *testing.T, verifier OIDCVerifier) *Server {
 			},
 		},
 	}
+	s.authorizationStore = fileAuthorizationStore{auth: s.auth}
 	if err := s.initAuth(); err != nil {
 		t.Fatalf("initAuth: %v", err)
 	}
@@ -191,6 +198,21 @@ func TestWIF_ReadScopeShellIsReadOnly(t *testing.T) {
 	fullID, _ := s.identityForName("ci-indexer") // defaults to {full}
 	if sh := s.buildSessionShell(fullID); !sh.ActionAllowed(cmds.ActionWrite) {
 		t.Error("full-scope session should allow write")
+	}
+}
+
+func TestTokenScopesFailClosed(t *testing.T) {
+	s := newWIFTestServer(t, fakeVerifier{claims: ghClaims()})
+	for _, scope := range []string{"", "unknown"} {
+		t.Run(scope, func(t *testing.T) {
+			id, err := s.resolveClaims(Claims{Subject: "ci-indexer", Scope: scope})
+			if err != nil {
+				t.Fatalf("resolve claims: %v", err)
+			}
+			if scopeGrantsWrite(id.Scopes) {
+				t.Fatalf("scope %q unexpectedly grants write", scope)
+			}
+		})
 	}
 }
 

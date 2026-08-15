@@ -11,10 +11,10 @@ import (
 	"github.com/aakarim/go-openlore/internal/config"
 )
 
-// newScopedTestAPI builds a Server with two docsets — "public" (in the default
-// lore) and "secret" (not in any lore) — and returns the JSON HTTP API handler
-// backed by the identity-scoped MCP shell. An unauthenticated caller resolves
-// to the anonymous "default" identity, so it must see only the public docset.
+// newScopedTestAPI builds a Server with two docsets — "public" (granted to
+// guest) and "secret" — and returns the JSON HTTP API handler backed by the
+// identity-scoped MCP shell. An unauthenticated caller resolves to guest, so it
+// must see only the public docset.
 func newScopedTestAPI(t *testing.T) http.Handler {
 	t.Helper()
 
@@ -35,13 +35,13 @@ func newScopedTestAPI(t *testing.T) http.Handler {
 		grants:       newGrantRegistry(),
 		auth: &config.AuthConfig{
 			Docsets: map[string]config.DocsetSpec{
-				"public": {Paths: []config.PathMapping{{Source: "/public", Display: "/public"}}},
+				"public": {Paths: []config.PathMapping{{Source: "/public", Display: "/public"}}, Access: config.DocsetAccess{Allow: map[string]string{"guest": "ro"}}},
 				"secret": {Paths: []config.PathMapping{{Source: "/secret", Display: "/secret"}}},
 			},
-			Default: map[string]string{"public": "ro"}, // secret deliberately excluded
 		},
 		config: config.Config{Readonly: true},
 	}
+	s.authorizationStore = fileAuthorizationStore{auth: s.auth}
 
 	server := NewMCPServer(s.merge, withMCPShellFactory(s.shellForContext))
 	return NewMCPHTTPAPI(server).Handler("/api")

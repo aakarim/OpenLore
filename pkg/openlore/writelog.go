@@ -49,6 +49,7 @@ type writeLog struct {
 
 	mu         sync.RWMutex      // guards closed + postCommit + serializes sends against Close
 	postCommit PostCommitHandler // optional; runs at the applier after a durable commit
+	preApply   func(Actor, vfs.ChangeSet) error
 	closed     bool
 	ch         chan logEntry
 
@@ -89,9 +90,26 @@ func newWriteLog(substrate vfs.WritableFS, postCommit PostCommitHandler, logger 
 func (l *writeLog) run() {
 	defer close(l.done)
 	for e := range l.ch {
-		h, err := vfs.CommitChangeSet(l.substrate, e.cs)
-		e.reply <- applyResult{hash: h, err: err}
-		if err != nil {
+		var committed vfs.CommitResult
+		var err error
+		if preflight, ok := l.substrate.(vfs.ChangePreflighter); ok {
+			for _, change := range e.cs.Leaves() {
+				if err = preflight.PreflightChange(change); err != nil {
+					break
+				}
+			}
+		}
+		l.mu.RLock()
+		pre := l.preApply
+		l.mu.RUnlock()
+		if err == nil && pre != nil {
+			err = pre(e.actor, e.cs)
+		}
+		if err == nil {
+			committed, err = vfs.CommitChangeSet(l.substrate, e.cs)
+		}
+		e.reply <- applyResult{hash: committed.Hash, err: err}
+		if !committed.HasCommitted() {
 			continue
 		}
 		l.mu.RLock()
@@ -100,11 +118,17 @@ func (l *writeLog) run() {
 		if pc == nil {
 			continue
 		}
-		if perr := pc(context.Background(), CommitInfo{ChangeSet: e.cs, Hash: h, Actor: e.actor}); perr != nil {
+		if perr := pc(context.Background(), CommitInfo{ChangeSet: committed.Committed, Hash: committed.Hash, Actor: e.actor}); perr != nil {
 			l.logger.Error("post-commit chain failed; log continues",
 				"target", e.cs.Target, "action", e.cs.Action, "err", perr)
 		}
 	}
+}
+
+func (l *writeLog) SetPreApply(h func(Actor, vfs.ChangeSet) error) {
+	l.mu.Lock()
+	l.preApply = h
+	l.mu.Unlock()
 }
 
 // SetPostCommit replaces the post-commit handler run by the applier after each

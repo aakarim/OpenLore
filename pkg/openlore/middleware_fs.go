@@ -2,6 +2,7 @@ package openlore
 
 import (
 	"context"
+	"syscall"
 
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
@@ -36,8 +37,13 @@ func newMiddlewareFS(readView vfs.FileSystem, actor Actor, admit WriteHandler) *
 // hash (empty for non-write actions) or the chain's error. A deferred write
 // surfaces as *vfs.PendingChangeError; a rejected one as the middleware's error.
 func (m *middlewareFS) run(cs vfs.ChangeSet) (string, error) {
-	res, err := m.admit(context.Background(), WriteOp{ChangeSet: cs, Actor: m.actor})
+	res, err := m.admit(context.Background(), NewWriteOp(m.actor, cs))
 	return res.Hash, err
+}
+
+func (m *middlewareFS) AdmitChangeSet(cs vfs.ChangeSet) error {
+	_, err := m.run(cs)
+	return err
 }
 
 func (m *middlewareFS) WriteFileAtomic(p string, data []byte, opts vfs.WriteOpts) (string, error) {
@@ -72,6 +78,37 @@ func (m *middlewareFS) RemoveAll(p string, opts vfs.RemoveOpts) error {
 	return err
 }
 
+func (m *middlewareFS) GetXattr(p, name string) ([]byte, error) {
+	x, ok := m.FileSystem.(vfs.XattrReader)
+	if !ok {
+		return nil, syscall.ENOTSUP
+	}
+	return x.GetXattr(p, name)
+}
+func (m *middlewareFS) ListXattrs(p string) ([]string, error) {
+	x, ok := m.FileSystem.(vfs.XattrReader)
+	if !ok {
+		return nil, syscall.ENOTSUP
+	}
+	return x.ListXattrs(p)
+}
+func (m *middlewareFS) SetXattr(p, name string, value []byte, flags vfs.XattrFlags) error {
+	_, err := m.run(vfs.ChangeSet{Target: p, Action: vfs.ChangeActionSetXattr, Xattr: &vfs.XattrChange{Name: name, Value: append([]byte(nil), value...), Flags: flags}})
+	return err
+}
+func (m *middlewareFS) RemoveXattr(p, name string) error {
+	_, err := m.run(vfs.ChangeSet{Target: p, Action: vfs.ChangeActionRemoveXattr, Xattr: &vfs.XattrChange{Name: name}})
+	return err
+}
+func (m *middlewareFS) PreserveAndRecreateXattrs(p string, attrs map[string][]byte) error {
+	_, err := m.run(vfs.ChangeSet{Target: p, Action: vfs.ChangeActionPreserveAndRecreateXattrs, XattrRepair: &vfs.XattrRepairChange{Attributes: attrs}})
+	return err
+}
+func (m *middlewareFS) MigrateXattrs(p string, migration vfs.XattrMigration) error {
+	_, err := m.run(vfs.ChangeSet{Target: p, Action: vfs.ChangeActionMigrateXattrs, XattrMigration: &migration})
+	return err
+}
+
 // SetWriteable / SetReadonly are no-ops: the substrate-wide write lock is owned
 // centrally by the server (MergeFS.SetWriteable at startup) and the applier is
 // the sole writer. A session may only narrow access, never toggle the lock.
@@ -79,3 +116,4 @@ func (m *middlewareFS) SetWriteable() error { return nil }
 func (m *middlewareFS) SetReadonly() error  { return nil }
 
 var _ vfs.WritableFS = (*middlewareFS)(nil)
+var _ vfs.ChangeSetAdmitter = (*middlewareFS)(nil)

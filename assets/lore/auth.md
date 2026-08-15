@@ -4,14 +4,71 @@
 
 By default, any SSH client can connect. No keys required.
 
-## Docsets & Lore
+## RBAC Quick Start
 
-Access control is built on two concepts:
+Create `lore.json` next to `openlore.yml`. This example gives keyless visitors
+read-only public docs, reviewers read-only backend docs, and engineers
+read/write backend docs:
 
-- **Docsets** — atomic document collections with path mappings (an agent's workspace)
-- **Lore** — named compositions of docsets (what an identity can access)
+```json
+{
+  "allow_keyless": true,
+  "unknown_identity": "deny",
+  "roles": {
+    "reviewer": {},
+    "engineer": {}
+  },
+  "docsets": {
+    "public": {
+      "paths": ["/docs/public"],
+      "access": {
+        "allow": { "guest": "ro", "reviewer": "ro", "engineer": "rw" }
+      }
+    },
+    "backend": {
+      "paths": ["/docs/backend"],
+      "access": {
+        "allow": { "reviewer": "ro", "engineer": "rw" }
+      }
+    },
+    "engineer-home": {
+      "paths": [{ "homes/engineer": "/home/engineer" }]
+    }
+  },
+  "identities": [
+    {
+      "name": "engineering-agent",
+      "public_key": "ssh-ed25519 AAAA...",
+      "roles": ["engineer", "reviewer"],
+      "home": "engineer-home"
+    }
+  ]
+}
+```
 
-Each identity references a lore name, which resolves to one or more docsets. When multiple docsets are in a lore, each appears as a subdirectory.
+Enable it in `openlore.yml`:
+
+```yaml
+auth_file: ./lore.json
+readonly: false # keep true if no role should be able to write
+```
+
+Then start OpenLore normally. No role-management commands are required; edit
+`lore.json` and restart the server after changing file-backed policy.
+
+### How access is resolved
+
+- `roles` declares the exact role names available to identities. Roles are flat
+  and do not inherit.
+- `docsets` own access policy. `access.allow` maps each role to `ro`, `rw`, or a
+  plugin grant such as `publish`.
+- An identity may have multiple roles. Their allows are combined, while any
+  matching role in a docset's `access.deny` denies the entire docset.
+- `guest` is built in for keyless and allowed unknown callers. It can only be
+  granted read-only access.
+- A unique `home` docset is implicitly read/write for its owner and needs no
+  access entry. Nested docsets remain separate access boundaries.
+- A docset without a matching allow is inaccessible.
 
 ## Publishing
 
@@ -70,53 +127,11 @@ Override it per docset in `lore.json` (takes precedence for paths in that docset
 }
 ```
 
-## Public Key Auth
-
-Create a `lore.json` to control per-agent access:
-
-```json
-{
-  "docsets": {
-    "public": { "paths": ["/docs/public"] },
-    "backend": { "paths": ["/docs/api", "/docs/backend"], "publish_dir": "./published/backend" },
-    "frontend": { "paths": ["/docs/frontend", "/docs/shared"] }
-  },
-  "lore": {
-    "default": ["public"],
-    "backend": ["public", "backend"],
-    "engineering": ["public", "backend", "frontend"]
-  },
-  "identities": [
-    {
-      "name": "backend-agent",
-      "public_key": "ssh-ed25519 AAAA...",
-      "lore": "backend"
-    },
-    {
-      "name": "eng-lead",
-      "public_key": "ssh-ed25519 AAAA...",
-      "lore": "engineering"
-    }
-  ]
-}
-```
-
-## Adding Identities
-
-Use the CLI:
-
-```bash
-openlore identity add \
-  --name my-agent \
-  --key "ssh-ed25519 AAAA..." \
-  --lore backend \
-  --auth ./lore.json
-```
-
 ## Unknown Identity Handling
 
 In `lore.json`:
-- `"unknown_identity": "allow"` — unrecognized keys get the "default" lore
+- `"unknown_identity": "allow"` — unrecognized keys receive the built-in
+  `guest` role
 - `"unknown_identity": "deny"` — unrecognized keys are rejected
 
 ## Federated Access (WIF)

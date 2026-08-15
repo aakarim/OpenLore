@@ -157,7 +157,7 @@ func (t *tokenEndpoint) handleAuthorizationCode(w http.ResponseWriter, r *http.R
 	}
 	// A resource indicator on the token request must match the one bound at
 	// /authorize (RFC 8707).
-	if reqResource := r.Form.Get("resource"); reqResource != "" && c.Resource != "" && reqResource != c.Resource {
+	if reqResource := r.Form.Get("resource"); reqResource != "" && c.Resource != "" && !sameResourceIdentifier(reqResource, c.Resource) {
 		oauthError(w, http.StatusBadRequest, "invalid_target", "resource mismatch")
 		return
 	}

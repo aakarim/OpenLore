@@ -10,7 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aakarim/go-openlore/pkg/meta"
+	"github.com/aakarim/go-openlore/pkg/openlore/meta"
+	"github.com/aakarim/go-openlore/pkg/openlore/validation"
 	"github.com/aakarim/go-openlore/pkg/shell/cmds"
 	"github.com/aakarim/go-openlore/pkg/shell/parser"
 	"github.com/aakarim/go-openlore/pkg/vfs"
@@ -25,7 +26,8 @@ type Shell struct {
 	// "unrestricted" — every action is allowed (the default, backward
 	// compatible). When non-nil, a command (or redirect) whose capability
 	// class is absent is treated as if it does not exist.
-	allowedActions map[cmds.Action]bool
+	allowedActions   map[cmds.Action]bool
+	actionAuthorizer func(cmds.Action) bool
 	// conflictPolicyFn resolves the write-conflict policy for a resolved path.
 	// nil means "use the default" (vfs.PolicyHash). The server sets this to a
 	// per-docset resolver; standalone shells get the default.
@@ -39,6 +41,12 @@ type Shell struct {
 	// metaExtenders are the plugin-contributed extenders applied by `lore meta`,
 	// installed by the host per session. nil for a standalone shell.
 	metaExtenders []meta.Extender
+	metaFilters   []meta.Filter
+	// validators are plugin-contributed checks applied by `lore validate`.
+	validators           []validation.Validator
+	skillsManagement     bool
+	skillsRemoteTimeout  time.Duration
+	skillsRemoteMaxBytes int64
 }
 
 // UnsupportedUsage describes shell syntax that OpenLore did not implement.
@@ -93,11 +101,17 @@ func (s *Shell) SetAllowedActions(actions []cmds.Action) {
 // ActionAllowed reports whether the session may perform the capability class.
 // An unrestricted shell (allowedActions == nil) permits everything.
 func (s *Shell) ActionAllowed(a cmds.Action) bool {
+	if s.actionAuthorizer != nil && !s.actionAuthorizer(a) {
+		return false
+	}
 	if s.allowedActions == nil {
 		return true
 	}
 	return s.allowedActions[a]
 }
+
+// SetActionAuthorizer installs a per-invocation narrowing check.
+func (s *Shell) SetActionAuthorizer(fn func(cmds.Action) bool) { s.actionAuthorizer = fn }
 
 // SetConflictPolicyFn installs a resolver that maps a resolved path to its
 // write-conflict policy. Passing nil restores the default (vfs.PolicyHash).
@@ -133,6 +147,21 @@ func (s *Shell) SetMetaExtenders(e []meta.Extender) { s.metaExtenders = e }
 // MetaExtenders reports the per-session `lore meta` extenders. Implements
 // CmdContext.
 func (s *Shell) MetaExtenders() []meta.Extender { return s.metaExtenders }
+func (s *Shell) SetMetaFilters(f []meta.Filter) { s.metaFilters = f }
+func (s *Shell) MetaFilters() []meta.Filter     { return s.metaFilters }
+
+// SetValidators installs plugin-contributed checks for `lore validate`.
+func (s *Shell) SetValidators(validators []validation.Validator) { s.validators = validators }
+
+// Validators reports this shell's plugin-contributed validation checks.
+func (s *Shell) Validators() []validation.Validator      { return s.validators }
+func (s *Shell) SetSkillsManagementEnabled(enabled bool) { s.skillsManagement = enabled }
+func (s *Shell) SkillsManagementEnabled() bool           { return s.skillsManagement }
+func (s *Shell) SetSkillsRemoteConfig(timeout time.Duration, maxBytes int64) {
+	s.skillsRemoteTimeout, s.skillsRemoteMaxBytes = timeout, maxBytes
+}
+func (s *Shell) SkillsRemoteTimeout() time.Duration { return s.skillsRemoteTimeout }
+func (s *Shell) SkillsRemoteMaxBytes() int64        { return s.skillsRemoteMaxBytes }
 
 // --- CmdContext interface implementation ---
 

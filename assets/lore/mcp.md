@@ -31,7 +31,13 @@ Configure it in `openlore.yml`:
 mcp:
   enabled: true   # on by default; set false to disable
   path: /mcp      # path on the HTTP server
+  require_auth: true # force OAuth login instead of anonymous access
 ```
+
+`require_auth` is optional. When omitted, MCP inherits the SSH posture from
+`allow_keyless`; set it to `true` to make OAuth-native clients such as Claude
+open the browser login flow even while keyless SSH remains enabled. Set it to
+`false` to allow anonymous MCP access even when SSH requires a key.
 
 Or with flags: `--mcp-path /custom` to change the path. The endpoint requires
 the HTTP server (`http_port`) to be enabled.

@@ -99,7 +99,7 @@ func (s *Server) authorizeHandler(w http.ResponseWriter, r *http.Request) {
 	// If a resource indicator (RFC 8707) is present it must name this instance's
 	// audience — the only resource OpenLore mints tokens for.
 	resource := q.Get("resource")
-	if resource != "" && s.config.Tokens != nil && resource != s.config.Tokens.Audience {
+	if resource != "" && s.config.Tokens != nil && !sameResourceIdentifier(resource, s.config.Tokens.Audience) {
 		http.Error(w, "resource does not match this server's audience", http.StatusBadRequest)
 		return
 	}
@@ -118,6 +118,35 @@ func (s *Server) authorizeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	id := s.authorizeReqs.put(req)
 	s.renderAuthorizeChoice(w, id)
+}
+
+// sameResourceIdentifier treats the two valid spellings of an origin URL as
+// equivalent: https://example.com and https://example.com/. OAuth clients such
+// as Claude canonicalize an advertised origin to the latter form. Paths other
+// than the root remain exact so this does not broaden a resource's boundary.
+func sameResourceIdentifier(a, b string) bool {
+	if a == b {
+		return true
+	}
+	au, err := url.Parse(a)
+	if err != nil || au.Scheme == "" || au.Host == "" || au.Opaque != "" || au.User != nil {
+		return false
+	}
+	bu, err := url.Parse(b)
+	if err != nil || bu.Scheme == "" || bu.Host == "" || bu.Opaque != "" || bu.User != nil {
+		return false
+	}
+	if au.Scheme != bu.Scheme || au.Host != bu.Host || au.RawQuery != bu.RawQuery || au.Fragment != bu.Fragment {
+		return false
+	}
+	ap, bp := au.EscapedPath(), bu.EscapedPath()
+	if ap == "" {
+		ap = "/"
+	}
+	if bp == "" {
+		bp = "/"
+	}
+	return ap == bp
 }
 
 // authorizePublicHandler serves POST /authorize/public: the "continue with

@@ -28,7 +28,7 @@ func runOKF(p *okfPlugin, cs vfs.ChangeSet) (reachedTerminal bool, err error) {
 		return WriteResult{Hash: "ok"}, nil
 	}
 	h := mws[0](terminal)
-	_, err = h(context.Background(), WriteOp{ChangeSet: cs})
+	_, err = h(context.Background(), NewWriteOp(Actor{}, cs))
 	return reachedTerminal, err
 }
 
@@ -61,6 +61,17 @@ func TestOKFPlugin_RejectsNonConformantMarkdown(t *testing.T) {
 	}
 	if reached {
 		t.Fatal("terminal handler should not be reached when a write is rejected")
+	}
+}
+
+func TestOKFPlugin_RejectsForbiddenLaterBatchLeaf(t *testing.T) {
+	cs := vfs.ChangeSet{Changes: []vfs.Change{
+		{Target: "/docs/good.md", Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: []byte(validDoc)}},
+		{Target: "/docs/bad.md", Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: []byte(invalidDoc)}},
+	}}
+	reached, err := runOKF(pluginWith(docsWithOKF()), cs)
+	if err == nil || reached {
+		t.Fatalf("later invalid leaf was not rejected: reached=%v err=%v", reached, err)
 	}
 }
 
@@ -306,7 +317,9 @@ func TestRegisterPlugin_WiresOKFIntoLoreMeta(t *testing.T) {
 		"wiki": docset("/wiki", &config.OKFDocsetConfig{}),
 	}
 	s := &Server{grants: newGrantRegistry()}
-	s.registerPlugin(newOKF(docsets, nil)) // must collect the meta extender
+	if err := s.registerPlugin(newOKF(docsets, nil)); err != nil { // must collect the meta extender
+		t.Fatal(err)
+	}
 
 	sh := shell.NewShell(NewDirFS(dir, config.FilesConfig{}))
 	sh.SetMetaExtenders(s.metaExtenders)
@@ -347,5 +360,105 @@ func TestAnyDocsetHasOKF(t *testing.T) {
 	}
 	if !anyDocsetHasOKF(docsWithOKF()) {
 		t.Fatal("a docset carries OKF; expected true")
+	}
+}
+
+func TestOKFPlugin_ValidateCommandListsAllErrorsAndAliasWarnings(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(name, content string) {
+		if err := os.WriteFile(filepath.Join(dir, "docs", name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("good.md", "---\ntype: Note\n---\n[target](target.md) [missing](missing.md)\n")
+	write("target.md", validDoc)
+	write("invalid.md", invalidDoc)
+
+	docsets := docsWithOKF()
+	docset := docsets["docs"]
+	docset.Paths = []config.PathMapping{{Source: "/wiki", Display: "/wiki"}}
+	docset.Aliases = []string{"/docs"}
+	docsets["docs"] = docset
+	plugin := pluginWith(docsets)
+	sh := shell.NewShell(NewDirFS(dir, config.FilesConfig{}))
+	sh.SetCwd("/docs")
+	sh.SetValidators(plugin.Validators())
+
+	var out, errOut bytes.Buffer
+	code := sh.ExecPipeline("lore validate", &out, &errOut, nil)
+	if code != 1 {
+		t.Fatalf("exit=%d, want 1; stdout=%s stderr=%s", code, out.String(), errOut.String())
+	}
+	for _, want := range []string{
+		"invalid.md:1:1: error [okf/concept]",
+		"error [openlore/broken-link]",
+		"warning [openlore/alias-referrer]",
+		"warning [openlore/alias-target]",
+		"2 errors, 4 warnings",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("output missing %q:\n%s", want, out.String())
+		}
+	}
+}
+
+func TestOKFPlugin_ValidateCommandSucceedsForPortableBundle(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "note.md"), []byte(validDoc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sh := shell.NewShell(NewDirFS(dir, config.FilesConfig{}))
+	sh.SetCwd("/")
+	sh.SetValidators(pluginWith(docsWithOKF()).Validators())
+
+	var out, errOut bytes.Buffer
+	if code := sh.ExecPipeline("lore validate", &out, &errOut, nil); code != 0 {
+		t.Fatalf("exit=%d stdout=%s stderr=%s", code, out.String(), errOut.String())
+	}
+	if out.String() != "0 errors, 0 warnings\n" {
+		t.Fatalf("unexpected output: %q", out.String())
+	}
+}
+
+func TestRegisterPlugin_ValidateCommandIsCoreAndValidatorsAreSessionLocal(t *testing.T) {
+	withOKF := &Server{}
+	if err := withOKF.registerPlugin(pluginWith(docsWithOKF())); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "invalid.md"), []byte(invalidDoc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fsys := NewDirFS(dir, config.FilesConfig{})
+	withShell := shell.NewShell(fsys)
+	withShell.SetValidators(withOKF.validators)
+	withoutShell := shell.NewShell(fsys)
+
+	var withOut, withoutOut, errOut bytes.Buffer
+	if code := withShell.ExecPipeline("lore", &withOut, &errOut, nil); code != 0 {
+		t.Fatalf("lore with plugin exit=%d: %s", code, errOut.String())
+	}
+	if code := withoutShell.ExecPipeline("lore", &withoutOut, &errOut, nil); code != 0 {
+		t.Fatalf("lore without plugin exit=%d: %s", code, errOut.String())
+	}
+	if !strings.Contains(withOut.String(), "validate") || !strings.Contains(withoutOut.String(), "validate") {
+		t.Fatalf("core validate command missing: with plugin:\n%s\nwithout plugin:\n%s", withOut.String(), withoutOut.String())
+	}
+	withOut.Reset()
+	withoutOut.Reset()
+	errOut.Reset()
+	if code := withShell.ExecPipeline("lore validate", &withOut, &errOut, nil); code != 1 {
+		t.Fatalf("with plugin exit=%d, want 1: %s", code, withOut.String())
+	}
+	errOut.Reset()
+	if code := withoutShell.ExecPipeline("lore validate", &withoutOut, &errOut, nil); code != 0 {
+		t.Fatalf("without plugin exit=%d, want 0: %s", code, errOut.String())
+	}
+	if !strings.Contains(withOut.String(), "okf/concept") || withoutOut.String() != "" || !strings.Contains(errOut.String(), "warning: no validators enabled") {
+		t.Fatalf("validators not session-local: with=%q without=%q stderr=%q", withOut.String(), withoutOut.String(), errOut.String())
 	}
 }

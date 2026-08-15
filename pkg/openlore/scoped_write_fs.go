@@ -2,14 +2,15 @@ package openlore
 
 import (
 	"github.com/aakarim/go-openlore/pkg/vfs"
+	"syscall"
 )
 
 // writeAuthorizer decides whether a session may perform a mutation action on a
 // display path. It is the per-operation authority: the server binds it to the
-// session identity's grants (Server.identityCanWrite), so two agents that can
-// both see the same docsets are still authorized independently per write, and a
-// grant like `publish` can permit create/edit only within an inbox while
-// denying deletes.
+// principal's current RBAC policy (Server.identityCanWrite), so two agents that
+// can see the same docsets are still authorized independently per write, and a
+// grant like `publish` can permit create/edit only within an inbox while denying
+// deletes.
 type writeAuthorizer func(action vfs.ChangeAction, p string) bool
 
 // scopedWriteFS gates a session's writes through a writeAuthorizer. Reads pass
@@ -38,6 +39,19 @@ func (s *scopedWriteFS) WriteFileAtomic(p string, data []byte, opts vfs.WriteOpt
 		return "", vfs.ErrReadOnly
 	}
 	return s.inner.WriteFileAtomic(p, data, opts)
+}
+
+func (s *scopedWriteFS) AdmitChangeSet(cs vfs.ChangeSet) error {
+	a, ok := s.inner.(vfs.ChangeSetAdmitter)
+	if !ok || vfs.ValidateChangeSet(cs) != nil {
+		return vfs.ErrReadOnly
+	}
+	for _, change := range cs.Leaves() {
+		if !s.authorize(change.Action, change.Target) {
+			return vfs.ErrReadOnly
+		}
+	}
+	return a.AdmitChangeSet(cs)
 }
 
 // CanWrite reports whether a whole-file write to p is authorized in this session
@@ -73,6 +87,60 @@ func (s *scopedWriteFS) RemoveAll(p string, opts vfs.RemoveOpts) error {
 	}
 	return s.inner.RemoveAll(p, opts)
 }
+func (s *scopedWriteFS) GetXattr(p, name string) ([]byte, error) {
+	x, ok := s.FileSystem.(vfs.XattrReader)
+	if !ok {
+		return nil, syscall.ENOTSUP
+	}
+	return x.GetXattr(p, name)
+}
+func (s *scopedWriteFS) ListXattrs(p string) ([]string, error) {
+	x, ok := s.FileSystem.(vfs.XattrReader)
+	if !ok {
+		return nil, syscall.ENOTSUP
+	}
+	return x.ListXattrs(p)
+}
+func (s *scopedWriteFS) SetXattr(p, name string, value []byte, flags vfs.XattrFlags) error {
+	if s.inner == nil || !s.authorize(vfs.ChangeActionSetXattr, p) {
+		return syscall.EPERM
+	}
+	x, ok := s.inner.(vfs.XattrWriter)
+	if !ok {
+		return syscall.ENOTSUP
+	}
+	return x.SetXattr(p, name, value, flags)
+}
+func (s *scopedWriteFS) RemoveXattr(p, name string) error {
+	if s.inner == nil || !s.authorize(vfs.ChangeActionRemoveXattr, p) {
+		return syscall.EPERM
+	}
+	x, ok := s.inner.(vfs.XattrWriter)
+	if !ok {
+		return syscall.ENOTSUP
+	}
+	return x.RemoveXattr(p, name)
+}
+func (s *scopedWriteFS) PreserveAndRecreateXattrs(p string, attrs map[string][]byte) error {
+	if s.inner == nil || !s.authorize(vfs.ChangeActionPreserveAndRecreateXattrs, p) {
+		return syscall.EPERM
+	}
+	x, ok := s.inner.(vfs.XattrMaintenance)
+	if !ok {
+		return syscall.ENOTSUP
+	}
+	return x.PreserveAndRecreateXattrs(p, attrs)
+}
+func (s *scopedWriteFS) MigrateXattrs(p string, m vfs.XattrMigration) error {
+	if s.inner == nil || !s.authorize(vfs.ChangeActionMigrateXattrs, p) {
+		return syscall.EPERM
+	}
+	x, ok := s.inner.(vfs.XattrMaintenance)
+	if !ok {
+		return syscall.ENOTSUP
+	}
+	return x.MigrateXattrs(p, m)
+}
 
 // SetWriteable / SetReadonly are no-ops: a session must not be able to toggle
 // the substrate-wide write lock. The lock is owned centrally by the server
@@ -81,3 +149,4 @@ func (s *scopedWriteFS) SetWriteable() error { return nil }
 func (s *scopedWriteFS) SetReadonly() error  { return nil }
 
 var _ vfs.WritableFS = (*scopedWriteFS)(nil)
+var _ vfs.ChangeSetAdmitter = (*scopedWriteFS)(nil)

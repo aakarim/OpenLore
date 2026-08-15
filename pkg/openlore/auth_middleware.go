@@ -6,23 +6,23 @@ import (
 	"strings"
 )
 
-// authMiddleware wraps the /mcp and /api handlers with posture-aware bearer
-// verification. Posture is derived from SSH (§4): no separate switch.
+// authMiddleware wraps an HTTP handler with posture-aware bearer verification.
+// The caller supplies whether a token is required so transports may override
+// the SSH-derived default.
 //
 //   - No issuer configured → no-op; callers resolve to anonymous (Phase 0).
-//   - allow_keyless (optional-token) → verify a token if present (reject if
-//     invalid); if absent, proceed anonymously.
-//   - !allow_keyless (required-token) → a valid token is required; missing or
-//     invalid → 401. Unknown identity under `unknown_identity: deny` → 403.
+//   - Optional-token posture → verify a token if present (reject if invalid);
+//     if absent, proceed anonymously.
+//   - Required-token posture → a valid token is required; missing or invalid
+//     returns 401. Unknown identity under `unknown_identity: deny` returns 403.
 //
 // A verified token is resolved to an Identity and stored on the request context
 // via contextWithIdentity, so the shared shellForContext scopes the tool call
 // exactly as an SSH session (docs/mcp-bearer-auth.md §4, §6).
-func (s *Server) authMiddleware(next http.Handler) http.Handler {
+func (s *Server) authMiddleware(next http.Handler, required bool) http.Handler {
 	if s.issuer == nil {
 		return next
 	}
-	required := !s.config.AllowKeyless
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token := bearerToken(r)

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -20,7 +21,8 @@ import (
 	"github.com/aakarim/go-openlore/internal/metrics"
 	"github.com/aakarim/go-openlore/internal/passkeys"
 	"github.com/aakarim/go-openlore/internal/skills"
-	"github.com/aakarim/go-openlore/pkg/meta"
+	"github.com/aakarim/go-openlore/pkg/openlore/meta"
+	"github.com/aakarim/go-openlore/pkg/openlore/validation"
 	"github.com/aakarim/go-openlore/pkg/shell"
 	"github.com/aakarim/go-openlore/pkg/shell/cmds"
 	"github.com/aakarim/go-openlore/pkg/vfs"
@@ -80,27 +82,33 @@ type Server struct {
 	// readMW is the read (before-read) middleware contributed by plugins, run in
 	// front of Stat/ReadDir/ReadFile in registration order. Empty in core
 	// go-openlore; when empty no read wrapper is installed (zero read overhead).
-	readMW []ReadMiddleware
+	readMW            []ReadMiddleware
+	contentTransforms []ContentTransform
+	agentSkills       *agentSkillsPlugin
 
 	// metaExtenders are the `lore meta` extenders contributed by plugins,
 	// installed per session in buildSessionShell.
 	metaExtenders []meta.Extender
+	metaFilters   []meta.Filter
+	validators    []validation.Validator
 
 	// postCommitMW is the post-commit middleware contributed by plugins, run at
 	// the applier after a durable commit (feed emit, post_write hooks) in
 	// registration order. Empty in core go-openlore.
 	postCommitMW []PostCommitMiddleware
+	httpRoutes   []HTTPRouteProvider
 
 	// Bearer-token auth for the MCP + HTTP API (docs/mcp-bearer-auth.md).
 	// identityStore is always set (resolves claims → Identity). The rest are
 	// non-nil only when auth.tokens is configured, which enables token auth.
-	identityStore IdentityStore
-	issuer        Issuer
-	refreshStore  RefreshTokenStore
-	clientStore   ClientStore
-	authCodes     *authCodeStore
-	authorizeReqs *authorizeStore
-	tokens        *tokenEndpoint
+	identityStore      IdentityStore
+	authorizationStore AuthorizationStore
+	issuer             Issuer
+	refreshStore       RefreshTokenStore
+	clientStore        ClientStore
+	authCodes          *authCodeStore
+	authorizeReqs      *authorizeStore
+	tokens             *tokenEndpoint
 	// oidc verifies external IdP assertions for the jwt-bearer (WIF) grant. It
 	// is non-nil only when oidc_issuers are configured alongside auth.tokens.
 	oidc OIDCVerifier
@@ -110,7 +118,7 @@ type Server struct {
 // rootDir is the primary directory to serve (can be empty if using Mount).
 // Options are applied using the functional options pattern via config.Option.
 func NewServer(rootDir string, opts ...config.Option) (*Server, error) {
-	return newServerWithRoot(rootDir, nil, opts...)
+	return newServerWithRoot(rootDir, nil, nil, opts...)
 }
 
 // NewServerWithRootFS creates a server whose root filesystem is a caller-supplied
@@ -120,14 +128,21 @@ func NewServer(rootDir string, opts ...config.Option) (*Server, error) {
 // SetRootBashFS runs after SetWriteable()/newWriteLog and would leave the log
 // with no writable backend at construction time.
 func NewServerWithRootFS(root vfs.FileSystem, opts ...config.Option) (*Server, error) {
-	return newServerWithRoot("", root, opts...)
+	return newServerWithRoot("", root, nil, opts...)
+}
+
+// NewServerWithLowerFS creates a server with a read-only lower filesystem.
+// When writable_dir is configured, its disk tree is layered over lower at the
+// same virtual root and receives all writes.
+func NewServerWithLowerFS(lower fs.FS, opts ...config.Option) (*Server, error) {
+	return newServerWithRoot("", nil, NewFSAdapter(lower), opts...)
 }
 
 // newServerWithRoot is the shared constructor. When rootFS is non-nil it becomes
 // the merge root (rootDir is ignored); otherwise rootDir (if non-empty) is served
 // via a DirFS. The root is installed before the writable block so the write log's
 // substrate is live at construction.
-func newServerWithRoot(rootDir string, rootFS vfs.FileSystem, opts ...config.Option) (*Server, error) {
+func newServerWithRoot(rootDir string, rootFS, lowerFS vfs.FileSystem, opts ...config.Option) (*Server, error) {
 	cfg, err := config.New(opts...)
 	if err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
@@ -150,16 +165,15 @@ func newServerWithRoot(rootDir string, rootFS vfs.FileSystem, opts ...config.Opt
 		motd:    cfg.MOTD,
 	}
 
-	// Built-in shellexec plugin: external commands as middleware on the
-	// read/write paths (pre_read, pre_commit, post_write). Registered here,
-	// before the write log is built, so its post-commit middleware is composed
-	// into the applier's chain.
+	// Construct shellexec now, but register built-ins after auth/docsets are
+	// loaded so Agent Skills admission can be the outermost write middleware.
+	var shellPlugin *shellexecPlugin
 	if !cfg.Shellexec.IsEmpty() {
 		plug, err := newShellexec(cfg.Shellexec, cfg.DataDir, ShellRunner{}, logger)
 		if err != nil {
 			return nil, fmt.Errorf("configuring shellexec plugin: %w", err)
 		}
-		s.registerPlugin(plug)
+		shellPlugin = plug
 	}
 
 	// Load auth config
@@ -169,6 +183,7 @@ func newServerWithRoot(rootDir string, rootFS vfs.FileSystem, opts ...config.Opt
 			return nil, fmt.Errorf("loading auth config: %w", err)
 		}
 		s.auth = auth
+		s.authorizationStore = fileAuthorizationStore{auth: auth}
 		s.authEnforced = true
 
 		// Auth policy fields override config defaults
@@ -183,14 +198,11 @@ func newServerWithRoot(rootDir string, rootFS vfs.FileSystem, opts ...config.Opt
 		}
 	} else {
 		// No auth file: run in trusted/unenforced mode as a single `public`
-		// docset rooted at "/", with any folder mounts folded in. The anonymous
-		// identity holds an `rw` grant on it (see anonymousIdentity), so every
-		// consumer reuses the normal docset machinery.
-		paths := []config.PathMapping{{Source: "/", Display: "/"}}
-		for _, f := range cfg.Folders {
-			paths = append(paths, config.PathMapping{Source: "/" + f.Name, Display: "/" + f.Name})
-		}
-		s.auth.Docsets = map[string]config.DocsetSpec{"public": {Paths: paths}}
+		// docset rooted at "/". Unenforced sessions receive synthetic `rw`
+		// authority on it, so every consumer reuses normal docset scoping.
+		s.auth.Docsets = map[string]config.DocsetSpec{"public": {
+			Paths: []config.PathMapping{{Source: "/", Display: "/"}},
+		}}
 	}
 
 	// Collect docset root display paths so DirFS.Mkdir can enforce the
@@ -212,8 +224,23 @@ func newServerWithRoot(rootDir string, rootFS vfs.FileSystem, opts ...config.Opt
 	// write log is built — because it resolves the effective OKF config per write
 	// from the docset that owns the target path. Only registered when at least
 	// one docset carries OKF config.
+	var agentSkills *agentSkillsPlugin
+	if cfg.Plugins.Skills.Enabled {
+		agentSkills = newAgentSkills(s.auth.Docsets, s.merge, s.canonicalPath, logger, cfg.Plugins.Skills)
+		s.agentSkills = agentSkills
+		if err := s.registerPlugin(agentSkills); err != nil {
+			return nil, err
+		}
+	}
 	if anyDocsetHasOKF(s.auth.Docsets) {
-		s.registerPlugin(newOKF(s.auth.Docsets, logger))
+		if err := s.registerPlugin(newOKF(s.auth.Docsets, logger)); err != nil {
+			return nil, err
+		}
+	}
+	if shellPlugin != nil {
+		if err := s.registerPlugin(shellPlugin); err != nil {
+			return nil, err
+		}
 	}
 
 	// Set up root directory. A caller-supplied rootFS wins (installed before the
@@ -224,13 +251,19 @@ func newServerWithRoot(rootDir string, rootFS vfs.FileSystem, opts ...config.Opt
 	} else if rootDir != "" {
 		dirFS := NewDirFS(rootDir, cfg.Files).WithDocsetRoots(docsetRoots)
 		s.merge.SetRoot(dirFS)
-	}
-
-	// Set up additional folders. Each folder mount is itself a docset, so any
-	// non-root path within it is a valid Mkdir target (default boundary).
-	for _, folder := range cfg.Folders {
-		folderFS := NewDirFS(folder.Path, cfg.Files)
-		s.merge.Mount(folder.Name, folderFS)
+	} else if cfg.WritableDir != "" {
+		info, err := os.Stat(cfg.WritableDir)
+		if err != nil || !info.IsDir() {
+			return nil, fmt.Errorf("writable_dir %q is not a directory", cfg.WritableDir)
+		}
+		upper := NewDirFS(cfg.WritableDir, cfg.Files).WithDocsetRoots(docsetRoots)
+		if lowerFS != nil {
+			s.merge.SetRoot(NewOverlayFS(upper, lowerFS))
+		} else {
+			s.merge.SetRoot(upper)
+		}
+	} else if lowerFS != nil {
+		s.merge.SetRoot(lowerFS)
 	}
 
 	// Enable the experimental writable substrate when the global lock is open.
@@ -246,6 +279,13 @@ func newServerWithRoot(rootDir string, rootFS vfs.FileSystem, opts ...config.Opt
 		// so it is the sole writer and gives globally ordered writes/removes. The
 		// applier runs the post-commit chain after each durable commit.
 		s.writeLog = newWriteLog(s.merge, s.postCommitChain(), logger, 0)
+		if agentSkills != nil {
+			agentSkills.submit = func(ctx context.Context, cs vfs.ChangeSet) error {
+				_, err := s.CommitChangeSet(ctx, Actor{ID: "agent_skills_remote", internal: true}, cs)
+				return err
+			}
+			s.writeLog.SetPreApply(agentSkills.validateMutation)
+		}
 
 		// Async external work (Part D): the `spawn` command runs a command in a
 		// bounded goroutine and writes its stdout back through the captured
@@ -438,7 +478,7 @@ func (s *Server) resolveIdentity(sess ssh.Session) Identity {
 		}
 	}
 
-	// Unrecognized key / keyless: the anonymous default identity.
+	// Unrecognized key / keyless: the reserved guest identity.
 	return withConn(conn, s.anonymousIdentity())
 }
 
@@ -449,6 +489,16 @@ func withConn(conn, resolved Identity) Identity {
 	resolved.RemoteAddr = conn.RemoteAddr
 	resolved.User = conn.User
 	resolved.PublicKey = conn.PublicKey
+	resolved.Principal.Source = "ssh"
+	resolved.Principal.Subject = resolved.IdentityName
+	resolved.Principal.Claims = map[string]any{"user": conn.User, "remote_addr": conn.RemoteAddr}
+	if conn.PublicKey != nil {
+		resolved.Principal.Claims["public_key_fingerprint"] = gossh.FingerprintSHA256(conn.PublicKey)
+		if cert, ok := conn.PublicKey.(*gossh.Certificate); ok {
+			resolved.Principal.Claims["certificate_serial"] = cert.Serial
+			resolved.Principal.Claims["certificate_principals"] = append([]string(nil), cert.ValidPrincipals...)
+		}
+	}
 	return resolved
 }
 
@@ -472,22 +522,6 @@ func (s *Server) resolveHomeDir(homeDocset string) string {
 	return vfs.CleanPath(display)
 }
 
-// hasWritableGrant reports whether the identity holds any grant that ever
-// permits writes (rw, publish, …). It drives coarse shell action gating: a
-// read-only identity (only `ro` grants) is offered no write verbs. Per-op
-// authorization still runs through identityCanWrite.
-func (s *Server) hasWritableGrant(id Identity) bool {
-	for name, grantName := range id.Grants {
-		if _, ok := s.auth.Docsets[name]; !ok {
-			continue
-		}
-		if grant, ok := s.grants.get(grantName); ok && grant.AllowsWrite() {
-			return true
-		}
-	}
-	return false
-}
-
 // writeConflictPolicy resolves the policy governing whole-file overwrites to
 // virtual path p. A per-docset override (DocsetSpec.WriteConflictPolicy) wins
 // for paths inside that docset; otherwise the global default applies. An
@@ -497,7 +531,7 @@ func (s *Server) writeConflictPolicy(p string) vfs.WriteConflictPolicy {
 	if global == "" {
 		global = vfs.DefaultWriteConflictPolicy
 	}
-	clean := vfs.CleanPath(p)
+	clean := s.canonicalPath(p)
 	for _, ds := range s.auth.Docsets {
 		if ds.WriteConflictPolicy == "" {
 			continue
@@ -612,11 +646,14 @@ func (s *Server) shellHandler(next ssh.Handler) ssh.Handler {
 // post-commit provider registered after construction still fires on commits.
 //
 // Call it before serving; it is not safe to call concurrently with live traffic.
-func (s *Server) RegisterPlugin(p any) {
-	s.registerPlugin(p)
+func (s *Server) RegisterPlugin(p any) error {
+	if err := s.registerPlugin(p); err != nil {
+		return err
+	}
 	if s.writeLog != nil {
 		s.writeLog.SetPostCommit(s.postCommitChain())
 	}
+	return nil
 }
 
 // CommitChangeSet appends an already-authorized ChangeSet directly to the ordered
@@ -633,8 +670,53 @@ func (s *Server) CommitChangeSet(ctx context.Context, actor Actor, cs vfs.Change
 	if s.writeLog == nil {
 		return WriteResult{}, vfs.ErrReadOnly
 	}
+	cs = s.canonicalChangeSet(cs)
 	h, err := s.writeLog.Submit(ctx, actor, cs)
 	return WriteResult{Hash: h}, err
+}
+
+func (s *Server) AdmitChangeSet(ctx context.Context, id Identity, cs vfs.ChangeSet) (WriteResult, error) {
+	if s.writeLog == nil {
+		return WriteResult{}, vfs.ErrReadOnly
+	}
+	cs = s.canonicalChangeSet(cs)
+	if err := vfs.ValidateChangeSet(cs); err != nil {
+		return WriteResult{}, err
+	}
+	for _, change := range cs.Leaves() {
+		if !s.identityCanWrite(id, change.Action, change.Target) {
+			return WriteResult{}, vfs.ErrReadOnly
+		}
+	}
+	return s.writeChain()(ctx, NewWriteOp(Actor{ID: id.IdentityName}, cs))
+}
+
+type HTTPRouteProvider interface {
+	PrepareHTTPRoutes(*Server) (HTTPRouteRegistrar, error)
+}
+type HTTPRouteRegistrar func(*http.ServeMux)
+type routeExtender struct{ register HTTPRouteRegistrar }
+
+func (e routeExtender) RegisterHTTPHandlers(mux *http.ServeMux) { e.register(mux) }
+
+func (s *Server) canonicalChangeSet(cs vfs.ChangeSet) vfs.ChangeSet {
+	if len(cs.Changes) == 0 {
+		cs.Target = s.canonicalPath(cs.Target)
+		if cs.RemoveAll != nil && cs.RemoveAll.Opts.Expected != nil {
+			remove := *cs.RemoveAll
+			remove.Opts.Expected = copyCanonicalSnapshot(remove.Opts.Expected, s.canonicalPath)
+			cs.RemoveAll = &remove
+		}
+	}
+	for i := range cs.Changes {
+		cs.Changes[i].Target = s.canonicalPath(cs.Changes[i].Target)
+		if cs.Changes[i].RemoveAll != nil && cs.Changes[i].RemoveAll.Opts.Expected != nil {
+			remove := *cs.Changes[i].RemoveAll
+			remove.Opts.Expected = copyCanonicalSnapshot(remove.Opts.Expected, s.canonicalPath)
+			cs.Changes[i].RemoveAll = &remove
+		}
+	}
+	return cs
 }
 
 // registerPlugin wires any middleware a plugin provides into the admission,
@@ -642,12 +724,32 @@ func (s *Server) CommitChangeSet(ctx context.Context, actor Actor, cs vfs.Change
 // NewServer before the write log is built: read/write middleware are read
 // per-session at buildSessionShell time, but the post-commit chain is composed
 // once when newWriteLog is constructed.
-func (s *Server) registerPlugin(p any) {
+func (s *Server) registerPlugin(p any) error {
+	if fp, ok := p.(MetaFilterProvider); ok {
+		claimed := map[string]bool{}
+		for _, existing := range s.metaFilters {
+			claimed[existing.Name] = true
+			for _, alias := range existing.Aliases {
+				claimed[alias] = true
+			}
+		}
+		for _, f := range fp.MetaFilters() {
+			for _, name := range append([]string{f.Name}, f.Aliases...) {
+				if name == "" || claimed[name] {
+					return fmt.Errorf("metadata filter name or alias %q is already registered", name)
+				}
+				claimed[name] = true
+			}
+		}
+	}
 	if wp, ok := p.(WriteMiddlewareProvider); ok {
 		s.writeMW = append(s.writeMW, wp.WriteMiddleware()...)
 	}
 	if rp, ok := p.(ReadMiddlewareProvider); ok {
 		s.readMW = append(s.readMW, rp.ReadMiddleware()...)
+	}
+	if tp, ok := p.(ContentTransformProvider); ok {
+		s.contentTransforms = append(s.contentTransforms, tp.ContentTransforms()...)
 	}
 	if pc, ok := p.(PostCommitProvider); ok {
 		s.postCommitMW = append(s.postCommitMW, pc.PostCommitMiddleware()...)
@@ -657,13 +759,14 @@ func (s *Server) registerPlugin(p any) {
 			s.grants.register(g)
 		}
 	}
-	if cp, ok := p.(CommandProvider); ok {
-		for _, c := range cp.LoreCommands() {
-			cmds.RegisterLoreSub(c)
-		}
-	}
 	if mp, ok := p.(MetaExtenderProvider); ok {
 		s.metaExtenders = append(s.metaExtenders, mp.MetaExtenders()...)
+	}
+	if fp, ok := p.(MetaFilterProvider); ok {
+		s.metaFilters = append(s.metaFilters, fp.MetaFilters()...)
+	}
+	if vp, ok := p.(ValidatorProvider); ok {
+		s.validators = append(s.validators, vp.Validators()...)
 	}
 	// Record the plugin's identity + version in the boot logs. Logged per
 	// registration so it captures plugins registered after NewServer (e.g. the
@@ -672,6 +775,10 @@ func (s *Server) registerPlugin(p any) {
 		info := ip.Info()
 		s.logger.Info("plugin registered", "name", info.Name, "version", info.Version)
 	}
+	if hp, ok := p.(HTTPRouteProvider); ok {
+		s.httpRoutes = append(s.httpRoutes, hp)
+	}
+	return nil
 }
 
 // writeChain composes the admission (pre-commit) middleware around a terminal
@@ -682,7 +789,7 @@ func (s *Server) registerPlugin(p any) {
 // chain is just the terminal submit.
 func (s *Server) writeChain() WriteHandler {
 	terminal := func(ctx context.Context, op WriteOp) (WriteResult, error) {
-		h, err := s.writeLog.Submit(ctx, op.Actor, op.ChangeSet)
+		h, err := s.writeLog.Submit(ctx, op.Actor, op.persistenceChangeSet())
 		return WriteResult{Hash: h}, err
 	}
 	return chainWrite(terminal, s.writeMW...)
@@ -704,28 +811,33 @@ func (s *Server) postCommitChain() PostCommitHandler {
 	return chainPostCommit(terminal, s.postCommitMW...)
 }
 
-// hasCapability reports whether have contains want.
-func hasCapability(have []string, want string) bool {
-	for _, c := range have {
-		if c == want {
-			return true
-		}
-	}
-	return false
-}
-
 // buildSessionShell constructs a fully-configured shell scoped to the given
 // identity: a per-identity filesystem (read scoping, write authorization,
 // read-tracking CAS), capability-gated allowed actions, and
 // OPENLORE_* environment variables. This is the single source of truth for
 // per-identity scoping, shared by the SSH shell handler and the MCP/HTTP tool
 // handlers so all transports enforce the same access rules.
-// buildSessionFS constructs the per-session filesystem for an identity: read
-// scoping to the identity's readable roots, the read/write middleware chains,
-// per-op write authorization by grant, and session CAS tracking. It is the
-// single source of the layered VFS shared by both the interactive shell and the
-// SFTP subsystem so both enforce identical read scoping and write authorization.
+// buildSessionFS constructs the per-session filesystem for an identity and
+// exposes its configured path aliases for filesystem-oriented transports.
 func (s *Server) buildSessionFS(id Identity) vfs.FileSystem {
+	id = s.resolveSessionIdentity(id)
+	sessionFS := s.buildCanonicalSessionFS(id)
+	// Expose this identity's aliases outermost so callers can retain the alias
+	// spelling while every internal operation, including CAS tracking, sees the
+	// canonical path. Ungranted aliases are never added to the session tree.
+	if aliases := s.aliasesForIdentity(id); len(aliases) > 0 {
+		sessionFS = newAliasFS(sessionFS, aliases)
+	}
+	return sessionFS
+}
+
+// buildCanonicalSessionFS constructs the per-session filesystem without path
+// aliases. The web browser uses this view so its folder tree presents each
+// docset only once; filesystem-oriented transports decorate it with aliases in
+// buildSessionFS.
+func (s *Server) buildCanonicalSessionFS(id Identity) vfs.FileSystem {
+	id = s.resolveSessionIdentity(id)
+
 	// Build per-session filesystem scoped to the identity's readable roots.
 	// Docsets are display-path subtrees of a shared backing filesystem, so read
 	// scoping is by path (not mount name): a session only sees the docsets it
@@ -751,25 +863,23 @@ func (s *Server) buildSessionFS(id Identity) vfs.FileSystem {
 	if s.writeLog != nil {
 		sessionFS = newMiddlewareFS(sessionFS, Actor{ID: id.User}, s.writeChain())
 	}
-	// canWrite is the coarse authority gate shared by the FS layer and the
-	// action layer: an identity may write only when auth is enforced, it is a
-	// named identity (not anonymous), its token scope grants write, and it holds
-	// at least one write-capable grant. A WIF token narrowed to `read` (or any
-	// non-`full` scope) is read-only here even if the underlying identity is
-	// write-capable — narrowing wins, fail-closed.
-	canWrite := s.authEnforced && id.IdentityName != "" && scopeGrantsWrite(id.Scopes) && s.hasWritableGrant(id)
-	// Per-op write authorization: every mutation is checked against the
-	// identity's grants (grant ∩ token scope ∩ readonly locks). This confines a
-	// session to exactly what its grants permit — an `rw` grant writes anywhere
-	// in its docset, a `publish` grant only creates/edits within the inbox and
-	// never deletes, and two identities sharing a docset are authorized
-	// independently per write. Anonymous/read-only identities get a nil
-	// authorizer (fully read-only). No-op when auth is not enforced.
+	// A write-capable session must be a named non-guest identity with full token
+	// scope. The per-operation authorizer below resolves current roles and grants;
+	// a read-scoped token remains read-only regardless of RBAC authority.
+	canWrite := s.authEnforced && id.IdentityName != "" && id.IdentityName != "guest" && scopeGrantsWrite(id.Scopes)
+	// Every mutation is checked against current role membership, the governing
+	// docset ACL, token scope, and readonly locks. A grant such as `publish` can
+	// further restrict actions and paths. Guest/read-only identities receive a
+	// nil authorizer and fail closed.
 	if s.authEnforced {
 		var authz writeAuthorizer
 		if canWrite {
+			// Writes deliberately resolve current policy on every operation. The
+			// session snapshot remains authoritative for its stable read view.
+			writeID := id
+			writeID.policySnapshot = nil
 			authz = func(action vfs.ChangeAction, p string) bool {
-				return s.identityCanWrite(id, action, p)
+				return s.identityCanWrite(writeID, action, p)
 			}
 		}
 		sessionFS = newScopedWriteFS(sessionFS, authz)
@@ -780,25 +890,65 @@ func (s *Server) buildSessionFS(id Identity) vfs.FileSystem {
 	// Session CAS: track the hash of every file read (and written) so a
 	// later blind overwrite compare-and-swaps against the version the
 	// caller last saw, without naming a hash — an overwrite fails if the
-	// file changed since it was read. Outermost so it observes all reads;
-	// only meaningful (and only added) when the substrate is writable.
+	// file changed since it was read. Outside policy layers so it observes all
+	// reads, but inside aliasing so both paths share canonical CAS state. Only
+	// meaningful (and only added) when the substrate is writable.
 	if !s.config.Readonly {
 		if w, ok := sessionFS.(vfs.WritableFS); ok {
 			sessionFS = newReadTrackingFS(w)
 		}
 	}
+	// Presentation-only transforms must be outside tracking: tracked hashes are
+	// hashes of durable bytes, never injected status annotations.
+	if len(s.contentTransforms) > 0 {
+		if writable, ok := sessionFS.(vfs.WritableFS); ok {
+			sessionFS = &writableReadTransformFS{WritableFS: writable, transforms: s.contentTransforms}
+		} else {
+			sessionFS = &readTransformFS{FileSystem: sessionFS, transforms: s.contentTransforms}
+		}
+		if s.agentSkills != nil {
+			switch transformed := sessionFS.(type) {
+			case *writableReadTransformFS:
+				transformed.updateRemoteSkill = s.agentSkills.updateRemoteSkill
+			case *readTransformFS:
+				transformed.updateRemoteSkill = s.agentSkills.updateRemoteSkill
+			}
+		}
+	}
 	return sessionFS
 }
 
+func (s *Server) resolveSessionIdentity(id Identity) Identity {
+	if s.authEnforced && id.policySnapshot == nil {
+		if policy, err := s.currentPolicy(id); err == nil {
+			id.policySnapshot = &policy
+			id.HomeDocset = policy.HomeDocset
+			id.HomeDir = s.resolveHomeDir(policy.HomeDocset)
+		} else {
+			deny := AuthorizationPolicy{}
+			id.policySnapshot = &deny
+		}
+	}
+	return id
+}
+
 func (s *Server) buildSessionShell(id Identity) *shell.Shell {
+	if s.authEnforced {
+		if policy, err := s.currentPolicy(id); err == nil {
+			id.policySnapshot = &policy
+			id.HomeDocset = policy.HomeDocset
+			id.HomeDir = s.resolveHomeDir(policy.HomeDocset)
+		} else {
+			deny := AuthorizationPolicy{}
+			id.policySnapshot = &deny
+			id.HomeDocset, id.HomeDir = "", ""
+		}
+	}
 	sessionFS := s.buildSessionFS(id)
-	// canWrite is the coarse authority gate shared by the FS layer and the
-	// action layer: an identity may write only when auth is enforced, it is a
-	// named identity (not anonymous), its token scope grants write, and it holds
-	// at least one write-capable grant. A WIF token narrowed to `read` (or any
-	// non-`full` scope) is read-only here even if the underlying identity is
-	// write-capable — narrowing wins, fail-closed.
-	canWrite := s.authEnforced && id.IdentityName != "" && scopeGrantsWrite(id.Scopes) && s.hasWritableGrant(id)
+	// Command visibility is snapshotted, but privileged operations are narrowed
+	// again at invocation. Guest, read-scoped, and currently read-only sessions
+	// do not see write verbs.
+	canWrite := s.authEnforced && id.IdentityName != "" && id.IdentityName != "guest" && len(s.writableDocsetNames(id)) > 0
 
 	sh := shell.NewShell(sessionFS)
 	if s.config.LogUnsupportedShellUsage {
@@ -825,7 +975,7 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 	// Capability gating (Part B). Only applies when an auth config is
 	// present — without one (local `openlore .` or an embedded KB server
 	// that does its own scoping) the shell stays unrestricted. With auth,
-	// an unrecognized/anonymous identity is read-only; a recognized
+	// an unrecognized/guest identity is read-only; a recognized
 	// identity may write and publish within its docsets.
 	if s.authEnforced {
 		if canWrite {
@@ -833,20 +983,30 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 			// spawn runs an external command as the OpenLore service
 			// user, so it's gated on an explicit `spawn` capability
 			// (Part D) — never granted to ordinary writers.
-			if hasCapability(id.Capabilities, "spawn") {
+			if s.hasCapabilityForPolicy(*id.policySnapshot, "spawn") {
 				allowed = append(allowed, cmds.ActionSpawn)
 			}
 			sh.SetAllowedActions(allowed)
 		} else {
 			sh.SetAllowedActions(nil) // read-only (ActionRead implied)
 		}
+		sh.SetActionAuthorizer(func(action cmds.Action) bool {
+			if action == cmds.ActionSpawn {
+				return s.hasCurrentCapability(id, "spawn")
+			}
+			return true
+		})
 	}
 
 	// Per-session docset views for `lore docsets` and publish inboxes for
 	// `publish`. Computed once here, where the access authority lives.
 	sh.SetDocsets(s.sessionDocsets(id))
+	sh.SetSkillsManagementEnabled(s.config.Plugins.Skills.Enabled)
+	sh.SetSkillsRemoteConfig(s.config.Plugins.Skills.RemoteTimeout, s.config.Plugins.Skills.RemoteMaxBytes)
+	sh.SetMetaFilters(s.sessionMetaFilters(id))
 	sh.SetPublishTargets(s.sessionPublishTargets(id))
 	sh.SetMetaExtenders(s.metaExtenders)
+	sh.SetValidators(s.validators)
 
 	// Set identity info as environment variables
 	if id.IdentityName != "" {
@@ -867,34 +1027,103 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 	return sh
 }
 
-// sessionDocsets resolves the docsets this session can access, with their
-// display paths, grant, and attributes — the per-session view surfaced by
-// `lore docsets`.
+// sessionDocsets resolves one row per accessible canonical or alias mount. A
+// docset's canonical paths are emitted first, followed by aliases targeting its
+// first path; `lore docsets` preserves this order for older consumers that use
+// the first row as the docset's mount.
 func (s *Server) sessionDocsets(id Identity) []cmds.DocsetInfo {
-	if len(id.Grants) == 0 {
-		return nil
-	}
 	writable := s.writableDocsetNames(id)
 	var out []cmds.DocsetInfo
-	for name, grantName := range id.Grants {
+	for name := range s.auth.Docsets {
 		ds, ok := s.auth.Docsets[name]
 		if !ok {
 			continue
 		}
-		var paths []string
-		for _, pm := range ds.Paths {
-			paths = append(paths, displayPath(pm))
+		grantNames, accessible := s.effectiveGrantNames(id, name)
+		if !accessible {
+			continue
 		}
-		out = append(out, cmds.DocsetInfo{
-			Name:     name,
-			Paths:    paths,
-			Grant:    grantName,
-			Writable: writable[name],
-			Home:     name == id.HomeDocset,
-			Inbox:    inboxPath(ds) != "",
-		})
+		legacyGrant := ""
+		if len(grantNames) == 1 && s.authorizationStore == nil {
+			legacyGrant = grantNames[0]
+		}
+		for i, pm := range ds.Paths {
+			out = append(out, cmds.DocsetInfo{
+				Name:        name,
+				Paths:       []string{displayPath(pm)},
+				Grants:      grantNames,
+				Grant:       legacyGrant,
+				Writable:    writable[name],
+				Home:        i == 0 && name == id.HomeDocset,
+				Inbox:       inboxPath(ds) != "",
+				AgentSkills: directMarker(s.merge, s.canonicalPath(displayPath(pm))),
+			})
+		}
+		target := primaryDisplayPath(ds)
+		for _, alias := range ds.Aliases {
+			out = append(out, cmds.DocsetInfo{
+				Name:        name,
+				Paths:       []string{vfs.CleanPath(alias)},
+				AliasTarget: target,
+				Grants:      grantNames,
+				Grant:       legacyGrant,
+				Writable:    writable[name],
+				AgentSkills: directMarker(s.merge, s.canonicalPath(target)),
+			})
+		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+func directMarker(fsys vfs.FileSystem, p string) bool {
+	if fsys == nil || (reflect.ValueOf(fsys).Kind() == reflect.Ptr && reflect.ValueOf(fsys).IsNil()) {
+		return false
+	}
+	x, ok := fsys.(vfs.XattrReader)
+	if !ok {
+		return false
+	}
+	b, err := x.GetXattr(p, agentSkillsMarker)
+	return err == nil && len(b) == 0
+}
+
+func (s *Server) sessionMetaFilters(id Identity) []meta.Filter {
+	var out []meta.Filter
+	for _, f := range s.metaFilters {
+		nf := f
+		nf.Roots = nil
+		seen := map[string]bool{}
+		for docsetName, ds := range s.auth.Docsets {
+			grantNames, accessible := s.effectiveGrantNames(id, docsetName)
+			if !accessible {
+				continue
+			}
+			for _, pm := range ds.Paths {
+				docRoot := s.canonicalPath(displayPath(pm))
+				for _, providerRoot := range f.Roots {
+					providerRoot = s.canonicalPath(providerRoot)
+					// Filters are bound to docset roots, not merely intersecting
+					// descendants. A grant on a nested ordinary docset must not
+					// expose a filter contributed by its skills-enabled ancestor.
+					readable := false
+					for _, grantName := range grantNames {
+						if grant, ok := s.grants.get(grantName); ok && grant.CanRead(ds, providerRoot) {
+							readable = true
+							break
+						}
+					}
+					if providerRoot == docRoot && !seen[providerRoot] && readable {
+						seen[providerRoot] = true
+						nf.Roots = append(nf.Roots, providerRoot)
+					}
+				}
+			}
+		}
+		if len(nf.Roots) > 0 {
+			out = append(out, nf)
+		}
+	}
 	return out
 }
 
@@ -906,13 +1135,22 @@ func (s *Server) sessionPublishTargets(id Identity) []cmds.PublishTarget {
 		return nil
 	}
 	var out []cmds.PublishTarget
-	for name, grantName := range id.Grants {
+	for name := range s.auth.Docsets {
 		ds, ok := s.auth.Docsets[name]
 		if !ok {
 			continue
 		}
-		grant, ok := s.grants.get(grantName)
-		if !ok || !grant.AllowsWrite() {
+		grantNames, ok := s.effectiveGrantNames(id, name)
+		if !ok {
+			continue
+		}
+		write := false
+		for _, grantName := range grantNames {
+			if grant, ok := s.grants.get(grantName); ok && grant.AllowsWrite() {
+				write = true
+			}
+		}
+		if !write {
 			continue
 		}
 		inbox := inboxPath(ds)
@@ -944,7 +1182,7 @@ func (s *Server) writableDocsetNames(id Identity) map[string]bool {
 	if id.IdentityName == "" || !scopeGrantsWrite(id.Scopes) {
 		return out
 	}
-	for name, grantName := range id.Grants {
+	for name := range s.auth.Docsets {
 		ds, ok := s.auth.Docsets[name]
 		if !ok {
 			continue
@@ -952,27 +1190,33 @@ func (s *Server) writableDocsetNames(id Identity) map[string]bool {
 		if ds.Readonly != nil && *ds.Readonly {
 			continue
 		}
-		if grant, ok := s.grants.get(grantName); ok && grant.AllowsWrite() {
-			out[name] = true
+		grantNames, ok := s.effectiveGrantNames(id, name)
+		if !ok {
+			continue
+		}
+		for _, grantName := range grantNames {
+			if grant, ok := s.grants.get(grantName); ok && grant.AllowsWrite() {
+				out[name] = true
+			}
 		}
 	}
 	return out
 }
 
 // anonymousIdentity returns the identity used for callers that present no
-// credential (keyless SSH, or an unauthenticated MCP/HTTP request): the auth
-// config's `default` docset→grant map when auth is enforced, or full access to
-// the synthetic `public` docset when it is not.
+// credential (keyless SSH, or an unauthenticated MCP/HTTP request). Enforced
+// sessions resolve the reserved guest role; unenforced sessions receive
+// synthetic public rw authority in effectiveGrantNames.
 func (s *Server) anonymousIdentity() Identity {
 	id := Identity{
 		SessionID:   generateSessionID(),
 		ConnectedAt: time.Now(),
 	}
 	if s.authEnforced {
-		id.Grants = s.auth.Default // nil ⇒ no access for anonymous sessions
+		id.IdentityName = "guest"
+		id.Principal = AuthenticatedPrincipal{Subject: "guest", IdentityName: "guest", Source: "guest"}
+		id.Scopes = []string{ScopeFull}
 	} else {
-		// Auth not enforced: full access to the synthetic `public` docset.
-		id.Grants = map[string]string{"public": "rw"}
 		id.Scopes = []string{ScopeFull}
 	}
 	return id
@@ -1029,6 +1273,16 @@ func joinCommand(parts []string) string {
 func (s *Server) ListenAndServe() error {
 	if err := s.validateGrants(); err != nil {
 		return err
+	}
+	preparedRoutes := make([]HTTPRouteRegistrar, 0, len(s.httpRoutes))
+	if s.config.HTTPPort > 0 {
+		for _, provider := range s.httpRoutes {
+			register, err := provider.PrepareHTTPRoutes(s)
+			if err != nil {
+				return err
+			}
+			preparedRoutes = append(preparedRoutes, register)
+		}
 	}
 	opts := []ssh.Option{
 		wish.WithAddress(fmt.Sprintf(":%d", s.config.Port)),
@@ -1180,7 +1434,7 @@ func (s *Server) ListenAndServe() error {
 				// Posture-aware bearer auth (§4): identity from a verified token
 				// (or anonymous) is placed on the request context, which the
 				// Streamable transport carries into the tool handler.
-				h := s.authMiddleware(mcpHandler)
+				h := s.authMiddleware(mcpHandler, s.config.MCPAuthRequired())
 				httpCfg.ExtraHandlers[mcpPath] = h
 				httpCfg.ExtraHandlers[mcpPath+"/"] = h
 				s.logger.Info("MCP endpoint mounted", "path", mcpPath, "http_port", s.config.HTTPPort)
@@ -1192,7 +1446,7 @@ func (s *Server) ListenAndServe() error {
 			if s.config.APIEnabled && s.config.APIPath != "" {
 				apiPath := "/" + strings.Trim(s.config.APIPath, "/")
 				api := NewMCPHTTPAPI(mcpServer)
-				httpCfg.ExtraHandlers[apiPath+"/"] = s.authMiddleware(api.Handler(apiPath))
+				httpCfg.ExtraHandlers[apiPath+"/"] = s.authMiddleware(api.Handler(apiPath), !s.config.AllowKeyless)
 				s.logger.Info("HTTP API mounted", "path", apiPath, "http_port", s.config.HTTPPort)
 			}
 
@@ -1207,6 +1461,9 @@ func (s *Server) ListenAndServe() error {
 				s.logger.Info("authorize endpoint mounted", "path", authorizePath, "http_port", s.config.HTTPPort)
 				s.logger.Info("client registration mounted", "path", registrationPath, "http_port", s.config.HTTPPort)
 				s.logger.Info("oauth metadata mounted", "path", protectedResourceMetadataPath, "http_port", s.config.HTTPPort)
+			}
+			for _, register := range preparedRoutes {
+				httpCfg.Extenders = append(httpCfg.Extenders, routeExtender{register: register})
 			}
 
 			if s.passkeys != nil {
@@ -1247,16 +1504,17 @@ func (s *Server) ListenAndServe() error {
 				}
 				lorePath = "/" + strings.Trim(lorePath, "/")
 				// The /lore web browser reads through the same per-identity
-				// scoped session FS as every other transport, so docset
+				// scoped canonical FS as every other transport, so docset
 				// boundaries (including nested-docset carve-outs) are enforced
-				// identically. An unresolved identity falls back to the
-				// anonymous/default authority.
+				// identically, without exposing filesystem path aliases in the
+				// human-facing folder tree. An unresolved identity falls back to
+				// the anonymous/default authority.
 				httpCfg.ExtraHandlers[lorePath+"/"] = s.passkeys.LoreBrowserHandler(func(name string) vfs.FileSystem {
 					id, ok := s.identityForName(name)
 					if !ok {
 						id = s.anonymousIdentity()
 					}
-					return s.buildSessionFS(id)
+					return s.buildCanonicalSessionFS(id)
 				})
 
 				cmds.PublishBaseURL = baseURL + lorePath

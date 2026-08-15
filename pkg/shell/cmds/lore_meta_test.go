@@ -3,13 +3,15 @@ package cmds_test
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"strings"
 	"testing"
 
-	"github.com/aakarim/go-openlore/pkg/meta"
+	"github.com/aakarim/go-openlore/pkg/openlore/meta"
 	"github.com/aakarim/go-openlore/pkg/shell"
 	"github.com/aakarim/go-openlore/pkg/shell/cmds"
+	"github.com/aakarim/go-openlore/pkg/vfs"
 )
 
 // The `lore meta` command lives here (shell plumbing); its scanning business
@@ -113,6 +115,80 @@ func TestLoreMetaCommand_AppliesSessionExtenders(t *testing.T) {
 				t.Fatalf("extender leaked onto %v", r["path"])
 			}
 		}
+	}
+}
+
+type canonicalMetaFS struct{ *mapFS }
+
+func (f canonicalMetaFS) CanonicalPath(p string) string {
+	p = vfs.CleanPath(p)
+	if p == "/alias" || strings.HasPrefix(p, "/alias/") {
+		return "/docs" + strings.TrimPrefix(p, "/alias")
+	}
+	return p
+}
+
+func TestLoreMetaFilterAliasesNarrowingAndAbsoluteCanonicalPaths(t *testing.T) {
+	fs := canonicalMetaFS{metaTreeFS()}
+	sh := shell.NewShell(fs)
+	sh.SetMetaFilters([]meta.Filter{{
+		Name:          "agent_skills",
+		Aliases:       []string{"agent_skill", "skills", "skill"},
+		Roots:         []string{"/docs"},
+		AbsolutePaths: true,
+		Selector: func(abs string, r meta.Record) bool {
+			return r.Fields["type"] == "Note"
+		},
+	}})
+	for _, alias := range []string{"agent_skills", "agent_skill", "skills", "skill"} {
+		out, errOut, code := runMeta(t, sh, "/", "lore meta --filter "+alias+" /alias/sub")
+		if code != 0 {
+			t.Fatalf("%s: exit=%d stderr=%s", alias, code, errOut)
+		}
+		recs := parseNDJSON(t, out)
+		if len(recs) != 1 || recs[0]["path"] != "/docs/sub/nested.md" {
+			t.Fatalf("%s: canonical narrowed results = %v", alias, recs)
+		}
+	}
+}
+
+func TestLoreMetaFilterExactFilePath(t *testing.T) {
+	sh := shell.NewShell(metaTreeFS())
+	sh.SetMetaFilters([]meta.Filter{{
+		Name:          "notes",
+		Roots:         []string{"/docs"},
+		AbsolutePaths: true,
+		Selector:      func(abs string, _ meta.Record) bool { return abs == "/docs/metric.md" },
+	}})
+	out, errOut, code := runMeta(t, sh, "/", "lore meta --filter notes /docs/metric.md")
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, errOut)
+	}
+	recs := parseNDJSON(t, out)
+	if len(recs) != 1 || recs[0]["path"] != "/docs/metric.md" {
+		t.Fatalf("exact-file filtered result = %v", recs)
+	}
+}
+
+type errorWriter struct{ err error }
+
+func (w errorWriter) Write([]byte) (int, error) { return 0, w.err }
+
+func TestLoreMetaFilterReportsEncodingFailure(t *testing.T) {
+	sh := shell.NewShell(metaTreeFS())
+	sh.SetMetaFilters([]meta.Filter{{
+		Name:     "all",
+		Roots:    []string{"/docs"},
+		Selector: func(string, meta.Record) bool { return true },
+	}})
+	var errOut bytes.Buffer
+	writeErr := errors.New("output unavailable")
+	code := sh.ExecPipeline("lore meta --filter all", errorWriter{err: writeErr}, &errOut, nil)
+	if code != 1 {
+		t.Fatalf("exit=%d, want 1", code)
+	}
+	if !strings.Contains(errOut.String(), writeErr.Error()) {
+		t.Fatalf("stderr missing encoding error: %q", errOut.String())
 	}
 }
 

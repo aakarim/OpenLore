@@ -32,6 +32,7 @@ var commandActions = map[string]Action{
 	"patch":   ActionWrite,
 	"tee":     ActionWrite,
 	"mkdir":   ActionWrite,
+	"mv":      ActionWrite,
 	"rm":      ActionWrite,
 	"publish": ActionPublish,
 	"spawn":   ActionSpawn,

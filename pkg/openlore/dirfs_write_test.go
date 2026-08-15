@@ -30,6 +30,49 @@ func newWritableDirFS(t *testing.T) (*DirFS, string) {
 	return d, dir
 }
 
+func TestDirFSFailedBatchRestoresXattrs(t *testing.T) {
+	d, _ := newWritableDirFS(t)
+	if err := d.MkdirAll("/tree"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.WriteFileAtomic("/tree/file.md", []byte("old"), vfs.WriteOpts{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.WriteFileAtomic("/sentinel.md", []byte("sentinel"), vfs.WriteOpts{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.SetXattr("/tree", "user.lore.test", []byte("directory"), 0); err != nil {
+		t.Fatal(err)
+	}
+	badHash := "not-the-sentinel-hash"
+	failingWrite := vfs.Change{Target: "/sentinel.md", Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: []byte("new"), Opts: vfs.WriteOpts{IfMatch: &badHash}}}
+
+	_, err := vfs.CommitChangeSet(d, vfs.ChangeSet{Changes: []vfs.Change{
+		{Target: "/tree", Action: vfs.ChangeActionRemoveAll, RemoveAll: &vfs.RemoveAllChange{}},
+		failingWrite,
+	}})
+	if err == nil {
+		t.Fatal("batch succeeded, want CAS failure")
+	}
+	if got, readErr := d.ReadFile("/tree/file.md"); readErr != nil || string(got) != "old" {
+		t.Fatalf("restored file=%q err=%v", got, readErr)
+	}
+	if got, xattrErr := d.GetXattr("/tree", "user.lore.test"); xattrErr != nil || string(got) != "directory" {
+		t.Fatalf("restored xattr=%q err=%v", got, xattrErr)
+	}
+
+	_, err = vfs.CommitChangeSet(d, vfs.ChangeSet{Changes: []vfs.Change{
+		{Target: "/tree", Action: vfs.ChangeActionSetXattr, Xattr: &vfs.XattrChange{Name: "user.lore.test", Value: []byte("changed")}},
+		failingWrite,
+	}})
+	if err == nil {
+		t.Fatal("xattr batch succeeded, want CAS failure")
+	}
+	if got, xattrErr := d.GetXattr("/tree", "user.lore.test"); xattrErr != nil || string(got) != "directory" {
+		t.Fatalf("xattr-only rollback=%q err=%v", got, xattrErr)
+	}
+}
+
 func TestDirFS_ReadOnlyByDefault(t *testing.T) {
 	dir := t.TempDir()
 	d := NewDirFS(dir, config.FilesConfig{})

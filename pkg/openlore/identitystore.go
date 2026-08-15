@@ -128,13 +128,12 @@ func (d serverIdentityStore) Resolve(_ context.Context, claims Claims) (Identity
 func (s *Server) resolveClaims(claims Claims) (Identity, error) {
 	sub := claims.Subject
 
-	// A public/anonymous token resolves to the same read-only default identity a
+	// A public/anonymous token resolves to the same read-only guest identity a
 	// tokenless caller gets (§8.4).
 	if sub == "" || sub == anonymousSubject {
 		id := s.anonymousIdentity()
-		if claims.Scope != "" {
-			id.Scopes = []string{claims.Scope}
-		}
+		id.Scopes = []string{claims.Scope}
+		id.Principal = AuthenticatedPrincipal{Subject: sub, IdentityName: "guest", Source: "token", Claims: claims.Raw, Scope: claims.Scope}
 		return id, nil
 	}
 
@@ -150,7 +149,10 @@ func (s *Server) resolveClaims(claims Claims) (Identity, error) {
 			return Identity{}, ErrUnknownIdentity
 		}
 		// Posture allows unknowns: land in the read-only default lore.
-		return s.anonymousIdentity(), nil
+		id := s.anonymousIdentity()
+		id.Principal = AuthenticatedPrincipal{Subject: sub, IdentityName: "guest", Source: "token", Claims: claims.Raw, Scope: claims.Scope}
+		id.Scopes = []string{claims.Scope}
+		return id, nil
 	}
 
 	id, ok := s.identityForName(name)
@@ -158,9 +160,8 @@ func (s *Server) resolveClaims(claims Claims) (Identity, error) {
 		// A rule pointed at a nonexistent identity — fail closed.
 		return Identity{}, ErrUnknownIdentity
 	}
-	if claims.Scope != "" {
-		id.Scopes = []string{claims.Scope}
-	}
+	id.Scopes = []string{claims.Scope}
+	id.Principal = AuthenticatedPrincipal{Subject: sub, IdentityName: name, Source: "token", Claims: claims.Raw, Scope: claims.Scope}
 	return id, nil
 }
 
@@ -349,8 +350,7 @@ func (s *Server) identityForName(name string) (Identity, bool) {
 func (s *Server) identityFromAuth(ident config.AuthIdentity) Identity {
 	return Identity{
 		IdentityName: ident.Name,
-		Grants:       ident.Docsets,
-		Capabilities: ident.Capabilities,
+		Principal:    AuthenticatedPrincipal{Subject: ident.Name, IdentityName: ident.Name, Source: "local"},
 		HomeDir:      s.resolveHomeDir(ident.Home),
 		HomeDocset:   ident.Home,
 		Scopes:       []string{ScopeFull},

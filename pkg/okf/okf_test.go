@@ -91,8 +91,8 @@ no closing delimiter
 			wantErr: true,
 		},
 		{
-			name: "crlf line endings",
-			path: "tables/orders.md",
+			name:    "crlf line endings",
+			path:    "tables/orders.md",
 			content: "---\r\ntype: BigQuery Table\r\n---\r\nbody\r\n",
 			wantErr: false,
 		},
@@ -181,6 +181,12 @@ func TestValidate_NonUTF8(t *testing.T) {
 	content := []byte{'-', '-', '-', '\n', 't', 'y', 'p', 'e', ':', ' ', 0xff, 0xfe, '\n', '-', '-', '-', '\n'}
 	if err := Validate("x.md", content); err == nil {
 		t.Fatal("expected error for non-UTF-8 content")
+	}
+}
+
+func TestValidate_ReservedFileWithUnclosedFrontmatter(t *testing.T) {
+	if err := Validate("index.md", []byte("---\nokf_version: 0.1\n")); err == nil {
+		t.Fatal("expected unclosed reserved-file frontmatter to fail")
 	}
 }
 

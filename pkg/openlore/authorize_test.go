@@ -66,6 +66,38 @@ func TestAuthorize_RendersChoicePageWithRequestID(t *testing.T) {
 	}
 }
 
+func TestAuthorize_AcceptsRootSlashResourceCanonicalization(t *testing.T) {
+	s := newTokenTestServer(t, true, "allow")
+	_, challenge := pkcePair()
+
+	rec, authz := runAuthorize(t, s, url.Values{
+		"response_type":         {"code"},
+		"redirect_uri":          {"http://127.0.0.1:52123/callback"},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+		"resource":              {s.config.Tokens.Audience + "/"},
+	})
+	if rec.Code != http.StatusOK || authz == "" {
+		t.Fatalf("status = %d, authz = %q; want accepted canonical resource; body=%s", rec.Code, authz, rec.Body.String())
+	}
+}
+
+func TestAuthorize_RejectsDifferentResourcePath(t *testing.T) {
+	s := newTokenTestServer(t, true, "allow")
+	_, challenge := pkcePair()
+
+	rec, _ := runAuthorize(t, s, url.Values{
+		"response_type":         {"code"},
+		"redirect_uri":          {"http://127.0.0.1:52123/callback"},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+		"resource":              {s.config.Tokens.Audience + "/other"},
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for a different resource path", rec.Code)
+	}
+}
+
 // TestAuthorize_PublicChoiceMintsAnonymousToken exercises the "continue with
 // public access" button: POST /authorize/public → redirect with code → token
 // exchange yields an anonymous, read-only token (§8.4).
@@ -122,8 +154,8 @@ func TestAuthorize_PublicChoiceMintsAnonymousToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveClaims: %v", err)
 	}
-	if id.IdentityName != "" || id.Grants["public"] != "ro" {
-		t.Errorf("public token resolved to %q/%v, want anonymous with default grants", id.IdentityName, id.Grants)
+	if id.IdentityName != "guest" || id.Principal.IdentityName != "guest" {
+		t.Errorf("public token resolved to %+v, want guest principal", id)
 	}
 }
 
@@ -338,8 +370,8 @@ func TestMatchResolvesToIdentity(t *testing.T) {
 	if id.IdentityName != "alice" {
 		t.Fatalf("IdentityName = %q, want alice (via Match alias)", id.IdentityName)
 	}
-	if id.Grants["secret"] != "rw" {
-		t.Errorf("Grants = %v, want secret:rw", id.Grants)
+	if id.Principal.IdentityName != "alice" {
+		t.Errorf("principal = %+v, want alice", id.Principal)
 	}
 }
 

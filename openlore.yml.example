@@ -9,6 +9,15 @@
 # Config file version. Used for migration between config formats.
 version: "1"
 
+plugins:
+  skills:
+    enabled: false
+
+# Optional disk-backed content root. When the binary includes embedded docs,
+# this directory is overlaid at the same virtual root: its filesystem hierarchy
+# defines paths, while lore.json independently defines docsets and access.
+# writable_dir: ./published
+
 # ── Server ────────────────────────────────────────────
 
 # SSH server port. Agents connect here.
@@ -33,6 +42,9 @@ metrics_port: 3000
 mcp:
   enabled: true
   path: /mcp
+  # Force OAuth login even when lore.json allows keyless/anonymous access.
+  # Omit this setting to inherit the SSH posture from allow_keyless.
+  require_auth: true
 
 # ── JSON HTTP API ─────────────────────────────────────
 #
@@ -127,8 +139,8 @@ host_key_path: .ssh/openlore_ed25519
 # infrastructure — how this instance mints and verifies tokens — so it
 # lives here, not in lore.json (which is access policy). When omitted,
 # the MCP/HTTP endpoints serve anonymous callers (Phase 0). Posture
-# (public vs token-required) still derives from lore.json's
-# allow_keyless / unknown_identity.
+# (public vs token-required) derives from lore.json's allow_keyless by default;
+# mcp.require_auth can override it for the MCP endpoint.
 #
 # The ES256 signing key is generated on first boot under <data_dir>/auth/.
 # Public keys are published at /.well-known/jwks.json. Passkey login mints
@@ -151,6 +163,19 @@ host_key_path: .ssh/openlore_ed25519
 #   - issuer_url: https://token.actions.githubusercontent.com
 #     jwks:
 #       mode: discovery
+
+# ── Inbox HTTP uploads ────────────────────────────────
+# Inbox credentials are separate, revocable webhook secrets. They may only
+# publish to a docset inbox allowed by the credential identity's live grants.
+# `auth_file` is mandatory for CLI credential creation. This bounded in-memory
+# policy is independent and does not permit these types/sizes via shell or MCP.
+inbox:
+  max_upload_size: 10MB
+  allowed_types:
+    - extensions: [".md", ".markdown"]
+      mime: text/markdown
+#     - extensions: [".m4a"]
+#       mime: audio/mp4
 
 # ── Content ───────────────────────────────────────────
 
@@ -179,14 +204,6 @@ files:
     - "*.pem"
     - "*.p12"
     - ".DS_Store"
-
-# Mount additional directories under named paths in the virtual filesystem.
-# Each folder appears as a top-level directory in the shell.
-# folders:
-#   - name: api-docs
-#     path: /var/docs/api
-#   - name: runbooks
-#     path: /var/docs/runbooks
 
 # ── Skills ────────────────────────────────────────────
 

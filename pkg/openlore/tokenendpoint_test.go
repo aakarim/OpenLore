@@ -52,6 +52,24 @@ func TestTokenEndpoint_AuthorizationCodeGrant(t *testing.T) {
 	}
 }
 
+func TestTokenEndpoint_AcceptsEquivalentRootResource(t *testing.T) {
+	s := newTokenTestServer(t, true, "allow")
+	code := s.authCodes.Issue(authCode{
+		Subject:  "alice",
+		Scope:    ScopeFull,
+		Resource: s.config.Tokens.Audience + "/",
+	})
+
+	rec, _ := postForm(t, s.tokens, url.Values{
+		"grant_type": {"authorization_code"},
+		"code":       {code},
+		"resource":   {s.config.Tokens.Audience},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestTokenEndpoint_CodeIsSingleUse(t *testing.T) {
 	s := newTokenTestServer(t, true, "allow")
 	code, _ := s.IssueAuthCode("alice", ScopeFull)

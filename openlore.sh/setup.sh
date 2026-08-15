@@ -25,7 +25,7 @@ fi
 
 echo "==> Setting up $INSTALL_DIR..."
 mkdir -p "$INSTALL_DIR/skills" "$INSTALL_DIR/.ssh"
-mkdir -p "$INSTALL_DIR/published"/{knowledge,research,pipeline,runbooks,memory}
+mkdir -p "$INSTALL_DIR/published"
 
 echo "==> Installing binary..."
 cp "$BINARY" "$INSTALL_DIR/openlore"

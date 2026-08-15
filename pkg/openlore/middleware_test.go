@@ -10,11 +10,8 @@ import (
 )
 
 func admitOp(target string) WriteOp {
-	return WriteOp{
-		ChangeSet: vfs.ChangeSet{Target: target, Action: vfs.ChangeActionWrite,
-			Write: &vfs.WriteChange{Bytes: []byte("x")}},
-		Actor: Actor{ID: "agent-1"},
-	}
+	return NewWriteOp(Actor{ID: "agent-1"}, vfs.ChangeSet{Target: target, Action: vfs.ChangeActionWrite,
+		Write: &vfs.WriteChange{Bytes: []byte("x")}})
 }
 
 // recordMW appends label to *order when it runs, then calls next.
@@ -58,7 +55,7 @@ func TestChainWrite_DeferShortCircuitsBeforeTerminal(t *testing.T) {
 	deferMW := func(next WriteHandler) WriteHandler {
 		return func(ctx context.Context, op WriteOp) (WriteResult, error) {
 			order = append(order, "b-defer")
-			return WriteResult{}, &vfs.PendingChangeError{ChangeSet: op.ChangeSet, Ref: "req-1"}
+			return WriteResult{}, op.Pending("req-1")
 		}
 	}
 	h := chainWrite(terminal, recordMW(&order, "a"), deferMW, recordMW(&order, "c"))

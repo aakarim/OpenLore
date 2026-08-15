@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
+	"syscall"
 	"time"
 )
 
@@ -40,6 +41,58 @@ type FileSystem interface {
 	ReadDir(path string) ([]FileInfo, error)
 	ReadFile(path string) ([]byte, error)
 }
+
+// XattrFlags controls creation/replacement of an extended attribute.
+type XattrFlags uint32
+
+const (
+	XattrCreate XattrFlags = 1 << iota
+	XattrReplace
+)
+
+func (f XattrFlags) Valid() bool {
+	return f&^(XattrCreate|XattrReplace) == 0 && f != (XattrCreate|XattrReplace)
+}
+
+// XattrReader and XattrWriter are optional capabilities. Implementations which
+// cannot store attributes should return syscall.ENOTSUP.
+type XattrReader interface {
+	GetXattr(path, name string) ([]byte, error)
+	ListXattrs(path string) ([]string, error)
+}
+
+type XattrWriter interface {
+	SetXattr(path, name string, value []byte, flags XattrFlags) error
+	RemoveXattr(path, name string) error
+}
+
+// XattrMaintenance is the focused internal storage capability used by queued
+// recovery and plugin-schema migrations. It is intentionally separate from the
+// public set/remove surface.
+type XattrMaintenance interface {
+	PreserveAndRecreateXattrs(path string, attrs map[string][]byte) error
+	MigrateXattrs(path string, migration XattrMigration) error
+}
+
+type XattrEdit struct {
+	Name   string `json:"name"`
+	Value  []byte `json:"value,omitempty"`
+	Remove bool   `json:"remove,omitempty"`
+}
+
+type XattrMigration struct {
+	NamespacePrefix        string      `json:"namespace_prefix"`
+	ExpectedEnvelopeSHA256 []byte      `json:"expected_envelope_sha256"`
+	Edits                  []XattrEdit `json:"edits"`
+}
+
+// XattrStaleError indicates that a migration's exact-envelope precondition no
+// longer matches. Callers may use errors.As to rediscover and retry.
+type XattrStaleError struct{}
+
+func (*XattrStaleError) Error() string { return "xattr envelope changed" }
+
+var _ = syscall.ENOTSUP // document the portable errno contract without platform aliases
 
 // WriteConflictPolicy selects how a whole-file overwrite (the `>`, tee, sed -i
 // and publish verbs) defends against concurrent writers. It does not affect
@@ -93,6 +146,12 @@ type WriteOpts struct {
 	// IfNoneMatch, when true, requires the target to not already exist
 	// (create-only). Fails with a conflict if it does.
 	IfNoneMatch bool
+
+	// ContentPolicyValidated is set only by trusted, narrowly scoped ingress
+	// adapters after they enforce their own extension/MIME and request limits.
+	// Substrates bypass their ordinary extension and per-write size policies for
+	// this leaf; admission and precondition checks still apply.
+	ContentPolicyValidated bool
 }
 
 // WritableFS is the read+write filesystem interface. A backend only satisfies
@@ -200,6 +259,13 @@ func (e *TreeStaleError) Error() string {
 // nothing about content preconditions or approval gating, only scope.
 type WriteScopeFS interface {
 	CanWrite(path string) bool
+}
+
+// PathCanonicalizer is optionally implemented by filesystems that expose more
+// than one virtual path for the same file. Commands use it when path identity
+// matters, such as avoiding a move from an alias onto its canonical path.
+type PathCanonicalizer interface {
+	CanonicalPath(path string) string
 }
 
 // ReadTracker is optionally implemented by a session filesystem that remembers

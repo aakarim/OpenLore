@@ -5,9 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
+	"mime"
 	"os"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/aakarim/go-openlore/pkg/vfs"
+	"golang.org/x/crypto/ssh"
 	"gopkg.in/yaml.v3"
 )
 
@@ -23,6 +29,9 @@ type Config struct {
 	MOTD            string
 	AuthFile        string
 	SkillsDir       string
+	// WritableDir is the disk-backed content root layered over embedded docs.
+	// Its directory hierarchy is exposed directly at the virtual root.
+	WritableDir string
 	// DataDir is the server's writable control-plane data root. Distinct from
 	// docset content. Defaults to ./.openlore.
 	DataDir         string
@@ -32,6 +41,10 @@ type Config struct {
 	// Default true. The endpoint is mounted at MCPPath on the HTTP server.
 	MCPEnabled bool
 	MCPPath    string
+	// MCPRequireAuth overrides the SSH-derived authentication posture for the
+	// MCP endpoint. Nil inherits !AllowKeyless; true forces OAuth so clients
+	// such as Claude open the browser login flow.
+	MCPRequireAuth *bool
 	// APIEnabled controls whether the plain JSON HTTP API (backed by the MCP
 	// server) runs. Default true. It is mounted at APIPath on the HTTP server.
 	APIEnabled   bool
@@ -41,7 +54,6 @@ type Config struct {
 	CAKeysFile   string
 	HostCertFile string
 	Files        FilesConfig
-	Folders      []FolderConfig
 	Passkeys     PasskeysConfig
 	// Shellexec is the external-command middleware config (pre_read, pre_commit,
 	// post_write) run by the built-in shellexec plugin. Replaces the legacy
@@ -73,7 +85,9 @@ type Config struct {
 	// key, TTLs) — not per-lore access policy — so it lives in openlore.yml
 	// alongside passkeys, not in lore.json. When nil, token auth is disabled
 	// and the MCP/HTTP endpoints behave as anonymous callers (Phase 0).
-	Tokens *AuthTokensConfig
+	Tokens  *AuthTokensConfig
+	Inbox   InboxConfig
+	Plugins PluginsConfig
 
 	// OIDCIssuers are external IdPs whose JWTs may be exchanged for OpenLore
 	// tokens at the token endpoint via the jwt-bearer grant (workload identity
@@ -85,6 +99,82 @@ type Config struct {
 	// Track sources for conflict detection.
 	configFileLoaded   bool
 	embeddedConfigUsed bool
+}
+
+type PluginsConfig struct{ Skills SkillsPluginConfig }
+type SkillsPluginConfig struct {
+	Enabled        bool
+	RemoteCheckTTL time.Duration
+	RemoteTimeout  time.Duration
+	RemoteMaxBytes int64
+}
+
+const DefaultInboxMaxUploadSize int64 = 10 * 1024 * 1024
+
+type InboxConfig struct {
+	MaxUploadSize int64
+	AllowedTypes  map[string]string
+}
+type inboxAllowedYAML struct {
+	Extensions []string `yaml:"extensions"`
+	MIME       string   `yaml:"mime"`
+}
+type inboxYAML struct {
+	MaxUploadSize string             `yaml:"max_upload_size"`
+	AllowedTypes  []inboxAllowedYAML `yaml:"allowed_types"`
+}
+
+func parseByteSize(value string) (int64, error) {
+	s := strings.ToUpper(strings.TrimSpace(value))
+	multiplier := int64(1)
+	for suffix, m := range map[string]int64{"KB": 1024, "MB": 1024 * 1024, "GB": 1024 * 1024 * 1024} {
+		if strings.HasSuffix(s, suffix) {
+			multiplier = m
+			s = strings.TrimSpace(strings.TrimSuffix(s, suffix))
+			break
+		}
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil || n <= 0 || n > math.MaxInt64/multiplier {
+		return 0, fmt.Errorf("invalid inbox max_upload_size %q", value)
+	}
+	return n * multiplier, nil
+}
+
+func applyInboxConfig(cfg *Config, in *inboxYAML) error {
+	if in == nil {
+		return nil
+	}
+	if in.MaxUploadSize != "" {
+		n, err := parseByteSize(in.MaxUploadSize)
+		if err != nil {
+			return err
+		}
+		cfg.Inbox.MaxUploadSize = n
+	}
+	if in.AllowedTypes != nil {
+		cfg.Inbox.AllowedTypes = map[string]string{}
+		for _, item := range in.AllowedTypes {
+			mt, _, err := mime.ParseMediaType(item.MIME)
+			if err != nil || mt == "" || mt != strings.ToLower(item.MIME) {
+				return fmt.Errorf("invalid inbox MIME %q", item.MIME)
+			}
+			if len(item.Extensions) == 0 {
+				return fmt.Errorf("inbox allowed type has no extensions")
+			}
+			for _, raw := range item.Extensions {
+				ext := strings.ToLower(strings.TrimSpace(raw))
+				if len(ext) < 2 || ext[0] != '.' || strings.ContainsAny(ext, "/\\\x00") || ext == "." || strings.ContainsAny(ext[1:], ". ") {
+					return fmt.Errorf("unsafe inbox extension %q", raw)
+				}
+				if old, ok := cfg.Inbox.AllowedTypes[ext]; ok {
+					return fmt.Errorf("duplicate/conflicting inbox extension %q (%s, %s)", ext, old, mt)
+				}
+				cfg.Inbox.AllowedTypes[ext] = mt
+			}
+		}
+	}
+	return nil
 }
 
 // ShellexecConfig is the openlore.yml `shellexec:` block: external commands run
@@ -160,22 +250,33 @@ type FilesConfig struct {
 	Ignore  []string
 }
 
-// FolderConfig defines an additional named folder mount.
-type FolderConfig struct {
-	Name string
-	Path string
-}
-
 // AuthConfig is loaded from lore.json.
 type AuthConfig struct {
 	AllowKeyless    *bool                 `json:"allow_keyless,omitempty"`
 	UnknownIdentity string                `json:"unknown_identity,omitempty"`
 	DefaultCwd      string                `json:"default_cwd,omitempty"`
 	Docsets         map[string]DocsetSpec `json:"docsets"`
-	// Default is the docset→grant map applied to keyless / unrecognized callers
-	// (the former `lore.default`). Empty = no access for anonymous sessions.
+	Roles           map[string]RoleSpec   `json:"roles,omitempty"`
+	// Default is a legacy authority field retained only for JSON parsing. It is ignored.
 	Default    map[string]string `json:"default,omitempty"`
 	Identities []AuthIdentity    `json:"identities"`
+}
+
+type CapabilityRules struct {
+	Capabilities []string `json:"capabilities,omitempty"`
+}
+
+// RoleSpec is a reusable set of capabilities. Docset grants are resource-side
+// ACL entries, not properties of the role itself.
+type RoleSpec struct {
+	Comment string          `json:"comment,omitempty"`
+	Allow   CapabilityRules `json:"allow,omitempty"`
+	Deny    CapabilityRules `json:"deny,omitempty"`
+}
+
+type DocsetAccess struct {
+	Allow map[string]string `json:"allow,omitempty"`
+	Deny  []string          `json:"deny,omitempty"`
 }
 
 // AuthTokensConfig controls the bearer-token issuer for the MCP + HTTP API.
@@ -203,7 +304,14 @@ type JWKSSpec struct {
 
 // DocsetSpec defines a named set of path mappings.
 type DocsetSpec struct {
-	Paths []PathMapping `json:"paths"`
+	Paths  []PathMapping `json:"paths"`
+	Access DocsetAccess  `json:"access,omitempty"`
+	// AgentSkills is ignored. Collections are selected dynamically by xattr.
+	AgentSkills bool `json:"-"`
+	// Aliases are alternate display roots for the first path. They expose the
+	// same content while the first path remains canonical for home, inbox,
+	// policy, hooks, and changesets.
+	Aliases []string `json:"aliases,omitempty"`
 	// Inbox names a subfolder (VFS path, relative to a docset root or absolute)
 	// that the `publish` grant confines create/edit to. Empty = the docset has
 	// no inbox, so a `publish` grant on it can write nothing.
@@ -236,6 +344,14 @@ type PathMapping struct {
 	Display string // the path shown in the shell (empty = same as Source)
 }
 
+// MarshalJSON preserves the two input forms accepted by UnmarshalJSON.
+func (p PathMapping) MarshalJSON() ([]byte, error) {
+	if p.Display == "" || p.Display == p.Source {
+		return json.Marshal(p.Source)
+	}
+	return json.Marshal(map[string]string{p.Source: p.Display})
+}
+
 // UnmarshalJSON supports both string and {"source": "display"} forms.
 func (p *PathMapping) UnmarshalJSON(data []byte) error {
 	// Try string first
@@ -261,23 +377,21 @@ func (p *PathMapping) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// AuthIdentity defines a user identity and its per-docset grants.
+// AuthIdentity defines a user identity and its role membership.
 type AuthIdentity struct {
 	Name    string `json:"name"`
 	Comment string `json:"comment,omitempty"`
 	// PublicKey is optional: an identity may exist purely as a passkey/token
 	// login target (no SSH key). Empty = no SSH public-key auth for this identity.
-	PublicKey string `json:"public_key,omitempty"`
-	// Docsets maps a docset name to the grant this identity holds on it
-	// (e.g. "ro", "rw", "publish"). Grant names must be registered grant types
-	// at server startup, else the server refuses to boot (fail-closed).
+	PublicKey string   `json:"public_key,omitempty"`
+	Roles     []string `json:"roles,omitempty"`
+	// Docsets is a legacy authority field retained only for JSON parsing. It is ignored.
 	Docsets map[string]string `json:"docsets"`
 	// Home names the docset that serves as this identity's home directory. Its
 	// display path becomes $HOME and the session's initial working directory.
-	// Must be one of the docsets in the identity's grants. Empty = no home.
+	// Home ownership provides implicit rw unless a nested docset takes precedence.
 	Home string `json:"home,omitempty"`
-	// Capabilities are the extra capabilities this identity holds, e.g.
-	// "spawn" to authorize the async external-work command.
+	// Capabilities is a legacy authority field retained only for JSON parsing. It is ignored.
 	Capabilities []string `json:"capabilities,omitempty"`
 
 	// Match lists the token-claim predicates that resolve TO this identity.
@@ -316,6 +430,7 @@ type fileConfig struct {
 	MOTDFile            string           `yaml:"motd_file"`
 	AuthFile            string           `yaml:"auth_file"`
 	SkillsDir           string           `yaml:"skills_dir"`
+	WritableDir         string           `yaml:"writable_dir"`
 	DataDir             string           `yaml:"data_dir"`
 	HTTPPort            int              `yaml:"http_port"`
 	ExternalSSHPort     int              `yaml:"external_ssh_port"`
@@ -327,7 +442,6 @@ type fileConfig struct {
 	HostCertFile        string           `yaml:"host_cert_file"`
 	DefaultCwd          string           `yaml:"default_cwd"`
 	Files               *filesYAML       `yaml:"files"`
-	Folders             []FolderConfig   `yaml:"folders"`
 	Passkeys            *passkeysYAML    `yaml:"passkeys"`
 	Shellexec           *ShellexecConfig `yaml:"shellexec"`
 	Readonly            *bool            `yaml:"readonly"`
@@ -337,11 +451,50 @@ type fileConfig struct {
 	// the MCP + HTTP API), hence configured here rather than in lore.json.
 	Tokens      *AuthTokensConfig `yaml:"tokens"`
 	OIDCIssuers []OIDCIssuer      `yaml:"oidc_issuers"`
+	Inbox       *inboxYAML        `yaml:"inbox"`
+	Plugins     pluginsYAML       `yaml:"plugins"`
+}
+
+type pluginsYAML struct {
+	Skills skillsPluginYAML `yaml:"skills"`
+}
+type skillsPluginYAML struct {
+	Enabled        bool   `yaml:"enabled"`
+	RemoteCheckTTL string `yaml:"remote_check_ttl"`
+	RemoteTimeout  string `yaml:"remote_timeout"`
+	RemoteMaxBytes string `yaml:"remote_max_bytes"`
+}
+
+func applySkillsConfig(cfg *Config, in skillsPluginYAML) error {
+	cfg.Plugins.Skills.Enabled = in.Enabled
+	for _, setting := range []struct {
+		value  string
+		target *time.Duration
+	}{{in.RemoteCheckTTL, &cfg.Plugins.Skills.RemoteCheckTTL}, {in.RemoteTimeout, &cfg.Plugins.Skills.RemoteTimeout}} {
+		value, target := setting.value, setting.target
+		if value == "" {
+			continue
+		}
+		d, err := time.ParseDuration(value)
+		if err != nil || d < 0 {
+			return fmt.Errorf("invalid skills remote duration %q", value)
+		}
+		*target = d
+	}
+	if in.RemoteMaxBytes != "" {
+		n, err := parseByteSize(in.RemoteMaxBytes)
+		if err != nil {
+			return fmt.Errorf("invalid skills remote_max_bytes: %w", err)
+		}
+		cfg.Plugins.Skills.RemoteMaxBytes = n
+	}
+	return nil
 }
 
 type mcpYAML struct {
-	Enabled *bool  `yaml:"enabled"`
-	Path    string `yaml:"path"`
+	Enabled     *bool  `yaml:"enabled"`
+	Path        string `yaml:"path"`
+	RequireAuth *bool  `yaml:"require_auth"`
 }
 
 type apiYAML struct {
@@ -383,6 +536,8 @@ func New(opts ...Option) (Config, error) {
 		Readonly:            true,                           // safe default: read-only substrate
 		WriteConflictPolicy: vfs.DefaultWriteConflictPolicy, // "hash": overwrites are compare-and-swap
 		MaxJobs:             8,                              // bound concurrent async spawn jobs
+		Plugins:             PluginsConfig{Skills: SkillsPluginConfig{RemoteCheckTTL: 60 * time.Second, RemoteTimeout: 3 * time.Second, RemoteMaxBytes: 10 * 1024 * 1024}},
+		Inbox:               InboxConfig{MaxUploadSize: DefaultInboxMaxUploadSize, AllowedTypes: map[string]string{".md": "text/markdown", ".markdown": "text/markdown"}},
 		Files: FilesConfig{
 			Allowed: []string{
 				"*.md", "*.markdown", "*.txt",
@@ -405,6 +560,9 @@ func New(opts ...Option) (Config, error) {
 
 	if cfg.configFileLoaded && cfg.embeddedConfigUsed {
 		return Config{}, errors.New("conflict: cannot use both a config file and embedded config")
+	}
+	if cfg.MCPEnabled && cfg.MCPRequireAuth != nil && *cfg.MCPRequireAuth && cfg.Tokens == nil {
+		return Config{}, errors.New("mcp.require_auth requires tokens to be configured")
 	}
 
 	return cfg, nil
@@ -457,6 +615,9 @@ func WithConfigFile(path string) Option {
 		if fc.SkillsDir != "" {
 			cfg.SkillsDir = fc.SkillsDir
 		}
+		if fc.WritableDir != "" {
+			cfg.WritableDir = fc.WritableDir
+		}
 		if fc.DataDir != "" {
 			cfg.DataDir = fc.DataDir
 		}
@@ -492,9 +653,6 @@ func WithConfigFile(path string) Option {
 				cfg.Files.Ignore = fc.Files.Ignore
 			}
 		}
-		if len(fc.Folders) > 0 {
-			cfg.Folders = fc.Folders
-		}
 		if fc.Shellexec != nil {
 			cfg.Shellexec = *fc.Shellexec
 		}
@@ -511,10 +669,16 @@ func WithConfigFile(path string) Option {
 		if fc.MaxJobs > 0 {
 			cfg.MaxJobs = fc.MaxJobs
 		}
+		if err := applySkillsConfig(cfg, fc.Plugins.Skills); err != nil {
+			return err
+		}
 		applyPasskeysConfig(cfg, fc.Passkeys)
 		applyMCPConfig(cfg, fc.MCP)
 		applyAPIConfig(cfg, fc.API)
 		applyTokensConfig(cfg, fc.Tokens, fc.OIDCIssuers)
+		if err := applyInboxConfig(cfg, fc.Inbox); err != nil {
+			return err
+		}
 
 		return nil
 	}
@@ -569,6 +733,9 @@ func WithEmbeddedConfig(data []byte, motdFallback string) Option {
 			if fc.SkillsDir != "" {
 				cfg.SkillsDir = fc.SkillsDir
 			}
+			if fc.WritableDir != "" {
+				cfg.WritableDir = fc.WritableDir
+			}
 			if fc.DataDir != "" {
 				cfg.DataDir = fc.DataDir
 			}
@@ -604,14 +771,14 @@ func WithEmbeddedConfig(data []byte, motdFallback string) Option {
 					cfg.Files.Ignore = fc.Files.Ignore
 				}
 			}
-			if len(fc.Folders) > 0 {
-				cfg.Folders = fc.Folders
-			}
 			if fc.Shellexec != nil {
 				cfg.Shellexec = *fc.Shellexec
 			}
 			if fc.Readonly != nil {
 				cfg.Readonly = *fc.Readonly
+			}
+			if err := applySkillsConfig(cfg, fc.Plugins.Skills); err != nil {
+				return err
 			}
 			if fc.WriteConflictPolicy != "" {
 				p, err := vfs.ParseWriteConflictPolicy(fc.WriteConflictPolicy)
@@ -627,6 +794,9 @@ func WithEmbeddedConfig(data []byte, motdFallback string) Option {
 			applyMCPConfig(cfg, fc.MCP)
 			applyAPIConfig(cfg, fc.API)
 			applyTokensConfig(cfg, fc.Tokens, fc.OIDCIssuers)
+			if err := applyInboxConfig(cfg, fc.Inbox); err != nil {
+				return err
+			}
 		}
 
 		// MOTD fallback: only set if nothing else has set it yet
@@ -745,6 +915,14 @@ func WithDataDir(dir string) Option {
 	}
 }
 
+// WithWritableDir sets the disk-backed content root layered over embedded docs.
+func WithWritableDir(dir string) Option {
+	return func(cfg *Config) error {
+		cfg.WritableDir = dir
+		return nil
+	}
+}
+
 // WithAllowedPatterns sets the file patterns to serve.
 func WithAllowedPatterns(patterns []string) Option {
 	return func(cfg *Config) error {
@@ -824,6 +1002,18 @@ func applyMCPConfig(cfg *Config, m *mcpYAML) {
 	if m.Path != "" {
 		cfg.MCPPath = m.Path
 	}
+	if m.RequireAuth != nil {
+		cfg.MCPRequireAuth = m.RequireAuth
+	}
+}
+
+// MCPAuthRequired resolves the MCP-specific override. When it is omitted, MCP
+// retains the historical behavior of mirroring the SSH keyless posture.
+func (cfg Config) MCPAuthRequired() bool {
+	if cfg.MCPRequireAuth != nil {
+		return *cfg.MCPRequireAuth
+	}
+	return !cfg.AllowKeyless
 }
 
 // WithMCPPath sets the path the MCP-over-HTTP endpoint is mounted at on the
@@ -919,34 +1109,122 @@ func LoadAuthConfig(path string) (*AuthConfig, error) {
 		return nil, err
 	}
 
-	// Every docset referenced by an identity's grants or by the anonymous
-	// default must exist; home must be one of the identity's granted docsets.
-	// Grant *names* are validated against the registered grant types at server
-	// startup (fail-closed), not here — config parsing does not know the plugin
-	// set.
-	for name, grant := range auth.Default {
-		if grant == "" {
-			return nil, fmt.Errorf("default grant for docset %q is empty", name)
+	if err := ValidateAuthConfig(&auth); err != nil {
+		return nil, err
+	}
+	return &auth, nil
+}
+
+// ValidateAuthConfig validates a parsed static authorization policy. Legacy
+// authority fields are deliberately ignored.
+func ValidateAuthConfig(auth *AuthConfig) error {
+	if _, ok := auth.Roles["guest"]; ok {
+		return fmt.Errorf("role %q is reserved", "guest")
+	}
+	validateNames := func(where string, values []string) error {
+		seen := map[string]bool{}
+		for _, value := range values {
+			if value == "" || strings.TrimSpace(value) != value {
+				return fmt.Errorf("%s contains an empty or untrimmed name", where)
+			}
+			if seen[value] {
+				return fmt.Errorf("%s contains duplicate %q", where, value)
+			}
+			seen[value] = true
 		}
-		if _, ok := auth.Docsets[name]; !ok {
-			return nil, fmt.Errorf("default references unknown docset %q", name)
+		return nil
+	}
+	for name, role := range auth.Roles {
+		if name == "" || strings.TrimSpace(name) != name {
+			return fmt.Errorf("invalid role name %q", name)
+		}
+		if err := validateNames(fmt.Sprintf("role %q allow capabilities", name), role.Allow.Capabilities); err != nil {
+			return err
+		}
+		if err := validateNames(fmt.Sprintf("role %q deny capabilities", name), role.Deny.Capabilities); err != nil {
+			return err
 		}
 	}
+	homes := map[string]string{}
+	identities := map[string]bool{}
+	keys := map[string]string{}
 	for _, ident := range auth.Identities {
-		for name, grant := range ident.Docsets {
-			if grant == "" {
-				return nil, fmt.Errorf("identity %q grant for docset %q is empty", ident.Name, name)
+		if ident.Name == "" || strings.TrimSpace(ident.Name) != ident.Name {
+			return fmt.Errorf("invalid identity name %q", ident.Name)
+		}
+		if ident.Name == "guest" || ident.Name == "anonymous" {
+			return fmt.Errorf("identity %q is reserved", ident.Name)
+		}
+		if identities[ident.Name] {
+			return fmt.Errorf("duplicate identity name %q", ident.Name)
+		}
+		identities[ident.Name] = true
+		if key := strings.TrimSpace(ident.PublicKey); key != "" {
+			parsed, _, _, _, err := ssh.ParseAuthorizedKey([]byte(key))
+			if err != nil {
+				return fmt.Errorf("identity %q has invalid SSH public key: %w", ident.Name, err)
 			}
-			if _, ok := auth.Docsets[name]; !ok {
-				return nil, fmt.Errorf("identity %q references unknown docset %q", ident.Name, name)
+			normalized := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(parsed)))
+			if other, ok := keys[normalized]; ok {
+				return fmt.Errorf("identities %q and %q share public key", other, ident.Name)
+			}
+			keys[normalized] = ident.Name
+		}
+		if err := validateNames(fmt.Sprintf("identity %q roles", ident.Name), ident.Roles); err != nil {
+			return err
+		}
+		for _, role := range ident.Roles {
+			if role == "guest" {
+				return fmt.Errorf("identity %q cannot be assigned reserved role guest", ident.Name)
+			}
+			if _, ok := auth.Roles[role]; !ok {
+				return fmt.Errorf("identity %q references unknown role %q", ident.Name, role)
 			}
 		}
 		if ident.Home != "" {
-			if _, ok := ident.Docsets[ident.Home]; !ok {
-				return nil, fmt.Errorf("identity %q home docset %q is not in its grants", ident.Name, ident.Home)
+			if _, ok := auth.Docsets[ident.Home]; !ok {
+				return fmt.Errorf("identity %q references unknown home docset %q", ident.Name, ident.Home)
+			}
+			if other, ok := homes[ident.Home]; ok {
+				return fmt.Errorf("identities %q and %q share home docset %q", other, ident.Name, ident.Home)
+			}
+			homes[ident.Home] = ident.Name
+		}
+	}
+	for docset, ds := range auth.Docsets {
+		for role, grant := range ds.Access.Allow {
+			if grant == "" || strings.TrimSpace(grant) != grant {
+				return fmt.Errorf("docset %q has invalid grant for role %q", docset, role)
+			}
+			if role != "guest" {
+				if _, ok := auth.Roles[role]; !ok {
+					return fmt.Errorf("docset %q references unknown role %q", docset, role)
+				}
+			}
+		}
+		if err := validateNames(fmt.Sprintf("docset %q deny roles", docset), ds.Access.Deny); err != nil {
+			return err
+		}
+		for _, role := range ds.Access.Deny {
+			if role != "guest" {
+				if _, ok := auth.Roles[role]; !ok {
+					return fmt.Errorf("docset %q denies unknown role %q", docset, role)
+				}
+			}
+		}
+	}
+	for _, ident := range auth.Identities {
+		if ident.Home != "" {
+			ds := auth.Docsets[ident.Home]
+			for _, denied := range ds.Access.Deny {
+				for _, role := range ident.Roles {
+					if denied == role {
+						return fmt.Errorf("identity %q role %q is denied on its home %q", ident.Name, role, ident.Home)
+					}
+				}
 			}
 		}
 	}
 
-	return &auth, nil
+	return nil
 }

@@ -9,6 +9,10 @@ default_cwd: /
 auth_file: ./lore.json
 data_dir: ./data
 
+# Disk-backed lore is overlaid at the virtual root. Its directory hierarchy is
+# the namespace; lore.json independently defines docsets and authorization.
+writable_dir: ./published
+
 # Global write lock. The substrate boots read-only by default; set false to
 # enable the experimental writable substrate so authenticated identities can
 # create/overwrite files within their writable docsets (per-identity/per-docset
@@ -32,6 +36,7 @@ max_jobs: 8
 mcp:
   enabled: true
   path: /mcp
+  require_auth: true
 
 passkeys:
   enabled: true
@@ -47,33 +52,11 @@ passkeys:
 # instance mints/verifies tokens), so it lives here, not in lore.json. Enabling
 # it mounts the OAuth flow (/authorize, /oauth/token), Dynamic Client
 # Registration (/register), and discovery (/.well-known/oauth-*), so OAuth-native
-# MCP clients (Claude Desktop, Cowork) can log in — while posture (public vs
-# token-required) still derives from lore.json's allow_keyless/unknown_identity.
+# MCP clients (Claude Desktop, Cowork) can log in. MCP's require_auth setting
+# overrides the default posture inherited from lore.json's allow_keyless.
 # The ES256 signing key is generated on first boot under <data_dir>/auth/.
 tokens:
   issuer: https://openlore.sh
   audience: https://openlore.sh
   access_ttl: 30m
   refresh_ttl: 720h
-
-folders:
-  - name: knowledge
-    path: ./published/knowledge
-  - name: jared
-    path: ./published/jared
-  - name: claw
-    path: ./published/claw
-  - name: cor
-    path: ./published/cor
-  - name: ray
-    path: ./published/ray
-  - name: razer
-    path: ./published/razer
-  - name: miles
-    path: ./published/miles
-  - name: zeb
-    path: ./published/zeb
-  - name: adil
-    path: ./published/adil
-  - name: alfie
-    path: ./published/alfie

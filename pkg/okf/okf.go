@@ -1,5 +1,8 @@
 // Package okf implements validation for the Google Open Knowledge Format
-// (OKF) v0.1 — a directory of markdown files with YAML frontmatter.
+// (OKF) — a directory of markdown files with YAML frontmatter. It supports
+// spec revisions 0.1 and 0.2 (see Version); a bundle's effective version is
+// read from the okf_version declaration in its root index.md, defaulting to
+// Latest.
 //
 // Spec: https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md
 //
@@ -8,7 +11,8 @@
 // from downstream shell commands (e.g. knowledge-backend's `kb save`/`kb
 // publish`), and as a standalone conformance checker.
 //
-// Validation enforces only the hard conformance rules of the spec (§9):
+// Validate enforces only the hard conformance rules of the spec (§11 in
+// v0.2), which are identical in both supported revisions:
 //
 //  1. Every non-reserved .md file contains a parseable YAML frontmatter block.
 //  2. Every such frontmatter block contains a non-empty `type` field.
@@ -16,9 +20,12 @@
 //     present it must still be parseable (the bundle-root index.md MAY declare
 //     okf_version — the one place frontmatter is permitted in an index).
 //
-// Everything else in the spec (titles, descriptions, links, citations, body
-// section conventions) is soft guidance that consumers MUST tolerate, so it is
-// deliberately not enforced here.
+// The version-specific optional field families (v0.2 provenance, trust,
+// lifecycle, and Attested Computation shapes; v0.1 legacy timestamp) are
+// shape-checked as warnings by ValidateBundle via the granular, composable
+// ConceptCheck functions in families.go. Everything else in the spec (titles,
+// descriptions, links, body section conventions) is soft guidance that
+// consumers MUST tolerate, so it is deliberately not enforced.
 package okf
 
 import (
@@ -84,6 +91,9 @@ func validateConcept(content []byte) error {
 func validateReserved(content []byte) error {
 	fm, _, ok := SplitFrontmatter(content)
 	if !ok {
+		if _, hasOpen := trimOpeningDelim(content); hasOpen {
+			return fmt.Errorf("YAML frontmatter block has no closing '---' delimiter")
+		}
 		return nil
 	}
 	_, err := parseFrontmatter(fm)

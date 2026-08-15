@@ -1,135 +1,45 @@
 {
   "allow_keyless": true,
   "unknown_identity": "allow",
-  "default_cwd": "/docs",
-
-  "//tokens": "Bearer-token auth for the MCP + HTTP API is SERVER config: set the `tokens:` block in openlore.yml, not here. lore.json is access policy (who can see what); token issuance is infrastructure.",
-
-  "//grants": "An identity holds a named GRANT on each docset it can access. Core grants: `ro` (read the whole docset) and `rw` (read + write anywhere in the docset). The inbox plugin adds `publish` (read the whole docset, no deletes, create/edit only within the docset's `inbox` folder). A grant name with no registered handler makes the server refuse to start.",
-
-  "//okf": "Add an `okf` block to a docset to validate Open Knowledge Format documents on write across that docset's subtree. `patterns` (default [\"*.md\"]) are basename globs; `enforce` (default true) rejects non-conformant writes (false = log and allow). A write is governed by the OKF config of the docset that OWNS its path (longest matching display root, same as grants). Scope narrower subtrees with nested docsets: `personal` below has no okf, but the nested `personal-wiki` docset enforces OKF only under /home/personal/wiki without re-declaring any grants (writes still authorize through the parent's grant).",
-
-  "docsets": {
-    "public": {
-      "paths": [
-        "/docs/public",
-        "/docs/getting-started.md"
-      ]
+  "default_cwd": "/docs/public",
+  "roles": {
+    "engineer": {
+      "comment": "Engineering agents",
+      "allow": { "capabilities": ["spawn"] }
     },
-    "frontend": {
-      "paths": [
-        "/docs/frontend",
-        "/docs/shared",
-        "/docs/components"
-      ]
-    },
-    "backend": {
-      "paths": [
-        "/docs/backend",
-        "/docs/api",
-        {"internal/db-schema": "/docs/database"},
-        "/docs/shared"
-      ],
-      "inbox": "inbox",
-      "max_write_size": 5000000
-    },
-    "backend-home": {
-      "paths": [
-        {"published/backend-home": "/home/backend"}
-      ],
-      "inbox": "inbox"
-    },
-    "ops": {
-      "paths": [
-        "/docs/infrastructure",
-        {"internal/runbooks/on-call.md": "/docs/runbooks/on-call.md"},
-        "/docs/deployment"
-      ]
-    },
-    "wiki": {
-      "//": "OKF enforced across this whole docset: any *.md write must be a conformant OKF concept (parseable YAML frontmatter with a non-empty `type`), else it is rejected before it hits disk.",
-      "paths": [
-        "/docs/wiki"
-      ],
-      "okf": {
-        "patterns": ["*.md"],
-        "enforce": true
-      }
-    },
-    "personal": {
-      "//": "No okf here: writes anywhere under /home/personal are unvalidated…",
-      "paths": [
-        {"published/personal": "/home/personal"}
-      ],
-      "inbox": "inbox"
-    },
-    "personal-wiki": {
-      "//": "…except this nested docset, which owns /home/personal/wiki (longer matching root) and enforces OKF only there. It carries no grants, so it does not change who can write — writes still authorize through the parent `personal` grant; it only attaches OKF to the subtree.",
-      "paths": [
-        {"published/personal/wiki": "/home/personal/wiki"}
-      ],
-      "okf": {}
+    "reviewer": {
+      "allow": { "capabilities": ["review"] },
+      "deny": { "capabilities": ["spawn"] }
     }
   },
-
-  "//default": "The docset→grant map applied to keyless / unrecognized callers. Omit for no anonymous access.",
-  "default": {
-    "public": "ro"
+  "docsets": {
+    "public": {
+      "paths": ["/docs/public"],
+      "access": { "allow": { "guest": "ro", "engineer": "rw", "reviewer": "ro" } }
+    },
+    "backend": {
+      "paths": ["/docs/backend"],
+      "inbox": "inbox",
+      "access": {
+        "allow": { "engineer": "rw", "reviewer": "publish" },
+        "deny": []
+      }
+    },
+    "engineer-home": {
+      "paths": [{ "published/engineer": "/home/engineer" }]
+    }
   },
-
   "identities": [
     {
-      "name": "frontend-agent",
-      "comment": "Claude agent for frontend team",
-      "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleFrontendKeyHere frontend-agent",
-      "docsets": {
-        "public": "ro",
-        "frontend": "rw"
-      }
-    },
-    {
       "name": "backend-agent",
-      "comment": "GPT agent for backend services",
+      "comment": "Backend automation",
       "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleBackendKeyHere backend-agent",
-      "docsets": {
-        "public": "ro",
-        "backend": "rw",
-        "backend-home": "rw"
-      },
-      "home": "backend-home"
+      "roles": ["engineer", "reviewer"],
+      "home": "engineer-home"
     },
     {
-      "name": "contributor",
-      "comment": "Outside collaborator: can read backend docs and drop files into its inbox, but cannot edit the rest or delete anything",
-      "docsets": {
-        "public": "ro",
-        "backend": "publish"
-      }
-    },
-    {
-      "name": "ops-agent",
-      "comment": "Infrastructure and deployment docs",
-      "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleOpsKeyHere ops-agent",
-      "docsets": {
-        "public": "ro",
-        "ops": "rw"
-      }
-    },
-    {
-      "name": "read-all",
-      "comment": "Full read access to all documentation",
-      "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleReadAllKeyHere admin",
-      "docsets": {
-        "public": "ro",
-        "frontend": "ro",
-        "backend": "ro",
-        "ops": "ro"
-      },
-      "//match": "Optional: extra token-claim predicates that resolve TO this identity. A token whose `sub` == the identity Name resolves here automatically; add `match` only to map additional subjects (aliases) or WIF assertions via `sub_prefix`/`aud`/`claims`. `scope` narrows (e.g. \"read\") and `ttl` caps matched WIF tokens. Exact `sub` beats pattern matches.",
-      "match": [
-        { "sub": "alice" },
-        { "sub_prefix": "repo:my-org/my-repo:", "aud": "https://docs.example.com", "scope": "read", "ttl": "15m" }
-      ]
+      "name": "passkey-only-reviewer",
+      "roles": ["reviewer"]
     }
   ]
 }

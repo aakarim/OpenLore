@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aakarim/go-openlore/pkg/openlore/validation"
 	"github.com/aakarim/go-openlore/pkg/shell"
 	"github.com/aakarim/go-openlore/pkg/shell/cmds"
 )
@@ -44,8 +45,9 @@ func TestLore_UnknownSubcommandExitsOne(t *testing.T) {
 
 func TestLoreDocsets_Table(t *testing.T) {
 	docsets := []cmds.DocsetInfo{
-		{Name: "public", Paths: []string{"/docs/public", "/docs/getting-started.md"}, Grant: "ro"},
-		{Name: "backend", Paths: []string{"/docs/backend", "/docs/api"}, Grant: "rw", Writable: true},
+		{Name: "public", Paths: []string{"/docs/public"}, Grant: "ro"},
+		{Name: "public", Paths: []string{"/public"}, AliasTarget: "/docs/public", Grant: "ro"},
+		{Name: "backend", Paths: []string{"/docs/backend", "/docs/api"}, Grant: "rw", Writable: true, AgentSkills: true},
 		{Name: "home", Paths: []string{"/home/backend"}, Grant: "rw", Writable: true, Home: true, Inbox: true},
 	}
 	out, _, code := runLore(t, docsets, "lore docsets")
@@ -53,26 +55,24 @@ func TestLoreDocsets_Table(t *testing.T) {
 		t.Fatalf("lore docsets exit = %d, want 0", code)
 	}
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
-	if len(lines) != 4 {
-		t.Fatalf("want header + 3 rows, got %d lines:\n%s", len(lines), out)
+	if len(lines) != 5 {
+		t.Fatalf("want header + 4 rows, got %d lines:\n%s", len(lines), out)
 	}
 	if !strings.HasPrefix(lines[0], "DOCSET") {
 		t.Fatalf("first line should be header, got %q", lines[0])
 	}
 	// Fields are grep/field-splittable.
-	assertRow := func(line, name, access, attrs, paths string) {
+	assertRow := func(line, name, access, attrs, mount, target string) {
 		t.Helper()
 		f := strings.Fields(line)
-		if f[0] != name || f[1] != access || f[2] != attrs {
-			t.Fatalf("row %q: got name=%q access=%q attrs=%q; want %q %q %q", line, f[0], f[1], f[2], name, access, attrs)
-		}
-		if !strings.HasSuffix(strings.TrimRight(line, " "), paths) {
-			t.Fatalf("row %q: paths should end with %q", line, paths)
+		if len(f) != 5 || f[0] != name || f[1] != access || f[2] != attrs || f[3] != mount || f[4] != target {
+			t.Fatalf("row %q: got %v; want %q %q %q %q %q", line, f, name, access, attrs, mount, target)
 		}
 	}
-	assertRow(lines[1], "public", "ro", "-", "/docs/public,/docs/getting-started.md")
-	assertRow(lines[2], "backend", "rw", "-", "/docs/backend,/docs/api")
-	assertRow(lines[3], "home", "rw", "home,inbox", "/home/backend")
+	assertRow(lines[1], "public", "ro", "-", "/docs/public", "-")
+	assertRow(lines[2], "public", "ro", "alias", "/public", "/docs/public")
+	assertRow(lines[3], "backend", "rw", "agent-skills", "/docs/backend,/docs/api", "-")
+	assertRow(lines[4], "home", "rw", "home,inbox", "/home/backend", "-")
 }
 
 func TestLoreDocsets_EmptyShowsHeaderOnly(t *testing.T) {
@@ -80,7 +80,7 @@ func TestLoreDocsets_EmptyShowsHeaderOnly(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit = %d, want 0", code)
 	}
-	if strings.TrimRight(out, "\n") != "DOCSET  GRANT  ATTRIBUTES  PATHS" {
+	if strings.TrimRight(out, "\n") != "DOCSET  GRANTS  ATTRIBUTES  PATH  TARGET" {
 		t.Fatalf("empty docsets should print header only, got:\n%q", out)
 	}
 }
@@ -96,5 +96,32 @@ func TestLoreDocsets_GrepByAttribute(t *testing.T) {
 	}
 	if !strings.Contains(out, "backend") || strings.Contains(out, "public ") {
 		t.Fatalf("grep inbox should return only the backend row, got:\n%s", out)
+	}
+}
+
+func TestLoreValidate_WarnsWithoutEnabledValidator(t *testing.T) {
+	sh := shell.NewShell(testFS())
+	var out, errOut bytes.Buffer
+	code := sh.ExecPipeline("lore validate /docs", &out, &errOut, nil)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0", code)
+	}
+	if out.String() != "" || !strings.Contains(errOut.String(), "warning: no validators enabled") {
+		t.Fatalf("stdout=%q stderr=%q", out.String(), errOut.String())
+	}
+}
+
+func TestLoreValidate_RunsEnabledValidator(t *testing.T) {
+	sh := shell.NewShell(testFS())
+	sh.SetValidators([]validation.Validator{func(validation.Bundle) []validation.Diagnostic {
+		return nil
+	}})
+	var out, errOut bytes.Buffer
+	code := sh.ExecPipeline("lore validate /docs", &out, &errOut, nil)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0; stderr=%q", code, errOut.String())
+	}
+	if out.String() != "0 errors, 0 warnings\n" {
+		t.Fatalf("stdout=%q", out.String())
 	}
 }

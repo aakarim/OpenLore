@@ -1,11 +1,11 @@
 // Package meta holds the business logic behind `lore meta`: walking a document
 // tree, extracting each document's YAML frontmatter, and letting plugins enrich
-// the result. It is a dedicated business-logic package rather than living in
-// pkg/shell/cmds (which owns only the generic `lore` dispatcher and the thin
-// command adapter) or pkg/openlore (which imports cmds, so cmds cannot import it
-// back without an import cycle). It depends only on pkg/vfs and pkg/okf, so both
-// the shell command and the openlore host can reuse the exact same scanning
-// logic that `lore meta` exposes (as pkg/okf backs write-side validation).
+// the result. It lives under the openlore namespace but is a separate package
+// from pkg/openlore (which imports cmds): keeping meta cmds-free lets the shell
+// command (pkg/shell/cmds) call it without an import cycle, while the parent
+// openlore host reuses it too. It depends only on pkg/vfs and pkg/okf, so the
+// same scanning logic backs `lore meta` on every path (as pkg/okf backs
+// write-side validation).
 package meta
 
 import (
@@ -24,6 +24,15 @@ import (
 // documents with OKF conformance where OKF applies, so read-side discovery
 // agrees with write-side enforcement.
 type Extender func(absPath string, content []byte, frontmatter map[string]any) map[string]any
+
+// Filter is a plugin-provided, session-bound metadata query.
+type Filter struct {
+	Name          string
+	Aliases       []string
+	Roots         []string
+	AbsolutePaths bool
+	Selector      func(absPath string, record Record) bool
+}
 
 // Record is one scanned document: its path relative to the scan root and the
 // merged field map (frontmatter plus any extender-contributed fields). Path is

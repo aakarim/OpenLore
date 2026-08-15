@@ -7,10 +7,7 @@ import (
 	"strings"
 )
 
-// LoreSub is a registered `lore` subcommand. Core subcommands (docsets, meta)
-// register themselves in init; plugins contribute more via the host
-// (openlore.CommandProvider → RegisterLoreSub), so the introspection surface is
-// extensible without reshaping the `lore` dispatcher.
+// LoreSub is a registered core `lore` subcommand.
 type LoreSub struct {
 	// Name is the subcommand word, e.g. "meta" in `lore meta`.
 	Name string
@@ -24,15 +21,14 @@ type LoreSub struct {
 // loreSubs is the registry of `lore` subcommands, keyed by name.
 var loreSubs = map[string]LoreSub{}
 
-// RegisterLoreSub adds (or replaces) a `lore` subcommand. Called from init for
-// core subcommands and by the host when a plugin contributes commands.
+// RegisterLoreSub adds (or replaces) a core `lore` subcommand.
 func RegisterLoreSub(sub LoreSub) {
 	loreSubs[sub.Name] = sub
 }
 
 // CmdLore is the `lore` introspection dispatcher. Bare `lore` prints usage and
 // exits 0; an unknown subcommand errors to stderr and exits 1. Subcommands are
-// resolved from the loreSubs registry, so plugins can extend the surface.
+// resolved from the loreSubs registry.
 func CmdLore(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.Reader) int {
 	if len(args) == 0 {
 		printLoreUsage(w)
@@ -79,14 +75,17 @@ func init() {
 }
 
 // cmdLoreDocsets prints an aligned, greppable table of the session's accessible
-// docsets: name, direct access (r/rw), attribute tokens (home,publish),
-// and display paths.
+// docset mounts: name, grants, attribute tokens, display path, and canonical
+// target for alias rows.
 func cmdLoreDocsets(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.Reader) int {
 	docsets := ctx.Docsets()
 
-	rows := [][4]string{{"DOCSET", "GRANT", "ATTRIBUTES", "PATHS"}}
+	rows := [][5]string{{"DOCSET", "GRANTS", "ATTRIBUTES", "PATH", "TARGET"}}
 	for _, d := range docsets {
-		grant := d.Grant
+		grant := strings.Join(d.Grants, ",")
+		if grant == "" {
+			grant = d.Grant
+		}
 		if grant == "" {
 			grant = "ro"
 		}
@@ -97,15 +96,25 @@ func cmdLoreDocsets(ctx CmdContext, args []string, w io.Writer, errW io.Writer, 
 		if d.Inbox {
 			attrs = append(attrs, "inbox")
 		}
+		if d.AgentSkills {
+			attrs = append(attrs, "agent-skills")
+		}
+		if d.AliasTarget != "" {
+			attrs = append(attrs, "alias")
+		}
 		attrStr := "-"
 		if len(attrs) > 0 {
 			attrStr = strings.Join(attrs, ",")
 		}
-		rows = append(rows, [4]string{d.Name, grant, attrStr, strings.Join(d.Paths, ",")})
+		target := d.AliasTarget
+		if target == "" {
+			target = "-"
+		}
+		rows = append(rows, [5]string{d.Name, grant, attrStr, strings.Join(d.Paths, ","), target})
 	}
 
 	// Column widths from every cell except the last column (which is ragged).
-	var w0, w1, w2 int
+	var w0, w1, w2, w3 int
 	for _, r := range rows {
 		if len(r[0]) > w0 {
 			w0 = len(r[0])
@@ -116,9 +125,12 @@ func cmdLoreDocsets(ctx CmdContext, args []string, w io.Writer, errW io.Writer, 
 		if len(r[2]) > w2 {
 			w2 = len(r[2])
 		}
+		if len(r[3]) > w3 {
+			w3 = len(r[3])
+		}
 	}
 	for _, r := range rows {
-		fmt.Fprintf(w, "%-*s  %-*s  %-*s  %s\n", w0, r[0], w1, r[1], w2, r[2], r[3])
+		fmt.Fprintf(w, "%-*s  %-*s  %-*s  %-*s  %s\n", w0, r[0], w1, r[1], w2, r[2], w3, r[3], r[4])
 	}
 	return 0
 }

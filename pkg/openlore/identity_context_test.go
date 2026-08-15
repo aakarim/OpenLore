@@ -13,11 +13,11 @@ import (
 func TestIdentityFromContext_RoundTrip(t *testing.T) {
 	s := &Server{merge: NewMergeFS()}
 
-	want := Identity{IdentityName: "frontend", Grants: map[string]string{"frontend": "rw"}, Scopes: []string{ScopeFull}}
+	want := Identity{IdentityName: "frontend", Principal: AuthenticatedPrincipal{IdentityName: "frontend"}, Scopes: []string{ScopeFull}}
 	ctx := contextWithIdentity(context.Background(), want)
 
 	got := s.identityFromContext(ctx)
-	if got.IdentityName != "frontend" || got.Grants["frontend"] != "rw" {
+	if got.IdentityName != "frontend" || got.Principal.IdentityName != "frontend" {
 		t.Fatalf("identity did not round-trip: %+v", got)
 	}
 	if len(got.Scopes) != 1 || got.Scopes[0] != ScopeFull {
@@ -35,16 +35,16 @@ func TestIdentityFromContext_AnonymousIsNotFull(t *testing.T) {
 			Docsets: map[string]config.DocsetSpec{
 				"public": {Paths: []config.PathMapping{{Source: "/", Display: "/"}}},
 			},
-			Default: map[string]string{"public": "ro"},
 		},
 	}
+	s.authorizationStore = fileAuthorizationStore{auth: s.auth}
 
 	got := s.identityFromContext(context.Background())
-	if got.Grants["public"] != "ro" {
-		t.Fatalf("anonymous caller should resolve to default grants, got %v", got.Grants)
+	if got.IdentityName != "guest" || got.Principal.IdentityName != "guest" {
+		t.Fatalf("anonymous caller should resolve to guest, got %+v", got)
 	}
-	if len(got.Scopes) != 0 {
-		t.Fatalf("anonymous caller must not carry any scope (fail-closed), got %v", got.Scopes)
+	if !scopeGrantsWrite(got.Scopes) {
+		t.Fatalf("guest uses full transport scope; its grants remain read-only, got %v", got.Scopes)
 	}
 }
 

@@ -2,8 +2,10 @@ package cmds
 
 import (
 	"io"
+	"time"
 
-	"github.com/aakarim/go-openlore/pkg/meta"
+	"github.com/aakarim/go-openlore/pkg/openlore/meta"
+	"github.com/aakarim/go-openlore/pkg/openlore/validation"
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
 
@@ -41,18 +43,30 @@ type CmdContext interface {
 	// meta` records. The host installs these once per session; a standalone
 	// shell returns nil.
 	MetaExtenders() []meta.Extender
+	MetaFilters() []meta.Filter
+	// Validators reports plugin-contributed checks used by `lore validate`.
+	Validators() []validation.Validator
+	SkillsManagementEnabled() bool
+	SkillsRemoteTimeout() time.Duration
+	SkillsRemoteMaxBytes() int64
 }
 
 // DocsetInfo describes one docset a session can access. It is the per-session
-// view surfaced by `lore docsets` — the host resolves it from the identity's
-// grants at session creation.
+// view surfaced by `lore docsets` — the host resolves it from the session's
+// role-policy snapshot.
 type DocsetInfo struct {
 	// Name is the docset's logical name (its key in the auth config).
 	Name string
-	// Paths are the docset's display (virtual) paths in the filesystem.
+	// Paths contains the single display path represented by this row. It remains
+	// a slice so existing command consumers can parse canonical rows unchanged.
 	Paths []string
-	// Grant is the grant name the session holds on this docset (ro/rw/publish).
+	// AliasTarget is the canonical display path when this row represents an
+	// alias. Empty means the row is canonical.
+	AliasTarget string
+	// Grant is retained for standalone callers that provide one grant directly.
 	Grant string
+	// Grants are the effective grants contributed by the session's roles.
+	Grants []string
 	// Writable reports whether this session may write to the docset directly
 	// with the normal write verbs. This is the FS-authoritative answer.
 	Writable bool
@@ -61,7 +75,8 @@ type DocsetInfo struct {
 	// Inbox reports whether the docset declares an inbox folder (used by the
 	// publish grant). It says nothing about the inbox path or size — that lives
 	// in PublishTarget.
-	Inbox bool
+	Inbox       bool
+	AgentSkills bool
 }
 
 // PublishTarget is a writable inbox: its logical docset name (the first path

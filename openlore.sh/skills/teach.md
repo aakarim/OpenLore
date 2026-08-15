@@ -46,29 +46,69 @@ The real power of OpenLore is baking your docs into a single binary that anyone 
 
 ## Setting Up Access Control
 
-If you want different agents to see different docs:
+If you want different agents to have different access, create a `lore.json`
+next to `openlore.yml`. This quick start gives keyless visitors read-only access
+to public docs, reviewers read-only access to backend docs, and engineers
+read/write access to backend docs:
 
-1. Create a `lore.json` (see `lore.json.example`):
-   ```json
-   {
-     "lore": {
-       "default": { "paths": ["/docs/public"] },
-       "backend": { "paths": ["/docs/api", "/docs/backend"] }
-     },
-     "identities": [
-       {
-         "name": "my-agent",
-         "public_key": "ssh-ed25519 AAAA...",
-         "lore": "backend"
-       }
-     ]
-   }
-   ```
+```json
+{
+  "allow_keyless": true,
+  "unknown_identity": "deny",
+  "roles": {
+    "reviewer": {},
+    "engineer": {}
+  },
+  "docsets": {
+    "public": {
+      "paths": ["/docs/public"],
+      "access": {
+        "allow": { "guest": "ro", "reviewer": "ro", "engineer": "rw" }
+      }
+    },
+    "backend": {
+      "paths": ["/docs/backend"],
+      "access": {
+        "allow": { "reviewer": "ro", "engineer": "rw" }
+      }
+    },
+    "engineer-home": {
+      "paths": [{ "homes/engineer": "/home/engineer" }]
+    }
+  },
+  "identities": [
+    {
+      "name": "engineering-agent",
+      "public_key": "ssh-ed25519 AAAA...",
+      "roles": ["engineer", "reviewer"],
+      "home": "engineer-home"
+    }
+  ]
+}
+```
 
-2. Start with auth:
-   ```bash
-   openlore --auth lore.json ./docs
-   ```
+- `roles` declares the role names identities may use. Role names are exact and
+  roles do not inherit from one another.
+- Each docset's `access.allow` maps roles to `ro`, `rw`, or a plugin grant such
+  as `publish`. Grants from multiple roles are combined; a role listed in
+  `access.deny` denies the entire docset and overrides all allows.
+- `guest` is built in. It represents keyless and allowed unknown callers and
+  can only be granted read-only access.
+- An identity may have multiple roles. Its unique `home` docset is implicitly
+  read/write for that identity, so it needs no access entry.
+- A docset without a matching allow is inaccessible. Nested docsets are
+  separate access boundaries, including inside a home.
+
+Enable the file in `openlore.yml`, then start OpenLore normally:
+
+```yaml
+auth_file: ./lore.json
+readonly: false # keep true if no role should be able to write
+```
+
+Set `allow_keyless` to `false` if every SSH connection must present a known
+key. Set `unknown_identity` to `allow` only if unknown keys should receive the
+built-in `guest` role.
 
 ## Using the GitHub Action
 

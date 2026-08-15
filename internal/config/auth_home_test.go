@@ -23,7 +23,7 @@ func TestLoadAuthConfigHomeValid(t *testing.T) {
 			"agent-home": {"paths": [{"published/agent": "/home/agent"}]}
 		},
 		"identities": [
-			{"name": "a1", "public_key": "ssh-ed25519 AAAA", "docsets": {"public": "ro", "agent-home": "rw"}, "home": "agent-home"}
+			{"name": "a1", "docsets": {"public": "ro", "agent-home": "rw"}, "home": "agent-home"}
 		]
 	}`)
 
@@ -36,23 +36,23 @@ func TestLoadAuthConfigHomeValid(t *testing.T) {
 	}
 }
 
-func TestLoadAuthConfigHomeNotInGrants(t *testing.T) {
+func TestLoadAuthConfigHomeDoesNotRequireLegacyGrant(t *testing.T) {
 	p := writeAuth(t, `{
 		"docsets": {
 			"public": {"paths": ["/docs/public"]},
 			"other": {"paths": ["/docs/other"]}
 		},
 		"identities": [
-			{"name": "a1", "public_key": "ssh-ed25519 AAAA", "docsets": {"public": "ro"}, "home": "other"}
+			{"name": "a1", "docsets": {"public": "ro"}, "home": "other"}
 		]
 	}`)
 
-	if _, err := LoadAuthConfig(p); err == nil {
-		t.Fatal("expected error for home docset not in grants, got nil")
+	if _, err := LoadAuthConfig(p); err != nil {
+		t.Fatalf("home ownership is independent of legacy grants: %v", err)
 	}
 }
 
-func TestLoadAuthConfigUnknownDocset(t *testing.T) {
+func TestLoadAuthConfigIgnoresLegacyUnknownDocset(t *testing.T) {
 	p := writeAuth(t, `{
 		"docsets": {"public": {"paths": ["/docs/public"]}},
 		"identities": [
@@ -60,8 +60,8 @@ func TestLoadAuthConfigUnknownDocset(t *testing.T) {
 		]
 	}`)
 
-	if _, err := LoadAuthConfig(p); err == nil {
-		t.Fatal("expected error for grant on unknown docset, got nil")
+	if _, err := LoadAuthConfig(p); err != nil {
+		t.Fatalf("legacy identity grants must be ignored: %v", err)
 	}
 }
 

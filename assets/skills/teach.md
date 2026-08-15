@@ -81,49 +81,69 @@ can run.
 
 ## Setting Up Access Control
 
-If you want different agents to see different docs, ship a `lore.json`. Docsets
-name a set of paths; lores group docsets; identities map an SSH public key to a
-lore. Start from `lore.json.example` in the repo.
+If you want different agents to have different access, create a `lore.json`
+next to `openlore.yml`. This quick start gives keyless visitors read-only access
+to public docs, reviewers read-only access to backend docs, and engineers
+read/write access to backend docs:
 
 ```json
 {
-  "allow_keyless": false,
-  "docsets": {
-    "public":  { "paths": ["/getting-started.md", "/public"] },
-    "backend": { "paths": ["/api", "/backend"] }
+  "allow_keyless": true,
+  "unknown_identity": "deny",
+  "roles": {
+    "reviewer": {},
+    "engineer": {}
   },
-  "lore": {
-    "default": ["public"],
-    "backend": ["public", "backend"]
+  "docsets": {
+    "public": {
+      "paths": ["/docs/public"],
+      "access": {
+        "allow": { "guest": "ro", "reviewer": "ro", "engineer": "rw" }
+      }
+    },
+    "backend": {
+      "paths": ["/docs/backend"],
+      "access": {
+        "allow": { "reviewer": "ro", "engineer": "rw" }
+      }
+    },
+    "engineer-home": {
+      "paths": [{ "homes/engineer": "/home/engineer" }]
+    }
   },
   "identities": [
     {
-      "name": "my-agent",
+      "name": "engineering-agent",
       "public_key": "ssh-ed25519 AAAA...",
-      "lore": "backend"
+      "roles": ["engineer", "reviewer"],
+      "home": "engineer-home"
     }
   ]
 }
 ```
 
-- `docsets` — named groups of paths (into the served tree).
-- `lore` — each lore is a **list of docset names**; an identity's lore is the
-  union of those docsets' paths. `default` is the lore used by keyless/unknown
-  clients.
-- `identities` — bind an SSH public key to a lore.
-- `allow_keyless` — `false` requires a known public key; `true` (default) lets
-  any client connect as the `default` lore.
+- `roles` declares the role names identities may use. Role names are exact and
+  roles do not inherit from one another.
+- Each docset's `access.allow` maps roles to `ro`, `rw`, or a plugin grant such
+  as `publish`. Grants from multiple roles are combined; a role listed in
+  `access.deny` denies the entire docset and overrides all allows.
+- `guest` is built in. It represents keyless and allowed unknown callers and
+  can only be granted read-only access.
+- An identity may have multiple roles. Its unique `home` docset is implicitly
+  read/write for that identity, so it needs no access entry.
+- A docset without a matching allow is inaccessible. Nested docsets are
+  separate access boundaries, including inside a home.
 
-Point the server at it either by setting `auth_file: ./lore.json` in
-`openlore.yml`, or with a flag:
-```bash
-openlore --auth lore.json ./docs
+Enable the file in `openlore.yml`, then start OpenLore normally:
+
+```yaml
+auth_file: ./lore.json
+readonly: false # keep true if no role should be able to write
 ```
 
-Add a public key without hand-editing the JSON:
-```bash
-openlore identity add --name my-agent --key "ssh-ed25519 AAAA..." --lore backend --auth lore.json
-```
+Set `allow_keyless` to `false` if every SSH connection must present a known
+key. Set `unknown_identity` to `allow` only if unknown keys should receive the
+built-in `guest` role.
 
 ## Using the GitHub Action
 

@@ -23,8 +23,8 @@ seam, so concurrency, scoping, approval, and notification all compose cleanly.
    `WriteFileAtomic`: it takes the complete new contents and commits them in one
    `rename(2)`. There is no way to observe or persist a half-written file. Even
    "append" and "patch" are implemented as read-modify-write of the whole file.
-2. **One write seam.** Every write verb (`>`, `>>`, `tee`, `sed -i`, `patch`,
-   `publish`, and the async `spawn` write-back) funnels through one helper
+2. **One write seam.** Every content-writing verb (`>`, `>>`, `tee`, `sed -i`,
+   `patch`, `mv`, `publish`, and the async `spawn` write-back) funnels through one helper
    (`cmds.WriteFile` / `cmds.WriteFileCAS`). Concurrency control, scoping, and
    approval are enforced once, at that seam — not re-implemented per command.
 3. **Read-only by default.** The substrate boots read-only. Writes require an
@@ -183,9 +183,17 @@ Because all verbs go through here, the policy resolution, CAS base capture, and
 read-only/precondition error reporting exist in exactly one place. Commands that
 write: [`write`/`tee`/redirects](../pkg/shell/cmds/write.go),
 [`patch`](../pkg/shell/cmds/patch.go), [`sed -i`](../pkg/shell/cmds/sed.go),
-[`mkdir`](../pkg/shell/cmds/mkdir.go), [`rm`](../pkg/shell/cmds/rm.go),
+[`mkdir`](../pkg/shell/cmds/mkdir.go), [`mv`](../pkg/shell/cmds/mv.go),
+[`rm`](../pkg/shell/cmds/rm.go),
 [`publish`](../pkg/shell/cmds/publish.go), and
 [`spawn`](../pkg/shell/cmds/spawn.go)'s background write-back.
+
+`mv` supports files only. It writes the destination through `WriteFile`, then
+deletes the source with a snapshot precondition so a concurrent source edit is
+never removed. These are two independently scoped and approval-gated changes;
+if source deletion is held or denied after the destination commits, both files
+remain and the command reports that outcome. Directory moves are rejected
+because the VFS has no atomic tree-write primitive.
 
 ---
 
@@ -236,7 +244,7 @@ Commands are classified by `Action` in
 | Action | Verbs | Granted to |
 |--------|-------|------------|
 | `read` | `ls`, `cat`, `grep`, … (default) | everyone |
-| `write` | `write`, `patch`, `tee`, `>`/`>>`, `sed -i`, `mkdir`, `rm` | recognized identities |
+| `write` | `write`, `patch`, `tee`, `>`/`>>`, `sed -i`, `mkdir`, `mv`, `rm` | recognized identities |
 | `publish` | `publish` | recognized identities |
 | `approve` | `approve`, `reject` | identities holding any approval capability |
 | `spawn` | `spawn` | identities holding the explicit `spawn` capability |
@@ -258,12 +266,14 @@ records a **changeset** — an `ApprovalRequest` in a `RequestStore` — instead
 committing. The changeset is the single approval primitive for every gated
 mutation; its `Action` discriminates the payload:
 
-- **Write changesets** (`write`, `patch`, `tee`, `>`/`>>`, `sed -i`) carry a
+- **Write changesets** (`write`, `patch`, `tee`, `>`/`>>`, `sed -i`, and the
+  destination side of `mv`) carry a
   `WriteApprovalPayload`: the base hash + proposed bytes, stored alongside the
   metadata for the diff and for CAS replay at approval time. The caller's own
   precondition is honored first, so a stale write fails immediately rather than
   parking a doomed request.
-- **Delete changesets** (`rm`, `rm -r`) carry a `DeleteApprovalPayload`: an
+- **Delete changesets** (`rm`, `rm -r`, and the source side of `mv`) carry a
+  `DeleteApprovalPayload`: an
   **exact subtree snapshot** captured at proposal time. The snapshot is both the
   reviewable manifest and the compare-and-swap base. Delete changesets are
   manifest-only — no bytes are copied aside — so the target files stay **live**

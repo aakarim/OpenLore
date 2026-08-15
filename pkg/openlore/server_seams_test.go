@@ -22,8 +22,10 @@ type deferMWProvider struct {
 func (p deferMWProvider) WriteMiddleware() []WriteMiddleware {
 	return []WriteMiddleware{func(next WriteHandler) WriteHandler {
 		return func(ctx context.Context, op WriteOp) (WriteResult, error) {
-			if strings.HasPrefix(op.ChangeSet.Target, p.gatedPrefix) {
-				return WriteResult{}, &vfs.PendingChangeError{ChangeSet: op.ChangeSet, Ref: p.ref}
+			for _, leaf := range op.Leaves() {
+				if strings.HasPrefix(leaf.Target, p.gatedPrefix) {
+					return WriteResult{}, op.Pending(p.ref)
+				}
 			}
 			return next(ctx, op)
 		}
@@ -119,12 +121,14 @@ func TestRegisterPlugin_WriteMiddlewareGatesLaterWrite(t *testing.T) {
 	s := newSeamServer(t, fs)
 
 	// Registered AFTER construction — must take effect on the composed chain.
-	s.RegisterPlugin(deferMWProvider{gatedPrefix: "/gated", ref: "held-1"})
+	if err := s.RegisterPlugin(deferMWProvider{gatedPrefix: "/gated", ref: "held-1"}); err != nil {
+		t.Fatal(err)
+	}
 
 	chain := s.writeChain()
 
 	// A gated write is deferred (parked) and never reaches the substrate.
-	_, err := chain(context.Background(), WriteOp{ChangeSet: writeCS("/gated/a"), Actor: Actor{ID: "a"}})
+	_, err := chain(context.Background(), NewWriteOp(Actor{ID: "a"}, writeCS("/gated/a")))
 	var pce *vfs.PendingChangeError
 	if !errors.As(err, &pce) || pce.Ref != "held-1" {
 		t.Fatalf("gated write: want PendingChangeError held-1, got %v", err)
@@ -134,7 +138,7 @@ func TestRegisterPlugin_WriteMiddlewareGatesLaterWrite(t *testing.T) {
 	}
 
 	// An ungated write commits.
-	res, err := chain(context.Background(), WriteOp{ChangeSet: writeCS("/ok"), Actor: Actor{ID: "a"}})
+	res, err := chain(context.Background(), NewWriteOp(Actor{ID: "a"}, writeCS("/ok")))
 	if err != nil || res.Hash != "h:/ok" {
 		t.Fatalf("ungated write: h=%q err=%v", res.Hash, err)
 	}
@@ -143,12 +147,31 @@ func TestRegisterPlugin_WriteMiddlewareGatesLaterWrite(t *testing.T) {
 	}
 }
 
+func TestRegisterPlugin_DefersBatchWhenLaterLeafMatches(t *testing.T) {
+	fs := &wlRecordingFS{}
+	s := newSeamServer(t, fs)
+	if err := s.RegisterPlugin(deferMWProvider{gatedPrefix: "/gated", ref: "held-batch"}); err != nil {
+		t.Fatal(err)
+	}
+	cs := vfs.ChangeSet{Changes: []vfs.Change{
+		writeCS("/safe").Leaves()[0],
+		writeCS("/gated/later").Leaves()[0],
+	}}
+	_, err := s.writeChain()(context.Background(), NewWriteOp(Actor{ID: "a"}, cs))
+	var pending *vfs.PendingChangeError
+	if !errors.As(err, &pending) || pending.Ref != "held-batch" || len(pending.ChangeSet.Changes) != 2 || len(fs.order()) != 0 {
+		t.Fatalf("whole batch not deferred: pending=%+v applied=%v err=%v", pending, fs.order(), err)
+	}
+}
+
 func TestRegisterPlugin_PostCommitFiresAfterConstruction(t *testing.T) {
 	fs := &wlRecordingFS{}
 	s := newSeamServer(t, fs)
 
 	rec := &recordPostCommit{}
-	s.RegisterPlugin(rec) // post-commit provider registered after the log was built
+	if err := s.RegisterPlugin(rec); err != nil { // post-commit provider registered after the log was built
+		t.Fatal(err)
+	}
 
 	_, err := s.CommitChangeSet(context.Background(), Actor{ID: "alice", Extra: map[string]string{"approver": "bob"}}, writeCS("/x"))
 	if err != nil {
@@ -171,10 +194,12 @@ func TestCommitChangeSet_SkipsAdmission(t *testing.T) {
 	s := newSeamServer(t, fs)
 
 	// A middleware that defers EVERY write. Admission (writeChain) would park.
-	s.RegisterPlugin(deferMWProvider{gatedPrefix: "/", ref: "held"})
+	if err := s.RegisterPlugin(deferMWProvider{gatedPrefix: "/", ref: "held"}); err != nil {
+		t.Fatal(err)
+	}
 
 	// Sanity: admission defers.
-	if _, err := s.writeChain()(context.Background(), WriteOp{ChangeSet: writeCS("/x"), Actor: Actor{ID: "a"}}); err == nil {
+	if _, err := s.writeChain()(context.Background(), NewWriteOp(Actor{ID: "a"}, writeCS("/x"))); err == nil {
 		t.Fatal("admission chain should defer every write in this test")
 	}
 

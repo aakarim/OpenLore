@@ -5,10 +5,13 @@ import (
 	"fmt"
 	"log/slog"
 	"path"
+	"sort"
+	"strings"
 
 	"github.com/aakarim/go-openlore/internal/config"
-	"github.com/aakarim/go-openlore/pkg/meta"
 	"github.com/aakarim/go-openlore/pkg/okf"
+	"github.com/aakarim/go-openlore/pkg/openlore/meta"
+	"github.com/aakarim/go-openlore/pkg/openlore/validation"
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
 
@@ -24,7 +27,7 @@ import (
 // a global block, so OKF scoping reads the exact same display roots as authz and
 // can't drift from it. A write is governed by the OKF config of the docset that
 // owns its target path — the longest matching display root across all docsets,
-// exactly as grantForPath resolves grants. A child docset therefore includes a
+// exactly as grantsForPath resolves grants. A child docset therefore includes a
 // subtree (child carries OKF) or exempts it (child carries none, shadowing a
 // parent's OKF).
 //
@@ -108,16 +111,17 @@ func (p *okfPlugin) WriteMiddleware() []WriteMiddleware {
 	return []WriteMiddleware{
 		func(next WriteHandler) WriteHandler {
 			return func(ctx context.Context, op WriteOp) (WriteResult, error) {
-				cs := op.ChangeSet
-				if cs.Action == vfs.ChangeActionWrite && cs.Write != nil {
-					if oc := p.resolve(cs.Target); oc != nil && matchesOKFPatterns(cs.Target, oc.Patterns) {
-						if err := okf.Validate(cs.Target, cs.Write.Bytes); err != nil {
-							enforce := oc.Enforce == nil || *oc.Enforce
-							if enforce {
-								return WriteResult{}, fmt.Errorf("okf: %s: %w", cs.Target, err)
+				for _, leaf := range op.Leaves() {
+					if leaf.Action == vfs.ChangeActionWrite && leaf.Write != nil {
+						if oc := p.resolve(leaf.Target); oc != nil && matchesOKFPatterns(leaf.Target, oc.Patterns) {
+							if err := okf.Validate(leaf.Target, leaf.Write.Bytes); err != nil {
+								enforce := oc.Enforce == nil || *oc.Enforce
+								if enforce {
+									return WriteResult{}, fmt.Errorf("okf: %s: %w", leaf.Target, err)
+								}
+								p.logger.Warn("okf validation failed (non-enforcing)",
+									"path", leaf.Target, "err", err)
 							}
-							p.logger.Warn("okf validation failed (non-enforcing)",
-								"path", cs.Target, "err", err)
 						}
 					}
 				}
@@ -152,14 +156,98 @@ func (p *okfPlugin) MetaExtenders() []meta.Extender {
 	}
 }
 
-// Info implements PluginInfoProvider. The version tracks the OKF spec revision
-// the validator targets (OKF v0.1).
+// Validators implements ValidatorProvider. The command and filesystem scan are
+// owned by core; the plugin contributes OKF conformance plus OpenLore's
+// operational link and alias-portability checks.
+func (p *okfPlugin) Validators() []validation.Validator {
+	aliasRoots := p.aliasRoots()
+	return []validation.Validator{func(bundle validation.Bundle) []validation.Diagnostic {
+		files := make([]okf.File, 0, len(bundle.Files))
+		for _, file := range bundle.Files {
+			files = append(files, okf.File{Path: file.Path, Content: file.Content})
+		}
+		okfDiagnostics := okf.ValidateBundle(files)
+		diagnostics := make([]validation.Diagnostic, 0, len(okfDiagnostics))
+		for _, diagnostic := range okfDiagnostics {
+			diagnostics = append(diagnostics, fromOKFDiagnostic(diagnostic))
+		}
+		for _, file := range bundle.Files {
+			if path.Ext(file.Path) != ".md" {
+				continue
+			}
+			for _, link := range okf.Links(file.Content) {
+				local, ok := okf.LocalLinkPath(link.Destination)
+				if !ok {
+					continue
+				}
+				target := path.Join(path.Dir(file.AbsolutePath), local)
+				if strings.HasPrefix(local, "/") {
+					target = path.Join(bundle.Root, strings.TrimPrefix(local, "/"))
+				}
+				target = vfs.CleanPath(target)
+				if !pathWithinRoot(bundle.Root, target) {
+					diagnostics = append(diagnostics, openLoreDiagnostic(file.Path, link, validation.SeverityError,
+						"openlore/link-outside-bundle", fmt.Sprintf("local link %q resolves outside the bundle", link.Destination)))
+				} else if _, err := bundle.FS.Stat(target); err != nil {
+					diagnostics = append(diagnostics, openLoreDiagnostic(file.Path, link, validation.SeverityError,
+						"openlore/broken-link", fmt.Sprintf("local link %q does not resolve", link.Destination)))
+				}
+				if aliasRoot(file.AbsolutePath, aliasRoots) != "" {
+					diagnostics = append(diagnostics, openLoreDiagnostic(file.Path, link, validation.SeverityWarning,
+						"openlore/alias-referrer", "link originates from an aliased docset path; use a stable checkout path"))
+				}
+				if alias := aliasRoot(target, aliasRoots); alias != "" {
+					diagnostics = append(diagnostics, openLoreDiagnostic(file.Path, link, validation.SeverityWarning,
+						"openlore/alias-target", fmt.Sprintf("link targets aliased docset path %s; it may resolve differently on another machine", alias)))
+				}
+			}
+		}
+		return diagnostics
+	}}
+}
+
+func (p *okfPlugin) aliasRoots() []string {
+	var roots []string
+	for _, docset := range p.docsets {
+		roots = append(roots, docset.Aliases...)
+	}
+	sort.Slice(roots, func(i, j int) bool { return len(roots[i]) > len(roots[j]) })
+	return roots
+}
+
+func aliasRoot(filePath string, roots []string) string {
+	for _, root := range roots {
+		if pathWithinRoot(root, filePath) {
+			return root
+		}
+	}
+	return ""
+}
+
+func openLoreDiagnostic(filePath string, link okf.Link, severity validation.Severity, rule, message string) validation.Diagnostic {
+	return validation.Diagnostic{
+		Path: filePath, Line: link.Line, Column: link.Column,
+		Severity: severity, Rule: rule, Message: message,
+	}
+}
+
+func fromOKFDiagnostic(diagnostic okf.Diagnostic) validation.Diagnostic {
+	return validation.Diagnostic{
+		Path: diagnostic.Path, Line: diagnostic.Line, Column: diagnostic.Column,
+		Severity: validation.Severity(diagnostic.Severity), Rule: diagnostic.Rule, Message: diagnostic.Message,
+	}
+}
+
+// Info implements PluginInfoProvider. The version tracks the newest OKF spec
+// revision the validator targets (OKF v0.2); bundles declaring okf_version
+// "0.1" are still accepted and linted against v0.1 rules.
 func (p *okfPlugin) Info() PluginInfo {
-	return PluginInfo{Name: "okf", Version: "0.1.0"}
+	return PluginInfo{Name: "okf", Version: "0.2.0"}
 }
 
 var (
 	_ WriteMiddlewareProvider = (*okfPlugin)(nil)
 	_ MetaExtenderProvider    = (*okfPlugin)(nil)
+	_ ValidatorProvider       = (*okfPlugin)(nil)
 	_ PluginInfoProvider      = (*okfPlugin)(nil)
 )

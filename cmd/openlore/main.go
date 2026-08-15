@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -21,6 +22,292 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	gossh "golang.org/x/crypto/ssh"
 )
+
+type stringList []string
+
+func (s *stringList) String() string     { return strings.Join(*s, ",") }
+func (s *stringList) Set(v string) error { *s = append(*s, v); return nil }
+
+func loadPolicy(path string) (openlore.AuthConfig, error) {
+	var auth openlore.AuthConfig
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return auth, err
+	}
+	err = json.Unmarshal(b, &auth)
+	return auth, err
+}
+func savePolicy(path string, auth openlore.AuthConfig) error {
+	if err := openlore.ValidateAuthConfig(&auth); err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(auth, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(b, '\n'), 0644)
+}
+
+func runIdentityCommand(args []string, out io.Writer) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: identity add|role")
+	}
+	if args[0] == "add" {
+		fs := flag.NewFlagSet("identity add", flag.ContinueOnError)
+		name := fs.String("name", "", "")
+		key := fs.String("key", "", "")
+		comment := fs.String("comment", "", "")
+		home := fs.String("home", "", "")
+		path := fs.String("auth", "./lore.json", "")
+		var roles stringList
+		fs.Var(&roles, "role", "")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if *name == "" || *name == "guest" {
+			return fmt.Errorf("invalid or reserved identity name %q", *name)
+		}
+		auth, err := loadPolicy(*path)
+		if err != nil {
+			return err
+		}
+		seen := map[string]bool{}
+		for _, role := range roles {
+			if seen[role] {
+				return fmt.Errorf("duplicate role %q", role)
+			}
+			seen[role] = true
+			if role != "guest" {
+				if _, ok := auth.Roles[role]; !ok {
+					return fmt.Errorf("unknown role %q", role)
+				}
+			}
+		}
+		if *home != "" {
+			if _, ok := auth.Docsets[*home]; !ok {
+				return fmt.Errorf("unknown home docset %q", *home)
+			}
+			for _, id := range auth.Identities {
+				if id.Home == *home {
+					return fmt.Errorf("home docset %q already belongs to %q", *home, id.Name)
+				}
+			}
+		}
+		for _, id := range auth.Identities {
+			if id.Name == *name {
+				return fmt.Errorf("identity %q already exists", *name)
+			}
+		}
+		if *key != "" {
+			if _, _, _, _, err := gossh.ParseAuthorizedKey([]byte(*key)); err != nil {
+				return fmt.Errorf("invalid SSH public key: %w", err)
+			}
+		}
+		auth.Identities = append(auth.Identities, openlore.AuthIdentity{Name: *name, PublicKey: strings.TrimSpace(*key), Comment: *comment, Home: *home, Roles: roles})
+		if err := savePolicy(*path, auth); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "Added identity %q\n", *name)
+		return nil
+	}
+	if args[0] == "role" && len(args) > 1 {
+		fs := flag.NewFlagSet("identity role", flag.ContinueOnError)
+		identity := fs.String("identity", "", "")
+		role := fs.String("role", "", "")
+		path := fs.String("auth", "./lore.json", "")
+		if err := fs.Parse(args[2:]); err != nil {
+			return err
+		}
+		auth, err := loadPolicy(*path)
+		if err != nil {
+			return err
+		}
+		if _, ok := auth.Roles[*role]; !ok {
+			return fmt.Errorf("unknown role %q", *role)
+		}
+		for i := range auth.Identities {
+			if auth.Identities[i].Name == *identity {
+				if args[1] == "add" {
+					for _, r := range auth.Identities[i].Roles {
+						if r == *role {
+							return savePolicy(*path, auth)
+						}
+					}
+					auth.Identities[i].Roles = append(auth.Identities[i].Roles, *role)
+				} else if args[1] == "remove" {
+					rs := auth.Identities[i].Roles[:0]
+					for _, r := range auth.Identities[i].Roles {
+						if r != *role {
+							rs = append(rs, r)
+						}
+					}
+					auth.Identities[i].Roles = rs
+				} else {
+					return fmt.Errorf("usage: identity role add|remove")
+				}
+				return savePolicy(*path, auth)
+			}
+		}
+		return fmt.Errorf("unknown identity %q", *identity)
+	}
+	return fmt.Errorf("usage: identity add|role add|remove")
+}
+
+func runRoleCommand(args []string, out io.Writer) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: role add|remove|grant|revoke|deny|undeny|capability")
+	}
+	fs := flag.NewFlagSet("role "+args[0], flag.ContinueOnError)
+	name := fs.String("name", "", "")
+	role := fs.String("role", "", "")
+	docset := fs.String("docset", "", "")
+	grant := fs.String("grant", "", "")
+	comment := fs.String("comment", "", "")
+	capability := fs.String("capability", "", "")
+	effect := fs.String("effect", "", "")
+	path := fs.String("auth", "./lore.json", "")
+	parseFrom := 1
+	capAction := ""
+	if args[0] == "capability" {
+		if len(args) < 2 {
+			return fmt.Errorf("capability action required")
+		}
+		capAction = args[1]
+		parseFrom = 2
+	}
+	if err := fs.Parse(args[parseFrom:]); err != nil {
+		return err
+	}
+	auth, err := loadPolicy(*path)
+	if err != nil {
+		return err
+	}
+	if auth.Roles == nil {
+		auth.Roles = map[string]config.RoleSpec{}
+	}
+	if *role == "" {
+		*role = *name
+	}
+	spec, exists := auth.Roles[*role]
+	switch args[0] {
+	case "add":
+		if *role == "guest" {
+			return fmt.Errorf("guest is reserved")
+		}
+		if *role == "" || exists {
+			return fmt.Errorf("invalid or existing role %q", *role)
+		}
+		auth.Roles[*role] = config.RoleSpec{Comment: *comment}
+	case "remove":
+		if *role == "guest" {
+			return fmt.Errorf("guest is reserved")
+		}
+		if !exists {
+			return fmt.Errorf("unknown role %q", *role)
+		}
+		for _, id := range auth.Identities {
+			for _, r := range id.Roles {
+				if r == *role {
+					return fmt.Errorf("role %q is referenced by identity %q", *role, id.Name)
+				}
+			}
+		}
+		for n, ds := range auth.Docsets {
+			if _, ok := ds.Access.Allow[*role]; ok {
+				return fmt.Errorf("role %q is referenced by docset %q", *role, n)
+			}
+			for _, r := range ds.Access.Deny {
+				if r == *role {
+					return fmt.Errorf("role %q is referenced by docset %q", *role, n)
+				}
+			}
+		}
+		delete(auth.Roles, *role)
+	case "grant", "revoke", "deny", "undeny":
+		if !exists && *role != "guest" {
+			return fmt.Errorf("unknown role %q", *role)
+		}
+		ds, ok := auth.Docsets[*docset]
+		if !ok {
+			return fmt.Errorf("unknown docset %q", *docset)
+		}
+		if ds.Access.Allow == nil {
+			ds.Access.Allow = map[string]string{}
+		}
+		if args[0] == "grant" {
+			if *grant == "" {
+				return fmt.Errorf("grant required")
+			}
+			ds.Access.Allow[*role] = *grant
+		} else if args[0] == "revoke" {
+			delete(ds.Access.Allow, *role)
+		} else if args[0] == "deny" {
+			found := false
+			for _, r := range ds.Access.Deny {
+				found = found || r == *role
+			}
+			if !found {
+				ds.Access.Deny = append(ds.Access.Deny, *role)
+			}
+		} else {
+			rs := ds.Access.Deny[:0]
+			for _, r := range ds.Access.Deny {
+				if r != *role {
+					rs = append(rs, r)
+				}
+			}
+			ds.Access.Deny = rs
+		}
+		auth.Docsets[*docset] = ds
+	case "capability":
+		if *role == "guest" {
+			return fmt.Errorf("guest capability mutation is forbidden")
+		}
+		if !exists || *capability == "" {
+			return fmt.Errorf("unknown role or empty capability")
+		}
+		add := func(xs []string) []string {
+			for _, x := range xs {
+				if x == *capability {
+					return xs
+				}
+			}
+			return append(xs, *capability)
+		}
+		remove := func(xs []string) []string {
+			out := xs[:0]
+			for _, x := range xs {
+				if x != *capability {
+					out = append(out, x)
+				}
+			}
+			return out
+		}
+		if capAction == "allow" {
+			spec.Allow.Capabilities = add(spec.Allow.Capabilities)
+		} else if capAction == "deny" {
+			spec.Deny.Capabilities = add(spec.Deny.Capabilities)
+		} else if capAction == "remove" {
+			if *effect == "allow" {
+				spec.Allow.Capabilities = remove(spec.Allow.Capabilities)
+			} else if *effect == "deny" {
+				spec.Deny.Capabilities = remove(spec.Deny.Capabilities)
+			} else {
+				return fmt.Errorf("effect must be allow or deny")
+			}
+		} else {
+			return fmt.Errorf("invalid capability action")
+		}
+		auth.Roles[*role] = spec
+	default:
+		return fmt.Errorf("unknown role command %q", args[0])
+	}
+	if err := savePolicy(*path, auth); err != nil {
+		return err
+	}
+	fmt.Fprintln(out, "Updated role policy")
+	return nil
+}
 
 func main() {
 	// Handle subcommands before flag parsing
@@ -119,7 +406,9 @@ func main() {
 				config.WithConfigFile(*mcpConfig),
 				config.WithEmbeddedConfig(embeddedCfg, ""),
 			}
+			var resolvedCfg config.Config
 			if cfg, err := config.New(cfgOpts...); err == nil {
+				resolvedCfg = cfg
 				if len(files.Allowed) == 0 {
 					files.Allowed = cfg.Files.Allowed
 				}
@@ -138,7 +427,13 @@ func main() {
 				}
 				vfs = openlore.NewDirFS(absDir, files)
 			} else if loreFS := assets.Lore(); loreFS != nil {
-				vfs = openlore.NewFSAdapter(loreFS)
+				lower := openlore.NewFSAdapter(loreFS)
+				if resolvedCfg.WritableDir != "" {
+					upper := openlore.NewDirFS(resolvedCfg.WritableDir, files)
+					vfs = openlore.NewOverlayFS(upper, lower)
+				} else {
+					vfs = lower
+				}
 			} else {
 				fmt.Fprintln(os.Stderr, "error: no directory specified and no embedded docs found")
 				mcpCmd.Usage()
@@ -177,120 +472,21 @@ func main() {
 
 		case "identity":
 			if len(os.Args) < 3 {
-				fmt.Fprintf(os.Stderr, "Usage: openlore identity <command>\n\n")
-				fmt.Fprintf(os.Stderr, "Commands:\n")
-				fmt.Fprintf(os.Stderr, "  add    Add a public key identity to lore.json\n")
+				fmt.Fprintln(os.Stderr, "Usage: openlore identity add|role add|remove")
 				os.Exit(1)
 			}
-
-			switch os.Args[2] {
-			case "add":
-				idCmd := flag.NewFlagSet("identity add", flag.ExitOnError)
-				name := idCmd.String("name", "", "identity name (required)")
-				key := idCmd.String("key", "", "SSH public key (optional: an identity may be passkey/token-only)")
-				docset := idCmd.String("docset", "", "docset to grant access to (required)")
-				grant := idCmd.String("grant", "ro", "grant on the docset: ro, rw, or publish")
-				authPath := idCmd.String("auth", "./lore.json", "path to lore.json")
-				comment := idCmd.String("comment", "", "optional comment")
-				home := idCmd.String("home", "", "docset in the identity's grants to use as home ($HOME)")
-				idCmd.Usage = func() {
-					fmt.Fprintf(os.Stderr, "Usage: openlore identity add [flags]\n\n")
-					fmt.Fprintf(os.Stderr, "Add an identity with a per-docset grant to lore.json.\n\n")
-					idCmd.PrintDefaults()
-				}
-				idCmd.Parse(os.Args[3:])
-
-				if *name == "" || *docset == "" || *grant == "" {
-					idCmd.Usage()
-					os.Exit(1)
-				}
-
-				// Validate the public key when one is given (it is optional).
-				if *key != "" {
-					if _, _, _, _, err := gossh.ParseAuthorizedKey([]byte(*key)); err != nil {
-						fmt.Fprintf(os.Stderr, "error: invalid SSH public key: %v\n", err)
-						os.Exit(1)
-					}
-				}
-
-				// Load or create auth config
-				var auth openlore.AuthConfig
-				data, readErr := os.ReadFile(*authPath)
-				if readErr == nil {
-					if err := json.Unmarshal(data, &auth); err != nil {
-						fmt.Fprintf(os.Stderr, "error: parsing %s: %v\n", *authPath, err)
-						os.Exit(1)
-					}
-				} else if os.IsNotExist(readErr) {
-					auth.Docsets = map[string]openlore.DocsetSpec{
-						"all": {Paths: []openlore.PathMapping{{Source: "/", Display: "/"}}},
-					}
-				} else {
-					fmt.Fprintf(os.Stderr, "error: reading %s: %v\n", *authPath, readErr)
-					os.Exit(1)
-				}
-
-				// Check the docset exists.
-				if _, ok := auth.Docsets[*docset]; !ok {
-					fmt.Fprintf(os.Stderr, "error: docset %q not found in %s\n", *docset, *authPath)
-					fmt.Fprintf(os.Stderr, "Available docsets: ")
-					for k := range auth.Docsets {
-						fmt.Fprintf(os.Stderr, "%s ", k)
-					}
-					fmt.Fprintln(os.Stderr)
-					os.Exit(1)
-				}
-
-				// If a home docset is given, it must be the granted docset.
-				if *home != "" && *home != *docset {
-					fmt.Fprintf(os.Stderr, "error: home docset %q is not in the identity's grants\n", *home)
-					os.Exit(1)
-				}
-
-				// Check for duplicate keys (only when a key is provided).
-				if *key != "" {
-					for _, ident := range auth.Identities {
-						if strings.TrimSpace(ident.PublicKey) == strings.TrimSpace(*key) {
-							fmt.Fprintf(os.Stderr, "error: public key already exists for identity %q\n", ident.Name)
-							os.Exit(1)
-						}
-					}
-				}
-
-				// Add identity
-				newIdent := openlore.AuthIdentity{
-					Name:    *name,
-					Docsets: map[string]string{*docset: *grant},
-				}
-				if *key != "" {
-					newIdent.PublicKey = strings.TrimSpace(*key)
-				}
-				if *comment != "" {
-					newIdent.Comment = *comment
-				}
-				if *home != "" {
-					newIdent.Home = *home
-				}
-				auth.Identities = append(auth.Identities, newIdent)
-
-				// Write back
-				out, err := json.MarshalIndent(auth, "", "  ")
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "error: marshaling JSON: %v\n", err)
-					os.Exit(1)
-				}
-				if err := os.WriteFile(*authPath, append(out, '\n'), 0644); err != nil {
-					fmt.Fprintf(os.Stderr, "error: writing %s: %v\n", *authPath, err)
-					os.Exit(1)
-				}
-
-				fmt.Printf("Added identity %q with %s grant on docset %q to %s\n", *name, *grant, *docset, *authPath)
-				os.Exit(0)
-
-			default:
-				fmt.Fprintf(os.Stderr, "Unknown identity command: %s\n", os.Args[2])
+			if err := runIdentityCommand(os.Args[2:], os.Stdout); err != nil {
+				fmt.Fprintln(os.Stderr, "error:", err)
 				os.Exit(1)
 			}
+			return
+
+		case "role":
+			if err := runRoleCommand(os.Args[2:], os.Stdout); err != nil {
+				fmt.Fprintln(os.Stderr, "error:", err)
+				os.Exit(1)
+			}
+			return
 
 		case "token":
 			if len(os.Args) < 3 {
@@ -366,6 +562,17 @@ func main() {
 				fmt.Fprintf(os.Stderr, "Unknown token command: %s\n", os.Args[2])
 				os.Exit(1)
 			}
+
+		case "inbox":
+			if len(os.Args) < 4 || os.Args[2] != "token" {
+				fmt.Fprintln(os.Stderr, "Usage: openlore inbox token <create|list|revoke>")
+				os.Exit(1)
+			}
+			if err := inboxTokenCommand(os.Args[3:], os.Stdout, os.Stderr, time.Now); err != nil {
+				fmt.Fprintln(os.Stderr, "error:", err)
+				os.Exit(1)
+			}
+			os.Exit(0)
 		}
 	}
 
@@ -485,8 +692,16 @@ func main() {
 		opts = append(opts, openlore.WithUnsupportedShellUsageLogging(true))
 	}
 
-	// Create server
-	srv, err := openlore.NewServer(rootDir, opts...)
+	// Create server. Embedded docs are installed as the lower layer during
+	// construction so a configured writable_dir can be the upper layer before
+	// the ordered write log is initialized.
+	var srv *openlore.Server
+	var err error
+	if rootDir == "" && assets.Lore() != nil {
+		srv, err = openlore.NewServerWithLowerFS(assets.Lore(), opts...)
+	} else {
+		srv, err = openlore.NewServer(rootDir, opts...)
+	}
 	if err != nil {
 		slog.Error("failed to create server", "error", err)
 		os.Exit(1)
@@ -495,16 +710,12 @@ func main() {
 	// The inbox plugin contributes the `publish` grant (read whole docset, no
 	// deletes, create/edit only within the docset's inbox). Registered by
 	// default so lore.json may use `"grant": "publish"`.
-	srv.RegisterPlugin(openlore.NewInboxPlugin())
+	if err := srv.RegisterPlugin(openlore.NewInboxPlugin()); err != nil {
+		slog.Error("failed to register inbox plugin", "error", err)
+		os.Exit(1)
+	}
 
 	cmds.VersionString = assets.Version()
-
-	// Mount embedded docs if present and no directory was given on the CLI
-	if rootDir == "" {
-		if loreFS := assets.Lore(); loreFS != nil {
-			srv.SetRootFS(loreFS)
-		}
-	}
 
 	cfg := srv.Config()
 
@@ -542,6 +753,114 @@ func main() {
 		slog.Error("server exited with error", "error", err)
 		os.Exit(1)
 	}
+}
+
+func inboxTokenCommand(args []string, stdout, stderr io.Writer, now func() time.Time) error {
+	if len(args) == 0 {
+		return fmt.Errorf("missing inbox token command")
+	}
+	command := args[0]
+	flags := flag.NewFlagSet("inbox token "+command, flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	configPath := flags.String("config", "./openlore.yml", "path to openlore.yml")
+	var identity, label *string
+	var ttl *time.Duration
+	parseArgs := args[1:]
+	switch command {
+	case "create":
+		identity = flags.String("identity", "", "identity name")
+		label = flags.String("label", "", "credential label")
+		ttl = flags.Duration("ttl", 0, "credential lifetime (zero means no expiry)")
+	case "list":
+	case "revoke":
+		// The documented TOKEN_ID-before-flags form is normalized for flag.FlagSet,
+		// which otherwise stops parsing at the first positional argument.
+		if len(parseArgs) > 0 && !strings.HasPrefix(parseArgs[0], "-") {
+			parseArgs = append(append([]string{}, parseArgs[1:]...), parseArgs[0])
+		}
+	default:
+		return fmt.Errorf("unknown inbox token command: %s", command)
+	}
+	if err := flags.Parse(parseArgs); err != nil {
+		return err
+	}
+	if command != "revoke" && flags.NArg() != 0 {
+		return fmt.Errorf("unexpected argument %q", flags.Arg(0))
+	}
+	cfg, err := config.New(config.WithConfigFile(*configPath))
+	if err != nil {
+		return err
+	}
+	store, err := openlore.NewInboxTokenStore(cfg.DataDir)
+	if err != nil {
+		return err
+	}
+	switch command {
+	case "create":
+		if *identity == "" {
+			return fmt.Errorf("--identity is required")
+		}
+		if cfg.AuthFile == "" {
+			return fmt.Errorf("auth_file is required to validate the inbox token identity")
+		}
+		if *ttl < 0 {
+			return fmt.Errorf("ttl must not be negative")
+		}
+		{
+			auth, err := config.LoadAuthConfig(cfg.AuthFile)
+			if err != nil {
+				return err
+			}
+			found := false
+			for _, id := range auth.Identities {
+				if id.Name == *identity {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return fmt.Errorf("identity %q not found", *identity)
+			}
+		}
+		var expires *time.Time
+		if *ttl > 0 {
+			t := now().UTC().Add(*ttl)
+			expires = &t
+		}
+		t, err := store.Create(*identity, *label, expires)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(stdout, t.Credential())
+		fmt.Fprintf(stderr, "id=%s identity=%s expires=%v\n", t.ID, t.Identity, t.ExpiresAt)
+	case "list":
+		tokens, err := store.List()
+		if err != nil {
+			return err
+		}
+		for _, t := range tokens {
+			fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", t.ID, t.Identity, t.Label, expiryText(t.ExpiresAt))
+		}
+	case "revoke":
+		if flags.NArg() != 1 {
+			return fmt.Errorf("revoke requires TOKEN_ID")
+		}
+		ok, err := store.Delete(flags.Arg(0))
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("token not found")
+		}
+	}
+	return nil
+}
+
+func expiryText(t *time.Time) string {
+	if t == nil {
+		return "never"
+	}
+	return t.Format(time.RFC3339)
 }
 
 func isFlagSet(name string) bool {

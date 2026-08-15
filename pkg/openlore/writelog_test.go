@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/aakarim/go-openlore/internal/config"
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
 
@@ -204,6 +207,31 @@ func TestWriteLog_CloseDrainsInFlightAndQueued(t *testing.T) {
 	}
 	if got := fmt.Sprint(fs.order()); got != "[/a /b]" {
 		t.Fatalf("applied = %s, want [/a /b]", got)
+	}
+}
+
+func TestWriteLogPreflightsWholeBatchBeforeFirstMutation(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "skills"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dir := NewDirFS(root, config.FilesConfig{Allowed: []string{"*.md"}}).WithDocsetRoots([]string{"/skills"})
+	if err := dir.SetWriteable(); err != nil {
+		t.Fatal(err)
+	}
+	merged := NewMergeFS()
+	merged.SetRoot(dir)
+	log := newWriteLog(merged, nil, nil, 1)
+	t.Cleanup(func() { _ = log.Close(context.Background()) })
+	cs := vfs.ChangeSet{Changes: []vfs.Change{
+		{Target: "/skills/imported", Action: vfs.ChangeActionMkdir},
+		{Target: "/skills/imported/payload.exe", Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: []byte("bad")}},
+	}}
+	if _, err := log.Submit(context.Background(), Actor{}, cs); err == nil {
+		t.Fatal("policy-invalid batch accepted")
+	}
+	if _, err := dir.Stat("/skills/imported"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("batch partially created destination: %v", err)
 	}
 }
 

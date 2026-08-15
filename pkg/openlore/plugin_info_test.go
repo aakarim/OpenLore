@@ -14,7 +14,7 @@ func TestPluginInfo_BuiltinsReportNameAndVersion(t *testing.T) {
 		plugin       PluginInfoProvider
 		name, semver string
 	}{
-		{pluginWith(docsWithOKF()), "okf", "0.1.0"},
+		{pluginWith(docsWithOKF()), "okf", "0.2.0"},
 		{NewInboxPlugin(), "inbox", "1.0.0"},
 		{&shellexecPlugin{}, "shellexec", "1.0.0"},
 	}
@@ -32,11 +32,15 @@ func TestRegisterPlugin_LogsNameAndVersion(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
 	s := &Server{grants: newGrantRegistry(), logger: logger}
 
-	s.registerPlugin(newOKF(map[string]config.DocsetSpec{}, logger))
-	s.registerPlugin(NewInboxPlugin())
+	if err := s.registerPlugin(newOKF(map[string]config.DocsetSpec{}, logger)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.registerPlugin(NewInboxPlugin()); err != nil {
+		t.Fatal(err)
+	}
 
 	out := buf.String()
-	for _, want := range []string{`name=okf`, `version=0.1.0`, `name=inbox`, `version=1.0.0`} {
+	for _, want := range []string{`name=okf`, `version=0.2.0`, `name=inbox`, `version=1.0.0`} {
 		if !strings.Contains(out, want) {
 			t.Errorf("boot log missing %q; got:\n%s", want, out)
 		}
@@ -47,5 +51,7 @@ func TestRegisterPlugin_LogsNameAndVersion(t *testing.T) {
 // panic during registration.
 func TestRegisterPlugin_NilLoggerDoesNotPanic(t *testing.T) {
 	s := &Server{grants: newGrantRegistry()}
-	s.registerPlugin(NewInboxPlugin()) // must not panic
+	if err := s.registerPlugin(NewInboxPlugin()); err != nil { // must not panic
+		t.Fatal(err)
+	}
 }

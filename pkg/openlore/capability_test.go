@@ -31,7 +31,15 @@ func TestCapability_ReadOnlySession_WriteCmdsUnknown(t *testing.T) {
 	sh, _, _ := newWritableShell(t)
 	sh.SetAllowedActions(nil) // read-only
 
-	for _, c := range []string{"write /a.md", "patch /a.md", "tee /a.md", "publish ds /a.md"} {
+	for _, c := range []string{
+		"write /a.md",
+		"patch /a.md",
+		"tee /a.md",
+		"mkdir /dir",
+		"mv /a.md /b.md",
+		"rm /a.md",
+		"publish ds /a.md",
+	} {
 		_, errs, code := run(sh, c)
 		if code != 127 || !strings.Contains(errs, "command not found") {
 			t.Fatalf("%q: want 127/command not found, got code=%d err=%q", c, code, errs)
