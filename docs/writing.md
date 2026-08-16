@@ -22,21 +22,6 @@ Every operation is a whole-object atomic swap. Directory moves are not
 supported because the filesystem has no atomic tree-move operation; create the
 destination and move files explicitly.
 
-## Temporary scratch files
-
-Write-enabled server sessions have a private `/tmp` directory for intermediate
-work. It supports the same shell file operations as a docset, but its contents
-are session-local and are never persisted or submitted to the write log:
-
-```bash
-cat /mydocset/index.md > /tmp/index.md
-sed -i 's/old/new/g' /tmp/index.md
-cat /tmp/index.md > /mydocset/index.md
-```
-
-Scratch files disappear when the session ends and are not visible to other
-sessions.
-
 ## Publish to an inbox
 
 `publish` lets a contributor read a whole docset while creating or editing only

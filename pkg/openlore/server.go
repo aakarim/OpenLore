@@ -625,9 +625,10 @@ func (s *Server) shellHandler(next ssh.Handler) ssh.Handler {
 		ctx := contextWithIdentity(sess.Context(), id)
 		sh := s.shellForContext(ctx)
 
-		cmd := sess.Command()
-		if len(cmd) > 0 {
-			cmdLine := joinCommand(cmd)
+		// Execute the original SSH command string. Session.Command tokenizes it
+		// first and cannot faithfully reconstruct shell operators such as output
+		// redirection, especially when an operator is adjacent to another word.
+		if cmdLine := sess.RawCommand(); cmdLine != "" {
 			s.metrics.TotalCommands.Add(1)
 			exitCode := sh.ExecPipeline(cmdLine, sess, sess.Stderr(), sess)
 			sess.Exit(exitCode)
@@ -832,13 +833,6 @@ func (s *Server) buildSessionFS(id Identity) vfs.FileSystem {
 	if aliases := s.aliasesForIdentity(id); len(aliases) > 0 {
 		sessionFS = newAliasFS(sessionFS, aliases)
 	}
-	// Give every session its own ephemeral /tmp. Keeping this mount outside the
-	// canonical session filesystem ensures scratch writes neither enter the
-	// durable write log nor weaken docset authorization.
-	withScratch := NewMergeFS()
-	withScratch.SetRoot(sessionFS)
-	withScratch.MountSystem("tmp", newScratchFS())
-	sessionFS = withScratch
 	return sessionFS
 }
 
@@ -1262,22 +1256,6 @@ func (s *Server) identityFromContext(ctx context.Context) Identity {
 // tool handler, so every transport enforces the same per-identity scoping.
 func (s *Server) shellForContext(ctx context.Context) *shell.Shell {
 	return s.buildSessionShell(s.identityFromContext(ctx))
-}
-
-func joinCommand(parts []string) string {
-	result := ""
-	for i, p := range parts {
-		if i > 0 {
-			result += " "
-		}
-		// Re-quote args that contain shell metacharacters (SSH splits on spaces)
-		if strings.ContainsAny(p, " \t") {
-			result += "'" + strings.ReplaceAll(p, "'", "'\\''") + "'"
-		} else {
-			result += p
-		}
-	}
-	return result
 }
 
 // ListenAndServe starts the SSH server (blocks).

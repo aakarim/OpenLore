@@ -169,3 +169,20 @@ func TestStderrFileRedirectTokens(t *testing.T) {
 		}
 	}
 }
+
+func TestStdoutRedirectAdjacentToWord(t *testing.T) {
+	f, err := parser.Parse("cat $P/index.md>/tmp/pi.md")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	call := f.Stmts[0].Cmd.(*parser.CallExpr)
+	if call.Redirect == nil || call.Redirect.Stderr || call.Redirect.Append {
+		t.Fatalf("redirect = %#v", call.Redirect)
+	}
+	if got := call.Redirect.Target.Parts[0].(*parser.Lit).Value; got != "/tmp/pi.md" {
+		t.Fatalf("target = %q, want /tmp/pi.md", got)
+	}
+	if len(call.Args) != 2 {
+		t.Fatalf("redirect leaked into command arguments: %#v", call.Args)
+	}
+}
