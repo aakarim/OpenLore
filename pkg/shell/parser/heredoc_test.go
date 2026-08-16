@@ -186,3 +186,20 @@ func TestStdoutRedirectAdjacentToWord(t *testing.T) {
 		t.Fatalf("redirect leaked into command arguments: %#v", call.Args)
 	}
 }
+
+func TestUnsupportedFDRedirectRemainsAWord(t *testing.T) {
+	f, err := parser.Parse("echo hi >&2")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	call := f.Stmts[0].Cmd.(*parser.CallExpr)
+	if call.Redirect != nil {
+		t.Fatalf("unsupported fd redirect became a redirect: %#v", call.Redirect)
+	}
+	if len(call.Args) != 3 {
+		t.Fatalf("args = %#v, want echo, hi, and >&2", call.Args)
+	}
+	if got := call.Args[2].Parts[0].(*parser.Lit).Value; got != ">&2" {
+		t.Fatalf("unsupported fd redirect = %q, want >&2", got)
+	}
+}
