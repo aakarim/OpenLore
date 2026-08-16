@@ -22,7 +22,8 @@ ssh -p 2222 localhost
 
 ## What Can Agents Do?
 
-Once connected, agents can use familiar bash commands:
+Once connected, agents can use familiar shell-style commands in OpenLore's
+restricted interpreter (not Bash):
 
 ```bash
 # List all documentation

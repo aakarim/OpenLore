@@ -81,7 +81,7 @@ func NewMCPServer(fs vfs.FileSystem, opts ...MCPOption) *mcp.Server {
 		serverOpts,
 	)
 
-	shellDesc := "Execute a bash command against the knowledge base filesystem. Supports ls, cat, grep, find, tree, head, tail, wc, stat, sort, uniq, cut, sed, awk, jq, xargs, pipes, loops, and more."
+	shellDesc := "Execute a command in OpenLore's restricted knowledge-base shell. This is not Bash and cannot run arbitrary executables. Supports ls, cat, grep, find, tree, head, tail, wc, stat, sort, uniq, cut, sed, awk, jq, xargs, pipes, loops, and more; use list_commands for the available surface."
 	if cfg.shellDescription != "" {
 		shellDesc = cfg.shellDescription
 	}
@@ -99,7 +99,7 @@ func NewMCPServer(fs vfs.FileSystem, opts ...MCPOption) *mcp.Server {
 }
 
 type mcpShellInput struct {
-	Command string `json:"command" jsonschema:"The bash command to execute (e.g. grep -r auth /docs)"`
+	Command string `json:"command" jsonschema:"The OpenLore shell command to execute (e.g. grep -r auth /docs). This is a restricted interpreter, not Bash."`
 }
 
 func newMCPShellHandler(fs vfs.FileSystem, envVars map[string]string, factory func(ctx context.Context) *shell.Shell) mcp.ToolHandlerFor[mcpShellInput, any] {
@@ -157,7 +157,7 @@ func newMCPListCommandsHandler() mcp.ToolHandlerFor[mcpListCommandsInput, any] {
 			sb.WriteString(name)
 			sb.WriteString("\n")
 		}
-		sb.WriteString("\nShell syntax: pipes (|), && / ||, for/while/if, variables, subshells")
+		sb.WriteString("\nOpenLore restricted-shell syntax: pipes (|), && / ||, for/while/if, variables, subshells. This is not Bash and cannot run arbitrary executables.")
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: sb.String()}},
 		}, nil, nil

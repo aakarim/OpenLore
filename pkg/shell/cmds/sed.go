@@ -99,11 +99,14 @@ func applySedCommands(cmds []sedCmd, lines []string, quiet bool, w io.Writer) {
 	for lineNum, line := range lines {
 		deleted := false
 		printed := false
+		var appendText []string
 		for _, cmd := range cmds {
 			if !sedAddressMatch(cmd, lineNum+1, totalLines, line) {
 				continue
 			}
 			switch cmd.command {
+			case 'a':
+				appendText = append(appendText, cmd.text)
 			case 'd':
 				deleted = true
 			case 'p':
@@ -147,6 +150,9 @@ func applySedCommands(cmds []sedCmd, lines []string, quiet bool, w io.Writer) {
 				}
 			}
 		}
+		for _, text := range appendText {
+			fmt.Fprintln(w, text)
+		}
 		_ = printed
 	}
 }
@@ -159,6 +165,7 @@ type sedCmd struct {
 	command      byte
 	pattern      string
 	replacement  string
+	text         string
 	sFlags       struct {
 		global          bool
 		caseInsensitive bool
@@ -263,6 +270,11 @@ func parseSedExpr(expr string) sedCmd {
 	}
 
 	switch expr[i] {
+	case 'a':
+		cmd.command = 'a'
+		cmd.text = strings.TrimPrefix(expr[i+1:], "\\")
+		cmd.text = strings.TrimPrefix(cmd.text, "\r\n")
+		cmd.text = strings.TrimPrefix(cmd.text, "\n")
 	case 's':
 		cmd.command = 's'
 		if i+1 < len(expr) {

@@ -5,8 +5,9 @@ so MCP-aware clients (Claude Desktop, Cowork, and other agents) can browse your
 docs without SSH. The MCP server exposes the same filesystem as the SSH shell
 through two tools:
 
-- `shell` — run a bash command against the docs filesystem (`ls`, `cat`, `grep`,
-  `find`, pipes, loops, and all the usual commands)
+- `shell` — run a command in OpenLore's restricted docs interpreter (`ls`,
+  `cat`, `grep`, `find`, pipes, loops, etc.). It is not Bash and cannot run
+  arbitrary executables.
 - `list_commands` — list every available shell command
 
 ## Always-on HTTP endpoint (default)
