@@ -832,6 +832,13 @@ func (s *Server) buildSessionFS(id Identity) vfs.FileSystem {
 	if aliases := s.aliasesForIdentity(id); len(aliases) > 0 {
 		sessionFS = newAliasFS(sessionFS, aliases)
 	}
+	// Give every session its own ephemeral /tmp. Keeping this mount outside the
+	// canonical session filesystem ensures scratch writes neither enter the
+	// durable write log nor weaken docset authorization.
+	withScratch := NewMergeFS()
+	withScratch.SetRoot(sessionFS)
+	withScratch.MountSystem("tmp", newScratchFS())
+	sessionFS = withScratch
 	return sessionFS
 }
 

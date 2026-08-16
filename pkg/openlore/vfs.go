@@ -830,6 +830,48 @@ func (m *MergeFS) WriteFileAtomic(p string, content []byte, opts vfs.WriteOpts) 
 	return w.WriteFileAtomic(subPath, content, opts)
 }
 
+// CanWrite reports whether the backend owning p permits a whole-file write.
+// Scoped backends retain their narrower authorization; ordinary writable
+// mounts (such as a session's /tmp) are writable throughout.
+func (m *MergeFS) CanWrite(p string) bool {
+	subPath, fsys, err := m.resolve(p)
+	if err != nil || fsys == nil {
+		return false
+	}
+	if scoped, ok := fsys.(vfs.WriteScopeFS); ok {
+		return scoped.CanWrite(subPath)
+	}
+	_, ok := fsys.(vfs.WritableFS)
+	return ok
+}
+
+// CanonicalPath preserves canonical path identity when a MergeFS decorates a
+// root filesystem with extra mounts.
+func (m *MergeFS) CanonicalPath(p string) string {
+	clean := vfs.CleanPath(p)
+	subPath, fsys, err := m.resolve(clean)
+	if err != nil || fsys == nil || fsys != m.root {
+		return clean
+	}
+	if canonicalizer, ok := fsys.(vfs.PathCanonicalizer); ok {
+		return canonicalizer.CanonicalPath(subPath)
+	}
+	return clean
+}
+
+// LastReadHash forwards session read tracking through a MergeFS root or mount.
+func (m *MergeFS) LastReadHash(p string) (string, bool) {
+	subPath, fsys, err := m.resolve(p)
+	if err != nil || fsys == nil {
+		return "", false
+	}
+	tracker, ok := fsys.(vfs.ReadTracker)
+	if !ok {
+		return "", false
+	}
+	return tracker.LastReadHash(subPath)
+}
+
 func (m *MergeFS) PreflightChange(change vfs.Change) error {
 	subPath, fsys, err := m.resolve(change.Target)
 	if err != nil {
