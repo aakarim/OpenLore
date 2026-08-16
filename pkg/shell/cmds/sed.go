@@ -208,13 +208,32 @@ func sedAddressMatch(cmd sedCmd, lineNum, totalLines int, line string) bool {
 func parseSedCommands(expressions []string) []sedCmd {
 	var cmds []sedCmd
 	for _, expr := range expressions {
-		for _, e := range strings.Split(expr, ";") {
-			e = strings.TrimSpace(e)
-			if e == "" {
+		for {
+			expr = strings.TrimSpace(expr)
+			if expr == "" {
+				break
+			}
+
+			separator := strings.IndexByte(expr, ';')
+			if separator < 0 {
+				cmds = append(cmds, parseSedExpr(expr))
+				break
+			}
+
+			prefix := strings.TrimSpace(expr[:separator])
+			if prefix == "" {
+				expr = expr[separator+1:]
 				continue
 			}
-			cmd := parseSedExpr(e)
+			cmd := parseSedExpr(prefix)
+			if cmd.command == 'a' {
+				// Append text consumes the rest of this expression. Semicolons
+				// in Markdown or code snippets are payload, not separators.
+				cmds = append(cmds, parseSedExpr(expr))
+				break
+			}
 			cmds = append(cmds, cmd)
+			expr = expr[separator+1:]
 		}
 	}
 	return cmds
