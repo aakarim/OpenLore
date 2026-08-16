@@ -281,7 +281,7 @@ func (l *lexer) scanWord() token {
 				return token{kind: tokWord, val: val}
 			}
 		}
-		if ch == ' ' || ch == '\t' || ch == '\n' || ch == ';' || ch == '|' || ch == '&' || ch == ')' {
+		if ch == ' ' || ch == '\t' || ch == '\n' || ch == ';' || ch == '|' || ch == '&' || ch == ')' || (ch == '>' && sb.Len() > 0) {
 			break
 		}
 		// { and } are included in words (e.g., {}, 'got: {}')

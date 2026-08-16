@@ -66,6 +66,38 @@ func TestRedirect_ReadOnly_HardError(t *testing.T) {
 	}
 }
 
+func TestRedirect_OutsideWriteSurfaceIsStillRedirection(t *testing.T) {
+	dir := t.TempDir()
+	d := NewDirFS(dir, config.FilesConfig{})
+	if err := d.SetWriteable(); err != nil {
+		t.Fatalf("SetWriteable: %v", err)
+	}
+	if err := os.Mkdir(d.resolve("/docs"), 0o755); err != nil {
+		t.Fatalf("mkdir docs: %v", err)
+	}
+	if err := os.WriteFile(d.resolve("/docs/index.md"), []byte("content\n"), 0o644); err != nil {
+		t.Fatalf("seed index: %v", err)
+	}
+	sh := shell.NewShell(newScopedWriteFS(d, rootsAuthz("/docs")))
+	sh.SetEnv("P", "/docs")
+
+	for _, command := range []string{
+		"cat $P/index.md > /tmp/pi.md",
+		"cat $P/index.md>/tmp/pi.md",
+	} {
+		out, errs, code := run(sh, command)
+		if code == 0 {
+			t.Fatalf("%q: redirect outside write surface should fail; out=%q err=%q", command, out, errs)
+		}
+		if !strings.Contains(errs, "redirect: /tmp/pi.md: read-only filesystem") {
+			t.Fatalf("%q: expected redirect error, got %q", command, errs)
+		}
+		if strings.Contains(errs, "command not found") {
+			t.Fatalf("%q: redirect target was treated as a command: %q", command, errs)
+		}
+	}
+}
+
 func TestRedirect_DevNullDiscardsWithoutWriteCapability(t *testing.T) {
 	dir := t.TempDir()
 	d := NewDirFS(dir, config.FilesConfig{}) // read-only substrate
