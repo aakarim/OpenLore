@@ -7,7 +7,7 @@ Sponsored by <a href="https://oiya.ai/?utm_source=github&amp;utm_medium=referral
 
 **Serve your docs to AI agents over SSH.**
 
-OpenLore is an agent-native, governed knowledge server.
+OpenLore is a minimal, extensible, agent-native knowledge base that keeps shared context current and inspectable.
 
 ---
 
