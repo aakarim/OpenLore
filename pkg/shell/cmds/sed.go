@@ -99,11 +99,14 @@ func applySedCommands(cmds []sedCmd, lines []string, quiet bool, w io.Writer) {
 	for lineNum, line := range lines {
 		deleted := false
 		printed := false
+		var appendText []string
 		for _, cmd := range cmds {
 			if !sedAddressMatch(cmd, lineNum+1, totalLines, line) {
 				continue
 			}
 			switch cmd.command {
+			case 'a':
+				appendText = append(appendText, cmd.text)
 			case 'd':
 				deleted = true
 			case 'p':
@@ -147,6 +150,9 @@ func applySedCommands(cmds []sedCmd, lines []string, quiet bool, w io.Writer) {
 				}
 			}
 		}
+		for _, text := range appendText {
+			fmt.Fprintln(w, text)
+		}
 		_ = printed
 	}
 }
@@ -159,6 +165,7 @@ type sedCmd struct {
 	command      byte
 	pattern      string
 	replacement  string
+	text         string
 	sFlags       struct {
 		global          bool
 		caseInsensitive bool
@@ -201,13 +208,32 @@ func sedAddressMatch(cmd sedCmd, lineNum, totalLines int, line string) bool {
 func parseSedCommands(expressions []string) []sedCmd {
 	var cmds []sedCmd
 	for _, expr := range expressions {
-		for _, e := range strings.Split(expr, ";") {
-			e = strings.TrimSpace(e)
-			if e == "" {
+		for {
+			expr = strings.TrimSpace(expr)
+			if expr == "" {
+				break
+			}
+
+			separator := strings.IndexByte(expr, ';')
+			if separator < 0 {
+				cmds = append(cmds, parseSedExpr(expr))
+				break
+			}
+
+			prefix := strings.TrimSpace(expr[:separator])
+			if prefix == "" {
+				expr = expr[separator+1:]
 				continue
 			}
-			cmd := parseSedExpr(e)
+			cmd := parseSedExpr(prefix)
+			if cmd.command == 'a' {
+				// Append text consumes the rest of this expression. Semicolons
+				// in Markdown or code snippets are payload, not separators.
+				cmds = append(cmds, parseSedExpr(expr))
+				break
+			}
 			cmds = append(cmds, cmd)
+			expr = expr[separator+1:]
 		}
 	}
 	return cmds
@@ -263,6 +289,11 @@ func parseSedExpr(expr string) sedCmd {
 	}
 
 	switch expr[i] {
+	case 'a':
+		cmd.command = 'a'
+		cmd.text = strings.TrimPrefix(expr[i+1:], "\\")
+		cmd.text = strings.TrimPrefix(cmd.text, "\r\n")
+		cmd.text = strings.TrimPrefix(cmd.text, "\n")
 	case 's':
 		cmd.command = 's'
 		if i+1 < len(expr) {

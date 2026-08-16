@@ -43,3 +43,24 @@ func TestSedSubstitutionGlobal(t *testing.T) {
 		t.Errorf("sed s///g: should contain 'APPLE', got:\n%s", out)
 	}
 }
+
+func TestSedAppendMultilineInPlace(t *testing.T) {
+	fs := testFS()
+	command := "sed -i '/This is/a\\\n* idea, with context (important); keep it\n* another idea' /docs/readme.md"
+	_, errOut, code := execCmd(t, fs, command)
+	if code != 0 {
+		t.Fatalf("sed multiline append failed: code=%d stderr=%s", code, errOut)
+	}
+	if strings.Contains(errOut, "command not found") {
+		t.Fatalf("append text leaked as shell commands:\n%s", errOut)
+	}
+
+	content, err := fs.ReadFile("/docs/readme.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "# Hello World\nThis is a test file.\n* idea, with context (important); keep it\n* another idea\nLine 3\nLine 4\nLine 5\n"
+	if string(content) != want {
+		t.Fatalf("content = %q, want %q", content, want)
+	}
+}
