@@ -166,6 +166,10 @@ host_key_path: .ssh/openlore_ed25519
 #   - issuer_url: https://token.actions.githubusercontent.com
 #     jwks:
 #       mode: discovery
+#   - issuer_url: https://spire.example
+#     jwks:
+#       mode: url
+#       url: https://spire.example/keys  # direct JWKS/trust-bundle endpoint
 
 # ── Inbox HTTP uploads ────────────────────────────────
 # Inbox credentials are separate, revocable webhook secrets. They may only

@@ -293,11 +293,14 @@ type OIDCIssuer struct {
 	JWKS      JWKSSpec `yaml:"jwks" json:"jwks,omitempty"`
 }
 
-// JWKSSpec configures how an OIDC issuer's public keys are obtained. Only
-// "discovery" (fetch from the issuer's .well-known/openid-configuration) is
-// supported today; empty defaults to discovery.
+// JWKSSpec configures how an OIDC issuer's public keys are obtained.
+// "discovery" (default) fetches them via the issuer's
+// .well-known/openid-configuration; "url" fetches a JWKS document directly from
+// URL, for issuers that publish keys without a discovery document (e.g. a SPIRE
+// trust-bundle endpoint).
 type JWKSSpec struct {
-	Mode string `yaml:"mode" json:"mode,omitempty"` // "discovery" (default)
+	Mode string `yaml:"mode" json:"mode,omitempty"` // "discovery" (default) or "url"
+	URL  string `yaml:"url" json:"url,omitempty"`   // JWKS document URL; required iff mode is "url"
 }
 
 // DocsetSpec defines a named set of path mappings.

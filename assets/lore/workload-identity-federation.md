@@ -57,41 +57,52 @@ keys (JWKS) to verify assertion signatures.
 
 ```yaml
 # openlore.yml
-auth:
-  tokens:
-    issuer: https://openlore.example       # your OpenLore instance (iss + JWKS base)
-    audience: https://openlore.example     # one audience per instance
-    access_ttl: 30m
-    refresh_ttl: 720h
+tokens:
+  issuer: https://openlore.example       # your OpenLore instance (iss + JWKS base)
+  audience: https://openlore.example     # one audience per instance
+  access_ttl: 30m
+  refresh_ttl: 720h
 
-  oidc_issuers:
-    - issuer_url: https://token.actions.githubusercontent.com   # GitHub Actions OIDC
-      jwks: { mode: discovery }            # fetch keys from the issuer's well-known JWKS
+oidc_issuers:
+  - issuer_url: https://token.actions.githubusercontent.com   # GitHub Actions OIDC
+    jwks: { mode: discovery }            # fetch keys from OIDC discovery
+
+  # Direct JWKS mode skips discovery, for example for a SPIRE trust bundle.
+  - issuer_url: https://spire.example
+    jwks:
+      mode: url
+      url: https://spire.example/keys
 ```
 
 `audience` is the value your workloads must request in their platform JWT (see
 the platform examples below). OpenLore rejects assertions whose `aud` does not
-match.
+match. `jwks.mode` defaults to `discovery`. `url` mode requires `jwks.url`, and
+`jwks.url` is rejected in discovery mode. Direct mode changes only where keys
+come from: issuer, audience, expiry, signature, and asymmetric-algorithm checks
+remain identical.
 
 ## 2. Map IdP claims → an OpenLore identity
 
-WIF rules live alongside the exact-`sub` rules used for human/passkey logins. A
-rule matches on the assertion's claims and resolves to a named **identity** that
-must already exist in `lore.json` (see `cat /auth.md`). Rules narrow — never
-widen — the identity's authority via `scope`.
+WIF rules live in `lore.json` on the **identity** they resolve to. The identity
+must already exist; federation never creates one. All predicates in a match are
+ANDed, and exact `sub` matches take precedence over broader matches. Rules
+narrow—never widen—the identity's authority via `scope`.
 
-```yaml
-  rules:
-    # human / passkey / SSH identity (exact sub) — for contrast
-    - match: { sub: "alice" }
-
-    # WIF: any GitHub Actions run in org/repo, requesting our audience
-    - match:
-        sub_prefix: "repo:my-org/my-repo:"
-        aud: "https://openlore.example"
-      identity: ci-indexer      # must exist in lore.json identities[]
-      scope: "read"             # narrow below the identity's full authority
-      ttl: 15m                  # cap the OpenLore token lifetime for this rule
+```json
+{
+  "name": "ci-indexer",
+  "roles": ["reader"],
+  "match": [{
+    "sub_prefix": "repo:my-org/my-repo:",
+    "aud": "https://openlore.example",
+    "claims": {
+      "iss": "https://token.actions.githubusercontent.com",
+      "environment": "production"
+    },
+    "scope": "read",
+    "ttl": "15m"
+  }]
+}
 ```
 
 Match keys:
@@ -102,8 +113,11 @@ Match keys:
 - **`sub`** — exact subject match.
 - **`aud`** — required audience; pin it to your instance to prevent token reuse
   across services.
-- Additional claim matches (e.g. `environment`, `ref`) can be required so, say,
-  only the `production` environment maps to a write-capable identity.
+- **`claims`** — exact string values for additional claims such as `iss`,
+  `environment`, or `ref`. Pin `iss` when trusted issuers could have overlapping
+  subjects.
+- **`scope`** — required `read` or `full` authority ceiling.
+- **`ttl`** — optional Go duration cap for the exchanged token.
 
 ## 3. Scopes: narrow, never widen
 
@@ -174,9 +188,11 @@ OL=$(curl -sS -X POST https://openlore.example/oauth/token \
   -d "assertion=$JWT" | jq -r .access_token)
 ```
 
-Add a matching rule for the SA subject
-(`system:serviceaccount:<ns>:<name>` for SA tokens, or the SPIFFE ID) and set
-its `issuer_url`/`jwks` to your cluster or SPIRE bundle.
+Add a match to the target identity for the SA subject
+(`system:serviceaccount:<ns>:<name>` for SA tokens, or a `spiffe://…` ID). Use
+discovery with a SPIRE OIDC Discovery Provider, or `jwks.mode: url` with a bare
+JWKS/trust-bundle endpoint. WIF accepts bearer JWT-SVIDs; X.509-SVID/mTLS is not
+part of this flow.
 
 ## 5. Use the OpenLore token
 

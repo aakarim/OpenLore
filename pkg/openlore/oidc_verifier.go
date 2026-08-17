@@ -48,8 +48,9 @@ type oidcVerifier struct {
 }
 
 // newOIDCVerifier builds a verifier that trusts the given OIDC issuers, each
-// pinned to OUR audience. Only JWKS discovery mode is supported today. Returns
-// nil (no error) when no issuers are configured — WIF stays disabled.
+// pinned to OUR audience. Keys are obtained per issuer via OIDC discovery
+// (default) or a direct JWKS URL (jwks mode "url"). Returns nil (no error) when
+// no issuers are configured — WIF stays disabled.
 func newOIDCVerifier(audience string, issuers []config.OIDCIssuer) (*oidcVerifier, error) {
 	if len(issuers) == 0 {
 		return nil, nil
@@ -62,14 +63,29 @@ func newOIDCVerifier(audience string, issuers []config.OIDCIssuer) (*oidcVerifie
 		if oi.IssuerURL == "" {
 			return nil, errors.New("oidc issuer_url is required")
 		}
-		if mode := oi.JWKS.Mode; mode != "" && mode != "discovery" {
-			return nil, fmt.Errorf("oidc issuer %q: unsupported jwks mode %q (only \"discovery\")", oi.IssuerURL, mode)
-		}
 		u, err := url.Parse(oi.IssuerURL)
 		if err != nil {
 			return nil, fmt.Errorf("oidc issuer %q: %w", oi.IssuerURL, err)
 		}
-		provider, err := jwks.NewCachingProvider(jwks.WithIssuerURL(u))
+		providerOpts := []any{jwks.WithIssuerURL(u)}
+		switch oi.JWKS.Mode {
+		case "", "discovery":
+			if oi.JWKS.URL != "" {
+				return nil, fmt.Errorf("oidc issuer %q: jwks.url is only valid with jwks mode \"url\"", oi.IssuerURL)
+			}
+		case "url":
+			if oi.JWKS.URL == "" {
+				return nil, fmt.Errorf("oidc issuer %q: jwks mode \"url\" requires jwks.url", oi.IssuerURL)
+			}
+			jwksURL, err := url.Parse(oi.JWKS.URL)
+			if err != nil {
+				return nil, fmt.Errorf("oidc issuer %q: jwks.url: %w", oi.IssuerURL, err)
+			}
+			providerOpts = append(providerOpts, jwks.WithCustomJWKSURI(jwksURL))
+		default:
+			return nil, fmt.Errorf("oidc issuer %q: unsupported jwks mode %q (supported: \"discovery\", \"url\")", oi.IssuerURL, oi.JWKS.Mode)
+		}
+		provider, err := jwks.NewCachingProvider(providerOpts...)
 		if err != nil {
 			return nil, fmt.Errorf("oidc issuer %q: %w", oi.IssuerURL, err)
 		}
