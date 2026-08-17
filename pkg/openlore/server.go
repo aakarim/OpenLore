@@ -1409,7 +1409,11 @@ func (s *Server) ListenAndServe() error {
 			// callers get the same lore/capability scoping as an SSH session.
 			var mcpServer *mcp.Server
 			if (s.config.MCPEnabled && s.config.MCPPath != "") || (s.config.APIEnabled && s.config.APIPath != "") {
-				mcpServer = NewMCPServer(s.fs, withMCPShellFactory(s.shellForContext))
+				mcpServer = NewMCPServer(
+					s.fs,
+					WithMCPReadOnly(s.config.Readonly),
+					withMCPShellFactory(s.shellForContext),
+				)
 			}
 
 			// Mount the MCP-over-HTTP (Streamable HTTP) endpoint on the HTTP
