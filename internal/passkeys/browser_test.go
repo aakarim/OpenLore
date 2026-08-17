@@ -93,7 +93,7 @@ func TestRenderDirUsesSingleTapActionsAndDoubleTapNavigation(t *testing.T) {
 		`class="action-hint">Double tap to open`,
 		`data-open>Open`,
 		`data-copy="url">Copy URL`,
-		`data-copy="path">Copy path`,
+		`data-copy="path">Copy path<span class="action-subtext">Copy to agent</span>`,
 		`window.location.assign(selected.href)`,
 		`setTimeout(()=>{tapTimer=null;show(link)},275)`,
 		`window.location.assign(link.href)`,
