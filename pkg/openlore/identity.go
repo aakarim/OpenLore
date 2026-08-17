@@ -44,11 +44,19 @@ type Identity struct {
 	SessionID      string
 	ConnectedAt    time.Time
 	IdentityName   string // matched identity name from auth config
+	Attribution    Attribution
 	Principal      AuthenticatedPrincipal
 	policySnapshot *AuthorizationPolicy
 	HomeDir        string   // display path of the identity's home docset ($HOME); empty = none
 	HomeDocset     string   // name of the identity's home docset; empty = none
 	Scopes         []string // token scopes narrowing authority; {ScopeFull} = full authority
+}
+
+func (i Identity) attribution() Attribution {
+	if i.Attribution.Principal != "" {
+		return i.Attribution
+	}
+	return Attribution{Principal: i.IdentityName}
 }
 
 // AuthenticatedPrincipal is the stable, transport-neutral authentication

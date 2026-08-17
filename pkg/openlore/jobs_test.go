@@ -87,8 +87,8 @@ func TestSpawn_AsyncWriteBack(t *testing.T) {
 	if b, err := base.ReadFile("/ops/live.md"); err != nil || string(b) != "temporal-ns: v42\n" {
 		t.Fatalf("write-back not committed: %q err=%v", b, err)
 	}
-	if job.Identity != "jared" {
-		t.Fatalf("provenance = %q, want jared", job.Identity)
+	if job.Attribution.Principal != "jared" {
+		t.Fatalf("provenance = %q, want jared", job.Attribution.Principal)
 	}
 }
 

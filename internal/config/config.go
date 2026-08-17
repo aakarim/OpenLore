@@ -377,8 +377,9 @@ func (p *PathMapping) UnmarshalJSON(data []byte) error {
 
 // AuthIdentity defines a user identity and its role membership.
 type AuthIdentity struct {
-	Name    string `json:"name"`
-	Comment string `json:"comment,omitempty"`
+	Name      string `json:"name"`
+	Comment   string `json:"comment,omitempty"`
+	CreatedBy string `json:"created_by,omitempty"`
 	// PublicKey is optional: an identity may exist purely as a passkey/token
 	// login target (no SSH key). Empty = no SSH public-key auth for this identity.
 	PublicKey string   `json:"public_key,omitempty"`
@@ -399,6 +400,41 @@ type AuthIdentity struct {
 	// Name resolves here implicitly. WIF exchanges (jwt-bearer) match on
 	// `sub`/`sub_prefix`/`aud`/`claims` entries with narrowing `scope`/`ttl`.
 	Match []IdentityMatch `json:"match,omitempty"`
+	// Delegates are identities permitted to act on behalf of this principal.
+	// An omitted Roles field inherits all principal roles; a present field is
+	// intersected with the principal's roles. Denials always subtract authority.
+	Delegates []DelegateEntry `json:"delegates,omitempty"`
+}
+
+// DelegateEntry grants an identity permission to act for a principal while
+// capping its authority at the principal's current authority.
+type DelegateEntry struct {
+	Identity         string   `json:"identity"`
+	Roles            []string `json:"roles,omitempty"`
+	DenyDocsets      []string `json:"deny_docsets,omitempty"`
+	DenyCapabilities []string `json:"deny_capabilities,omitempty"`
+}
+
+// MarshalJSON preserves the semantic distinction between an omitted roles
+// field (inherit all principal roles) and an explicitly empty list (inherit no
+// roles). encoding/json's ordinary omitempty handling collapses those states.
+func (d DelegateEntry) MarshalJSON() ([]byte, error) {
+	type wire struct {
+		Identity         string   `json:"identity"`
+		Roles            []string `json:"roles,omitempty"`
+		DenyDocsets      []string `json:"deny_docsets,omitempty"`
+		DenyCapabilities []string `json:"deny_capabilities,omitempty"`
+	}
+	if d.Roles == nil {
+		return json.Marshal(wire(d))
+	}
+	type wireWithRoles struct {
+		Identity         string   `json:"identity"`
+		Roles            []string `json:"roles"`
+		DenyDocsets      []string `json:"deny_docsets,omitempty"`
+		DenyCapabilities []string `json:"deny_capabilities,omitempty"`
+	}
+	return json.Marshal(wireWithRoles(d))
 }
 
 // IdentityMatch is a token-claim predicate attached to an AuthIdentity. When a
@@ -1152,6 +1188,12 @@ func ValidateAuthConfig(auth *AuthConfig) error {
 		if ident.Name == "" || strings.TrimSpace(ident.Name) != ident.Name {
 			return fmt.Errorf("invalid identity name %q", ident.Name)
 		}
+		if strings.Contains(ident.Name, "/") || (strings.Contains(ident.Name, "@") && ident.CreatedBy != "oauth") {
+			return fmt.Errorf("identity name %q uses a reserved character", ident.Name)
+		}
+		if ident.CreatedBy != "" && ident.CreatedBy != "oauth" {
+			return fmt.Errorf("identity %q has unsupported created_by %q", ident.Name, ident.CreatedBy)
+		}
 		if ident.Name == "guest" || ident.Name == "anonymous" {
 			return fmt.Errorf("identity %q is reserved", ident.Name)
 		}
@@ -1181,6 +1223,35 @@ func ValidateAuthConfig(auth *AuthConfig) error {
 				return fmt.Errorf("identity %q references unknown role %q", ident.Name, role)
 			}
 		}
+		delegateNames := map[string]bool{}
+		for _, delegate := range ident.Delegates {
+			if delegate.Identity == "" || strings.TrimSpace(delegate.Identity) != delegate.Identity || strings.Contains(delegate.Identity, "/") {
+				return fmt.Errorf("identity %q has invalid delegate %q", ident.Name, delegate.Identity)
+			}
+			if delegateNames[delegate.Identity] {
+				return fmt.Errorf("identity %q has duplicate delegate %q", ident.Name, delegate.Identity)
+			}
+			delegateNames[delegate.Identity] = true
+			if err := validateNames(fmt.Sprintf("identity %q delegate %q roles", ident.Name, delegate.Identity), delegate.Roles); err != nil {
+				return err
+			}
+			for _, role := range delegate.Roles {
+				if _, ok := auth.Roles[role]; !ok {
+					return fmt.Errorf("identity %q delegate %q references unknown role %q", ident.Name, delegate.Identity, role)
+				}
+			}
+			if err := validateNames(fmt.Sprintf("identity %q delegate %q denied docsets", ident.Name, delegate.Identity), delegate.DenyDocsets); err != nil {
+				return err
+			}
+			for _, docset := range delegate.DenyDocsets {
+				if _, ok := auth.Docsets[docset]; !ok {
+					return fmt.Errorf("identity %q delegate %q denies unknown docset %q", ident.Name, delegate.Identity, docset)
+				}
+			}
+			if err := validateNames(fmt.Sprintf("identity %q delegate %q denied capabilities", ident.Name, delegate.Identity), delegate.DenyCapabilities); err != nil {
+				return err
+			}
+		}
 		if ident.Home != "" {
 			if _, ok := auth.Docsets[ident.Home]; !ok {
 				return fmt.Errorf("identity %q references unknown home docset %q", ident.Name, ident.Home)
@@ -1189,6 +1260,13 @@ func ValidateAuthConfig(auth *AuthConfig) error {
 				return fmt.Errorf("identities %q and %q share home docset %q", other, ident.Name, ident.Home)
 			}
 			homes[ident.Home] = ident.Name
+		}
+	}
+	for _, ident := range auth.Identities {
+		for _, delegate := range ident.Delegates {
+			if !identities[delegate.Identity] {
+				return fmt.Errorf("identity %q references unknown delegate identity %q", ident.Name, delegate.Identity)
+			}
 		}
 	}
 	for docset, ds := range auth.Docsets {

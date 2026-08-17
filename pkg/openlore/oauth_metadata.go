@@ -16,6 +16,7 @@ const (
 	tokenPath                     = "/oauth/token"
 	authorizePath                 = "/authorize"
 	authorizePublicPath           = "/authorize/public"
+	authorizeConsentPath          = "/authorize/consent"
 )
 
 // oauthRoutes returns the OAuth endpoints mounted whenever token auth is
@@ -31,6 +32,7 @@ func (s *Server) oauthRoutes() map[string]http.Handler {
 		jwksPath:                      jwksHandler(s.issuer),
 		authorizePath:                 http.HandlerFunc(s.authorizeHandler),
 		authorizePublicPath:           http.HandlerFunc(s.authorizePublicHandler),
+		authorizeConsentPath:          http.HandlerFunc(s.authorizeConsentHandler),
 		registrationPath:              http.HandlerFunc(s.registrationHandler),
 		protectedResourceMetadataPath: http.HandlerFunc(s.resourceMetadata),
 		authServerMetadataPath:        http.HandlerFunc(s.authServerMetadata),
@@ -73,7 +75,7 @@ func (s *Server) authServerMetadata(w http.ResponseWriter, r *http.Request) {
 		"registration_endpoint":                 base + registrationPath,
 		"jwks_uri":                              base + jwksPath,
 		"response_types_supported":              []string{"code"},
-		"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
+		"grant_types_supported":                 []string{"authorization_code", "refresh_token", "urn:ietf:params:oauth:grant-type:token-exchange"},
 		"token_endpoint_auth_methods_supported": []string{"none"},
 		"code_challenge_methods_supported":      []string{"S256"},
 		"scopes_supported":                      []string{ScopeFull},

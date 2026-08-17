@@ -2,11 +2,17 @@ package openlore
 
 import (
 	"context"
+	"fmt"
 	"html/template"
 	"net/http"
 	"net/url"
+	"regexp"
+	"sort"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/aakarim/go-openlore/internal/config"
 )
 
 // authorizeRequest holds the validated parameters of an in-flight OAuth
@@ -30,6 +36,51 @@ type authorizeStore struct {
 	mu       sync.Mutex
 	requests map[string]authorizeRequest
 	ttl      time.Duration
+}
+
+type consentRequest struct {
+	AuthorizeID string
+	Principal   string
+	Expires     time.Time
+}
+
+type consentStore struct {
+	mu       sync.Mutex
+	requests map[string]consentRequest
+}
+
+func newConsentStore() *consentStore { return &consentStore{requests: map[string]consentRequest{}} }
+func (s *consentStore) put(req consentRequest) string {
+	id := randomToken()
+	req.Expires = time.Now().Add(10 * time.Minute)
+	s.mu.Lock()
+	s.requests[id] = req
+	s.mu.Unlock()
+	return id
+}
+func (s *consentStore) get(id string, consume bool) (consentRequest, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	req, ok := s.requests[id]
+	if !ok || req.Expires.Before(time.Now()) {
+		delete(s.requests, id)
+		return consentRequest{}, false
+	}
+	if consume {
+		delete(s.requests, id)
+	}
+	return req, true
+}
+
+func (a *authorizeStore) get(id string) (authorizeRequest, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	req, ok := a.requests[id]
+	if !ok || req.Expires.Before(time.Now()) {
+		delete(a.requests, id)
+		return authorizeRequest{}, false
+	}
+	return req, true
 }
 
 func newAuthorizeStore() *authorizeStore {
@@ -244,12 +295,27 @@ func (s *Server) CompleteAuthorize(requestID, sub string) (string, bool) {
 	if s.authorizeReqs == nil || s.authCodes == nil {
 		return "", false
 	}
+	req, ok := s.authorizeReqs.get(requestID)
+	if !ok {
+		return "", false
+	}
+	if sub != anonymousSubject && req.ClientID != "" {
+		if _, ok, _ := s.clientStore.Lookup(context.Background(), req.ClientID); ok {
+			consent := s.consents.put(consentRequest{AuthorizeID: requestID, Principal: sub})
+			return authorizeConsentPath + "?consent=" + url.QueryEscape(consent), true
+		}
+	}
+	return s.finishAuthorize(requestID, sub, "")
+}
+
+func (s *Server) finishAuthorize(requestID, sub, actor string) (string, bool) {
 	req, ok := s.authorizeReqs.take(requestID)
 	if !ok {
 		return "", false
 	}
 	code := s.authCodes.Issue(authCode{
 		Subject:             sub,
+		Actor:               actor,
 		Scope:               req.Scope,
 		ClientID:            req.ClientID,
 		RedirectURI:         req.RedirectURI,
@@ -269,6 +335,238 @@ func (s *Server) CompleteAuthorize(requestID, sub string) (string, bool) {
 	}
 	u.RawQuery = rq.Encode()
 	return u.String(), true
+}
+
+var delegateSlugRE = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+
+func redirectDomain(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	return strings.ToLower(u.Hostname())
+}
+
+func defaultDelegateName(domain, clientName string) string {
+	switch domain {
+	case "claude.ai":
+		return "claude"
+	case "chatgpt.com", "openai.com":
+		return "chatgpt"
+	}
+	s := strings.ToLower(clientName)
+	s = regexp.MustCompile(`[^a-z0-9]+`).ReplaceAllString(s, "-")
+	s = strings.Trim(s, "-")
+	if s == "" {
+		return "oauth-client"
+	}
+	return s
+}
+
+type consentView struct {
+	Consent, Principal, Domain, ClientName, DefaultName, Selected string
+	Delegates, Docsets, Capabilities                              []string
+	EnabledDocsets, EnabledCapabilities                           map[string]bool
+}
+
+var consentTmpl = template.Must(template.New("consent").Parse(`<!doctype html><html><head><meta charset="utf-8"><title>Authorize OpenLore</title></head><body>
+<main><h1>Authorize {{.ClientName}}</h1><p>Acting for <strong>{{.Principal}}</strong></p>
+<form method="post" action="` + authorizeConsentPath + `"><input type="hidden" name="consent" value="{{.Consent}}">
+<fieldset><legend>Agent identity</legend>{{range .Delegates}}<label><input type="radio" name="delegate" value="{{.}}"{{if eq . $.Selected}} checked{{end}}> {{.}}</label><br>{{end}}
+<label><input type="radio" name="delegate" value="new"{{if not .Selected}} checked{{end}}> create new: <input name="name" pattern="[a-z0-9-]+" value="{{.DefaultName}}">@{{.Domain}}</label></fieldset>
+<fieldset><legend>Docsets</legend>{{range .Docsets}}<label><input type="checkbox" name="docset" value="{{.}}"{{if index $.EnabledDocsets .}} checked{{end}}> {{.}}</label><br>{{end}}</fieldset>
+<fieldset><legend>Capabilities</legend>{{range .Capabilities}}<label><input type="checkbox" name="capability" value="{{.}}"{{if index $.EnabledCapabilities .}} checked{{end}}> {{.}}</label><br>{{end}}</fieldset>
+<button type="submit">Authorize</button></form></main></body></html>`))
+
+func (s *Server) authorizeConsentHandler(w http.ResponseWriter, r *http.Request) {
+	consentID := r.URL.Query().Get("consent")
+	if r.Method == http.MethodPost {
+		_ = r.ParseForm()
+		consentID = r.Form.Get("consent")
+	}
+	consent, ok := s.consents.get(consentID, r.Method == http.MethodPost)
+	if !ok {
+		http.Error(w, "consent request expired", http.StatusBadRequest)
+		return
+	}
+	authz, ok := s.authorizeReqs.get(consent.AuthorizeID)
+	if !ok {
+		http.Error(w, "authorization request expired", 400)
+		return
+	}
+	client, ok, err := s.clientStore.Lookup(r.Context(), authz.ClientID)
+	if err != nil || !ok {
+		http.Error(w, "unknown client", 400)
+		return
+	}
+	domain := redirectDomain(authz.RedirectURI)
+	if domain == "" {
+		http.Error(w, "client redirect has no domain", 400)
+		return
+	}
+	principal, ok := s.findAuthIdentity(consent.Principal)
+	if !ok {
+		http.Error(w, "unknown principal", 400)
+		return
+	}
+	var delegates []string
+	for _, d := range principal.Delegates {
+		if strings.HasSuffix(d.Identity, "@"+domain) {
+			delegates = append(delegates, d.Identity)
+		}
+	}
+	sort.Strings(delegates)
+	id, _ := s.identityForName(consent.Principal)
+	policy, _ := s.currentPolicy(id)
+	var docsets []string
+	for name := range s.currentAuth().Docsets {
+		if _, ok := s.effectiveGrantNames(id, name); ok {
+			docsets = append(docsets, name)
+		}
+	}
+	var capabilities []string
+	seen := map[string]bool{}
+	for _, role := range policy.Roles {
+		for _, c := range s.currentAuth().Roles[role].Allow.Capabilities {
+			if s.hasCapabilityForPolicy(policy, c) {
+				seen[c] = true
+			}
+		}
+	}
+	seen["lore:config:edit"] = s.hasCapabilityForPolicy(policy, "lore:config:edit")
+	for c, allowed := range seen {
+		if allowed {
+			capabilities = append(capabilities, c)
+		}
+	}
+	sort.Strings(docsets)
+	sort.Strings(capabilities)
+	selected := client.LastDelegate
+	if !strings.HasSuffix(selected, "@"+domain) {
+		selected = ""
+	}
+	enabledDocsets, enabledCapabilities := stringSet(docsets), stringSet(capabilities)
+	if selected != "" {
+		if delegate, ok := findDelegate(principal, selected); ok {
+			for _, denied := range delegate.DenyDocsets {
+				delete(enabledDocsets, denied)
+			}
+			for _, denied := range delegate.DenyCapabilities {
+				delete(enabledCapabilities, denied)
+			}
+		}
+	}
+	view := consentView{
+		Consent: consentID, Principal: consent.Principal, Domain: domain,
+		ClientName: client.ClientName, DefaultName: defaultDelegateName(domain, client.ClientName), Selected: selected,
+		Delegates: delegates, Docsets: docsets, Capabilities: capabilities,
+		EnabledDocsets: enabledDocsets, EnabledCapabilities: enabledCapabilities,
+	}
+	if r.Method == http.MethodGet {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_ = consentTmpl.Execute(w, view)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	delegateName := r.Form.Get("delegate")
+	created := false
+	if delegateName == "new" {
+		slug := r.Form.Get("name")
+		if !delegateSlugRE.MatchString(slug) {
+			http.Error(w, "invalid identity name", 400)
+			return
+		}
+		delegateName = slug + "@" + domain
+		created = true
+	} else if !containsString(delegates, delegateName) {
+		http.Error(w, "delegate was not offered", 400)
+		return
+	}
+	selectedDocsets, selectedCapabilities := stringSet(r.Form["docset"]), stringSet(r.Form["capability"])
+	eventType := "config.edit"
+	if created {
+		eventType = "delegate.create"
+	}
+	err = s.updateAuth(Attribution{Principal: consent.Principal, Actor: delegateName}, eventType, func(auth *config.AuthConfig) error {
+		var p *config.AuthIdentity
+		for i := range auth.Identities {
+			if auth.Identities[i].Name == consent.Principal {
+				p = &auth.Identities[i]
+			}
+		}
+		if p == nil {
+			return fmt.Errorf("principal disappeared")
+		}
+		idx := -1
+		for i := range p.Delegates {
+			if p.Delegates[i].Identity == delegateName {
+				idx = i
+			}
+		}
+		if idx < 0 {
+			p.Delegates = append(p.Delegates, config.DelegateEntry{Identity: delegateName})
+			idx = len(p.Delegates) - 1
+		}
+		if created {
+			for _, identity := range auth.Identities {
+				if identity.Name == delegateName {
+					return fmt.Errorf("identity already exists")
+				}
+			}
+			auth.Identities = append(auth.Identities, config.AuthIdentity{Name: delegateName, Comment: "Display: " + client.ClientName, CreatedBy: "oauth"})
+		}
+		d := &p.Delegates[idx]
+		d.DenyDocsets = difference(docsets, selectedDocsets)
+		d.DenyCapabilities = difference(capabilities, selectedCapabilities)
+		return nil
+	})
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	client.LastDelegate = delegateName
+	_ = s.clientStore.Save(r.Context(), client)
+	redirect, ok := s.finishAuthorize(consent.AuthorizeID, consent.Principal, delegateName)
+	if !ok {
+		http.Error(w, "authorization request expired", 400)
+		return
+	}
+	if s.audit != nil {
+		_ = s.audit.Record(r.Context(), AuditEvent{Type: "oauth.login", Attribution: Attribution{Principal: consent.Principal, Actor: delegateName}, Details: map[string]any{
+			"client_id": client.ClientID, "client_name": client.ClientName, "delegate": delegateName, "domain": domain,
+		}})
+	}
+	http.Redirect(w, r, redirect, http.StatusFound)
+}
+
+func stringSet(values []string) map[string]bool {
+	out := map[string]bool{}
+	for _, v := range values {
+		out[v] = true
+	}
+	return out
+}
+
+func containsString(values []string, wanted string) bool {
+	for _, value := range values {
+		if value == wanted {
+			return true
+		}
+	}
+	return false
+}
+
+func difference(all []string, selected map[string]bool) []string {
+	var out []string
+	for _, v := range all {
+		if !selected[v] {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // passkeyLoginPath returns the path of the passkey login page.

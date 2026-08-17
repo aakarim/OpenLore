@@ -23,6 +23,7 @@ var ErrRefreshInvalid = errors.New("invalid refresh token")
 type RefreshToken struct {
 	Token     string    `json:"token"`
 	Subject   string    `json:"subject"`
+	Actor     string    `json:"actor,omitempty"`
 	Scope     string    `json:"scope"`
 	ChainID   string    `json:"chain_id"`
 	ExpiresAt time.Time `json:"expires_at"`

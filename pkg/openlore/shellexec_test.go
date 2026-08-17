@@ -84,7 +84,7 @@ func TestShellexec_PreCommitPassesEnvAndAllows(t *testing.T) {
 	}
 	h := chainWrite(terminal, p.WriteMiddleware()...)
 
-	res, err := h(context.Background(), NewWriteOp(Actor{ID: "agent-1"}, writeCSBytes("/w/x", "hello")))
+	res, err := h(context.Background(), NewWriteOp(Attribution{Principal: "agent-1"}, writeCSBytes("/w/x", "hello")))
 	if err != nil || res.Hash != "h" {
 		t.Fatalf("res=%+v err=%v", res, err)
 	}
@@ -104,7 +104,7 @@ func TestShellexecBatchChangesJSONOmitsWriteBytes(t *testing.T) {
 	large := bytes.Repeat([]byte("x"), 1024*1024)
 	cs := vfs.ChangeSet{Changes: []vfs.Change{{Target: "/large", Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: large}}}}
 	env := map[string]string{}
-	for _, entry := range p.writeEnv(cs, Actor{}, "pre_commit") {
+	for _, entry := range p.writeEnv(cs, Attribution{}, "pre_commit") {
 		key, value, _ := strings.Cut(entry, "=")
 		env[key] = value
 	}
@@ -136,7 +136,7 @@ func TestShellexec_PreCommitFailOnErrorRejects(t *testing.T) {
 	}
 	h := chainWrite(terminal, p.WriteMiddleware()...)
 
-	if _, err := h(context.Background(), NewWriteOp(Actor{}, writeCSBytes("/w", "x"))); err == nil {
+	if _, err := h(context.Background(), NewWriteOp(Attribution{}, writeCSBytes("/w", "x"))); err == nil {
 		t.Fatal("want reject error from pre_commit")
 	}
 	if terminalCalled {
@@ -157,7 +157,7 @@ func TestShellexec_PreCommitNonFatalAllows(t *testing.T) {
 	}
 	h := chainWrite(terminal, p.WriteMiddleware()...)
 
-	if _, err := h(context.Background(), NewWriteOp(Actor{}, writeCSBytes("/w", "x"))); err != nil {
+	if _, err := h(context.Background(), NewWriteOp(Attribution{}, writeCSBytes("/w", "x"))); err != nil {
 		t.Fatalf("non-fatal pre_commit must not abort: %v", err)
 	}
 	if !terminalCalled {
@@ -209,7 +209,7 @@ func TestShellexec_PostWriteNeverHaltsButRuns(t *testing.T) {
 	terminal := func(_ context.Context, _ CommitInfo) error { nextCalled = true; return nil }
 	h := chainPostCommit(terminal, p.PostCommitMiddleware()...)
 
-	info := CommitInfo{ChangeSet: writeCSBytes("/w", "x"), Hash: "abc", Actor: Actor{ID: "a"}}
+	info := CommitInfo{ChangeSet: writeCSBytes("/w", "x"), Hash: "abc", Attribution: Attribution{Principal: "a"}}
 	if err := h(context.Background(), info); err != nil {
 		t.Fatalf("post_write must never halt: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestShellexec_AsyncDoesNotAbort(t *testing.T) {
 	}
 	h := chainWrite(terminal, p.WriteMiddleware()...)
 
-	if _, err := h(context.Background(), NewWriteOp(Actor{}, writeCSBytes("/w", "x"))); err != nil {
+	if _, err := h(context.Background(), NewWriteOp(Attribution{}, writeCSBytes("/w", "x"))); err != nil {
 		t.Fatalf("async pre_commit must never abort: %v", err)
 	}
 	if !terminalCalled {

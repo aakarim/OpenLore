@@ -22,7 +22,7 @@ func testIssuer(t *testing.T) *esIssuer {
 func TestIssuer_MintVerifyRoundTrip(t *testing.T) {
 	iss := testIssuer(t)
 
-	tok, exp, err := iss.Mint("alice", ScopeFull, 30*time.Minute)
+	tok, exp, err := iss.Mint(Attribution{Principal: "alice"}, ScopeFull, 30*time.Minute)
 	if err != nil {
 		t.Fatalf("Mint: %v", err)
 	}
@@ -47,7 +47,7 @@ func TestIssuer_MintVerifyRoundTrip(t *testing.T) {
 
 func TestIssuer_RejectsExpired(t *testing.T) {
 	iss := testIssuer(t)
-	tok, _, err := iss.Mint("alice", ScopeFull, -time.Minute) // already expired
+	tok, _, err := iss.Mint(Attribution{Principal: "alice"}, ScopeFull, -time.Minute) // already expired
 	if err != nil {
 		t.Fatalf("Mint: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestIssuer_RejectsExpired(t *testing.T) {
 
 func TestIssuer_RejectsTampered(t *testing.T) {
 	iss := testIssuer(t)
-	tok, _, _ := iss.Mint("alice", ScopeFull, 30*time.Minute)
+	tok, _, _ := iss.Mint(Attribution{Principal: "alice"}, ScopeFull, 30*time.Minute)
 	// Flip the last character of the signature.
 	tampered := tok[:len(tok)-1] + string(rune(tok[len(tok)-1]^0x01))
 	if _, err := iss.Verify(tampered); !errors.Is(err, auth.ErrInvalidToken) {
@@ -74,7 +74,7 @@ func TestIssuer_RejectsWrongIssuer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newESIssuer: %v", err)
 	}
-	tok, _, _ := b.Mint("alice", ScopeFull, 30*time.Minute)
+	tok, _, _ := b.Mint(Attribution{Principal: "alice"}, ScopeFull, 30*time.Minute)
 	if _, err := a.Verify(tok); !errors.Is(err, auth.ErrInvalidToken) {
 		t.Fatalf("expected ErrInvalidToken for foreign issuer, got %v", err)
 	}

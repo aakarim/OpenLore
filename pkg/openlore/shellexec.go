@@ -147,7 +147,7 @@ func (p *shellexecPlugin) WriteMiddleware() []WriteMiddleware {
 		name := fmt.Sprintf("pre_commit[%d]", i)
 		mws = append(mws, func(next WriteHandler) WriteHandler {
 			return func(ctx context.Context, op WriteOp) (WriteResult, error) {
-				if err := p.exec(ctx, name, c, p.writeLeavesEnv(op.Leaves(), op.Actor, "pre_commit"), true); err != nil {
+				if err := p.exec(ctx, name, c, p.writeLeavesEnv(op.Leaves(), op.Attribution, "pre_commit"), true); err != nil {
 					return WriteResult{}, err
 				}
 				return next(ctx, op)
@@ -218,28 +218,30 @@ func (p *shellexecPlugin) runOnce(ctx context.Context, name string, c execCmd, e
 }
 
 // baseEnv builds the OPENLORE_* env shared by every event kind.
-func (p *shellexecPlugin) baseEnv(event, path string, actor Actor) []string {
+func (p *shellexecPlugin) baseEnv(event, path string, attribution Attribution) []string {
 	env := []string{
 		"OPENLORE_DATA_DIR=" + p.dataDir,
 		"OPENLORE_EVENT=" + event,
 		"OPENLORE_PATH=" + path,
-		"OPENLORE_AGENT=" + actor.ID,
+		"OPENLORE_AGENT=" + attribution.String(),
+		"OPENLORE_IDENTITY=" + attribution.Principal,
+		"OPENLORE_ACTOR=" + attribution.Actor,
 	}
-	for k, v := range actor.Extra {
+	for k, v := range attribution.Extra {
 		env = append(env, "OPENLORE_EXTRA_"+k+"="+v)
 	}
 	return env
 }
 
 func (p *shellexecPlugin) readEnv(op ReadOp) []string {
-	return append(p.baseEnv("pre_read", op.Path, op.Actor), "OPENLORE_READ_KIND="+string(op.Kind))
+	return append(p.baseEnv("pre_read", op.Path, op.Attribution), "OPENLORE_READ_KIND="+string(op.Kind))
 }
 
-func (p *shellexecPlugin) writeEnv(cs vfs.ChangeSet, actor Actor, event string) []string {
-	return p.writeLeavesEnv(cs.Leaves(), actor, event)
+func (p *shellexecPlugin) writeEnv(cs vfs.ChangeSet, attribution Attribution, event string) []string {
+	return p.writeLeavesEnv(cs.Leaves(), attribution, event)
 }
 
-func (p *shellexecPlugin) writeLeavesEnv(leaves []vfs.Change, actor Actor, event string) []string {
+func (p *shellexecPlugin) writeLeavesEnv(leaves []vfs.Change, attribution Attribution, event string) []string {
 	if len(leaves) == 0 {
 		return nil
 	}
@@ -247,7 +249,7 @@ func (p *shellexecPlugin) writeLeavesEnv(leaves []vfs.Change, actor Actor, event
 	if len(leaves) > 1 {
 		path, action = "", "batch"
 	}
-	env := append(p.baseEnv(event, path, actor), "OPENLORE_ACTION="+action)
+	env := append(p.baseEnv(event, path, attribution), "OPENLORE_ACTION="+action)
 	// OPENLORE_CHANGES_JSON is always present and is the stable, inspectable
 	// leaf list. Batch hooks run once, preserving one admission/log operation.
 	type leafSummary struct {
@@ -280,7 +282,7 @@ func (p *shellexecPlugin) writeLeavesEnv(leaves []vfs.Change, actor Actor, event
 }
 
 func (p *shellexecPlugin) postEnv(info CommitInfo) []string {
-	return append(p.writeEnv(info.ChangeSet, info.Actor, "post_write"), "OPENLORE_HASH="+info.Hash)
+	return append(p.writeEnv(info.ChangeSet, info.Attribution, "post_write"), "OPENLORE_HASH="+info.Hash)
 }
 
 // debouncer coalesces repeated calls for the same path within a window.

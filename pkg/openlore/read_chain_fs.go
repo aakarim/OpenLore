@@ -21,32 +21,32 @@ import (
 type readChainFS struct {
 	vfs.FileSystem // read delegation
 
-	actor Actor
-	gate  ReadHandler // composed read chain; nil-safe via newReadChainFS guard
+	attribution Attribution
+	gate        ReadHandler // composed read chain; nil-safe via newReadChainFS guard
 }
 
 // newReadChainFS wraps base so each read first runs gate. Callers only install
 // it when at least one read middleware is registered.
-func newReadChainFS(base vfs.FileSystem, actor Actor, gate ReadHandler) *readChainFS {
-	return &readChainFS{FileSystem: base, actor: actor, gate: gate}
+func newReadChainFS(base vfs.FileSystem, attribution Attribution, gate ReadHandler) *readChainFS {
+	return &readChainFS{FileSystem: base, attribution: attribution, gate: gate}
 }
 
 func (r *readChainFS) Stat(p string) (*vfs.FileInfo, error) {
-	if err := r.gate(context.Background(), ReadOp{Path: p, Kind: ReadKindStat, Actor: r.actor}); err != nil {
+	if err := r.gate(context.Background(), ReadOp{Path: p, Kind: ReadKindStat, Attribution: r.attribution}); err != nil {
 		return nil, err
 	}
 	return r.FileSystem.Stat(p)
 }
 
 func (r *readChainFS) ReadDir(p string) ([]vfs.FileInfo, error) {
-	if err := r.gate(context.Background(), ReadOp{Path: p, Kind: ReadKindDir, Actor: r.actor}); err != nil {
+	if err := r.gate(context.Background(), ReadOp{Path: p, Kind: ReadKindDir, Attribution: r.attribution}); err != nil {
 		return nil, err
 	}
 	return r.FileSystem.ReadDir(p)
 }
 
 func (r *readChainFS) ReadFile(p string) ([]byte, error) {
-	if err := r.gate(context.Background(), ReadOp{Path: p, Kind: ReadKindFile, Actor: r.actor}); err != nil {
+	if err := r.gate(context.Background(), ReadOp{Path: p, Kind: ReadKindFile, Attribution: r.attribution}); err != nil {
 		return nil, err
 	}
 	return r.FileSystem.ReadFile(p)

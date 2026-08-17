@@ -10,7 +10,7 @@ import (
 )
 
 func admitOp(target string) WriteOp {
-	return NewWriteOp(Actor{ID: "agent-1"}, vfs.ChangeSet{Target: target, Action: vfs.ChangeActionWrite,
+	return NewWriteOp(Attribution{Principal: "agent-1"}, vfs.ChangeSet{Target: target, Action: vfs.ChangeActionWrite,
 		Write: &vfs.WriteChange{Bytes: []byte("x")}})
 }
 

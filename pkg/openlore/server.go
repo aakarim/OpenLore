@@ -9,9 +9,12 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aakarim/go-openlore/assets"
@@ -48,6 +51,8 @@ type Server struct {
 	// When true, an access-control policy was loaded and identity scoping is
 	// enforced (docsets filtered, anonymous is read-only).
 	auth         *config.AuthConfig
+	authMu       sync.RWMutex
+	runtimeAuth  atomic.Pointer[config.AuthConfig]
 	authEnforced bool
 	// grants is the registry of grant types (ro/rw + plugin-contributed like
 	// publish). A grant name in lore.json with no registered type fails startup.
@@ -108,10 +113,12 @@ type Server struct {
 	clientStore        ClientStore
 	authCodes          *authCodeStore
 	authorizeReqs      *authorizeStore
+	consents           *consentStore
 	tokens             *tokenEndpoint
 	// oidc verifies external IdP assertions for the jwt-bearer (WIF) grant. It
 	// is non-nil only when oidc_issuers are configured alongside auth.tokens.
-	oidc OIDCVerifier
+	oidc  OIDCVerifier
+	audit AuditLog
 }
 
 // NewServer creates a new OpenLore SSH server.
@@ -168,6 +175,11 @@ func newServerWithRoot(rootDir string, rootFS, lowerFS vfs.FileSystem, opts ...c
 		logger:  logger,
 		motd:    cfg.MOTD,
 	}
+	dataDir := cfg.DataDir
+	if dataDir == "" {
+		dataDir = ".openlore"
+	}
+	s.audit = NewJSONLAuditLog(filepath.Join(dataDir, "audit", "events.jsonl"))
 
 	// Construct shellexec now, but register built-ins after auth/docsets are
 	// loaded so Agent Skills admission can be the outermost write middleware.
@@ -189,6 +201,7 @@ func newServerWithRoot(rootDir string, rootFS, lowerFS vfs.FileSystem, opts ...c
 		s.auth = auth
 		s.authorizationStore = fileAuthorizationStore{auth: auth}
 		s.authEnforced = true
+		cmds.ConfigReloader = s
 
 		// Auth policy fields override config defaults
 		if auth.AllowKeyless != nil {
@@ -283,9 +296,11 @@ func newServerWithRoot(rootDir string, rootFS, lowerFS vfs.FileSystem, opts ...c
 		// so it is the sole writer and gives globally ordered writes/removes. The
 		// applier runs the post-commit chain after each durable commit.
 		s.writeLog = newWriteLog(s.merge, s.postCommitChain(), logger, 0)
+		s.writeLog.SetCommitRecorder(NewJSONLCommitRecorder(filepath.Join(dataDir, "history", "commits.jsonl")))
+		cmds.History = fileHistory{path: filepath.Join(dataDir, "history", "commits.jsonl")}
 		if agentSkills != nil {
 			agentSkills.submit = func(ctx context.Context, cs vfs.ChangeSet) error {
-				_, err := s.CommitChangeSet(ctx, Actor{ID: "agent_skills_remote", internal: true}, cs)
+				_, err := s.CommitChangeSet(ctx, Attribution{Principal: "agent_skills_remote", internal: true}, cs)
 				return err
 			}
 			s.writeLog.SetPreApply(agentSkills.validateMutation)
@@ -369,6 +384,13 @@ func newServerWithRoot(rootDir string, rootFS, lowerFS vfs.FileSystem, opts ...c
 	}
 
 	return s, nil
+}
+
+func (s *Server) currentAuth() *config.AuthConfig {
+	if auth := s.runtimeAuth.Load(); auth != nil {
+		return auth
+	}
+	return s.auth
 }
 
 // Config returns the resolved configuration.
@@ -464,7 +486,7 @@ func (s *Server) resolveIdentity(sess ssh.Session) Identity {
 
 		// First: match by public key. An authenticated key holds the identity's
 		// full authority (shared with token resolution).
-		for _, ident := range s.auth.Identities {
+		for _, ident := range s.currentAuth().Identities {
 			if ident.PublicKey != "" && strings.TrimSpace(ident.PublicKey) == keyStr {
 				return withConn(conn, s.identityFromAuth(ident))
 			}
@@ -514,7 +536,7 @@ func (s *Server) resolveHomeDir(homeDocset string) string {
 	if homeDocset == "" {
 		return ""
 	}
-	ds, ok := s.auth.Docsets[homeDocset]
+	ds, ok := s.currentAuth().Docsets[homeDocset]
 	if !ok || len(ds.Paths) == 0 {
 		return ""
 	}
@@ -536,7 +558,7 @@ func (s *Server) writeConflictPolicy(p string) vfs.WriteConflictPolicy {
 		global = vfs.DefaultWriteConflictPolicy
 	}
 	clean := s.canonicalPath(p)
-	for _, ds := range s.auth.Docsets {
+	for _, ds := range s.currentAuth().Docsets {
 		if ds.WriteConflictPolicy == "" {
 			continue
 		}
@@ -671,12 +693,12 @@ func (s *Server) RegisterPlugin(p any) error {
 // It returns the committed hash (empty for non-write actions) or a CAS/commit
 // error (*vfs.PreconditionError / *vfs.TreeStaleError on drift). If the substrate
 // is read-only (no write log), it returns vfs.ErrReadOnly.
-func (s *Server) CommitChangeSet(ctx context.Context, actor Actor, cs vfs.ChangeSet) (WriteResult, error) {
+func (s *Server) CommitChangeSet(ctx context.Context, attribution Attribution, cs vfs.ChangeSet) (WriteResult, error) {
 	if s.writeLog == nil {
 		return WriteResult{}, vfs.ErrReadOnly
 	}
 	cs = s.canonicalChangeSet(cs)
-	h, err := s.writeLog.Submit(ctx, actor, cs)
+	h, err := s.writeLog.Submit(ctx, attribution, cs)
 	return WriteResult{Hash: h}, err
 }
 
@@ -693,7 +715,7 @@ func (s *Server) AdmitChangeSet(ctx context.Context, id Identity, cs vfs.ChangeS
 			return WriteResult{}, vfs.ErrReadOnly
 		}
 	}
-	return s.writeChain()(ctx, NewWriteOp(Actor{ID: id.IdentityName}, cs))
+	return s.writeChain()(ctx, NewWriteOp(id.attribution(), cs))
 }
 
 type HTTPRouteProvider interface {
@@ -794,7 +816,7 @@ func (s *Server) registerPlugin(p any) error {
 // chain is just the terminal submit.
 func (s *Server) writeChain() WriteHandler {
 	terminal := func(ctx context.Context, op WriteOp) (WriteResult, error) {
-		h, err := s.writeLog.Submit(ctx, op.Actor, op.persistenceChangeSet())
+		h, err := s.writeLog.Submit(ctx, op.Attribution, op.persistenceChangeSet())
 		return WriteResult{Hash: h}, err
 	}
 	return chainWrite(terminal, s.writeMW...)
@@ -858,7 +880,7 @@ func (s *Server) buildCanonicalSessionFS(id Identity) vfs.FileSystem {
 	// abort a read. Innermost read wrapper so it fires for every read that
 	// reaches storage. Only installed when a plugin registered read middleware.
 	if len(s.readMW) > 0 {
-		sessionFS = newReadChainFS(sessionFS, Actor{ID: id.User}, s.readChain())
+		sessionFS = newReadChainFS(sessionFS, id.attribution(), s.readChain())
 	}
 	// Route this session's mutations through the single global ordered log:
 	// every write/mkdir/remove becomes a ChangeSet, runs the admission chain,
@@ -866,7 +888,7 @@ func (s *Server) buildCanonicalSessionFS(id Identity) vfs.FileSystem {
 	// Innermost writable wrapper, so the outer layers (scope) can deny or defer
 	// a mutation before it ever becomes a log entry.
 	if s.writeLog != nil {
-		sessionFS = newMiddlewareFS(sessionFS, Actor{ID: id.User}, s.writeChain())
+		sessionFS = newMiddlewareFS(sessionFS, id.attribution(), s.writeChain())
 	}
 	// A write-capable session must be a named non-guest identity with full token
 	// scope. The per-operation authorizer below resolves current roles and grants;
@@ -891,6 +913,11 @@ func (s *Server) buildCanonicalSessionFS(id Identity) vfs.FileSystem {
 	}
 	if s.sessionFSFn != nil {
 		sessionFS = s.sessionFSFn(id, sessionFS)
+	}
+	if s.config.AuthFile != "" && id.policySnapshot != nil && scopeGrantsWrite(id.Scopes) && s.hasCapabilityForPolicy(*id.policySnapshot, "lore:config:edit") {
+		if writable, ok := sessionFS.(vfs.WritableFS); ok {
+			sessionFS = &configViewFS{WritableFS: writable, server: s, attribution: id.attribution()}
+		}
 	}
 	// Session CAS: track the hash of every file read (and written) so a
 	// later blind overwrite compare-and-swaps against the version the
@@ -954,6 +981,7 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 	// again at invocation. Guest, read-scoped, and currently read-only sessions
 	// do not see write verbs.
 	canWrite := s.authEnforced && id.IdentityName != "" && id.IdentityName != "guest" && len(s.writableDocsetNames(id)) > 0
+	canAdmin := s.authEnforced && id.policySnapshot != nil && scopeGrantsWrite(id.Scopes) && s.hasCapabilityForPolicy(*id.policySnapshot, "lore:config:edit")
 
 	sh := shell.NewShell(sessionFS)
 	if s.config.Debug {
@@ -983,13 +1011,19 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 	// an unrecognized/guest identity is read-only; a recognized
 	// identity may write and publish within its docsets.
 	if s.authEnforced {
-		if canWrite {
-			allowed := []cmds.Action{cmds.ActionWrite, cmds.ActionPublish}
+		if canWrite || canAdmin {
+			allowed := []cmds.Action{}
+			if canWrite {
+				allowed = append(allowed, cmds.ActionWrite, cmds.ActionPublish)
+			}
 			// spawn runs an external command as the OpenLore service
 			// user, so it's gated on an explicit `spawn` capability
 			// (Part D) — never granted to ordinary writers.
 			if s.hasCapabilityForPolicy(*id.policySnapshot, "spawn") {
 				allowed = append(allowed, cmds.ActionSpawn)
+			}
+			if canAdmin {
+				allowed = append(allowed, cmds.ActionAdmin)
 			}
 			sh.SetAllowedActions(allowed)
 		} else {
@@ -998,6 +1032,9 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 		sh.SetActionAuthorizer(func(action cmds.Action) bool {
 			if action == cmds.ActionSpawn {
 				return s.hasCurrentCapability(id, "spawn")
+			}
+			if action == cmds.ActionAdmin {
+				return s.hasCurrentCapability(id, "lore:config:edit")
 			}
 			return true
 		})
@@ -1016,6 +1053,9 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 	// Set identity info as environment variables
 	if id.IdentityName != "" {
 		sh.SetEnv("OPENLORE_IDENTITY", id.IdentityName)
+	}
+	if id.Attribution.Actor != "" {
+		sh.SetEnv("OPENLORE_ACTOR", id.Attribution.Actor)
 	}
 	// $HOME points at the identity's home docset (enables ~ expansion and
 	// `cd` with no arguments).
@@ -1039,8 +1079,8 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 func (s *Server) sessionDocsets(id Identity) []cmds.DocsetInfo {
 	writable := s.writableDocsetNames(id)
 	var out []cmds.DocsetInfo
-	for name := range s.auth.Docsets {
-		ds, ok := s.auth.Docsets[name]
+	for name := range s.currentAuth().Docsets {
+		ds, ok := s.currentAuth().Docsets[name]
 		if !ok {
 			continue
 		}
@@ -1099,7 +1139,7 @@ func (s *Server) sessionMetaFilters(id Identity) []meta.Filter {
 		nf := f
 		nf.Roots = nil
 		seen := map[string]bool{}
-		for docsetName, ds := range s.auth.Docsets {
+		for docsetName, ds := range s.currentAuth().Docsets {
 			grantNames, accessible := s.effectiveGrantNames(id, docsetName)
 			if !accessible {
 				continue
@@ -1140,8 +1180,8 @@ func (s *Server) sessionPublishTargets(id Identity) []cmds.PublishTarget {
 		return nil
 	}
 	var out []cmds.PublishTarget
-	for name := range s.auth.Docsets {
-		ds, ok := s.auth.Docsets[name]
+	for name := range s.currentAuth().Docsets {
+		ds, ok := s.currentAuth().Docsets[name]
 		if !ok {
 			continue
 		}
@@ -1179,7 +1219,7 @@ func (s *Server) writableDocsetNames(id Identity) map[string]bool {
 		return out // global lock closed: nothing is writable
 	}
 	if !s.authEnforced {
-		for name := range s.auth.Docsets {
+		for name := range s.currentAuth().Docsets {
 			out[name] = true
 		}
 		return out
@@ -1187,8 +1227,8 @@ func (s *Server) writableDocsetNames(id Identity) map[string]bool {
 	if id.IdentityName == "" || !scopeGrantsWrite(id.Scopes) {
 		return out
 	}
-	for name := range s.auth.Docsets {
-		ds, ok := s.auth.Docsets[name]
+	for name := range s.currentAuth().Docsets {
+		ds, ok := s.currentAuth().Docsets[name]
 		if !ok {
 			continue
 		}
@@ -1219,6 +1259,7 @@ func (s *Server) anonymousIdentity() Identity {
 	}
 	if s.authEnforced {
 		id.IdentityName = "guest"
+		id.Attribution = Attribution{Principal: "guest"}
 		id.Principal = AuthenticatedPrincipal{Subject: "guest", IdentityName: "guest", Source: "guest"}
 		id.Scopes = []string{ScopeFull}
 	} else {
@@ -1315,7 +1356,7 @@ func (s *Server) ListenAndServe() error {
 				// are TrimSpace'd. Compare trimmed so a valid key isn't denied
 				// admission before resolveIdentity ever runs.
 				keyStr := strings.TrimSpace(string(gossh.MarshalAuthorizedKey(matchKey)))
-				for _, ident := range s.auth.Identities {
+				for _, ident := range s.currentAuth().Identities {
 					if ident.PublicKey != "" && strings.TrimSpace(ident.PublicKey) == keyStr {
 						return true
 					}

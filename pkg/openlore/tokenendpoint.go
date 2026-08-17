@@ -23,6 +23,7 @@ type authCodeStore struct {
 
 type authCode struct {
 	Subject string
+	Actor   string
 	Scope   string
 	Expires time.Time
 
@@ -99,13 +100,18 @@ type tokenEndpoint struct {
 	// wif performs the jwt-bearer (WIF) exchange: verify an external IdP
 	// assertion, match it to a rule, and return the subject/scope/TTL to mint.
 	// nil when no OIDC issuers are configured (grant stays unsupported).
-	wif wifExchanger
+	wif        wifExchanger
+	delegation delegationExchanger
 }
 
 // wifExchanger verifies an external IdP assertion and resolves it to the
 // subject/scope/TTL of the OpenLore token to mint. The Server implements it.
 type wifExchanger interface {
 	ExchangeAssertion(ctx context.Context, assertion string) (sub, scope string, ttl time.Duration, err error)
+}
+
+type delegationExchanger interface {
+	ExchangeDelegation(context.Context, string, string) (Attribution, string, time.Duration, error)
 }
 
 type tokenResponse struct {
@@ -133,6 +139,8 @@ func (t *tokenEndpoint) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		t.handleRefreshToken(w, r)
 	case "urn:ietf:params:oauth:grant-type:jwt-bearer":
 		t.handleJWTBearer(w, r)
+	case "urn:ietf:params:oauth:grant-type:token-exchange":
+		t.handleTokenExchange(w, r)
 	default:
 		oauthError(w, http.StatusBadRequest, "unsupported_grant_type", "unsupported grant_type")
 	}
@@ -178,7 +186,7 @@ func (t *tokenEndpoint) handleAuthorizationCode(w http.ResponseWriter, r *http.R
 			return
 		}
 	}
-	t.issue(w, c.Subject, c.Scope, randomToken())
+	t.issue(w, Attribution{Principal: c.Subject, Actor: c.Actor}, c.Scope, randomToken())
 }
 
 // verifyPKCE checks a code_verifier against a stored code_challenge per RFC 7636.
@@ -231,16 +239,34 @@ func (t *tokenEndpoint) handleJWTBearer(w http.ResponseWriter, r *http.Request) 
 		}
 		return
 	}
-	t.issueAccessOnly(w, sub, scope, ttl)
+	t.issueAccessOnly(w, Attribution{Principal: sub}, scope, ttl)
+}
+
+func (t *tokenEndpoint) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
+	if t.delegation == nil {
+		oauthError(w, http.StatusBadRequest, "unsupported_grant_type", "token exchange is not enabled")
+		return
+	}
+	actorToken, principal := r.Form.Get("actor_token"), r.Form.Get("act_for")
+	if actorToken == "" || principal == "" {
+		oauthError(w, http.StatusBadRequest, "invalid_request", "actor_token and act_for are required")
+		return
+	}
+	attribution, scope, ttl, err := t.delegation.ExchangeDelegation(r.Context(), actorToken, principal)
+	if err != nil {
+		oauthError(w, http.StatusForbidden, "invalid_grant", "delegation is not authorized")
+		return
+	}
+	t.issueAccessOnly(w, attribution, scope, ttl)
 }
 
 // issueAccessOnly mints an access token with an explicit TTL and no refresh
 // token (used by the WIF exchange).
-func (t *tokenEndpoint) issueAccessOnly(w http.ResponseWriter, sub, scope string, ttl time.Duration) {
+func (t *tokenEndpoint) issueAccessOnly(w http.ResponseWriter, attribution Attribution, scope string, ttl time.Duration) {
 	if scope == "" {
 		scope = ScopeFull
 	}
-	access, exp, err := t.issuer.Mint(sub, scope, ttl)
+	access, exp, err := t.issuer.Mint(attribution, scope, ttl)
 	if err != nil {
 		oauthError(w, http.StatusInternalServerError, "server_error", "mint failed")
 		return
@@ -267,6 +293,7 @@ func (t *tokenEndpoint) handleRefreshToken(w http.ResponseWriter, r *http.Reques
 	newRefresh := RefreshToken{
 		Token:     randomToken(),
 		Subject:   old.Subject,
+		Actor:     old.Actor,
 		Scope:     old.Scope,
 		ChainID:   old.ChainID,
 		ExpiresAt: time.Now().Add(t.refreshTTL),
@@ -276,22 +303,23 @@ func (t *tokenEndpoint) handleRefreshToken(w http.ResponseWriter, r *http.Reques
 		oauthError(w, http.StatusBadRequest, "invalid_grant", "refresh token rejected")
 		return
 	}
-	t.issueRotated(w, old.Subject, old.Scope, newRefresh.Token)
+	t.issueRotated(w, Attribution{Principal: old.Subject, Actor: old.Actor}, old.Scope, newRefresh.Token)
 }
 
 // issue mints access+refresh for a fresh login (new chain).
-func (t *tokenEndpoint) issue(w http.ResponseWriter, sub, scope, chainID string) {
+func (t *tokenEndpoint) issue(w http.ResponseWriter, attribution Attribution, scope, chainID string) {
 	if scope == "" {
 		scope = ScopeFull
 	}
-	access, exp, err := t.issuer.Mint(sub, scope, t.accessTTL)
+	access, exp, err := t.issuer.Mint(attribution, scope, t.accessTTL)
 	if err != nil {
 		oauthError(w, http.StatusInternalServerError, "server_error", "mint failed")
 		return
 	}
 	refreshTok := RefreshToken{
 		Token:     randomToken(),
-		Subject:   sub,
+		Subject:   attribution.Principal,
+		Actor:     attribution.Actor,
 		Scope:     scope,
 		ChainID:   chainID,
 		ExpiresAt: time.Now().Add(t.refreshTTL),
@@ -305,11 +333,11 @@ func (t *tokenEndpoint) issue(w http.ResponseWriter, sub, scope, chainID string)
 
 // issueRotated mints a new access token alongside an already-persisted rotated
 // refresh token.
-func (t *tokenEndpoint) issueRotated(w http.ResponseWriter, sub, scope, refreshTok string) {
+func (t *tokenEndpoint) issueRotated(w http.ResponseWriter, attribution Attribution, scope, refreshTok string) {
 	if scope == "" {
 		scope = ScopeFull
 	}
-	access, exp, err := t.issuer.Mint(sub, scope, t.accessTTL)
+	access, exp, err := t.issuer.Mint(attribution, scope, t.accessTTL)
 	if err != nil {
 		oauthError(w, http.StatusInternalServerError, "server_error", "mint failed")
 		return

@@ -32,10 +32,10 @@ func TestReadChainFS_GateRunsBeforeEachReadWithKindAndActor(t *testing.T) {
 	var actorID string
 	gate := func(_ context.Context, op ReadOp) error {
 		kinds = append(kinds, op.Kind)
-		actorID = op.Actor.ID
+		actorID = op.Attribution.Principal
 		return nil
 	}
-	r := newReadChainFS(inner, Actor{ID: "agent-2"}, gate)
+	r := newReadChainFS(inner, Attribution{Principal: "agent-2"}, gate)
 
 	if _, err := r.Stat("/a"); err != nil {
 		t.Fatalf("stat: %v", err)
@@ -62,7 +62,7 @@ func TestReadChainFS_GateRunsBeforeEachReadWithKindAndActor(t *testing.T) {
 func TestReadChainFS_GateAbortStopsRead(t *testing.T) {
 	inner := &rcRecordingFS{}
 	boom := errors.New("pull failed")
-	r := newReadChainFS(inner, Actor{}, func(_ context.Context, _ ReadOp) error { return boom })
+	r := newReadChainFS(inner, Attribution{}, func(_ context.Context, _ ReadOp) error { return boom })
 
 	if _, err := r.ReadFile("/a"); !errors.Is(err, boom) {
 		t.Fatalf("want pull failed, got %v", err)

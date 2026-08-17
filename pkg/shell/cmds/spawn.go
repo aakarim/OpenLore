@@ -16,11 +16,16 @@ import (
 // commit its stdout to Target through WriteCtx (a frozen, session-detached write
 // context). Append selects `>` vs `>>` semantics. Identity is for provenance.
 type JobSpec struct {
-	Command  string
-	Target   string
-	Append   bool
-	Identity string
-	WriteCtx CmdContext
+	Command     string
+	Target      string
+	Append      bool
+	Attribution JobAttribution
+	WriteCtx    CmdContext
+}
+
+type JobAttribution struct {
+	Principal string
+	Actor     string
 }
 
 // JobBackend schedules and runs JobSpecs. The server supplies the
@@ -93,11 +98,11 @@ func CmdSpawn(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin 
 
 	command := strings.Join(cmdParts, " ")
 	id, err := Jobs.Submit(JobSpec{
-		Command:  command,
-		Target:   resolved,
-		Append:   appendMode,
-		Identity: ctx.GetEnv("OPENLORE_IDENTITY"),
-		WriteCtx: newFrozenContext(ctx, resolved),
+		Command:     command,
+		Target:      resolved,
+		Append:      appendMode,
+		Attribution: JobAttribution{Principal: ctx.GetEnv("OPENLORE_IDENTITY"), Actor: ctx.GetEnv("OPENLORE_ACTOR")},
+		WriteCtx:    newFrozenContext(ctx, resolved),
 	})
 	if err != nil {
 		fmt.Fprintf(errW, "spawn: %s\n", err)

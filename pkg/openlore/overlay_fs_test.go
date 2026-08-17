@@ -97,7 +97,7 @@ func TestOverlayFSRejectsLowerBackedRemoval(t *testing.T) {
 func TestNewServerWithLowerFSUsesWritableDirAtRoot(t *testing.T) {
 	upperDir := t.TempDir()
 	lower := fstest.MapFS{"embedded.md": &fstest.MapFile{Data: []byte("embedded")}}
-	s, err := NewServerWithLowerFS(lower, WithWritableDir(upperDir), WithReadonly(false))
+	s, err := NewServerWithLowerFS(lower, WithWritableDir(upperDir), WithReadonly(false), config.WithDataDir(t.TempDir()))
 	if err != nil {
 		t.Fatalf("NewServerWithLowerFS: %v", err)
 	}

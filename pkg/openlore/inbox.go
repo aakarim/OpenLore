@@ -369,7 +369,7 @@ func (p *InboxPlugin) uploadHandler(s *Server, store *InboxTokenStore) http.Hand
 				return
 			}
 		}
-		ds, ok := s.auth.Docsets[r.PathValue("docset")]
+		ds, ok := s.currentAuth().Docsets[r.PathValue("docset")]
 		if !ok {
 			http.NotFound(w, r)
 			return

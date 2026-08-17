@@ -86,6 +86,7 @@ func (s *Server) initAuth() error {
 	}
 	s.authCodes = newAuthCodeStore()
 	s.authorizeReqs = newAuthorizeStore()
+	s.consents = newConsentStore()
 	s.tokens = &tokenEndpoint{
 		issuer:     s.issuer,
 		refresh:    s.refreshStore,
@@ -93,6 +94,7 @@ func (s *Server) initAuth() error {
 		accessTTL:  parseDurationDefault(tc.AccessTTL, 30*time.Minute),
 		refreshTTL: parseDurationDefault(tc.RefreshTTL, 720*time.Hour),
 		audience:   tc.Audience,
+		delegation: s,
 	}
 	// The token endpoint's jwt-bearer grant delegates the verify+match+narrow
 	// exchange back to the server (which holds the auth config + verifier).
@@ -161,8 +163,53 @@ func (s *Server) resolveClaims(claims Claims) (Identity, error) {
 		return Identity{}, ErrUnknownIdentity
 	}
 	id.Scopes = []string{claims.Scope}
-	id.Principal = AuthenticatedPrincipal{Subject: sub, IdentityName: name, Source: "token", Claims: claims.Raw, Scope: claims.Scope}
+	raw := claims.Raw
+	if raw == nil {
+		raw = map[string]any{}
+	}
+	if claims.Actor != "" {
+		principal, _ := s.findAuthIdentity(name)
+		if _, ok := s.findAuthIdentity(claims.Actor); !ok {
+			return Identity{}, ErrUnknownIdentity
+		}
+		if _, ok := findDelegate(principal, claims.Actor); !ok {
+			return Identity{}, ErrUnknownIdentity
+		}
+		raw["actor"] = claims.Actor
+	}
+	id.Attribution = Attribution{Principal: name, Actor: claims.Actor}
+	id.Principal = AuthenticatedPrincipal{Subject: sub, IdentityName: name, Source: "token", Claims: raw, Scope: claims.Scope}
 	return id, nil
+}
+
+// ExchangeDelegation verifies an agent's own OpenLore token and mints authority
+// to act for a principal only when that principal explicitly delegates to it.
+func (s *Server) ExchangeDelegation(_ context.Context, actorToken, principalName string) (Attribution, string, time.Duration, error) {
+	claims, err := s.issuer.Verify(actorToken)
+	if err != nil || claims.Actor != "" || claims.Subject == "" || claims.Subject == anonymousSubject {
+		return Attribution{}, "", 0, ErrUnknownIdentity
+	}
+	principal, ok := s.findAuthIdentity(principalName)
+	if !ok {
+		return Attribution{}, "", 0, ErrUnknownIdentity
+	}
+	if _, ok := s.findAuthIdentity(claims.Subject); !ok {
+		return Attribution{}, "", 0, ErrUnknownIdentity
+	}
+	if _, ok := findDelegate(principal, claims.Subject); !ok {
+		return Attribution{}, "", 0, ErrUnknownIdentity
+	}
+	scope := claims.Scope
+	if !recognizedScope(scope) {
+		return Attribution{}, "", 0, ErrInvalidScope
+	}
+	attribution := Attribution{Principal: principalName, Actor: claims.Subject}
+	if s.audit != nil {
+		_ = s.audit.Record(context.Background(), AuditEvent{Type: "token.exchange", Attribution: attribution, Details: map[string]any{
+			"agent": claims.Subject, "principal": principalName,
+		}})
+	}
+	return attribution, scope, s.tokens.accessTTL, nil
 }
 
 // ExchangeAssertion implements the jwt-bearer (WIF) exchange: it verifies an
@@ -218,7 +265,7 @@ func (s *Server) wifTTL(ruleTTL string, assertionExpiry time.Time) time.Duration
 // pattern/claim matches so a specific subject can override a broad rule.
 func (s *Server) matchWIFClaims(claims Claims) (string, config.IdentityMatch, bool) {
 	// First pass: exact sub wins.
-	for _, ident := range s.auth.Identities {
+	for _, ident := range s.currentAuth().Identities {
 		for _, m := range ident.Match {
 			if m.Sub != "" && m.Sub == claims.Subject && wifPredicatesMatch(m, claims) {
 				return ident.Name, m, true
@@ -228,7 +275,7 @@ func (s *Server) matchWIFClaims(claims Claims) (string, config.IdentityMatch, bo
 	// Second pass: prefix/claim matches (a WIF rule must specify sub_prefix,
 	// aud, or claims — an empty predicate never matches, so it can't grab every
 	// assertion).
-	for _, ident := range s.auth.Identities {
+	for _, ident := range s.currentAuth().Identities {
 		for _, m := range ident.Match {
 			if m.Sub != "" {
 				continue // handled above
@@ -314,7 +361,7 @@ func claimEquals(got any, want string) bool {
 // honors only exact `sub` matches; `sub_prefix`/`aud`/`claims` are reserved for
 // WIF, where cross-identity precedence will be exact-`sub`-beats-pattern.
 func (s *Server) matchRule(sub string) (string, bool) {
-	for _, ident := range s.auth.Identities {
+	for _, ident := range s.currentAuth().Identities {
 		for _, m := range ident.Match {
 			if m.Sub != "" && m.Sub == sub {
 				return ident.Name, true
@@ -326,7 +373,7 @@ func (s *Server) matchRule(sub string) (string, bool) {
 
 // findAuthIdentity returns the auth-config identity with the given name.
 func (s *Server) findAuthIdentity(name string) (config.AuthIdentity, bool) {
-	for _, i := range s.auth.Identities {
+	for _, i := range s.currentAuth().Identities {
 		if i.Name == name {
 			return i, true
 		}
@@ -350,6 +397,7 @@ func (s *Server) identityForName(name string) (Identity, bool) {
 func (s *Server) identityFromAuth(ident config.AuthIdentity) Identity {
 	return Identity{
 		IdentityName: ident.Name,
+		Attribution:  Attribution{Principal: ident.Name},
 		Principal:    AuthenticatedPrincipal{Subject: ident.Name, IdentityName: ident.Name, Source: "local"},
 		HomeDir:      s.resolveHomeDir(ident.Home),
 		HomeDocset:   ident.Home,

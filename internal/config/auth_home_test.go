@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -77,5 +78,50 @@ func TestLoadAuthConfigDefault(t *testing.T) {
 	}
 	if auth.Default["public"] != "ro" {
 		t.Errorf("default grant: got %q, want %q", auth.Default["public"], "ro")
+	}
+}
+
+func TestLoadAuthConfigDelegates(t *testing.T) {
+	p := writeAuth(t, `{
+		"roles": {"engineer": {}},
+		"docsets": {"docs": {"paths": ["/docs"]}},
+		"identities": [
+			{"name":"adil","roles":["engineer"],"delegates":[{"identity":"claude@claude.ai","deny_docsets":["docs"],"deny_capabilities":["lore:config:edit"]}]},
+			{"name":"claude@claude.ai","created_by":"oauth"}
+		]
+	}`)
+	auth, err := LoadAuthConfig(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := auth.Identities[0].Delegates[0].Identity; got != "claude@claude.ai" {
+		t.Fatalf("delegate=%q", got)
+	}
+}
+
+func TestDelegateEntryRoundTripPreservesExplicitEmptyRoles(t *testing.T) {
+	original := DelegateEntry{Identity: "agent", Roles: []string{}}
+	b, err := json.Marshal(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var roundTripped DelegateEntry
+	if err := json.Unmarshal(b, &roundTripped); err != nil {
+		t.Fatal(err)
+	}
+	if roundTripped.Roles == nil {
+		t.Fatalf("explicit empty roles collapsed to inheritance: %s", b)
+	}
+}
+
+func TestLoadAuthConfigRejectsReservedIdentityNamesAndUnknownDelegates(t *testing.T) {
+	for _, body := range []string{
+		`{"identities":[{"name":"hand@written"}]}`,
+		`{"identities":[{"name":"has/slash"}]}`,
+		`{"identities":[{"name":"adil","delegates":[{"identity":"missing"}]}]}`,
+	} {
+		if _, err := LoadAuthConfig(writeAuth(t, body)); err == nil {
+			t.Fatalf("accepted invalid config: %s", body)
+		}
 	}
 }

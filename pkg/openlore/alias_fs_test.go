@@ -137,7 +137,7 @@ func TestAliasFS_CanonicalizesMiddlewarePaths(t *testing.T) {
 	base := NewDirFS(root, config.FilesConfig{})
 
 	var readPath string
-	readView := newReadChainFS(base, Actor{}, func(_ context.Context, op ReadOp) error {
+	readView := newReadChainFS(base, Attribution{}, func(_ context.Context, op ReadOp) error {
 		readPath = op.Path
 		return nil
 	})
@@ -150,7 +150,7 @@ func TestAliasFS_CanonicalizesMiddlewarePaths(t *testing.T) {
 	}
 
 	var changePath string
-	writeView := newMiddlewareFS(base, Actor{}, func(_ context.Context, op WriteOp) (WriteResult, error) {
+	writeView := newMiddlewareFS(base, Attribution{}, func(_ context.Context, op WriteOp) (WriteResult, error) {
 		changePath = op.Leaves()[0].Target
 		return WriteResult{}, nil
 	})
@@ -243,7 +243,7 @@ func TestAliasFS_RewritesNamedMountFileInfoAndPreservesFileType(t *testing.T) {
 func TestAliasFS_CanonicalizesRemoveSnapshotWithoutMutatingCaller(t *testing.T) {
 	snapshot := &vfs.TreeSnapshot{Root: "/knowledge/old", Ops: []vfs.TreeOp{{RelPath: ".", Kind: "dir"}}}
 	var got vfs.ChangeSet
-	writeView := newMiddlewareFS(failingReadFS{err: os.ErrNotExist}, Actor{}, func(_ context.Context, op WriteOp) (WriteResult, error) {
+	writeView := newMiddlewareFS(failingReadFS{err: os.ErrNotExist}, Attribution{}, func(_ context.Context, op WriteOp) (WriteResult, error) {
 		got = op.persistenceChangeSet()
 		return WriteResult{}, nil
 	})

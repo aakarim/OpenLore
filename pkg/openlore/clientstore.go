@@ -19,6 +19,7 @@ type OAuthClient struct {
 	ResponseTypes           []string  `json:"response_types"`
 	Scope                   string    `json:"scope,omitempty"`
 	ClientIDIssuedAt        time.Time `json:"client_id_issued_at"`
+	LastDelegate            string    `json:"last_delegate,omitempty"`
 }
 
 // AllowsRedirect reports whether uri exactly matches one of the client's
@@ -78,8 +79,7 @@ func validRegisteredRedirectURI(raw string) bool {
 		host := u.Hostname()
 		return host == "127.0.0.1" || host == "localhost" || host == "::1"
 	default:
-		// Custom application scheme.
-		return true
+		return false
 	}
 }
 

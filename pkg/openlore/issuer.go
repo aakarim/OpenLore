@@ -26,6 +26,7 @@ import (
 // per request via the IdentityStore (see docs/mcp-bearer-auth.md §5.1).
 type Claims struct {
 	Subject  string
+	Actor    string
 	Scope    string
 	Issuer   string
 	Audience string
@@ -42,7 +43,7 @@ type Claims struct {
 type Issuer interface {
 	// Mint signs a short-lived access token for the subject with the given
 	// scope and TTL, returning the token and its expiry.
-	Mint(sub, scope string, ttl time.Duration) (token string, exp time.Time, err error)
+	Mint(attribution Attribution, scope string, ttl time.Duration) (token string, exp time.Time, err error)
 	// Verify parses and validates a token (signature, iss, aud, exp) and
 	// returns its claims. A verification failure unwraps to auth.ErrInvalidToken.
 	Verify(token string) (Claims, error)
@@ -134,16 +135,19 @@ func keyID(pub *ecdsa.PublicKey) string {
 	return base64.RawURLEncoding.EncodeToString(sum[:16])
 }
 
-func (e *esIssuer) Mint(sub, scope string, ttl time.Duration) (string, time.Time, error) {
+func (e *esIssuer) Mint(attribution Attribution, scope string, ttl time.Duration) (string, time.Time, error) {
 	now := time.Now()
 	exp := now.Add(ttl)
 	claims := jwt.MapClaims{
 		"iss":   e.issuer,
-		"sub":   sub,
+		"sub":   attribution.Principal,
 		"aud":   e.audience,
 		"iat":   now.Unix(),
 		"exp":   exp.Unix(),
 		"scope": scope,
+	}
+	if attribution.Actor != "" {
+		claims["act"] = map[string]string{"sub": attribution.Actor}
 	}
 	tok := jwt.NewWithClaims(jwt.SigningMethodES256, claims)
 	tok.Header["kid"] = e.kid
@@ -170,6 +174,10 @@ func (e *esIssuer) Verify(token string) (Claims, error) {
 	}
 
 	sub, _ := mc["sub"].(string)
+	actor := ""
+	if act, ok := mc["act"].(map[string]any); ok {
+		actor, _ = act["sub"].(string)
+	}
 	scope, _ := mc["scope"].(string)
 	aud, _ := mc["aud"].(string)
 	iss, _ := mc["iss"].(string)
@@ -179,6 +187,7 @@ func (e *esIssuer) Verify(token string) (Claims, error) {
 	}
 	return Claims{
 		Subject:  sub,
+		Actor:    actor,
 		Scope:    scope,
 		Issuer:   iss,
 		Audience: aud,

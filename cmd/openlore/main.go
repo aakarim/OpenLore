@@ -520,7 +520,7 @@ func main() {
 					fmt.Fprintf(os.Stderr, "error: %v\n", err)
 					os.Exit(1)
 				}
-				token, exp, err := issuer.Mint(*identity, *scope, *ttl)
+				token, exp, err := issuer.Mint(openlore.Attribution{Principal: *identity}, *scope, *ttl)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "error: minting token: %v\n", err)
 					os.Exit(1)

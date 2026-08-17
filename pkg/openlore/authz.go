@@ -27,7 +27,7 @@ func (s *Server) validateGrants() error {
 		}
 		return nil
 	}
-	for docset, ds := range s.auth.Docsets {
+	for docset, ds := range s.currentAuth().Docsets {
 		for role, grant := range ds.Access.Allow {
 			if err := check(fmt.Sprintf("docset %q role %q", docset, role), grant); err != nil {
 				return err
@@ -45,7 +45,7 @@ func (s *Server) validateGrants() error {
 	// could disagree on who governs the shared subtree. Fail closed at startup
 	// rather than serve an inconsistent authorization model.
 	owner := map[string]string{}
-	for name, ds := range s.auth.Docsets {
+	for name, ds := range s.currentAuth().Docsets {
 		for _, pm := range ds.Paths {
 			root := displayPath(pm)
 			if other, dup := owner[root]; dup {
@@ -63,7 +63,7 @@ func (s *Server) validateGrants() error {
 		mount  bool
 	}
 	var roots []rootSpec
-	for name, ds := range s.auth.Docsets {
+	for name, ds := range s.currentAuth().Docsets {
 		for _, pm := range ds.Paths {
 			roots = append(roots, rootSpec{docset: name, path: displayPath(pm)})
 		}
@@ -119,14 +119,17 @@ func (s *Server) validateGrants() error {
 }
 
 func (s *Server) currentPolicy(id Identity) (AuthorizationPolicy, error) {
-	if s.authorizationStore == nil {
+	s.authMu.RLock()
+	defer s.authMu.RUnlock()
+	store := s.authorizationStore
+	if store == nil {
 		return AuthorizationPolicy{}, fmt.Errorf("authorization store unavailable")
 	}
 	p := id.Principal
 	if p.IdentityName == "" {
 		p.IdentityName = id.IdentityName
 	}
-	policy, err := s.authorizationStore.ResolveAuthorization(context.Background(), p)
+	policy, err := store.ResolveAuthorization(context.Background(), p)
 	if err != nil {
 		return AuthorizationPolicy{}, err
 	}
@@ -151,12 +154,12 @@ func (s *Server) currentPolicy(id Identity) (AuthorizationPolicy, error) {
 			if !guest {
 				return AuthorizationPolicy{}, fmt.Errorf("non-guest identity received guest role")
 			}
-		} else if _, ok := s.auth.Roles[role]; !ok {
+		} else if _, ok := s.currentAuth().Roles[role]; !ok {
 			return AuthorizationPolicy{}, fmt.Errorf("unknown authorization role %q", role)
 		}
 	}
 	if policy.HomeDocset != "" {
-		home, ok := s.auth.Docsets[policy.HomeDocset]
+		home, ok := s.currentAuth().Docsets[policy.HomeDocset]
 		if !ok {
 			return AuthorizationPolicy{}, fmt.Errorf("unknown authorization home %q", policy.HomeDocset)
 		}
@@ -186,9 +189,14 @@ func (s *Server) effectiveGrantNames(id Identity, name string) ([]string, bool) 
 			return nil, false
 		}
 	}
-	ds, ok := s.auth.Docsets[name]
+	ds, ok := s.currentAuth().Docsets[name]
 	if !ok {
 		return nil, false
+	}
+	for _, denied := range policy.DenyDocsets {
+		if denied == name {
+			return nil, false
+		}
 	}
 	for _, denied := range ds.Access.Deny {
 		for _, role := range policy.Roles {
@@ -224,9 +232,14 @@ func (s *Server) hasCurrentCapability(id Identity, capability string) bool {
 }
 
 func (s *Server) hasCapabilityForPolicy(policy AuthorizationPolicy, capability string) bool {
+	for _, denied := range policy.DenyCapabilities {
+		if denied == capability {
+			return false
+		}
+	}
 	allowed := false
 	for _, roleName := range policy.Roles {
-		role, ok := s.auth.Roles[roleName]
+		role, ok := s.currentAuth().Roles[roleName]
 		if !ok {
 			if roleName == "guest" {
 				continue
@@ -271,7 +284,7 @@ func (s *Server) canonicalPath(p string) string {
 	clean := vfs.CleanPath(p)
 	bestAlias := ""
 	bestTarget := ""
-	for _, ds := range s.auth.Docsets {
+	for _, ds := range s.currentAuth().Docsets {
 		target := primaryDisplayPath(ds)
 		for _, raw := range ds.Aliases {
 			alias := vfs.CleanPath(raw)
@@ -289,8 +302,8 @@ func (s *Server) canonicalPath(p string) string {
 
 func (s *Server) aliasesForIdentity(id Identity) []pathAlias {
 	var aliases []pathAlias
-	for name := range s.auth.Docsets {
-		ds, ok := s.auth.Docsets[name]
+	for name := range s.currentAuth().Docsets {
+		ds, ok := s.currentAuth().Docsets[name]
 		if !ok {
 			continue
 		}
@@ -327,7 +340,7 @@ func (s *Server) mostSpecificDocset(p string) (string, config.DocsetSpec, bool) 
 	bestLen := -1
 	bestName := ""
 	var bestDS config.DocsetSpec
-	for name, ds := range s.auth.Docsets {
+	for name, ds := range s.currentAuth().Docsets {
 		for _, pm := range ds.Paths {
 			root := displayPath(pm)
 			if !pathWithinRoot(root, clean) {
@@ -373,7 +386,7 @@ func (s *Server) grantsForPath(id Identity, p string) (config.DocsetSpec, []Gran
 // during read scoping.
 func (s *Server) allDocsetRoots() []string {
 	var roots []string
-	for _, ds := range s.auth.Docsets {
+	for _, ds := range s.currentAuth().Docsets {
 		for _, pm := range ds.Paths {
 			roots = append(roots, displayPath(pm))
 		}
@@ -395,7 +408,7 @@ func (s *Server) identityCanWrite(id Identity, action vfs.ChangeAction, p string
 	}
 	p = s.canonicalPath(p)
 	if action == vfs.ChangeActionRemoveAll {
-		for _, candidate := range s.auth.Docsets {
+		for _, candidate := range s.currentAuth().Docsets {
 			for _, pm := range candidate.Paths {
 				root := displayPath(pm)
 				if p != root && pathWithinRoot(p, root) {
@@ -433,8 +446,8 @@ func (s *Server) identityCanWrite(id Identity, action vfs.ChangeAction, p string
 // build the session's read-scoping filesystem.
 func (s *Server) readableRoots(id Identity) []string {
 	var roots []string
-	for name := range s.auth.Docsets {
-		ds, ok := s.auth.Docsets[name]
+	for name := range s.currentAuth().Docsets {
+		ds, ok := s.currentAuth().Docsets[name]
 		if !ok {
 			continue
 		}

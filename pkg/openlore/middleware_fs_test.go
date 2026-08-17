@@ -17,15 +17,15 @@ func TestMiddlewareFS_MutationsMapToChangeSets(t *testing.T) {
 		got = op
 		return WriteResult{Hash: "committed"}, nil
 	}
-	m := newMiddlewareFS(mfsReadView{}, Actor{ID: "agent-1"}, admit)
+	m := newMiddlewareFS(mfsReadView{}, Attribution{Principal: "agent-1"}, admit)
 
 	base := "b0"
 	h, err := m.WriteFileAtomic("/w", []byte("hi"), vfs.WriteOpts{IfMatch: &base})
 	if err != nil || h != "committed" {
 		t.Fatalf("write: h=%q err=%v", h, err)
 	}
-	if got.Actor.ID != "agent-1" {
-		t.Fatalf("actor = %+v", got.Actor)
+	if got.Attribution.Principal != "agent-1" {
+		t.Fatalf("attribution = %+v", got.Attribution)
 	}
 	if got.Leaves()[0].Action != vfs.ChangeActionWrite || got.Leaves()[0].Target != "/w" ||
 		got.Leaves()[0].Write == nil || string(got.Leaves()[0].Write.Bytes) != "hi" ||
@@ -66,7 +66,7 @@ func TestMiddlewareFS_MutationsMapToChangeSets(t *testing.T) {
 
 func TestMiddlewareFS_PendingAndRejectPropagate(t *testing.T) {
 	pending := &vfs.PendingChangeError{Ref: "req-7"}
-	m := newMiddlewareFS(mfsReadView{}, Actor{}, func(_ context.Context, _ WriteOp) (WriteResult, error) {
+	m := newMiddlewareFS(mfsReadView{}, Attribution{}, func(_ context.Context, _ WriteOp) (WriteResult, error) {
 		return WriteResult{}, pending
 	})
 	_, err := m.WriteFileAtomic("/w", []byte("x"), vfs.WriteOpts{})
@@ -76,7 +76,7 @@ func TestMiddlewareFS_PendingAndRejectPropagate(t *testing.T) {
 	}
 
 	boom := errors.New("denied")
-	m2 := newMiddlewareFS(mfsReadView{}, Actor{}, func(_ context.Context, _ WriteOp) (WriteResult, error) {
+	m2 := newMiddlewareFS(mfsReadView{}, Attribution{}, func(_ context.Context, _ WriteOp) (WriteResult, error) {
 		return WriteResult{}, boom
 	})
 	if err := m2.Remove("/x"); !errors.Is(err, boom) {
