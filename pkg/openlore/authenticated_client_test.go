@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/auth0/go-jwt-middleware/v3/core"
 	"github.com/auth0/go-jwt-middleware/v3/validator"
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -76,9 +77,13 @@ func netipMustParse(raw string) netip.Addr {
 	return addr
 }
 
-type fixedCIMDResolver struct{ client *CIMDClient }
+type fixedCIMDResolver struct {
+	client  *CIMDClient
+	resolve int
+}
 
-func (r fixedCIMDResolver) Resolve(context.Context, string) (*CIMDClient, error) {
+func (r *fixedCIMDResolver) Resolve(context.Context, string) (*CIMDClient, error) {
+	r.resolve++
 	return r.client, nil
 }
 
@@ -91,8 +96,9 @@ func TestPrivateKeyJWTAuthenticationAndReplayProtection(t *testing.T) {
 	const clientID = "https://chatgpt.com/oauth/server/client.json"
 	const endpoint = "https://openlore.example/oauth/token"
 	client := &CIMDClient{ClientID: clientID, Origin: "chatgpt.com", ClientName: "ChatGPT", AuthMethods: []string{"none", "private_key_jwt"}, JWKSURI: "https://chatgpt.com/oauth/jwks.json"}
+	resolver := &fixedCIMDResolver{client: client}
 	authenticator := &clientAuthenticator{
-		resolver: fixedCIMDResolver{client}, httpClient: staticJSONClient(jwks), tokenEndpoint: endpoint,
+		resolver: resolver, httpClient: staticJSONClient(jwks), tokenEndpoint: endpoint,
 		validators: map[string]*validator.Validator{}, usedJTI: map[string]time.Time{},
 	}
 	claims := jwt.MapClaims{"iss": clientID, "sub": clientID, "aud": endpoint, "iat": time.Now().Unix(), "exp": time.Now().Add(2 * time.Minute).Unix(), "jti": "once"}
@@ -112,6 +118,9 @@ func TestPrivateKeyJWTAuthenticationAndReplayProtection(t *testing.T) {
 	if _, err := authenticator.Authenticate(req, client); err == nil {
 		t.Fatal("replayed jti was accepted")
 	}
+	if resolver.resolve != 0 {
+		t.Fatalf("replayed assertion triggered %d metadata refetches", resolver.resolve)
+	}
 	claims["jti"] = "with-mtls"
 	token = jwt.NewWithClaims(jwt.SigningMethodES256, claims)
 	token.Header["kid"] = "client-key"
@@ -130,6 +139,19 @@ func TestPrivateKeyJWTAuthenticationAndReplayProtection(t *testing.T) {
 	downgrade.Form = url.Values{}
 	if _, err := authenticator.Authenticate(downgrade, client); err == nil {
 		t.Fatal("private_key_jwt client downgraded to none")
+	}
+}
+
+func TestAssertionKeyFailureClassification(t *testing.T) {
+	for _, code := range []string{core.ErrorCodeInvalidSignature, core.ErrorCodeJWKSKeyNotFound} {
+		if !assertionKeyFailure(core.NewValidationError(code, "key failure", nil)) {
+			t.Errorf("code %q should trigger a key refresh", code)
+		}
+	}
+	for _, code := range []string{core.ErrorCodeTokenExpired, core.ErrorCodeInvalidAudience, core.ErrorCodeInvalidClaims, core.ErrorCodeJWKSFetchFailed} {
+		if assertionKeyFailure(core.NewValidationError(code, "not a key rotation signal", nil)) {
+			t.Errorf("code %q should not trigger a key refresh", code)
+		}
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/auth0/go-jwt-middleware/v3/core"
 	"github.com/auth0/go-jwt-middleware/v3/jwks"
 	"github.com/auth0/go-jwt-middleware/v3/validator"
 	"github.com/golang-jwt/jwt/v5"
@@ -54,7 +55,10 @@ func (a *clientAuthenticator) Authenticate(r *http.Request, client *CIMDClient) 
 		}
 		return "", errors.New("private_key_jwt is required for this client")
 	}
-	if err := a.verifyAssertion(r.Context(), client, assertion, false); err != nil {
+	if err := a.verifyAssertion(r.Context(), client, assertion); err != nil {
+		if !assertionKeyFailure(err) {
+			return "", fmt.Errorf("invalid client assertion: %w", err)
+		}
 		// Refetch metadata and rebuild the key provider once. This handles a new
 		// vendor kid immediately rather than waiting for cache expiry.
 		if resolver, ok := a.resolver.(*cimdResolver); ok {
@@ -64,7 +68,7 @@ func (a *clientAuthenticator) Authenticate(r *http.Request, client *CIMDClient) 
 		delete(a.validators, client.ClientID)
 		a.mu.Unlock()
 		fresh, resolveErr := a.resolver.Resolve(r.Context(), client.ClientID)
-		if resolveErr != nil || a.verifyAssertion(r.Context(), fresh, assertion, true) != nil {
+		if resolveErr != nil || a.verifyAssertion(r.Context(), fresh, assertion) != nil {
 			return "", fmt.Errorf("invalid client assertion: %w", err)
 		}
 	}
@@ -74,7 +78,15 @@ func (a *clientAuthenticator) Authenticate(r *http.Request, client *CIMDClient) 
 	return AuthPrivateKeyJWT, nil
 }
 
-func (a *clientAuthenticator) verifyAssertion(ctx context.Context, client *CIMDClient, assertion string, retry bool) error {
+func assertionKeyFailure(err error) bool {
+	var validationErr *core.ValidationError
+	if !errors.As(err, &validationErr) {
+		return false
+	}
+	return validationErr.Code == core.ErrorCodeInvalidSignature || validationErr.Code == core.ErrorCodeJWKSKeyNotFound
+}
+
+func (a *clientAuthenticator) verifyAssertion(ctx context.Context, client *CIMDClient, assertion string) error {
 	val, err := a.validator(client)
 	if err != nil {
 		return err
@@ -110,7 +122,6 @@ func (a *clientAuthenticator) verifyAssertion(ctx context.Context, client *CIMDC
 		return errors.New("client assertion jti was already used")
 	}
 	a.usedJTI[key] = expires.Time
-	_ = retry
 	return nil
 }
 

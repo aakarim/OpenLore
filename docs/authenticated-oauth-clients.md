@@ -32,6 +32,9 @@ auth:
 
 This is best-effort corroboration: clients that do not present a certificate
 can still connect. A presented certificate must chain to the configured CA.
+OpenLore does not match the certificate SAN to the CIMD client, so `ca_bundle`
+must contain only the CA certificates for the vendor whose mTLS corroboration
+OpenLore should record. Do not use a general-purpose client CA bundle.
 Reverse-proxy certificate forwarding is not supported.
 
 ## Signing-key rotation
