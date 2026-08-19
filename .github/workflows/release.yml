@@ -14,11 +14,43 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: aakarim/openlore@v1
+      - uses: actions/setup-go@v5
         with:
-          docs-dir: ./docs
-          config: ./openlore.yml
-          output-dir: dist
+          go-version-file: go.mod
+
+      - name: Verify release source
+        run: |
+          test "$(cat assets/config/VERSION)" = "${GITHUB_REF_NAME#v}"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          echo "Release source: $GITHUB_SHA"
+
+      - name: Build release artifacts
+        run: |
+          mkdir dist
+          for platform in \
+            linux/amd64 \
+            linux/arm64 \
+            darwin/amd64 \
+            darwin/arm64 \
+            windows/amd64
+          do
+            GOOS=${platform%/*}
+            GOARCH=${platform#*/}
+            output="dist/openlore-${GOOS}-${GOARCH}"
+            if [ "$GOOS" = windows ]; then
+              output="${output}.exe"
+            fi
+            CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" \
+              go build -trimpath -o "$output" ./cmd/openlore
+          done
+
+          echo "$GITHUB_SHA" > dist/source-sha.txt
+          (cd dist && sha256sum openlore-* > checksums.txt)
+
+      - name: Smoke-test release binary
+        run: |
+          test "$(dist/openlore-linux-amd64 version)" = "openlore ${GITHUB_REF_NAME#v}"
+          (cd dist && sha256sum --check checksums.txt)
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
