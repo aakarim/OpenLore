@@ -48,6 +48,25 @@ func TestLoginStatusEmpty(t *testing.T) {
 	}
 }
 
+func TestPasskeyPagesUseSharedStylesheet(t *testing.T) {
+	pk, mux := newTestPasskeys(t)
+	pr, err := pk.pending.Create("alice", "MacBook")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range []string{"/passkey/login", "/passkey/r/" + pr.Token} {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, target, nil))
+		body := rec.Body.String()
+		if !strings.Contains(body, `href="/assets/openlore.css"`) {
+			t.Errorf("%s does not use the shared stylesheet", target)
+		}
+		if strings.Contains(body, "<style>") {
+			t.Errorf("%s still contains inline styles", target)
+		}
+	}
+}
+
 func TestLoginBeginSetsCookieAndChallenge(t *testing.T) {
 	_, mux := newTestPasskeys(t)
 	rr := httptest.NewRecorder()

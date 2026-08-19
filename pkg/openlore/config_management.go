@@ -12,7 +12,7 @@ import (
 	"github.com/aakarim/go-openlore/pkg/shell/cmds"
 )
 
-func (s *Server) updateAuth(attribution Attribution, eventType string, mutate func(*config.AuthConfig) error) error {
+func (s *Server) updateAuth(attribution Attribution, eventType string, mutate func(*config.AuthConfig) error, after ...func() (map[string]any, error)) error {
 	s.authMu.Lock()
 	defer s.authMu.Unlock()
 	b, err := json.Marshal(s.currentAuth())
@@ -54,8 +54,22 @@ func (s *Server) updateAuth(attribution Attribution, eventType string, mutate fu
 	if s.passkeys != nil {
 		s.passkeys.SetAuthConfig(&next)
 	}
+	var details map[string]any
+	var afterErr error
+	if len(after) > 0 {
+		details, afterErr = after[0]()
+		if afterErr != nil {
+			if details == nil {
+				details = map[string]any{}
+			}
+			details["error"] = afterErr.Error()
+		}
+	}
 	if s.audit != nil {
-		_ = s.audit.Record(context.Background(), AuditEvent{Type: eventType, Attribution: attribution})
+		_ = s.audit.Record(context.Background(), AuditEvent{Type: eventType, Attribution: attribution, Details: details})
+	}
+	if afterErr != nil && s.logger != nil {
+		s.logger.Error("post-configuration action failed after configuration was persisted", "event", eventType, "error", afterErr)
 	}
 	return nil
 }

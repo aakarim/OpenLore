@@ -2,12 +2,19 @@ package openlore
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
 )
+
+type failingDelegateClientAuthRecorder struct{}
+
+func (failingDelegateClientAuthRecorder) recordDelegateClientAuth(string, string, ClientAuthLevel) error {
+	return errors.New("lore.json is read-only")
+}
 
 func postForm(t *testing.T, h http.Handler, form url.Values) (*httptest.ResponseRecorder, tokenResponse) {
 	t.Helper()
@@ -49,6 +56,20 @@ func TestTokenEndpoint_AuthorizationCodeGrant(t *testing.T) {
 	}
 	if claims.Subject != "alice" {
 		t.Errorf("sub = %q, want alice", claims.Subject)
+	}
+}
+
+func TestTokenEndpoint_ClientAuthRecordingFailureDoesNotBlockToken(t *testing.T) {
+	s := newTokenTestServer(t, true, "allow")
+	s.tokens.delegateAuth = failingDelegateClientAuthRecorder{}
+	code := s.authCodes.Issue(authCode{Subject: "alice", Actor: "claude@claude.ai", Scope: ScopeFull})
+
+	rec, resp := postForm(t, s.tokens, url.Values{
+		"grant_type": {"authorization_code"},
+		"code":       {code},
+	})
+	if rec.Code != http.StatusOK || resp.AccessToken == "" {
+		t.Fatalf("status=%d response=%+v body=%s", rec.Code, resp, rec.Body.String())
 	}
 }
 

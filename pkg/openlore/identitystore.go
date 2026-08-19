@@ -92,16 +92,18 @@ func (s *Server) initAuth() error {
 	s.cimdResolver = resolver
 	s.clientAuth = newClientAuthenticator(resolver, strings.TrimRight(tc.Issuer, "/")+tokenPath, s.audit)
 	s.tokens = &tokenEndpoint{
-		issuer:     s.issuer,
-		refresh:    s.refreshStore,
-		codes:      s.authCodes,
-		accessTTL:  parseDurationDefault(tc.AccessTTL, 30*time.Minute),
-		refreshTTL: parseDurationDefault(tc.RefreshTTL, 720*time.Hour),
-		audience:   tc.Audience,
-		delegation: s,
-		cimd:       resolver,
-		clientAuth: s.clientAuth,
-		audit:      s.audit,
+		issuer:       s.issuer,
+		refresh:      s.refreshStore,
+		codes:        s.authCodes,
+		accessTTL:    parseDurationDefault(tc.AccessTTL, 30*time.Minute),
+		refreshTTL:   parseDurationDefault(tc.RefreshTTL, 720*time.Hour),
+		audience:     tc.Audience,
+		delegation:   s,
+		cimd:         resolver,
+		clientAuth:   s.clientAuth,
+		audit:        s.audit,
+		delegateAuth: s,
+		logger:       s.logger,
 	}
 	// The token endpoint's jwt-bearer grant delegates the verify+match+narrow
 	// exchange back to the server (which holds the auth config + verifier).

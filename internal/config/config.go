@@ -424,6 +424,7 @@ type DelegateEntry struct {
 	Roles            []string `json:"roles,omitempty"`
 	DenyDocsets      []string `json:"deny_docsets,omitempty"`
 	DenyCapabilities []string `json:"deny_capabilities,omitempty"`
+	ClientAuth       string   `json:"client_auth,omitempty"`
 }
 
 // MarshalJSON preserves the semantic distinction between an omitted roles
@@ -435,6 +436,7 @@ func (d DelegateEntry) MarshalJSON() ([]byte, error) {
 		Roles            []string `json:"roles,omitempty"`
 		DenyDocsets      []string `json:"deny_docsets,omitempty"`
 		DenyCapabilities []string `json:"deny_capabilities,omitempty"`
+		ClientAuth       string   `json:"client_auth,omitempty"`
 	}
 	if d.Roles == nil {
 		return json.Marshal(wire(d))
@@ -444,6 +446,7 @@ func (d DelegateEntry) MarshalJSON() ([]byte, error) {
 		Roles            []string `json:"roles"`
 		DenyDocsets      []string `json:"deny_docsets,omitempty"`
 		DenyCapabilities []string `json:"deny_capabilities,omitempty"`
+		ClientAuth       string   `json:"client_auth,omitempty"`
 	}
 	return json.Marshal(wireWithRoles(d))
 }
