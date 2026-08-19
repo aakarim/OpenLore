@@ -89,7 +89,7 @@ Standalone agents can request delegated tokens with their own OpenLore JWT:
 
 ```bash
 curl -X POST https://your-host/oauth/token \
-  -d grant_type=urn:ietf:params:oauth:grant-type:token-exchange \
+  -d grant_type=urn:openlore:oauth:grant-type:delegation \
   -d actor_token="$OPENLORE_AGENT_TOKEN" \
   -d act_for=adil
 ```

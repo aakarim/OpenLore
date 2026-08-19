@@ -24,8 +24,8 @@ func (r fakeRunner) Run(_ context.Context, _ string, _ []string) ([]byte, error)
 }
 
 // spawnFixture wires the Part D stack: a writable substrate, a scoped session
-// (writable only under /ops), a JobManager with the given runner installed as
-// cmds.Jobs, and a shell that is allowed to spawn. It returns the proposer
+// (writable only under /ops), a JobManager bound to the shell, and a shell that
+// is allowed to spawn. It returns the proposer
 // shell, the manager, and the raw substrate.
 func spawnFixture(t *testing.T, runner fakeRunner) (*shell.Shell, *JobManager, *DirFS) {
 	t.Helper()
@@ -38,13 +38,12 @@ func spawnFixture(t *testing.T, runner fakeRunner) (*shell.Shell, *JobManager, *
 	}
 
 	mgr := NewJobManager(4, runner, nil)
-	saved := cmds.Jobs
-	cmds.Jobs = mgr
-	t.Cleanup(func() { cmds.Jobs = saved })
 
 	scoped := newScopedWriteFS(base, rootsAuthz("/ops"))
 	sh := shell.NewShell(scoped)
 	sh.SetAllowedActions([]cmds.Action{cmds.ActionWrite, cmds.ActionSpawn})
+	sh.SetJobBackend(mgr)
+	sh.SetCommandAttribution(cmds.JobAttribution{Principal: "jared"})
 	sh.SetEnv("OPENLORE_IDENTITY", "jared")
 	return sh, mgr, base
 }
@@ -67,6 +66,8 @@ func waitJob(t *testing.T, mgr *JobManager) Job {
 
 func TestSpawn_AsyncWriteBack(t *testing.T) {
 	sh, mgr, base := spawnFixture(t, fakeRunner{out: []byte("temporal-ns: v42\n")})
+	sh.SetEnv("OPENLORE_IDENTITY", "forged")
+	sh.SetEnv("OPENLORE_ACTOR", "forged-actor")
 
 	out, errs, code := run(sh, "spawn --writes /ops/live.md -- kubectl get ns")
 	if code != 0 {
@@ -89,6 +90,9 @@ func TestSpawn_AsyncWriteBack(t *testing.T) {
 	}
 	if job.Attribution.Principal != "jared" {
 		t.Fatalf("provenance = %q, want jared", job.Attribution.Principal)
+	}
+	if job.Attribution.Actor != "" {
+		t.Fatalf("mutable environment forged actor %q", job.Attribution.Actor)
 	}
 }
 
@@ -134,10 +138,6 @@ func TestSpawn_NotEnabled(t *testing.T) {
 	if err := base.SetWriteable(); err != nil {
 		t.Fatalf("SetWriteable: %v", err)
 	}
-	saved := cmds.Jobs
-	cmds.Jobs = nil
-	t.Cleanup(func() { cmds.Jobs = saved })
-
 	sh := shell.NewShell(newScopedWriteFS(base, nil))
 	sh.SetAllowedActions([]cmds.Action{cmds.ActionSpawn})
 	if _, errs, code := run(sh, "spawn --writes /a.md -- echo hi"); code == 0 || !strings.Contains(errs, "not enabled") {

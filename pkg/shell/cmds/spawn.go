@@ -36,9 +36,20 @@ type JobBackend interface {
 	Submit(spec JobSpec) (id string, err error)
 }
 
-// Jobs is the active job backend, set by the server at startup. Nil when the
-// server has no job manager (e.g. an embedded read-only server).
-var Jobs JobBackend
+type jobContext interface {
+	JobBackend() JobBackend
+}
+
+type attributionContext interface {
+	CommandAttribution() JobAttribution
+}
+
+func commandAttribution(ctx CmdContext) JobAttribution {
+	if provider, ok := ctx.(attributionContext); ok {
+		return provider.CommandAttribution()
+	}
+	return JobAttribution{}
+}
 
 // CmdSpawn runs an external command asynchronously and writes its stdout back
 // into the lore once it finishes — without blocking the caller.
@@ -49,7 +60,8 @@ var Jobs JobBackend
 // submit time otherwise. The command runs as the OpenLore service user, so the
 // verb is gated by ActionSpawn (operator-trusted identities only).
 func CmdSpawn(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.Reader) int {
-	if Jobs == nil {
+	provider, ok := ctx.(jobContext)
+	if !ok || provider.JobBackend() == nil {
 		fmt.Fprintln(errW, "spawn: async jobs are not enabled on this server")
 		return 1
 	}
@@ -98,11 +110,11 @@ func CmdSpawn(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin 
 	}
 
 	command := strings.Join(cmdParts, " ")
-	id, err := Jobs.Submit(JobSpec{
+	id, err := provider.JobBackend().Submit(JobSpec{
 		Command:     command,
 		Target:      resolved,
 		Append:      appendMode,
-		Attribution: JobAttribution{Principal: ctx.GetEnv("OPENLORE_IDENTITY"), Actor: ctx.GetEnv("OPENLORE_ACTOR"), ClientAuth: ctx.GetEnv("OPENLORE_CLIENT_AUTH")},
+		Attribution: commandAttribution(ctx),
 		WriteCtx:    newFrozenContext(ctx, resolved),
 	})
 	if err != nil {

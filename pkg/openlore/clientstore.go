@@ -105,9 +105,8 @@ func validNativeRedirectURI(raw string) bool {
 	}
 }
 
-// validRegisteredRedirectURI accepts redirect targets a client may register:
-// remote HTTPS, loopback HTTP(S), and non-HTTP custom schemes. A fragment is
-// never allowed (RFC 6749 §3.1.2).
+// validRegisteredRedirectURI accepts remote HTTPS and loopback HTTP(S)
+// redirect targets. A fragment is never allowed (RFC 6749 §3.1.2).
 func validRegisteredRedirectURI(raw string) bool {
 	u, ok := parseRedirectURI(raw)
 	if !ok {

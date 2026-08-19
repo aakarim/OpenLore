@@ -158,10 +158,13 @@ func (l *writeLog) run() {
 			recorder := l.recorder
 			l.mu.RUnlock()
 			if recorder != nil {
-				err = recorder.RecordCommit(context.Background(), CommitRecord{
+				if recordErr := recorder.RecordCommit(context.Background(), CommitRecord{
 					Time: time.Now().UTC(), Attribution: e.attribution,
 					ChangeSet: committed.Committed, Hash: committed.Hash,
-				})
+				}); recordErr != nil {
+					l.logger.Error("commit provenance recording failed after durable write",
+						"target", e.cs.Target, "action", e.cs.Action, "hash", committed.Hash, "err", recordErr)
+				}
 			}
 		}
 		e.reply <- applyResult{hash: committed.Hash, err: err}

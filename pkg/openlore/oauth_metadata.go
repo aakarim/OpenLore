@@ -78,7 +78,7 @@ func (s *Server) authServerMetadata(w http.ResponseWriter, r *http.Request) {
 		"registration_endpoint":                 base + registrationPath,
 		"jwks_uri":                              base + jwksPath,
 		"response_types_supported":              []string{"code"},
-		"grant_types_supported":                 []string{"authorization_code", "refresh_token", "urn:ietf:params:oauth:grant-type:token-exchange"},
+		"grant_types_supported":                 []string{"authorization_code", "refresh_token", delegationGrantType},
 		"token_endpoint_auth_methods_supported": []string{"none", "private_key_jwt"},
 		"client_id_metadata_document_supported": true,
 		"code_challenge_methods_supported":      []string{"S256"},

@@ -22,10 +22,12 @@ type LoreSub struct {
 var loreSubs = map[string]LoreSub{}
 
 type ConfigReloadBackend interface {
-	Reload(principal, actor string) error
+	Reload(JobAttribution) error
 }
 
-var ConfigReloader ConfigReloadBackend
+type configReloadContext interface {
+	ConfigReloadBackend() ConfigReloadBackend
+}
 
 // RegisterLoreSub adds (or replaces) a core `lore` subcommand.
 func RegisterLoreSub(sub LoreSub) {
@@ -86,11 +88,12 @@ func cmdLoreConfig(ctx CmdContext, args []string, w io.Writer, errW io.Writer, s
 		fmt.Fprintln(errW, "usage: lore config reload")
 		return 1
 	}
-	if ConfigReloader == nil {
+	provider, ok := ctx.(configReloadContext)
+	if !ok || provider.ConfigReloadBackend() == nil {
 		fmt.Fprintln(errW, "lore config: reload is unavailable")
 		return 1
 	}
-	if err := ConfigReloader.Reload(ctx.GetEnv("OPENLORE_IDENTITY"), ctx.GetEnv("OPENLORE_ACTOR")); err != nil {
+	if err := provider.ConfigReloadBackend().Reload(commandAttribution(ctx)); err != nil {
 		fmt.Fprintf(errW, "lore config reload: %v\n", err)
 		return 1
 	}

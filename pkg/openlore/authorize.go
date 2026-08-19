@@ -507,6 +507,7 @@ func (s *Server) authorizeConsentHandler(w http.ResponseWriter, r *http.Request)
 	}
 	delegateName := r.Form.Get("delegate")
 	created := false
+	identityCreated := false
 	if delegateName == "new" {
 		slug := r.Form.Get("name")
 		if client.CIMD != nil {
@@ -529,8 +530,10 @@ func (s *Server) authorizeConsentHandler(w http.ResponseWriter, r *http.Request)
 	}
 	err := s.updateAuth(Attribution{Principal: consent.Principal, Actor: delegateName}, eventType, func(auth *config.AuthConfig) error {
 		var p *config.AuthIdentity
+		principalIndex := -1
 		for i := range auth.Identities {
 			if auth.Identities[i].Name == consent.Principal {
+				principalIndex = i
 				p = &auth.Identities[i]
 			}
 		}
@@ -548,17 +551,26 @@ func (s *Server) authorizeConsentHandler(w http.ResponseWriter, r *http.Request)
 			idx = len(p.Delegates) - 1
 		}
 		if created {
+			found := false
 			for _, identity := range auth.Identities {
 				if identity.Name == delegateName {
-					return fmt.Errorf("identity already exists")
+					if !compatibleOAuthIdentity(identity, client, domain) {
+						return fmt.Errorf("identity already exists")
+					}
+					found = true
+					break
 				}
 			}
-			identity := config.AuthIdentity{Name: delegateName, Comment: "Display: " + client.ClientName, CreatedBy: "oauth"}
-			if client.CIMD != nil {
-				identity.ClientIDMetadata = &config.ClientIDMetadata{URL: client.CIMD.ClientID, PinnedName: client.CIMD.ClientName, FirstSeen: time.Now().UTC()}
+			if !found {
+				identity := config.AuthIdentity{Name: delegateName, Comment: "Display: " + client.ClientName, CreatedBy: "oauth"}
+				if client.CIMD != nil {
+					identity.ClientIDMetadata = &config.ClientIDMetadata{URL: client.CIMD.ClientID, PinnedName: client.CIMD.ClientName, FirstSeen: time.Now().UTC()}
+				}
+				auth.Identities = append(auth.Identities, identity)
+				identityCreated = true
 			}
-			auth.Identities = append(auth.Identities, identity)
 		}
+		p = &auth.Identities[principalIndex]
 		d := &p.Delegates[idx]
 		d.DenyDocsets = difference(docsets, selectedDocsets)
 		d.DenyCapabilities = difference(capabilities, selectedCapabilities)
@@ -571,7 +583,7 @@ func (s *Server) authorizeConsentHandler(w http.ResponseWriter, r *http.Request)
 	client.LastDelegate = delegateName
 	if client.CIMD == nil {
 		_ = s.clientStore.Save(r.Context(), client)
-	} else if created && s.audit != nil {
+	} else if identityCreated && s.audit != nil {
 		_ = s.audit.Record(r.Context(), AuditEvent{Type: "client.cimd_pin", Attribution: Attribution{Principal: consent.Principal, Actor: delegateName}, Details: map[string]any{
 			"url": client.CIMD.ClientID, "origin": client.CIMD.Origin, "pinned_name": client.CIMD.ClientName,
 		}})
@@ -587,6 +599,16 @@ func (s *Server) authorizeConsentHandler(w http.ResponseWriter, r *http.Request)
 		}})
 	}
 	http.Redirect(w, r, redirect, http.StatusFound)
+}
+
+func compatibleOAuthIdentity(identity config.AuthIdentity, client OAuthClient, domain string) bool {
+	if identity.CreatedBy != "oauth" || !strings.HasSuffix(identity.Name, "@"+domain) {
+		return false
+	}
+	if client.CIMD == nil {
+		return identity.ClientIDMetadata == nil && identity.Comment == "Display: "+client.ClientName
+	}
+	return identity.ClientIDMetadata != nil && identity.ClientIDMetadata.PinnedName == client.CIMD.ClientName
 }
 
 func stringSet(values []string) map[string]bool {

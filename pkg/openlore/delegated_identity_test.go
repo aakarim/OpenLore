@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/aakarim/go-openlore/internal/config"
+	"github.com/aakarim/go-openlore/pkg/shell"
+	"github.com/aakarim/go-openlore/pkg/shell/cmds"
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
 
@@ -31,6 +33,32 @@ func TestIssuerDelegatedAttributionRoundTrip(t *testing.T) {
 	}
 }
 
+type captureReload struct{ got cmds.JobAttribution }
+
+func (r *captureReload) Reload(got cmds.JobAttribution) error { r.got = got; return nil }
+
+func TestConfigReloadUsesPerShellBackendAndImmutableAttribution(t *testing.T) {
+	backend := &captureReload{}
+	sh := shell.NewShell(&wlRecordingFS{})
+	sh.SetAllowedActions([]cmds.Action{cmds.ActionAdmin})
+	sh.SetConfigReloadBackend(backend)
+	sh.SetCommandAttribution(cmds.JobAttribution{Principal: "alice", Actor: "client@vendor.example"})
+	sh.SetEnv("OPENLORE_IDENTITY", "forged")
+	sh.SetEnv("OPENLORE_ACTOR", "forged-actor")
+	if _, stderr, code := run(sh, "lore config reload"); code != 0 {
+		t.Fatalf("reload failed: %s", stderr)
+	}
+	if backend.got.Principal != "alice" || backend.got.Actor != "client@vendor.example" {
+		t.Fatalf("reload attribution=%+v", backend.got)
+	}
+
+	other := shell.NewShell(&wlRecordingFS{})
+	other.SetAllowedActions([]cmds.Action{cmds.ActionAdmin})
+	if _, _, code := run(other, "lore config reload"); code == 0 {
+		t.Fatal("shell without a bound backend reused another server's reloader")
+	}
+}
+
 func TestTokenExchangeMintsCappedDelegatedToken(t *testing.T) {
 	s := newTokenTestServer(t, true, "deny")
 	s.auth.Identities[0].Delegates = []config.DelegateEntry{{Identity: "build-agent", DenyDocsets: []string{"secret"}}}
@@ -40,7 +68,7 @@ func TestTokenExchangeMintsCappedDelegatedToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec, response := postForm(t, s.tokens, url.Values{
-		"grant_type":  {"urn:ietf:params:oauth:grant-type:token-exchange"},
+		"grant_type":  {delegationGrantType},
 		"actor_token": {actorToken}, "act_for": {"alice"},
 	})
 	if rec.Code != http.StatusOK {
@@ -65,8 +93,19 @@ func TestTokenExchangeMintsCappedDelegatedToken(t *testing.T) {
 	}
 }
 
+func TestDelegationDoesNotAdvertiseTheRFC8693Contract(t *testing.T) {
+	s := newTokenTestServer(t, true, "deny")
+	rec, _ := postForm(t, s.tokens, url.Values{
+		"grant_type": {"urn:ietf:params:oauth:grant-type:token-exchange"},
+	})
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "unsupported_grant_type") {
+		t.Fatalf("standard token-exchange URN was accepted: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestOAuthConsentCreatesDelegatedIdentity(t *testing.T) {
 	s := newTokenTestServer(t, true, "deny")
+	s.auth.Identities = append(s.auth.Identities, config.AuthIdentity{Name: "bob", Roles: append([]string(nil), s.auth.Identities[0].Roles...)})
 	authPath := filepath.Join(t.TempDir(), "lore.json")
 	s.config.AuthFile = authPath
 	writeAuthFixture(t, authPath, s.auth)
@@ -108,6 +147,53 @@ func TestOAuthConsentCreatesDelegatedIdentity(t *testing.T) {
 	if !ok || code.Subject != "alice" || code.Actor != "claude@claude.ai" {
 		t.Fatalf("code=%+v ok=%v", code, ok)
 	}
+
+	_, secondChallenge := pkcePair()
+	_, secondAuthz := runAuthorize(t, s, url.Values{
+		"response_type": {"code"}, "client_id": {clientID}, "redirect_uri": {"https://claude.ai/callback"},
+		"code_challenge": {secondChallenge}, "code_challenge_method": {"S256"},
+	})
+	secondConsent, ok := s.CompleteAuthorize(secondAuthz, "bob")
+	if !ok {
+		t.Fatal("second principal did not reach consent")
+	}
+	secondURL, _ := url.Parse(secondConsent)
+	secondForm := url.Values{"consent": {secondURL.Query().Get("consent")}, "delegate": {"new"}, "name": {"claude"}, "docset": {"public"}}
+	secondReq := httptest.NewRequest(http.MethodPost, authorizeConsentPath, strings.NewReader(secondForm.Encode()))
+	secondReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	secondRec := httptest.NewRecorder()
+	s.authorizeConsentHandler(secondRec, secondReq)
+	if secondRec.Code != http.StatusFound {
+		t.Fatalf("second principal status=%d body=%s", secondRec.Code, secondRec.Body.String())
+	}
+	bob, _ := s.findAuthIdentity("bob")
+	if _, ok := findDelegate(bob, "claude@claude.ai"); !ok {
+		t.Fatal("second principal did not reuse the OAuth identity")
+	}
+	count := 0
+	for _, identity := range s.currentAuth().Identities {
+		if identity.Name == "claude@claude.ai" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("OAuth identity count=%d", count)
+	}
+}
+
+func TestConfigAdminWithoutWritableDocsetCanUseConfigWriteVerbs(t *testing.T) {
+	s := newTokenTestServer(t, true, "deny")
+	s.config.AuthFile = filepath.Join(t.TempDir(), "lore.json")
+	s.auth.Roles["config-admin"] = config.RoleSpec{Allow: config.CapabilityRules{Capabilities: []string{"lore:config:edit"}}}
+	s.auth.Identities[0].Roles = []string{"config-admin"}
+	id, _ := s.identityForName("alice")
+	sh := s.buildSessionShell(id)
+	if !sh.ActionAllowed(cmds.ActionAdmin) || !sh.ActionAllowed(cmds.ActionWrite) {
+		t.Fatal("config administrator cannot invoke config write path")
+	}
+	if sh.ActionAllowed(cmds.ActionPublish) {
+		t.Fatal("config-only administrator gained publish authority")
+	}
 }
 
 func TestWriteLogPersistsStructuredAttribution(t *testing.T) {
@@ -134,14 +220,15 @@ func TestWriteLogPersistsStructuredAttribution(t *testing.T) {
 
 func TestConfigViewValidatesBeforePersistAndReloadsExplicitly(t *testing.T) {
 	authPath := filepath.Join(t.TempDir(), "lore.json")
-	auth := &config.AuthConfig{Roles: map[string]config.RoleSpec{"admin": {}}, Docsets: map[string]config.DocsetSpec{}, Identities: []config.AuthIdentity{{Name: "adil", Roles: []string{"admin"}}}}
+	auth := &config.AuthConfig{Roles: map[string]config.RoleSpec{"admin": {Allow: config.CapabilityRules{Capabilities: []string{"lore:config:edit"}}}}, Docsets: map[string]config.DocsetSpec{}, Identities: []config.AuthIdentity{{Name: "adil", Roles: []string{"admin"}}}}
 	writeAuthFixture(t, authPath, auth)
-	s := &Server{auth: auth, config: config.Config{AuthFile: authPath}, authorizationStore: fileAuthorizationStore{auth: auth}}
-	fsys := &configViewFS{WritableFS: &wlRecordingFS{}, server: s, attribution: Attribution{Principal: "adil"}}
+	s := &Server{auth: auth, authEnforced: true, grants: newGrantRegistry(), config: config.Config{AuthFile: authPath}, authorizationStore: fileAuthorizationStore{auth: auth}}
+	id := Identity{IdentityName: "adil", Principal: AuthenticatedPrincipal{IdentityName: "adil"}, Scopes: []string{ScopeFull}}
+	fsys := &configViewFS{WritableFS: &wlRecordingFS{}, server: s, identity: id, attribution: Attribution{Principal: "adil"}}
 	if _, err := fsys.WriteFileAtomic(authConfigVFSPath, []byte(`{"identities":[{"name":"bad/name"}]}`), vfs.WriteOpts{}); err == nil {
 		t.Fatal("invalid config persisted")
 	}
-	next := &config.AuthConfig{Roles: map[string]config.RoleSpec{"admin": {}}, Docsets: map[string]config.DocsetSpec{}, Identities: []config.AuthIdentity{{Name: "adil", Roles: []string{"admin"}}, {Name: "bot"}}}
+	next := &config.AuthConfig{Roles: auth.Roles, Docsets: map[string]config.DocsetSpec{}, Identities: []config.AuthIdentity{{Name: "adil", Roles: []string{"admin"}}, {Name: "bot"}}}
 	b, _ := json.Marshal(next)
 	if _, err := fsys.WriteFileAtomic(authConfigVFSPath, b, vfs.WriteOpts{}); err != nil {
 		t.Fatal(err)
@@ -149,11 +236,39 @@ func TestConfigViewValidatesBeforePersistAndReloadsExplicitly(t *testing.T) {
 	if _, ok := s.findAuthIdentity("bot"); ok {
 		t.Fatal("config edit changed runtime state before reload")
 	}
-	if err := s.Reload("adil", ""); err != nil {
+	if err := s.Reload(cmds.JobAttribution{Principal: "adil"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := s.findAuthIdentity("bot"); !ok {
 		t.Fatal("reload did not activate persisted config")
+	}
+	revoked := *next
+	revoked.Roles = map[string]config.RoleSpec{"admin": {}}
+	writeAuthFixture(t, authPath, &revoked)
+	if err := s.Reload(cmds.JobAttribution{Principal: "adil"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fsys.ReadFile(authConfigVFSPath); !os.IsPermission(err) {
+		t.Fatalf("revoked session retained config read access: %v", err)
+	}
+	if _, err := fsys.WriteFileAtomic(authConfigVFSPath, b, vfs.WriteOpts{}); !os.IsPermission(err) {
+		t.Fatalf("revoked session retained config write access: %v", err)
+	}
+}
+
+func TestLiveAuthRejectsServerDerivedPolicyChanges(t *testing.T) {
+	auth := &config.AuthConfig{Docsets: map[string]config.DocsetSpec{"docs": {Paths: []config.PathMapping{{Source: "/docs", Display: "/docs"}}}}}
+	s := &Server{auth: auth, authEnforced: true, grants: newGrantRegistry()}
+	next := *auth
+	next.Docsets = map[string]config.DocsetSpec{"other": {Paths: []config.PathMapping{{Source: "/other", Display: "/other"}}}}
+	if err := s.validateLiveAuthCandidate(&next); err == nil || !strings.Contains(err.Error(), "restart") {
+		t.Fatalf("docset change accepted: %v", err)
+	}
+	keyless := true
+	next = *auth
+	next.AllowKeyless = &keyless
+	if err := s.validateLiveAuthCandidate(&next); err == nil || !strings.Contains(err.Error(), "restart") {
+		t.Fatalf("posture change accepted: %v", err)
 	}
 }
 

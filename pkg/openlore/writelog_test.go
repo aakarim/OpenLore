@@ -58,6 +58,10 @@ type wlGatedFS struct {
 	gate    chan struct{}
 }
 
+type failingCommitRecorder struct{ err error }
+
+func (r failingCommitRecorder) RecordCommit(context.Context, CommitRecord) error { return r.err }
+
 func (g *wlGatedFS) WriteFileAtomic(name string, data []byte, opts vfs.WriteOpts) (string, error) {
 	g.entered <- name
 	<-g.gate
@@ -117,6 +121,21 @@ func TestWriteLog_PostCommitRunsWithActorAndDoesNotBlockSubmit(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("post-commit chain did not run")
+	}
+}
+
+func TestWriteLog_RecorderFailureDoesNotTurnCommittedWriteIntoFailure(t *testing.T) {
+	fs := &wlRecordingFS{}
+	l := newWriteLog(fs, nil, nil, 1)
+	l.SetCommitRecorder(failingCommitRecorder{err: errors.New("history disk full")})
+	defer l.Close(context.Background())
+
+	hash, err := l.Submit(context.Background(), Attribution{Principal: "alice"}, writeCS("/committed"))
+	if err != nil || hash != "h:/committed" {
+		t.Fatalf("durable commit reported hash=%q err=%v", hash, err)
+	}
+	if got := fs.order(); len(got) != 1 || got[0] != "/committed" {
+		t.Fatalf("applied=%v", got)
 	}
 }
 

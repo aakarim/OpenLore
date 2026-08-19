@@ -71,7 +71,8 @@ type Server struct {
 	sessionFSFn  SessionFSFn
 
 	// jobs runs async external work (Part D), surfaced read-only at /jobs.
-	jobs *JobManager
+	jobs        *JobManager
+	historyPath string
 
 	// writeLog is the single ordered write log + serialized applier: the sole
 	// writer to the substrate. Non-nil only when the substrate is writable
@@ -203,7 +204,6 @@ func newServerWithRoot(rootDir string, rootFS, lowerFS vfs.FileSystem, opts ...c
 		s.auth = auth
 		s.authorizationStore = fileAuthorizationStore{auth: auth}
 		s.authEnforced = true
-		cmds.ConfigReloader = s
 
 		// Auth policy fields override config defaults
 		if auth.AllowKeyless != nil {
@@ -298,8 +298,8 @@ func newServerWithRoot(rootDir string, rootFS, lowerFS vfs.FileSystem, opts ...c
 		// so it is the sole writer and gives globally ordered writes/removes. The
 		// applier runs the post-commit chain after each durable commit.
 		s.writeLog = newWriteLog(s.merge, s.postCommitChain(), logger, 0)
-		s.writeLog.SetCommitRecorder(NewJSONLCommitRecorder(filepath.Join(dataDir, "history", "commits.jsonl")))
-		cmds.History = fileHistory{path: filepath.Join(dataDir, "history", "commits.jsonl")}
+		s.historyPath = filepath.Join(dataDir, "history", "commits.jsonl")
+		s.writeLog.SetCommitRecorder(NewJSONLCommitRecorder(s.historyPath))
 		if agentSkills != nil {
 			agentSkills.submit = func(ctx context.Context, cs vfs.ChangeSet) error {
 				_, err := s.CommitChangeSet(ctx, Attribution{Principal: "agent_skills_remote", internal: true}, cs)
@@ -313,7 +313,6 @@ func newServerWithRoot(rootDir string, rootFS, lowerFS vfs.FileSystem, opts ...c
 		// scoped FS. Only meaningful when writes are possible. Jobs are in-memory
 		// (lost on restart) and surfaced read-only at /jobs.
 		s.jobs = NewJobManager(cfg.MaxJobs, ShellRunner{}, logger)
-		cmds.Jobs = s.jobs
 		s.merge.MountSystem("jobs", NewJobsFS(s.jobs))
 	}
 
@@ -918,7 +917,7 @@ func (s *Server) buildCanonicalSessionFS(id Identity) vfs.FileSystem {
 	}
 	if s.config.AuthFile != "" && id.policySnapshot != nil && scopeGrantsWrite(id.Scopes) && s.hasCapabilityForPolicy(*id.policySnapshot, "lore:config:edit") {
 		if writable, ok := sessionFS.(vfs.WritableFS); ok {
-			sessionFS = &configViewFS{WritableFS: writable, server: s, attribution: id.attribution()}
+			sessionFS = &configViewFS{WritableFS: writable, server: s, identity: id, attribution: id.attribution()}
 		}
 	}
 	// Session CAS: track the hash of every file read (and written) so a
@@ -1017,6 +1016,8 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 			allowed := []cmds.Action{}
 			if canWrite {
 				allowed = append(allowed, cmds.ActionWrite, cmds.ActionPublish)
+			} else if canAdmin {
+				allowed = append(allowed, cmds.ActionWrite)
 			}
 			// spawn runs an external command as the OpenLore service
 			// user, so it's gated on an explicit `spawn` capability
@@ -1032,6 +1033,9 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 			sh.SetAllowedActions(nil) // read-only (ActionRead implied)
 		}
 		sh.SetActionAuthorizer(func(action cmds.Action) bool {
+			if action == cmds.ActionWrite && !canWrite {
+				return s.hasCurrentCapability(id, "lore:config:edit")
+			}
 			if action == cmds.ActionSpawn {
 				return s.hasCurrentCapability(id, "spawn")
 			}
@@ -1051,6 +1055,15 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 	sh.SetPublishTargets(s.sessionPublishTargets(id))
 	sh.SetMetaExtenders(s.metaExtenders)
 	sh.SetValidators(s.validators)
+	a := id.attribution()
+	sh.SetCommandAttribution(cmds.JobAttribution{Principal: a.Principal, Actor: a.Actor, ClientAuth: string(a.ClientAuth)})
+	if canAdmin {
+		sh.SetConfigReloadBackend(s)
+	}
+	if s.historyPath != "" {
+		sh.SetHistoryBackend(fileHistory{path: s.historyPath, roots: historyRoots(s.sessionDocsets(id))})
+	}
+	sh.SetJobBackend(s.jobs)
 
 	// Set identity info as environment variables
 	if id.IdentityName != "" {

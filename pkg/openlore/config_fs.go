@@ -17,11 +17,19 @@ const authConfigVFSPath = "/opt/openlore/lore.json"
 type configViewFS struct {
 	vfs.WritableFS
 	server      *Server
+	identity    Identity
 	attribution Attribution
+}
+
+func (f *configViewFS) authorized() bool {
+	return scopeGrantsWrite(f.identity.Scopes) && f.server.hasCurrentCapability(f.identity, "lore:config:edit")
 }
 
 func (f *configViewFS) Stat(name string) (*vfs.FileInfo, error) {
 	clean := vfs.CleanPath(name)
+	if pathWithinRoot("/opt", clean) && !f.authorized() {
+		return nil, os.ErrPermission
+	}
 	if clean == "/opt" || clean == "/opt/openlore" {
 		return &vfs.FileInfo{FileName: path.Base(clean), FilePath: clean, Dir: true}, nil
 	}
@@ -32,12 +40,19 @@ func (f *configViewFS) Stat(name string) (*vfs.FileInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	info, _ := os.Stat(f.server.config.AuthFile)
+	info, err := os.Stat(f.server.config.AuthFile)
+	if err != nil {
+		return nil, err
+	}
 	return &vfs.FileInfo{FileName: "lore.json", FilePath: clean, FileSize: int64(len(b)), FileModTime: info.ModTime()}, nil
 }
 
 func (f *configViewFS) ReadDir(name string) ([]vfs.FileInfo, error) {
-	switch vfs.CleanPath(name) {
+	clean := vfs.CleanPath(name)
+	if pathWithinRoot("/opt", clean) && !f.authorized() {
+		return nil, os.ErrPermission
+	}
+	switch clean {
 	case "/":
 		entries, err := f.WritableFS.ReadDir(name)
 		if err != nil {
@@ -48,7 +63,10 @@ func (f *configViewFS) ReadDir(name string) ([]vfs.FileInfo, error) {
 				return entries, nil
 			}
 		}
-		return append(entries, vfs.FileInfo{FileName: "opt", FilePath: "/opt", Dir: true}), nil
+		if f.authorized() {
+			return append(entries, vfs.FileInfo{FileName: "opt", FilePath: "/opt", Dir: true}), nil
+		}
+		return entries, nil
 	case "/opt":
 		return []vfs.FileInfo{{FileName: "openlore", FilePath: "/opt/openlore", Dir: true}}, nil
 	case "/opt/openlore":
@@ -60,6 +78,9 @@ func (f *configViewFS) ReadDir(name string) ([]vfs.FileInfo, error) {
 
 func (f *configViewFS) ReadFile(name string) ([]byte, error) {
 	if vfs.CleanPath(name) == authConfigVFSPath {
+		if !f.authorized() {
+			return nil, os.ErrPermission
+		}
 		return os.ReadFile(f.server.config.AuthFile)
 	}
 	return f.WritableFS.ReadFile(name)
@@ -68,6 +89,9 @@ func (f *configViewFS) ReadFile(name string) ([]byte, error) {
 func (f *configViewFS) WriteFileAtomic(name string, data []byte, opts vfs.WriteOpts) (string, error) {
 	if vfs.CleanPath(name) != authConfigVFSPath {
 		return f.WritableFS.WriteFileAtomic(name, data, opts)
+	}
+	if !f.authorized() {
+		return "", os.ErrPermission
 	}
 	f.server.authMu.Lock()
 	defer f.server.authMu.Unlock()
@@ -84,6 +108,9 @@ func (f *configViewFS) WriteFileAtomic(name string, data []byte, opts vfs.WriteO
 	parseErr := json.Unmarshal(data, &parsed)
 	if parseErr == nil {
 		parseErr = config.ValidateAuthConfig(&parsed)
+	}
+	if parseErr == nil {
+		parseErr = f.server.validateLiveAuthCandidate(&parsed)
 	}
 	if parseErr != nil {
 		if f.server.audit != nil {

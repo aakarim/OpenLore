@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 
 	"github.com/aakarim/go-openlore/internal/config"
+	"github.com/aakarim/go-openlore/pkg/shell/cmds"
 )
 
 func (s *Server) updateAuth(attribution Attribution, eventType string, mutate func(*config.AuthConfig) error) error {
@@ -25,6 +27,9 @@ func (s *Server) updateAuth(attribution Attribution, eventType string, mutate fu
 		return err
 	}
 	if err := config.ValidateAuthConfig(&next); err != nil {
+		return err
+	}
+	if err := s.validateLiveAuthCandidate(&next); err != nil {
 		return err
 	}
 	if s.config.AuthFile == "" {
@@ -65,6 +70,12 @@ func (s *Server) reloadAuth(attribution Attribution) error {
 		}
 		return err
 	}
+	if err := s.validateLiveAuthCandidate(next); err != nil {
+		if s.audit != nil {
+			_ = s.audit.Record(context.Background(), AuditEvent{Type: "config.reject", Attribution: attribution, Details: map[string]any{"error": err.Error()}})
+		}
+		return err
+	}
 	s.runtimeAuth.Store(next)
 	s.authorizationStore = fileAuthorizationStore{auth: next}
 	if s.passkeys != nil {
@@ -76,8 +87,19 @@ func (s *Server) reloadAuth(attribution Attribution) error {
 	return nil
 }
 
-func (s *Server) Reload(principal, actor string) error {
-	return s.reloadAuth(Attribution{Principal: principal, Actor: actor})
+func (s *Server) Reload(source cmds.JobAttribution) error {
+	return s.reloadAuth(Attribution{Principal: source.Principal, Actor: source.Actor, ClientAuth: ClientAuthLevel(source.ClientAuth)})
+}
+
+func (s *Server) validateLiveAuthCandidate(next *config.AuthConfig) error {
+	current := s.currentAuth()
+	if !reflect.DeepEqual(current.AllowKeyless, next.AllowKeyless) || current.UnknownIdentity != next.UnknownIdentity || current.DefaultCwd != next.DefaultCwd {
+		return fmt.Errorf("allow_keyless, unknown_identity, and default_cwd require a server restart")
+	}
+	if !reflect.DeepEqual(current.Docsets, next.Docsets) {
+		return fmt.Errorf("docset configuration requires a server restart")
+	}
+	return s.validateGrantsFor(next)
 }
 
 // PromoteIdentity grants authority and credentials to an OAuth-created base

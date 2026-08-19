@@ -9,10 +9,13 @@ type HistoryBackend interface {
 	Query(principal, actor string) ([]byte, error)
 }
 
-var History HistoryBackend
+type historyContext interface {
+	HistoryBackend() HistoryBackend
+}
 
 func CmdHistory(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.Reader) int {
-	if History == nil {
+	provider, ok := ctx.(historyContext)
+	if !ok || provider.HistoryBackend() == nil {
 		fmt.Fprintln(w, "history: not available in this shell")
 		return 0
 	}
@@ -38,7 +41,7 @@ func CmdHistory(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdi
 			return 1
 		}
 	}
-	b, err := History.Query(principal, actor)
+	b, err := provider.HistoryBackend().Query(principal, actor)
 	if err != nil {
 		fmt.Fprintf(errW, "history: %v\n", err)
 		return 1

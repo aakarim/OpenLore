@@ -14,6 +14,8 @@ import (
 	"time"
 )
 
+const delegationGrantType = "urn:openlore:oauth:grant-type:delegation"
+
 // authCodeStore holds short-lived OAuth authorization codes issued by the login
 // ceremony (passkey in Phase 2) and consumed once at the token endpoint.
 type authCodeStore struct {
@@ -144,7 +146,7 @@ func (t *tokenEndpoint) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		t.handleRefreshToken(w, r)
 	case "urn:ietf:params:oauth:grant-type:jwt-bearer":
 		t.handleJWTBearer(w, r)
-	case "urn:ietf:params:oauth:grant-type:token-exchange":
+	case delegationGrantType:
 		t.handleTokenExchange(w, r)
 	default:
 		oauthError(w, http.StatusBadRequest, "unsupported_grant_type", "unsupported grant_type")

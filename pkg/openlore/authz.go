@@ -18,6 +18,10 @@ import (
 // `publish` without the inbox plugin) fails closed rather than silently denying
 // all access.
 func (s *Server) validateGrants() error {
+	return s.validateGrantsFor(s.currentAuth())
+}
+
+func (s *Server) validateGrantsFor(auth *config.AuthConfig) error {
 	if !s.authEnforced {
 		return nil
 	}
@@ -27,7 +31,7 @@ func (s *Server) validateGrants() error {
 		}
 		return nil
 	}
-	for docset, ds := range s.currentAuth().Docsets {
+	for docset, ds := range auth.Docsets {
 		for role, grant := range ds.Access.Allow {
 			if err := check(fmt.Sprintf("docset %q role %q", docset, role), grant); err != nil {
 				return err
@@ -45,7 +49,7 @@ func (s *Server) validateGrants() error {
 	// could disagree on who governs the shared subtree. Fail closed at startup
 	// rather than serve an inconsistent authorization model.
 	owner := map[string]string{}
-	for name, ds := range s.currentAuth().Docsets {
+	for name, ds := range auth.Docsets {
 		for _, pm := range ds.Paths {
 			root := displayPath(pm)
 			if other, dup := owner[root]; dup {
@@ -63,7 +67,7 @@ func (s *Server) validateGrants() error {
 		mount  bool
 	}
 	var roots []rootSpec
-	for name, ds := range s.currentAuth().Docsets {
+	for name, ds := range auth.Docsets {
 		for _, pm := range ds.Paths {
 			roots = append(roots, rootSpec{docset: name, path: displayPath(pm)})
 		}
