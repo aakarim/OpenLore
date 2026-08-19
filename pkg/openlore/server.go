@@ -1581,6 +1581,25 @@ func (s *Server) ListenAndServe() error {
 						id = s.anonymousIdentity()
 					}
 					return s.buildCanonicalSessionFS(id)
+				}, func(name, filePath string) ([]passkeys.FileHistoryEntry, error) {
+					if s.historyPath == "" {
+						return nil, nil
+					}
+					id, ok := s.identityForName(name)
+					if !ok {
+						id = s.anonymousIdentity()
+					}
+					entries, err := (fileHistory{path: s.historyPath, roots: historyRoots(s.sessionDocsets(id))}).QueryFile(filePath)
+					if err != nil {
+						return nil, err
+					}
+					history := make([]passkeys.FileHistoryEntry, len(entries))
+					for i, entry := range entries {
+						history[i] = passkeys.FileHistoryEntry{
+							Time: entry.Time, Attribution: entry.Attribution, Action: entry.Action, Hash: entry.Hash,
+						}
+					}
+					return history, nil
 				})
 
 				cmds.PublishBaseURL = baseURL + lorePath

@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
@@ -26,7 +27,9 @@ func TestRenderFileIncludesBreadcrumbsIframeAndParentCloseLink(t *testing.T) {
 	req := httptest.NewRequest("GET", "/lore/guides/setup.md", nil)
 	rec := httptest.NewRecorder()
 
-	pk.renderFile(rec, req, "/lore", "/guides/setup.md")
+	pk.renderFile(rec, req, "/lore", "/guides/setup.md", []FileHistoryEntry{{
+		Time: time.Date(2026, time.August, 19, 12, 30, 0, 0, time.UTC), Attribution: "adil/claude", Action: "write", Hash: "abc123",
+	}}, true)
 
 	body := rec.Body.String()
 	for _, want := range []string{
@@ -38,6 +41,14 @@ func TestRenderFileIncludesBreadcrumbsIframeAndParentCloseLink(t *testing.T) {
 		`aria-current="page">setup.md`,
 		`href="/lore/guides" aria-label="Close file and return to folder"`,
 		`src="/lore/guides/setup.md?raw=1"`,
+		`id="history-toggle"`,
+		`aria-controls="file-history" aria-expanded="true"`,
+		`<h2>Edit history</h2>`,
+		`class="history-action">write`,
+		`class="history-actor">adil/claude`,
+		`datetime="2026-08-19T12:30:00Z"`,
+		`title="abc123">abc123`,
+		`history.hidden=open`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("file view missing %q", want)
@@ -47,7 +58,7 @@ func TestRenderFileIncludesBreadcrumbsIframeAndParentCloseLink(t *testing.T) {
 
 func TestLoreBrowserServesPWAAssetsWithoutAuthentication(t *testing.T) {
 	pk := &Passkeys{cfg: Config{LorePath: "/knowledge"}}
-	handler := pk.LoreBrowserHandler(nil)
+	handler := pk.LoreBrowserHandler(nil, nil)
 
 	t.Run("manifest", func(t *testing.T) {
 		rec := httptest.NewRecorder()
