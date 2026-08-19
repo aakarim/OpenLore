@@ -14,6 +14,7 @@ const (
 	jwksPath                      = "/.well-known/jwks.json"
 	registrationPath              = "/register"
 	tokenPath                     = "/oauth/token"
+	revocationPath                = "/oauth/revoke"
 	authorizePath                 = "/authorize"
 	authorizePublicPath           = "/authorize/public"
 	authorizeConsentPath          = "/authorize/consent"
@@ -29,6 +30,7 @@ const (
 func (s *Server) oauthRoutes() map[string]http.Handler {
 	return map[string]http.Handler{
 		tokenPath:                     s.tokens,
+		revocationPath:                http.HandlerFunc(s.tokens.revoke),
 		jwksPath:                      jwksHandler(s.issuer),
 		authorizePath:                 http.HandlerFunc(s.authorizeHandler),
 		authorizePublicPath:           http.HandlerFunc(s.authorizePublicHandler),
@@ -72,11 +74,13 @@ func (s *Server) authServerMetadata(w http.ResponseWriter, r *http.Request) {
 		"issuer":                                base,
 		"authorization_endpoint":                base + authorizePath,
 		"token_endpoint":                        base + tokenPath,
+		"revocation_endpoint":                   base + revocationPath,
 		"registration_endpoint":                 base + registrationPath,
 		"jwks_uri":                              base + jwksPath,
 		"response_types_supported":              []string{"code"},
 		"grant_types_supported":                 []string{"authorization_code", "refresh_token", "urn:ietf:params:oauth:grant-type:token-exchange"},
-		"token_endpoint_auth_methods_supported": []string{"none"},
+		"token_endpoint_auth_methods_supported": []string{"none", "private_key_jwt"},
+		"client_id_metadata_document_supported": true,
 		"code_challenge_methods_supported":      []string{"S256"},
 		"scopes_supported":                      []string{ScopeFull},
 	})

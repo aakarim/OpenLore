@@ -58,6 +58,7 @@ func (s *Server) initAuth() error {
 		if err != nil {
 			return err
 		}
+		iss.retireGrace = parseDurationDefault(tc.AccessTTL, 30*time.Minute)
 		s.issuer = iss
 	}
 	if s.refreshStore == nil {
@@ -87,6 +88,9 @@ func (s *Server) initAuth() error {
 	s.authCodes = newAuthCodeStore()
 	s.authorizeReqs = newAuthorizeStore()
 	s.consents = newConsentStore()
+	resolver := newCIMDResolver()
+	s.cimdResolver = resolver
+	s.clientAuth = newClientAuthenticator(resolver, strings.TrimRight(tc.Issuer, "/")+tokenPath, s.audit)
 	s.tokens = &tokenEndpoint{
 		issuer:     s.issuer,
 		refresh:    s.refreshStore,
@@ -95,6 +99,9 @@ func (s *Server) initAuth() error {
 		refreshTTL: parseDurationDefault(tc.RefreshTTL, 720*time.Hour),
 		audience:   tc.Audience,
 		delegation: s,
+		cimd:       resolver,
+		clientAuth: s.clientAuth,
+		audit:      s.audit,
 	}
 	// The token endpoint's jwt-bearer grant delegates the verify+match+narrow
 	// exchange back to the server (which holds the auth config + verifier).
@@ -177,7 +184,7 @@ func (s *Server) resolveClaims(claims Claims) (Identity, error) {
 		}
 		raw["actor"] = claims.Actor
 	}
-	id.Attribution = Attribution{Principal: name, Actor: claims.Actor}
+	id.Attribution = Attribution{Principal: name, Actor: claims.Actor, ClientAuth: claims.ClientAuth}
 	id.Principal = AuthenticatedPrincipal{Subject: sub, IdentityName: name, Source: "token", Claims: raw, Scope: claims.Scope}
 	return id, nil
 }
@@ -203,7 +210,7 @@ func (s *Server) ExchangeDelegation(_ context.Context, actorToken, principalName
 	if !recognizedScope(scope) {
 		return Attribution{}, "", 0, ErrInvalidScope
 	}
-	attribution := Attribution{Principal: principalName, Actor: claims.Subject}
+	attribution := Attribution{Principal: principalName, Actor: claims.Subject, ClientAuth: claims.ClientAuth}
 	if s.audit != nil {
 		_ = s.audit.Record(context.Background(), AuditEvent{Type: "token.exchange", Attribution: attribution, Details: map[string]any{
 			"agent": claims.Subject, "principal": principalName,

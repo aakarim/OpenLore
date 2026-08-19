@@ -10,9 +10,10 @@ import (
 // for delegated execution, the actor exercising it. It remains outside the
 // content-addressed ChangeSet and is persisted alongside each commit.
 type Attribution struct {
-	Principal string            `json:"principal"`
-	Actor     string            `json:"actor,omitempty"`
-	Extra     map[string]string `json:"-"`
+	Principal  string            `json:"principal"`
+	Actor      string            `json:"actor,omitempty"`
+	ClientAuth ClientAuthLevel   `json:"client_auth,omitempty"`
+	Extra      map[string]string `json:"-"`
 	// internal is an unforgeable package capability. Public callers can set ID
 	// for attribution, but only OpenLore's own submission path can set this bit.
 	internal bool

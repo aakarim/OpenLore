@@ -21,6 +21,7 @@ import (
 // completes.
 type authorizeRequest struct {
 	ClientID            string
+	Client              OAuthClient
 	RedirectURI         string
 	State               string
 	Scope               string
@@ -125,7 +126,11 @@ func (s *Server) authorizeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	clientID := q.Get("client_id")
 	redirectURI := q.Get("redirect_uri")
-	if !s.validAuthorizeRedirect(r.Context(), clientID, redirectURI) {
+	client, ok := s.resolveOAuthClient(r.Context(), clientID)
+	if !ok && validNativeRedirectURI(redirectURI) {
+		client, ok = OAuthClient{ClientID: clientID, RedirectURIs: []string{redirectURI}}, true
+	}
+	if !ok || !client.AllowsRedirect(redirectURI) {
 		http.Error(w, "invalid or missing redirect_uri", http.StatusBadRequest)
 		return
 	}
@@ -160,6 +165,7 @@ func (s *Server) authorizeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	req := authorizeRequest{
 		ClientID:            clientID,
+		Client:              client,
 		RedirectURI:         redirectURI,
 		State:               q.Get("state"),
 		Scope:               scope,
@@ -278,12 +284,22 @@ func (s *Server) renderAuthorizeChoice(w http.ResponseWriter, authz string) {
 // callbacks (Claude). An absent/unregistered client_id falls back to the native
 // rules (loopback / custom scheme only), which never permit a remote origin.
 func (s *Server) validAuthorizeRedirect(ctx context.Context, clientID, redirectURI string) bool {
+	client, ok := s.resolveOAuthClient(ctx, clientID)
+	return (ok && client.AllowsRedirect(redirectURI)) || (!ok && validNativeRedirectURI(redirectURI))
+}
+
+func (s *Server) resolveOAuthClient(ctx context.Context, clientID string) (OAuthClient, bool) {
 	if clientID != "" && s.clientStore != nil {
 		if client, ok, err := s.clientStore.Lookup(ctx, clientID); err == nil && ok {
-			return client.AllowsRedirect(redirectURI)
+			return client, true
 		}
 	}
-	return validNativeRedirectURI(redirectURI)
+	if strings.HasPrefix(clientID, "https://") && s.cimdResolver != nil {
+		if client, err := s.cimdResolver.Resolve(ctx, clientID); err == nil {
+			return oauthClientFromCIMD(client), true
+		}
+	}
+	return OAuthClient{}, false
 }
 
 // CompleteAuthorize is called by the passkey login-finish hook once a caller has
@@ -300,7 +316,7 @@ func (s *Server) CompleteAuthorize(requestID, sub string) (string, bool) {
 		return "", false
 	}
 	if sub != anonymousSubject && req.ClientID != "" {
-		if _, ok, _ := s.clientStore.Lookup(context.Background(), req.ClientID); ok {
+		if req.Client.ClientID != "" {
 			consent := s.consents.put(consentRequest{AuthorizeID: requestID, Principal: sub})
 			return authorizeConsentPath + "?consent=" + url.QueryEscape(consent), true
 		}
@@ -318,6 +334,7 @@ func (s *Server) finishAuthorize(requestID, sub, actor string) (string, bool) {
 		Actor:               actor,
 		Scope:               req.Scope,
 		ClientID:            req.ClientID,
+		Client:              req.Client,
 		RedirectURI:         req.RedirectURI,
 		Resource:            req.Resource,
 		CodeChallenge:       req.CodeChallenge,
@@ -365,15 +382,16 @@ func defaultDelegateName(domain, clientName string) string {
 
 type consentView struct {
 	Consent, Principal, Domain, ClientName, DefaultName, Selected string
+	AuthLabel, AuthClass, FixedIdentity                           string
 	Delegates, Docsets, Capabilities                              []string
 	EnabledDocsets, EnabledCapabilities                           map[string]bool
 }
 
 var consentTmpl = template.Must(template.New("consent").Parse(`<!doctype html><html><head><meta charset="utf-8"><title>Authorize OpenLore</title></head><body>
-<main><h1>Authorize {{.ClientName}}</h1><p>Acting for <strong>{{.Principal}}</strong></p>
+<main><h1>Authorize {{.ClientName}}</h1><p class="{{.AuthClass}}">{{.AuthLabel}}</p><p>Acting for <strong>{{.Principal}}</strong></p>
 <form method="post" action="` + authorizeConsentPath + `"><input type="hidden" name="consent" value="{{.Consent}}">
 <fieldset><legend>Agent identity</legend>{{range .Delegates}}<label><input type="radio" name="delegate" value="{{.}}"{{if eq . $.Selected}} checked{{end}}> {{.}}</label><br>{{end}}
-<label><input type="radio" name="delegate" value="new"{{if not .Selected}} checked{{end}}> create new: <input name="name" pattern="[a-z0-9-]+" value="{{.DefaultName}}">@{{.Domain}}</label></fieldset>
+{{if .FixedIdentity}}<label><input type="radio" name="delegate" value="new"{{if not .Selected}} checked{{end}}> connect as {{.FixedIdentity}}</label>{{else}}<label><input type="radio" name="delegate" value="new"{{if not .Selected}} checked{{end}}> create new: <input name="name" pattern="[a-z0-9-]+" value="{{.DefaultName}}">@{{.Domain}}</label>{{end}}</fieldset>
 <fieldset><legend>Docsets</legend>{{range .Docsets}}<label><input type="checkbox" name="docset" value="{{.}}"{{if index $.EnabledDocsets .}} checked{{end}}> {{.}}</label><br>{{end}}</fieldset>
 <fieldset><legend>Capabilities</legend>{{range .Capabilities}}<label><input type="checkbox" name="capability" value="{{.}}"{{if index $.EnabledCapabilities .}} checked{{end}}> {{.}}</label><br>{{end}}</fieldset>
 <button type="submit">Authorize</button></form></main></body></html>`))
@@ -394,12 +412,22 @@ func (s *Server) authorizeConsentHandler(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "authorization request expired", 400)
 		return
 	}
-	client, ok, err := s.clientStore.Lookup(r.Context(), authz.ClientID)
-	if err != nil || !ok {
+	client := authz.Client
+	if client.ClientID == "" {
 		http.Error(w, "unknown client", 400)
 		return
 	}
 	domain := redirectDomain(authz.RedirectURI)
+	defaultName := defaultDelegateName(domain, client.ClientName)
+	fixedIdentity, authLabel, authClass := "", "Unverified client", "unverified"
+	if client.CIMD != nil {
+		domain = client.CIMD.Origin
+		defaultName = slugClientName(client.CIMD.ClientName, domain)
+		fixedIdentity = defaultName + "@" + domain
+		authLabel, authClass = "Verified client metadata", "verified"
+	} else if domain == "localhost" || domain == "127.0.0.1" || domain == "::1" {
+		domain = "local"
+	}
 	if domain == "" {
 		http.Error(w, "client redirect has no domain", 400)
 		return
@@ -442,6 +470,11 @@ func (s *Server) authorizeConsentHandler(w http.ResponseWriter, r *http.Request)
 	sort.Strings(docsets)
 	sort.Strings(capabilities)
 	selected := client.LastDelegate
+	if client.CIMD != nil {
+		if _, ok := findDelegate(principal, fixedIdentity); ok {
+			selected = fixedIdentity
+		}
+	}
 	if !strings.HasSuffix(selected, "@"+domain) {
 		selected = ""
 	}
@@ -458,7 +491,8 @@ func (s *Server) authorizeConsentHandler(w http.ResponseWriter, r *http.Request)
 	}
 	view := consentView{
 		Consent: consentID, Principal: consent.Principal, Domain: domain,
-		ClientName: client.ClientName, DefaultName: defaultDelegateName(domain, client.ClientName), Selected: selected,
+		ClientName: client.ClientName, DefaultName: defaultName, Selected: selected,
+		AuthLabel: authLabel, AuthClass: authClass, FixedIdentity: fixedIdentity,
 		Delegates: delegates, Docsets: docsets, Capabilities: capabilities,
 		EnabledDocsets: enabledDocsets, EnabledCapabilities: enabledCapabilities,
 	}
@@ -475,6 +509,9 @@ func (s *Server) authorizeConsentHandler(w http.ResponseWriter, r *http.Request)
 	created := false
 	if delegateName == "new" {
 		slug := r.Form.Get("name")
+		if client.CIMD != nil {
+			slug = defaultName
+		}
 		if !delegateSlugRE.MatchString(slug) {
 			http.Error(w, "invalid identity name", 400)
 			return
@@ -490,7 +527,7 @@ func (s *Server) authorizeConsentHandler(w http.ResponseWriter, r *http.Request)
 	if created {
 		eventType = "delegate.create"
 	}
-	err = s.updateAuth(Attribution{Principal: consent.Principal, Actor: delegateName}, eventType, func(auth *config.AuthConfig) error {
+	err := s.updateAuth(Attribution{Principal: consent.Principal, Actor: delegateName}, eventType, func(auth *config.AuthConfig) error {
 		var p *config.AuthIdentity
 		for i := range auth.Identities {
 			if auth.Identities[i].Name == consent.Principal {
@@ -516,7 +553,11 @@ func (s *Server) authorizeConsentHandler(w http.ResponseWriter, r *http.Request)
 					return fmt.Errorf("identity already exists")
 				}
 			}
-			auth.Identities = append(auth.Identities, config.AuthIdentity{Name: delegateName, Comment: "Display: " + client.ClientName, CreatedBy: "oauth"})
+			identity := config.AuthIdentity{Name: delegateName, Comment: "Display: " + client.ClientName, CreatedBy: "oauth"}
+			if client.CIMD != nil {
+				identity.ClientIDMetadata = &config.ClientIDMetadata{URL: client.CIMD.ClientID, PinnedName: client.CIMD.ClientName, FirstSeen: time.Now().UTC()}
+			}
+			auth.Identities = append(auth.Identities, identity)
 		}
 		d := &p.Delegates[idx]
 		d.DenyDocsets = difference(docsets, selectedDocsets)
@@ -528,7 +569,13 @@ func (s *Server) authorizeConsentHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	client.LastDelegate = delegateName
-	_ = s.clientStore.Save(r.Context(), client)
+	if client.CIMD == nil {
+		_ = s.clientStore.Save(r.Context(), client)
+	} else if created && s.audit != nil {
+		_ = s.audit.Record(r.Context(), AuditEvent{Type: "client.cimd_pin", Attribution: Attribution{Principal: consent.Principal, Actor: delegateName}, Details: map[string]any{
+			"url": client.CIMD.ClientID, "origin": client.CIMD.Origin, "pinned_name": client.CIMD.ClientName,
+		}})
+	}
 	redirect, ok := s.finishAuthorize(consent.AuthorizeID, consent.Principal, delegateName)
 	if !ok {
 		http.Error(w, "authorization request expired", 400)
@@ -536,7 +583,7 @@ func (s *Server) authorizeConsentHandler(w http.ResponseWriter, r *http.Request)
 	}
 	if s.audit != nil {
 		_ = s.audit.Record(r.Context(), AuditEvent{Type: "oauth.login", Attribution: Attribution{Principal: consent.Principal, Actor: delegateName}, Details: map[string]any{
-			"client_id": client.ClientID, "client_name": client.ClientName, "delegate": delegateName, "domain": domain,
+			"client_id": client.ClientID, "client_name": client.ClientName, "delegate": delegateName, "domain": domain, "client_auth": baselineClientAuth(client),
 		}})
 	}
 	http.Redirect(w, r, redirect, http.StatusFound)

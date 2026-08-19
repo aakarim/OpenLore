@@ -52,6 +52,7 @@ type Config struct {
 	APIPath      string
 	TLSCert      string
 	TLSKey       string
+	MTLS         MTLSConfig
 	CAKeysFile   string
 	HostCertFile string
 	Files        FilesConfig
@@ -380,9 +381,10 @@ func (p *PathMapping) UnmarshalJSON(data []byte) error {
 
 // AuthIdentity defines a user identity and its role membership.
 type AuthIdentity struct {
-	Name      string `json:"name"`
-	Comment   string `json:"comment,omitempty"`
-	CreatedBy string `json:"created_by,omitempty"`
+	Name             string            `json:"name"`
+	Comment          string            `json:"comment,omitempty"`
+	CreatedBy        string            `json:"created_by,omitempty"`
+	ClientIDMetadata *ClientIDMetadata `json:"client_id_metadata,omitempty"`
 	// PublicKey is optional: an identity may exist purely as a passkey/token
 	// login target (no SSH key). Empty = no SSH public-key auth for this identity.
 	PublicKey string   `json:"public_key,omitempty"`
@@ -407,6 +409,12 @@ type AuthIdentity struct {
 	// An omitted Roles field inherits all principal roles; a present field is
 	// intersected with the principal's roles. Denials always subtract authority.
 	Delegates []DelegateEntry `json:"delegates,omitempty"`
+}
+
+type ClientIDMetadata struct {
+	URL        string    `json:"url"`
+	PinnedName string    `json:"pinned_name"`
+	FirstSeen  time.Time `json:"first_seen"`
 }
 
 // DelegateEntry grants an identity permission to act for a principal while
@@ -459,38 +467,47 @@ type Option func(*Config) error
 
 // fileConfig mirrors Config for YAML deserialization.
 type fileConfig struct {
-	ConfigVersion       string           `yaml:"version"`
-	Debug               bool             `yaml:"debug"`
-	Port                int              `yaml:"port"`
-	MetricsPort         int              `yaml:"metrics_port"`
-	HostKeyPath         string           `yaml:"host_key_path"`
-	MOTD                string           `yaml:"motd"`
-	MOTDFile            string           `yaml:"motd_file"`
-	AuthFile            string           `yaml:"auth_file"`
-	SkillsDir           string           `yaml:"skills_dir"`
-	WritableDir         string           `yaml:"writable_dir"`
-	DataDir             string           `yaml:"data_dir"`
-	HTTPPort            int              `yaml:"http_port"`
-	ExternalSSHPort     int              `yaml:"external_ssh_port"`
-	MCP                 *mcpYAML         `yaml:"mcp"`
-	API                 *apiYAML         `yaml:"api"`
-	TLSCert             string           `yaml:"tls_cert"`
-	TLSKey              string           `yaml:"tls_key"`
-	CAKeysFile          string           `yaml:"ca_keys_file"`
-	HostCertFile        string           `yaml:"host_cert_file"`
-	DefaultCwd          string           `yaml:"default_cwd"`
-	Files               *filesYAML       `yaml:"files"`
-	Passkeys            *passkeysYAML    `yaml:"passkeys"`
-	Shellexec           *ShellexecConfig `yaml:"shellexec"`
-	Readonly            *bool            `yaml:"readonly"`
-	WriteConflictPolicy string           `yaml:"write_conflict_policy"`
-	MaxJobs             int              `yaml:"max_jobs"`
+	ConfigVersion       string                 `yaml:"version"`
+	Debug               bool                   `yaml:"debug"`
+	Port                int                    `yaml:"port"`
+	MetricsPort         int                    `yaml:"metrics_port"`
+	HostKeyPath         string                 `yaml:"host_key_path"`
+	MOTD                string                 `yaml:"motd"`
+	MOTDFile            string                 `yaml:"motd_file"`
+	AuthFile            string                 `yaml:"auth_file"`
+	SkillsDir           string                 `yaml:"skills_dir"`
+	WritableDir         string                 `yaml:"writable_dir"`
+	DataDir             string                 `yaml:"data_dir"`
+	HTTPPort            int                    `yaml:"http_port"`
+	ExternalSSHPort     int                    `yaml:"external_ssh_port"`
+	MCP                 *mcpYAML               `yaml:"mcp"`
+	API                 *apiYAML               `yaml:"api"`
+	TLSCert             string                 `yaml:"tls_cert"`
+	TLSKey              string                 `yaml:"tls_key"`
+	Auth                authInfrastructureYAML `yaml:"auth"`
+	CAKeysFile          string                 `yaml:"ca_keys_file"`
+	HostCertFile        string                 `yaml:"host_cert_file"`
+	DefaultCwd          string                 `yaml:"default_cwd"`
+	Files               *filesYAML             `yaml:"files"`
+	Passkeys            *passkeysYAML          `yaml:"passkeys"`
+	Shellexec           *ShellexecConfig       `yaml:"shellexec"`
+	Readonly            *bool                  `yaml:"readonly"`
+	WriteConflictPolicy string                 `yaml:"write_conflict_policy"`
+	MaxJobs             int                    `yaml:"max_jobs"`
 	// Tokens + OIDCIssuers are server infrastructure (bearer-token issuance for
 	// the MCP + HTTP API), hence configured here rather than in lore.json.
 	Tokens      *AuthTokensConfig `yaml:"tokens"`
 	OIDCIssuers []OIDCIssuer      `yaml:"oidc_issuers"`
 	Inbox       *inboxYAML        `yaml:"inbox"`
 	Plugins     pluginsYAML       `yaml:"plugins"`
+}
+
+type authInfrastructureYAML struct {
+	MTLS MTLSConfig `yaml:"mtls"`
+}
+
+type MTLSConfig struct {
+	CABundle string `yaml:"ca_bundle" json:"ca_bundle,omitempty"`
 }
 
 type pluginsYAML struct {
@@ -672,6 +689,7 @@ func WithConfigFile(path string) Option {
 		if fc.TLSKey != "" {
 			cfg.TLSKey = fc.TLSKey
 		}
+		cfg.MTLS = fc.Auth.MTLS
 		if fc.CAKeysFile != "" {
 			cfg.CAKeysFile = fc.CAKeysFile
 		}
@@ -791,6 +809,7 @@ func WithEmbeddedConfig(data []byte, motdFallback string) Option {
 			if fc.TLSKey != "" {
 				cfg.TLSKey = fc.TLSKey
 			}
+			cfg.MTLS = fc.Auth.MTLS
 			if fc.CAKeysFile != "" {
 				cfg.CAKeysFile = fc.CAKeysFile
 			}

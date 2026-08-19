@@ -226,6 +226,7 @@ func (p *shellexecPlugin) baseEnv(event, path string, attribution Attribution) [
 		"OPENLORE_AGENT=" + attribution.String(),
 		"OPENLORE_IDENTITY=" + attribution.Principal,
 		"OPENLORE_ACTOR=" + attribution.Actor,
+		"OPENLORE_CLIENT_AUTH=" + string(attribution.ClientAuth),
 	}
 	for k, v := range attribution.Extra {
 		env = append(env, "OPENLORE_EXTRA_"+k+"="+v)

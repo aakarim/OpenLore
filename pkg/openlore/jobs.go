@@ -90,7 +90,7 @@ func (m *JobManager) Submit(spec cmds.JobSpec) (string, error) {
 		ID:          id,
 		Command:     spec.Command,
 		Target:      spec.Target,
-		Attribution: Attribution{Principal: spec.Attribution.Principal, Actor: spec.Attribution.Actor},
+		Attribution: Attribution{Principal: spec.Attribution.Principal, Actor: spec.Attribution.Actor, ClientAuth: ClientAuthLevel(spec.Attribution.ClientAuth)},
 		State:       JobRunning,
 		StartedAt:   time.Now(),
 	}
@@ -143,6 +143,7 @@ func (m *JobManager) jobEnv(spec cmds.JobSpec) []string {
 	return []string{
 		"OPENLORE_IDENTITY=" + spec.Attribution.Principal,
 		"OPENLORE_ACTOR=" + spec.Attribution.Actor,
+		"OPENLORE_CLIENT_AUTH=" + spec.Attribution.ClientAuth,
 		"OPENLORE_JOB_TARGET=" + spec.Target,
 	}
 }

@@ -111,6 +111,8 @@ type Server struct {
 	issuer             Issuer
 	refreshStore       RefreshTokenStore
 	clientStore        ClientStore
+	cimdResolver       CIMDResolver
+	clientAuth         ClientAuthenticator
 	authCodes          *authCodeStore
 	authorizeReqs      *authorizeStore
 	consents           *consentStore
@@ -1057,6 +1059,9 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 	if id.Attribution.Actor != "" {
 		sh.SetEnv("OPENLORE_ACTOR", id.Attribution.Actor)
 	}
+	if id.Attribution.ClientAuth != "" {
+		sh.SetEnv("OPENLORE_CLIENT_AUTH", string(id.Attribution.ClientAuth))
+	}
 	// $HOME points at the identity's home docset (enables ~ expansion and
 	// `cd` with no arguments).
 	if id.HomeDir != "" {
@@ -1425,13 +1430,14 @@ func (s *Server) ListenAndServe() error {
 		webFS := assets.Web()
 		if webFS != nil {
 			httpCfg := httpserver.Config{
-				Port:          s.config.HTTPPort,
-				TLSCert:       s.config.TLSCert,
-				TLSKey:        s.config.TLSKey,
-				HostKeyPath:   s.config.HostKeyPath,
-				SSHPort:       s.advertisedSSHPort(),
-				Logger:        s.logger,
-				ExtraHandlers: map[string]http.Handler{},
+				Port:           s.config.HTTPPort,
+				TLSCert:        s.config.TLSCert,
+				TLSKey:         s.config.TLSKey,
+				ClientCABundle: s.config.MTLS.CABundle,
+				HostKeyPath:    s.config.HostKeyPath,
+				SSHPort:        s.advertisedSSHPort(),
+				Logger:         s.logger,
+				ExtraHandlers:  map[string]http.Handler{},
 			}
 
 			// Third-party license notices, served from the embedded legal
@@ -1550,7 +1556,10 @@ func (s *Server) ListenAndServe() error {
 				cmds.PublishBaseURL = baseURL + lorePath
 			}
 
-			httpSrv := httpserver.New(webFS, httpCfg)
+			httpSrv, err := httpserver.New(webFS, httpCfg)
+			if err != nil {
+				return fmt.Errorf("creating HTTP server: %w", err)
+			}
 			httpSrv.Start()
 			s.httpSrv = httpSrv
 		}

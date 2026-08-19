@@ -13,6 +13,7 @@ require (
 	github.com/pkg/sftp v1.13.10
 	github.com/yuin/goldmark v1.8.4
 	golang.org/x/crypto v0.50.0
+	golang.org/x/net v0.52.0
 	golang.org/x/sys v0.43.0
 	gopkg.in/yaml.v3 v3.0.1
 )

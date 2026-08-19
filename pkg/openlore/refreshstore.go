@@ -21,13 +21,15 @@ var ErrRefreshInvalid = errors.New("invalid refresh token")
 // descend from one login; rotation issues a new token in the chain and marks
 // the old one used, so re-presenting a used token reveals theft.
 type RefreshToken struct {
-	Token     string    `json:"token"`
-	Subject   string    `json:"subject"`
-	Actor     string    `json:"actor,omitempty"`
-	Scope     string    `json:"scope"`
-	ChainID   string    `json:"chain_id"`
-	ExpiresAt time.Time `json:"expires_at"`
-	Used      bool      `json:"used"`
+	Token      string          `json:"token"`
+	Subject    string          `json:"subject"`
+	Actor      string          `json:"actor,omitempty"`
+	ClientID   string          `json:"client_id,omitempty"`
+	ClientAuth ClientAuthLevel `json:"client_auth,omitempty"`
+	Scope      string          `json:"scope"`
+	ChainID    string          `json:"chain_id"`
+	ExpiresAt  time.Time       `json:"expires_at"`
+	Used       bool            `json:"used"`
 }
 
 // RefreshTokenStore persists refresh tokens with rotation and reuse detection.

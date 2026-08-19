@@ -24,8 +24,9 @@ type JobSpec struct {
 }
 
 type JobAttribution struct {
-	Principal string
-	Actor     string
+	Principal  string
+	Actor      string
+	ClientAuth string
 }
 
 // JobBackend schedules and runs JobSpecs. The server supplies the
@@ -101,7 +102,7 @@ func CmdSpawn(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin 
 		Command:     command,
 		Target:      resolved,
 		Append:      appendMode,
-		Attribution: JobAttribution{Principal: ctx.GetEnv("OPENLORE_IDENTITY"), Actor: ctx.GetEnv("OPENLORE_ACTOR")},
+		Attribution: JobAttribution{Principal: ctx.GetEnv("OPENLORE_IDENTITY"), Actor: ctx.GetEnv("OPENLORE_ACTOR"), ClientAuth: ctx.GetEnv("OPENLORE_CLIENT_AUTH")},
 		WriteCtx:    newFrozenContext(ctx, resolved),
 	})
 	if err != nil {
