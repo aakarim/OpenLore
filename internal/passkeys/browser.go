@@ -11,12 +11,25 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/aakarim/go-openlore/pkg/okf"
 	"github.com/aakarim/go-openlore/pkg/vfs"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/extension"
 )
+
+// FileHistoryEntry is one committed change to the file currently displayed by
+// the lore browser. History is best-effort: deployments without a history
+// provider still render the file view normally.
+type FileHistoryEntry struct {
+	Time        time.Time
+	Attribution string
+	Action      string
+	Hash        string
+}
+
+type FileHistoryProvider func(identity, filePath string) ([]FileHistoryEntry, error)
 
 // LoreBrowserHandler serves an authenticated web browser over the filesystem.
 // Unauthenticated requests are redirected to the passkey login page.
@@ -28,7 +41,7 @@ import (
 // docsets from an ancestor grant) are enforced identically here. There is no
 // separate allow-list in the browser: the scoped FS is the sole authority on
 // what a session may see.
-func (p *Passkeys) LoreBrowserHandler(fsForIdentity func(identity string) vfs.FileSystem) http.Handler {
+func (p *Passkeys) LoreBrowserHandler(fsForIdentity func(identity string) vfs.FileSystem, historyForFile FileHistoryProvider) http.Handler {
 	lorePath := "/" + strings.Trim(p.cfg.LorePath, "/")
 	if lorePath == "/" {
 		lorePath = "/lore"
@@ -77,7 +90,19 @@ func (p *Passkeys) LoreBrowserHandler(fsForIdentity func(identity string) vfs.Fi
 			return
 		}
 		if r.URL.Query().Get("raw") != "1" {
-			p.renderFile(w, r, lorePath, fsPath)
+			var history []FileHistoryEntry
+			historyAvailable := historyForFile != nil
+			if historyAvailable {
+				var err error
+				history, err = historyForFile(session.Identity, fsPath)
+				if err != nil {
+					historyAvailable = false
+					if p.logger != nil {
+						p.logger.Warn("file history unavailable", "identity", session.Identity, "path", fsPath, "error", err)
+					}
+				}
+			}
+			p.renderFile(w, r, lorePath, fsPath, history, historyAvailable)
 			return
 		}
 		if isMarkdown(fsPath) {
@@ -95,7 +120,7 @@ func (p *Passkeys) LoreBrowserHandler(fsForIdentity func(identity string) vfs.Fi
 	})
 }
 
-func (p *Passkeys) renderFile(w http.ResponseWriter, r *http.Request, lorePath, fsPath string) {
+func (p *Passkeys) renderFile(w http.ResponseWriter, r *http.Request, lorePath, fsPath string, history []FileHistoryEntry, historyAvailable bool) {
 	parentURL := lorePath + path.Dir(fsPath)
 	if path.Dir(fsPath) == "/" {
 		parentURL += "/"
@@ -121,9 +146,27 @@ func (p *Passkeys) renderFile(w http.ResponseWriter, r *http.Request, lorePath, 
 	b.WriteString(`<meta name="viewport" content="width=device-width, initial-scale=1">`)
 	b.WriteString(pwaHead(lorePath))
 	fmt.Fprintf(&b, "<title>%s — OpenLore</title>", html.EscapeString(name))
-	b.WriteString(`<style>*{box-sizing:border-box}html,body{height:100%;margin:0}body{display:flex;flex-direction:column;background:#0d1117;color:#c9d1d9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}.bar{height:3rem;flex:none;display:flex;align-items:center;gap:.65rem;padding:0 .85rem;border-bottom:1px solid #30363d;background:#161b22}.breadcrumbs{display:flex;align-items:center;gap:.5rem;min-width:0;overflow:hidden;white-space:nowrap;font-size:.9rem}.breadcrumbs a{color:#58a6ff;text-decoration:none}.breadcrumbs a:hover{text-decoration:underline}.breadcrumbs span[aria-current=page]{overflow:hidden;text-overflow:ellipsis;color:#c9d1d9}.separator{color:#6e7681}.close{display:grid;place-items:center;width:2rem;height:2rem;margin-left:auto;flex:none;border-radius:6px;color:#8b949e;text-decoration:none;font-size:1.35rem;line-height:1}.close:hover{background:#30363d;color:#f0f6fc}iframe{width:100%;flex:1;border:0;background:#fff}</style></head><body>`)
-	fmt.Fprintf(&b, `<nav class="bar" aria-label="File navigation"><div class="breadcrumbs">%s</div><a class="close" href="%s" aria-label="Close file and return to folder" title="Close">×</a></nav>`, crumbs.String(), html.EscapeString(parentURL))
-	fmt.Fprintf(&b, `<iframe src="%s" title="%s"></iframe>`, html.EscapeString(iframeURL), html.EscapeString(name))
+	b.WriteString(`<style>*{box-sizing:border-box}html,body{height:100%;margin:0}body{display:flex;flex-direction:column;background:#0d1117;color:#c9d1d9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}.bar{height:3rem;flex:none;display:flex;align-items:center;gap:.65rem;padding:0 .85rem;border-bottom:1px solid #30363d;background:#161b22}.breadcrumbs{display:flex;align-items:center;gap:.5rem;min-width:0;overflow:hidden;white-space:nowrap;font-size:.9rem}.breadcrumbs a{color:#58a6ff;text-decoration:none}.breadcrumbs a:hover{text-decoration:underline}.breadcrumbs span[aria-current=page]{overflow:hidden;text-overflow:ellipsis;color:#c9d1d9}.separator{color:#6e7681}.history-toggle,.close{display:grid;place-items:center;height:2rem;flex:none;border:0;border-radius:6px;background:transparent;color:#8b949e;font:inherit;cursor:pointer}.history-toggle{width:2rem;margin-left:auto}.history-toggle:hover,.close:hover{background:#30363d;color:#f0f6fc}.history-toggle svg{width:1.1rem;height:1.1rem;fill:currentColor}.close{width:2rem;text-decoration:none;font-size:1.35rem;line-height:1}.content{display:flex;min-height:0;flex:1}iframe{min-width:0;flex:1;border:0;background:#fff}.history{width:20rem;flex:none;overflow:auto;border-left:1px solid #30363d;background:#161b22}.history[hidden]{display:none}.history-header{position:sticky;top:0;padding:1rem;border-bottom:1px solid #30363d;background:#161b22}.history-header h2{margin:0;color:#f0f6fc;font-size:.95rem}.history-list{list-style:none;margin:0;padding:0}.history-entry{padding:1rem;border-bottom:1px solid #21262d}.history-action{display:inline-block;margin-bottom:.45rem;padding:.15rem .4rem;border-radius:999px;background:#21262d;color:#79c0ff;font-size:.7rem;font-weight:600;text-transform:uppercase}.history-actor{overflow-wrap:anywhere;color:#f0f6fc;font-size:.85rem}.history-time,.history-hash{display:block;margin-top:.3rem;color:#8b949e;font-size:.75rem}.history-hash{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:SFMono-Regular,Consolas,'Liberation Mono',monospace}.history-empty{padding:1rem;color:#8b949e;font-size:.85rem;line-height:1.5}@media(max-width:700px){.history{position:absolute;z-index:2;top:3rem;right:0;bottom:0;width:min(20rem,88vw);box-shadow:-12px 0 30px rgba(0,0,0,.4)}}</style></head><body>`)
+	fmt.Fprintf(&b, `<nav class="bar" aria-label="File navigation"><div class="breadcrumbs">%s</div><button class="history-toggle" id="history-toggle" type="button" aria-controls="file-history" aria-expanded="true" title="Toggle edit history"><span class="sr-only" hidden>Edit history</span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.643 3.143.427 1.927A.25.25 0 0 1 .604 1.5H4.75a.25.25 0 0 1 .25.25v4.146a.25.25 0 0 1-.427.177L3.31 4.81a5.5 5.5 0 1 1-.08 6.384.75.75 0 1 1 1.21-.888 4 4 0 1 0 .055-4.662L5.57 6.72A.75.75 0 0 1 4.51 7.78L1.643 4.914a1.25 1.25 0 0 1 0-1.77ZM8 4.5a.75.75 0 0 1 .75.75v2.44l1.53.765a.75.75 0 0 1-.67 1.342l-1.945-.973A.75.75 0 0 1 7.25 8.15v-2.9A.75.75 0 0 1 8 4.5Z"/></svg></button><a class="close" href="%s" aria-label="Close file and return to folder" title="Close">×</a></nav>`, crumbs.String(), html.EscapeString(parentURL))
+	fmt.Fprintf(&b, `<main class="content"><iframe src="%s" title="%s"></iframe><aside class="history" id="file-history" aria-label="Edit history"><header class="history-header"><h2>Edit history</h2></header>`, html.EscapeString(iframeURL), html.EscapeString(name))
+	if !historyAvailable {
+		b.WriteString(`<p class="history-empty">Edit history is unavailable.</p>`)
+	} else if len(history) == 0 {
+		b.WriteString(`<p class="history-empty">No edits have been recorded for this file.</p>`)
+	} else {
+		b.WriteString(`<ol class="history-list">`)
+		for _, entry := range history {
+			b.WriteString(`<li class="history-entry">`)
+			fmt.Fprintf(&b, `<span class="history-action">%s</span><div class="history-actor">%s</div>`, html.EscapeString(strings.ReplaceAll(entry.Action, "_", " ")), html.EscapeString(entry.Attribution))
+			fmt.Fprintf(&b, `<time class="history-time" datetime="%s">%s</time>`, html.EscapeString(entry.Time.Format(time.RFC3339)), html.EscapeString(entry.Time.Format("2 Jan 2006, 15:04 MST")))
+			if entry.Hash != "" {
+				fmt.Fprintf(&b, `<code class="history-hash" title="%s">%s</code>`, html.EscapeString(entry.Hash), html.EscapeString(entry.Hash))
+			}
+			b.WriteString(`</li>`)
+		}
+		b.WriteString(`</ol>`)
+	}
+	b.WriteString(`</aside></main><script>(()=>{const button=document.getElementById('history-toggle');const history=document.getElementById('file-history');button.addEventListener('click',()=>{const open=button.getAttribute('aria-expanded')==='true';button.setAttribute('aria-expanded',String(!open));history.hidden=open})})()</script>`)
 	b.WriteString(`</body></html>`)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
