@@ -26,6 +26,7 @@ type permissionToggle struct {
 type delegateView struct {
 	Identity              string
 	DisplayName           string
+	ResolutionError       string
 	ClientAuth            ClientAuthLevel
 	ClientAuthLabel       string
 	ClientAuthVerified    bool
@@ -47,11 +48,12 @@ var permissionsTmpl = template.Must(template.New("permissions").Funcs(template.F
 <main class="settings"><header><h1>Delegate permissions</h1><p class="subtitle">Signed in as <strong>{{.Principal}}</strong>. Delegates inherit your access, minus these denials. Effective permissions never exceed yours.</p></header>
 {{if .Delegates}}<div class="delegate-list">{{range .Delegates}}<section class="delegate">
 <div class="delegate-head"><div><h2>{{.Identity}}</h2>{{if .DisplayName}}<p class="display-name">{{.DisplayName}}</p>{{end}}</div><span class="badge{{if .ClientAuthVerified}} verified{{end}}">{{.ClientAuthLabel}}</span></div>
+{{if .ResolutionError}}<p class="preview"><strong>Permissions unavailable:</strong> {{.ResolutionError}}. You can still disconnect this delegate.</p>{{else}}
 <form method="post" action="` + permissionsUpdatePath + `"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="actor" value="{{.Identity}}">
 <fieldset><legend>Docsets</legend>{{range .Docsets}}<label class="toggle"><input type="checkbox" name="allowed_docsets" value="{{.Name}}"{{if .Allowed}} checked{{end}}> {{.Name}}</label>{{else}}<span class="muted">No docset access</span>{{end}}</fieldset>
 <fieldset><legend>Capabilities</legend>{{range .Capabilities}}<label class="toggle"><input type="checkbox" name="allowed_capabilities" value="{{.Name}}"{{if .Allowed}} checked{{end}}> {{.Name}}</label>{{else}}<span class="muted">No capabilities</span>{{end}}</fieldset>
 <p class="preview"><strong>Can currently reach:</strong> {{if .EffectiveDocsets}}{{join .EffectiveDocsets ", "}}{{else}}no docsets{{end}}{{if .EffectiveCapabilities}}; capabilities: {{join .EffectiveCapabilities ", "}}{{end}}.<br><strong>Denied:</strong> {{if .DeniedDocsets}}{{join .DeniedDocsets ", "}}{{else}}no docsets{{end}}{{if .DeniedCapabilities}}; capabilities: {{join .DeniedCapabilities ", "}}{{end}}.</p>
-<button type="submit">Save permissions</button></form><form class="disconnect-form" method="post" action="` + permissionsRemovePath + `" onsubmit="return confirm('Disconnect {{.Identity}}? Existing access tokens remain valid until they expire.')"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="actor" value="{{.Identity}}"><button class="danger" type="submit">Disconnect</button></form>
+<button type="submit">Save permissions</button></form>{{end}}<form class="disconnect-form" method="post" action="` + permissionsRemovePath + `" onsubmit="return confirm('Disconnect {{.Identity}}? Existing access tokens remain valid until they expire.')"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="actor" value="{{.Identity}}"><button class="danger" type="submit">Disconnect</button></form>
 </section>{{end}}</div>{{else}}<div class="empty">No OAuth clients are delegated to act for your identity.</div>{{end}}</main></body></html>`))
 
 func (s *Server) permissionsSession(w http.ResponseWriter, r *http.Request) (*passkeys.SessionInfo, bool) {
@@ -88,26 +90,31 @@ func (s *Server) handlePermissionsPage(w http.ResponseWriter, r *http.Request) {
 	}
 	views := make([]delegateView, 0, len(principal.Delegates))
 	for _, delegate := range principal.Delegates {
-		effectiveDocsets, effectiveCapabilities, err := s.permissionsFor(session.Identity, delegate.Identity)
-		if err != nil {
-			continue
-		}
-		allowedDocsets := stringSet(effectiveDocsets)
-		allowedCapabilities := stringSet(effectiveCapabilities)
 		view := delegateView{
-			Identity: delegate.Identity, ClientAuth: ClientAuthLevel(delegate.ClientAuth),
+			Identity:           delegate.Identity,
+			ClientAuth:         ClientAuthLevel(delegate.ClientAuth),
 			ClientAuthLabel:    clientAuthLabel(ClientAuthLevel(delegate.ClientAuth)),
 			ClientAuthVerified: ClientAuthLevel(delegate.ClientAuth).Verified(),
-			EffectiveDocsets:   effectiveDocsets, EffectiveCapabilities: effectiveCapabilities,
-			DeniedDocsets: difference(docsets, allowedDocsets), DeniedCapabilities: difference(capabilities, allowedCapabilities),
 		}
 		if identity, found := s.findAuthIdentity(delegate.Identity); found {
 			if identity.ClientIDMetadata != nil {
 				view.DisplayName = identity.ClientIDMetadata.PinnedName
-			} else {
+			} else if strings.HasPrefix(identity.Comment, "Display: ") {
 				view.DisplayName = strings.TrimPrefix(identity.Comment, "Display: ")
 			}
 		}
+		effectiveDocsets, effectiveCapabilities, err := s.permissionsFor(session.Identity, delegate.Identity)
+		if err != nil {
+			view.ResolutionError = err.Error()
+			views = append(views, view)
+			continue
+		}
+		allowedDocsets := stringSet(effectiveDocsets)
+		allowedCapabilities := stringSet(effectiveCapabilities)
+		view.EffectiveDocsets = effectiveDocsets
+		view.EffectiveCapabilities = effectiveCapabilities
+		view.DeniedDocsets = difference(docsets, allowedDocsets)
+		view.DeniedCapabilities = difference(capabilities, allowedCapabilities)
 		for _, name := range docsets {
 			view.Docsets = append(view.Docsets, permissionToggle{Name: name, Allowed: allowedDocsets[name]})
 		}
@@ -282,7 +289,7 @@ func (s *Server) recordDelegateClientAuth(principal, actor string, level ClientA
 	if clientAuthRank(ClientAuthLevel(delegate.ClientAuth)) >= clientAuthRank(level) {
 		return nil
 	}
-	return s.updateAuth(Attribution{Principal: principal, Actor: actor, ClientAuth: level}, "delegate.update", func(auth *config.AuthConfig) error {
+	return s.updateAuth(Attribution{Principal: principal, Actor: actor, ClientAuth: level}, "delegate.client_auth", func(auth *config.AuthConfig) error {
 		delegate, err := authDelegate(auth, principal, actor)
 		if err != nil {
 			return err

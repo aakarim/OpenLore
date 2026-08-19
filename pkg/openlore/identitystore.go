@@ -103,6 +103,7 @@ func (s *Server) initAuth() error {
 		clientAuth:   s.clientAuth,
 		audit:        s.audit,
 		delegateAuth: s,
+		logger:       s.logger,
 	}
 	// The token endpoint's jwt-bearer grant delegates the verify+match+narrow
 	// exchange back to the server (which holds the auth config + verifier).

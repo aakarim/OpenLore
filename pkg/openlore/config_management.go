@@ -68,7 +68,10 @@ func (s *Server) updateAuth(attribution Attribution, eventType string, mutate fu
 	if s.audit != nil {
 		_ = s.audit.Record(context.Background(), AuditEvent{Type: eventType, Attribution: attribution, Details: details})
 	}
-	return afterErr
+	if afterErr != nil && s.logger != nil {
+		s.logger.Error("post-configuration action failed after configuration was persisted", "event", eventType, "error", afterErr)
+	}
+	return nil
 }
 
 func (s *Server) reloadAuth(attribution Attribution) error {

@@ -2,6 +2,7 @@ package openlore
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -19,6 +20,21 @@ type captureAuditLog struct{ events []AuditEvent }
 func (l *captureAuditLog) Record(_ context.Context, event AuditEvent) error {
 	l.events = append(l.events, event)
 	return nil
+}
+
+type actorFailingAuthorizationStore struct{ AuthorizationStore }
+
+func (s actorFailingAuthorizationStore) ResolveAuthorization(ctx context.Context, principal AuthenticatedPrincipal) (AuthorizationPolicy, error) {
+	if actor, _ := principal.Claims["actor"].(string); actor != "" {
+		return AuthorizationPolicy{}, errors.New("delegate policy references an unknown role")
+	}
+	return s.AuthorizationStore.ResolveAuthorization(ctx, principal)
+}
+
+type failingRevokeStore struct{ RefreshTokenStore }
+
+func (s failingRevokeStore) RevokeDelegation(string, string) (int, error) {
+	return 0, errors.New("refresh store unavailable")
 }
 
 func newPermissionsTestServer(t *testing.T) (*Server, *passkeys.SessionManager, *captureAuditLog) {
@@ -115,6 +131,32 @@ func TestPermissionsPageRequiresSessionAndShowsEffectiveAccess(t *testing.T) {
 	}
 }
 
+func TestPermissionsPageKeepsUnresolvableDelegateDisconnectable(t *testing.T) {
+	s, manager, _ := newPermissionsTestServer(t)
+	s.authorizationStore = actorFailingAuthorizationStore{AuthorizationStore: s.authorizationStore}
+	s.currentAuth().Identities[1].Comment = "cron agent for reports"
+	s.currentAuth().Identities[1].CreatedBy = ""
+
+	req := authenticatedPermissionsRequest(t, manager, http.MethodGet, permissionsPath, nil)
+	rec := httptest.NewRecorder()
+	s.handlePermissionsPage(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{"claude@claude.ai", "Permissions unavailable", "unknown role", "Disconnect"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("page missing %q", want)
+		}
+	}
+	if strings.Contains(body, "cron agent for reports") {
+		t.Error("arbitrary identity comment was rendered as a display name")
+	}
+	if strings.Contains(body, "Save permissions") {
+		t.Error("page offered to edit permissions that could not be resolved")
+	}
+}
+
 func TestDelegateUpdateIsCSRFProtectedAndSelfService(t *testing.T) {
 	s, manager, audit := newPermissionsTestServer(t)
 
@@ -188,6 +230,24 @@ func TestDelegateRemoveRevokesRefreshChainsAndAuditsCount(t *testing.T) {
 	}
 }
 
+func TestDelegateRemoveRedirectsWhenRefreshRevocationFails(t *testing.T) {
+	s, manager, audit := newPermissionsTestServer(t)
+	s.refreshStore = failingRevokeStore{RefreshTokenStore: s.refreshStore}
+	req := authenticatedFormRequest(t, s, manager, permissionsRemovePath, url.Values{"actor": {"claude@claude.ai"}})
+	rec := httptest.NewRecorder()
+	s.handleDelegateRemove(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	principal, _ := s.findAuthIdentity("alice")
+	if _, ok := findDelegate(principal, "claude@claude.ai"); ok {
+		t.Fatal("delegate was not removed")
+	}
+	if len(audit.events) != 1 || audit.events[0].Details["error"] != "refresh store unavailable" {
+		t.Fatalf("audit events=%+v", audit.events)
+	}
+}
+
 func TestRecordDelegateClientAuthKeepsStrongestVerification(t *testing.T) {
 	s, _, audit := newPermissionsTestServer(t)
 	if err := s.recordDelegateClientAuth("alice", "claude@claude.ai", AuthPrivateKeyJWT); err != nil {
@@ -201,7 +261,7 @@ func TestRecordDelegateClientAuthKeepsStrongestVerification(t *testing.T) {
 	if delegate.ClientAuth != string(AuthPrivateKeyJWT) || clientAuthLabel(ClientAuthLevel(delegate.ClientAuth)) != "JWKS" {
 		t.Fatalf("client auth=%q", delegate.ClientAuth)
 	}
-	if len(audit.events) != 1 || audit.events[0].Type != "delegate.update" {
+	if len(audit.events) != 1 || audit.events[0].Type != "delegate.client_auth" {
 		t.Fatalf("audit events=%+v", audit.events)
 	}
 }

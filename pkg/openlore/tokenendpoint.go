@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -110,6 +111,7 @@ type tokenEndpoint struct {
 	clientAuth   ClientAuthenticator
 	audit        AuditLog
 	delegateAuth delegateClientAuthRecorder
+	logger       *slog.Logger
 }
 
 type delegateClientAuthRecorder interface {
@@ -213,8 +215,11 @@ func (t *tokenEndpoint) handleAuthorizationCode(w http.ResponseWriter, r *http.R
 	}
 	if c.Actor != "" && t.delegateAuth != nil {
 		if err := t.delegateAuth.recordDelegateClientAuth(c.Subject, c.Actor, clientAuth); err != nil {
-			oauthError(w, http.StatusInternalServerError, "server_error", "failed to record client authentication")
-			return
+			logger := t.logger
+			if logger == nil {
+				logger = slog.Default()
+			}
+			logger.Error("failed to record delegated client authentication", "principal", c.Subject, "actor", c.Actor, "error", err)
 		}
 	}
 	t.issue(w, Attribution{Principal: c.Subject, Actor: c.Actor, ClientAuth: clientAuth}, c.Scope, randomToken(), c.ClientID)
