@@ -94,7 +94,7 @@ func NewMCPServer(fs vfs.FileSystem, opts ...MCPOption) *mcp.Server {
 		shellDesc = cfg.shellDescription
 	}
 	destructive := !cfg.readOnly
-	closedWorld := false
+	openWorld := false
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "shell",
 		Description: shellDesc,
@@ -102,7 +102,7 @@ func NewMCPServer(fs vfs.FileSystem, opts ...MCPOption) *mcp.Server {
 			Title:           "OpenLore Shell",
 			ReadOnlyHint:    cfg.readOnly,
 			DestructiveHint: &destructive,
-			OpenWorldHint:   &closedWorld,
+			OpenWorldHint:   &openWorld,
 		},
 	}, newMCPShellHandler(fs, cfg.envVars, cfg.shellFactory))
 
@@ -113,7 +113,7 @@ func NewMCPServer(fs vfs.FileSystem, opts ...MCPOption) *mcp.Server {
 			Title:          "List OpenLore Commands",
 			ReadOnlyHint:   true,
 			IdempotentHint: true,
-			OpenWorldHint:  &closedWorld,
+			OpenWorldHint:  &openWorld,
 		},
 	}, newMCPListCommandsHandler())
 

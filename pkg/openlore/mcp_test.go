@@ -2,6 +2,7 @@ package openlore
 
 import (
 	"testing"
+	"testing/fstest"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -23,7 +24,8 @@ func TestMCPToolAnnotations(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			server := NewMCPServer(nil, tt.opts...)
+			fs := NewFSAdapter(fstest.MapFS{"test.md": {Data: []byte("test")}})
+			server := NewMCPServer(fs, tt.opts...)
 			serverTransport, clientTransport := mcp.NewInMemoryTransports()
 			serverSession, err := server.Connect(t.Context(), serverTransport, nil)
 			if err != nil {
@@ -48,7 +50,11 @@ func TestMCPToolAnnotations(t *testing.T) {
 				tools[tool.Name] = tool
 			}
 
-			shellAnnotations := tools["shell"].Annotations
+			shellTool, ok := tools["shell"]
+			if !ok {
+				t.Fatal("shell tool is not registered")
+			}
+			shellAnnotations := shellTool.Annotations
 			if shellAnnotations == nil {
 				t.Fatal("shell annotations are nil")
 			}
@@ -65,7 +71,11 @@ func TestMCPToolAnnotations(t *testing.T) {
 				t.Errorf("shell openWorldHint = %v, want false", shellAnnotations.OpenWorldHint)
 			}
 
-			listAnnotations := tools["list_commands"].Annotations
+			listTool, ok := tools["list_commands"]
+			if !ok {
+				t.Fatal("list_commands tool is not registered")
+			}
+			listAnnotations := listTool.Annotations
 			if listAnnotations == nil {
 				t.Fatal("list_commands annotations are nil")
 			}
