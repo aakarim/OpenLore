@@ -1,4 +1,4 @@
-# Workload Identity Federation (WIF)
+# Workload Identity Federation
 
 > **Status: shipped.** The `jwt-bearer` grant is live: configure
 > `oidc_issuers` (below) and OpenLore verifies external IdP assertions against
@@ -66,7 +66,11 @@ auth:
 
   oidc_issuers:
     - issuer_url: https://token.actions.githubusercontent.com   # GitHub Actions OIDC
-      jwks: { mode: discovery }            # fetch keys from the issuer's well-known JWKS
+      jwks: { mode: discovery }            # fetch keys via OIDC discovery (default)
+    - issuer_url: https://spire.example    # issuer without a discovery document
+      jwks:                                # fetch a JWKS document directly, e.g. a
+        mode: url                          # SPIRE trust-bundle endpoint
+        url: https://spire.example/keys
 ```
 
 `audience` is the value your workloads must request in their platform JWT (see

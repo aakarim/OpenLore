@@ -233,6 +233,7 @@ credentials are separate and revocable. See
 | [Ways to use OpenLore](docs/usage.md) | SSH, MCP, web, SSHFS, embedded binaries, GitHub Action, MCPB, and library usage |
 | [Command reference](docs/commands.md) | Complete shell, introspection, publishing, syntax, CLI command, and flag reference |
 | [Configuration and identity](docs/configuration-and-identity.md) | `openlore.yml`, authentication, roles, docsets, aliases, homes, and host verification |
+| [Workload identity federation](docs/workload-identity-federation.md) | Authenticate CI and agents with short-lived external identity tokens |
 | [Writing and publishing](docs/writing.md) | Write modes, inboxes, conflict handling, approvals, and jobs |
 | [Plugins and knowledge formats](docs/plugins.md) | Plugin installation, interfaces, OKF validation, `lore validate`, and `lore meta` |
 | [Write system internals](docs/write-system.md) | Filesystem layering, write seam, changesets, hooks, and async jobs |
