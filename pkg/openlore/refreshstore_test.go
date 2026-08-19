@@ -78,6 +78,37 @@ func TestRefreshStore_RotateUnknownInvalid(t *testing.T) {
 	}
 }
 
+func TestRefreshStore_RevokeDelegationRevokesMatchingDistinctChains(t *testing.T) {
+	rs := testRefreshStore(t)
+	expires := time.Now().Add(time.Hour)
+	for _, rt := range []RefreshToken{
+		{Token: "a1", Subject: "alice", Actor: "claude", ChainID: "c1", ExpiresAt: expires},
+		{Token: "a2", Subject: "alice", Actor: "claude", ChainID: "c1", ExpiresAt: expires},
+		{Token: "b", Subject: "alice", Actor: "claude", ChainID: "c2", ExpiresAt: expires},
+		{Token: "other-principal", Subject: "bob", Actor: "claude", ChainID: "c3", ExpiresAt: expires},
+		{Token: "other-actor", Subject: "alice", Actor: "chatgpt", ChainID: "c4", ExpiresAt: expires},
+	} {
+		if err := rs.Save(rt); err != nil {
+			t.Fatalf("Save: %v", err)
+		}
+	}
+
+	revoked, err := rs.RevokeDelegation("alice", "claude")
+	if err != nil || revoked != 2 {
+		t.Fatalf("RevokeDelegation: revoked=%d err=%v", revoked, err)
+	}
+	for _, token := range []string{"a1", "a2", "b"} {
+		if _, ok, _ := rs.Lookup(token); ok {
+			t.Errorf("matching token %q was not revoked", token)
+		}
+	}
+	for _, token := range []string{"other-principal", "other-actor"} {
+		if _, ok, _ := rs.Lookup(token); !ok {
+			t.Errorf("unrelated token %q was revoked", token)
+		}
+	}
+}
+
 func TestRefreshStore_Persistence(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "refresh.json")

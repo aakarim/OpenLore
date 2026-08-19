@@ -104,11 +104,16 @@ type tokenEndpoint struct {
 	// wif performs the jwt-bearer (WIF) exchange: verify an external IdP
 	// assertion, match it to a rule, and return the subject/scope/TTL to mint.
 	// nil when no OIDC issuers are configured (grant stays unsupported).
-	wif        wifExchanger
-	delegation delegationExchanger
-	cimd       CIMDResolver
-	clientAuth ClientAuthenticator
-	audit      AuditLog
+	wif          wifExchanger
+	delegation   delegationExchanger
+	cimd         CIMDResolver
+	clientAuth   ClientAuthenticator
+	audit        AuditLog
+	delegateAuth delegateClientAuthRecorder
+}
+
+type delegateClientAuthRecorder interface {
+	recordDelegateClientAuth(principal, actor string, level ClientAuthLevel) error
 }
 
 // wifExchanger verifies an external IdP assertion and resolves it to the
@@ -203,6 +208,12 @@ func (t *tokenEndpoint) handleAuthorizationCode(w http.ResponseWriter, r *http.R
 		}
 		if !verifyPKCE(c.CodeChallengeMethod, verifier, c.CodeChallenge) {
 			oauthError(w, http.StatusBadRequest, "invalid_grant", "PKCE verification failed")
+			return
+		}
+	}
+	if c.Actor != "" && t.delegateAuth != nil {
+		if err := t.delegateAuth.recordDelegateClientAuth(c.Subject, c.Actor, clientAuth); err != nil {
+			oauthError(w, http.StatusInternalServerError, "server_error", "failed to record client authentication")
 			return
 		}
 	}

@@ -24,6 +24,7 @@ import (
 	"github.com/aakarim/go-openlore/internal/metrics"
 	"github.com/aakarim/go-openlore/internal/passkeys"
 	"github.com/aakarim/go-openlore/internal/skills"
+	"github.com/aakarim/go-openlore/internal/webstyle"
 	"github.com/aakarim/go-openlore/pkg/openlore/meta"
 	"github.com/aakarim/go-openlore/pkg/openlore/validation"
 	"github.com/aakarim/go-openlore/pkg/shell"
@@ -1462,6 +1463,15 @@ func (s *Server) ListenAndServe() error {
 				httpCfg.ExtraHandlers["/legal/"] = legalHandler
 				s.logger.Info("legal notices mounted", "path", "/legal", "http_port", s.config.HTTPPort)
 			}
+			httpCfg.ExtraHandlers["/assets/openlore.css"] = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet {
+					http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+					return
+				}
+				w.Header().Set("Content-Type", "text/css; charset=utf-8")
+				w.Header().Set("Cache-Control", "public, max-age=3600")
+				_, _ = w.Write(webstyle.CSS)
+			})
 
 			// A single MCP server backs both the Streamable HTTP endpoint and
 			// the plain JSON HTTP API below. Its `shell` tool builds a
@@ -1550,6 +1560,9 @@ func (s *Server) ListenAndServe() error {
 				s.passkeys.SetTokenIssuer(s)
 
 				httpCfg.Extenders = append(httpCfg.Extenders, s.passkeys)
+				httpCfg.ExtraHandlers[permissionsPath] = http.HandlerFunc(s.handlePermissionsPage)
+				httpCfg.ExtraHandlers[permissionsUpdatePath] = http.HandlerFunc(s.handleDelegateUpdate)
+				httpCfg.ExtraHandlers[permissionsRemovePath] = http.HandlerFunc(s.handleDelegateRemove)
 
 				lorePath := s.config.Passkeys.LorePath
 				if lorePath == "" {

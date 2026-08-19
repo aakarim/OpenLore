@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/aakarim/go-openlore/internal/config"
+	"github.com/aakarim/go-openlore/internal/webstyle"
 )
 
 // authorizeRequest holds the validated parameters of an in-flight OAuth
@@ -237,18 +238,8 @@ var authorizeChoiceTmpl = template.Must(template.New("authorize").Parse(`<!DOCTY
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Connect — OpenLore</title>
-<style>
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0d1117;color:#c9d1d9;display:flex;align-items:center;justify-content:center;min-height:100vh}
-  .card{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:2.5rem;max-width:420px;width:100%;text-align:center}
-  h1{font-size:1.5rem;margin-bottom:.5rem}
-  .subtitle{color:#8b949e;margin-bottom:1.5rem;font-size:.9rem}
-  button,a.btn{display:block;width:100%;background:#238636;color:#fff;border:none;padding:.75rem 2rem;border-radius:8px;font-size:1rem;cursor:pointer;text-decoration:none;margin-bottom:.75rem}
-  button:hover,a.btn:hover{background:#2ea043}
-  a.btn.secondary{background:#21262d;border:1px solid #30363d}
-  a.btn.secondary:hover{background:#30363d}
-</style></head>
-<body><div class="card">
+` + webstyle.Link + `</head>
+<body class="centered"><div class="card">
   <h1>📜 OpenLore</h1>
   <p class="subtitle">How do you want to connect?</p>
   {{if .Passkeys}}<a class="btn" href="{{.LoginURL}}">Log in with passkey</a>{{end}}
@@ -387,13 +378,13 @@ type consentView struct {
 	EnabledDocsets, EnabledCapabilities                           map[string]bool
 }
 
-var consentTmpl = template.Must(template.New("consent").Parse(`<!doctype html><html><head><meta charset="utf-8"><title>Authorize OpenLore</title></head><body>
-<main><h1>Authorize {{.ClientName}}</h1><p class="{{.AuthClass}}">{{.AuthLabel}}</p><p>Acting for <strong>{{.Principal}}</strong></p>
+var consentTmpl = template.Must(template.New("consent").Parse(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Authorize OpenLore</title>` + webstyle.Link + `</head><body class="centered">
+<main class="card wide"><h1>Authorize {{.ClientName}}</h1><p class="{{.AuthClass}}">{{.AuthLabel}}</p><p>Acting for <strong>{{.Principal}}</strong></p>
 <form method="post" action="` + authorizeConsentPath + `"><input type="hidden" name="consent" value="{{.Consent}}">
-<fieldset><legend>Agent identity</legend>{{range .Delegates}}<label><input type="radio" name="delegate" value="{{.}}"{{if eq . $.Selected}} checked{{end}}> {{.}}</label><br>{{end}}
-{{if .FixedIdentity}}<label><input type="radio" name="delegate" value="new"{{if not .Selected}} checked{{end}}> connect as {{.FixedIdentity}}</label>{{else}}<label><input type="radio" name="delegate" value="new"{{if not .Selected}} checked{{end}}> create new: <input name="name" pattern="[a-z0-9-]+" value="{{.DefaultName}}">@{{.Domain}}</label>{{end}}</fieldset>
-<fieldset><legend>Docsets</legend>{{range .Docsets}}<label><input type="checkbox" name="docset" value="{{.}}"{{if index $.EnabledDocsets .}} checked{{end}}> {{.}}</label><br>{{end}}</fieldset>
-<fieldset><legend>Capabilities</legend>{{range .Capabilities}}<label><input type="checkbox" name="capability" value="{{.}}"{{if index $.EnabledCapabilities .}} checked{{end}}> {{.}}</label><br>{{end}}</fieldset>
+<fieldset><legend>Agent identity</legend>{{range .Delegates}}<label class="toggle"><input type="radio" name="delegate" value="{{.}}"{{if eq . $.Selected}} checked{{end}}> {{.}}</label>{{end}}
+{{if .FixedIdentity}}<label class="toggle"><input type="radio" name="delegate" value="new"{{if not .Selected}} checked{{end}}> connect as {{.FixedIdentity}}</label>{{else}}<label class="toggle"><input type="radio" name="delegate" value="new"{{if not .Selected}} checked{{end}}> create new: <input name="name" pattern="[a-z0-9-]+" value="{{.DefaultName}}">@{{.Domain}}</label>{{end}}</fieldset>
+<fieldset><legend>Docsets</legend>{{range .Docsets}}<label class="toggle"><input type="checkbox" name="docset" value="{{.}}"{{if index $.EnabledDocsets .}} checked{{end}}> {{.}}</label>{{end}}</fieldset>
+<fieldset><legend>Capabilities</legend>{{range .Capabilities}}<label class="toggle"><input type="checkbox" name="capability" value="{{.}}"{{if index $.EnabledCapabilities .}} checked{{end}}> {{.}}</label>{{end}}</fieldset>
 <button type="submit">Authorize</button></form></main></body></html>`))
 
 func (s *Server) authorizeConsentHandler(w http.ResponseWriter, r *http.Request) {
@@ -574,6 +565,7 @@ func (s *Server) authorizeConsentHandler(w http.ResponseWriter, r *http.Request)
 		d := &p.Delegates[idx]
 		d.DenyDocsets = difference(docsets, selectedDocsets)
 		d.DenyCapabilities = difference(capabilities, selectedCapabilities)
+		d.ClientAuth = string(baselineClientAuth(client))
 		return nil
 	})
 	if err != nil {

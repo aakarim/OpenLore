@@ -332,7 +332,10 @@ func (p *Passkeys) handleLoginFinish(w http.ResponseWriter, r *http.Request) {
 	// Set the browser session cookie for the /lore docs browser. The cookie
 	// carries the identity name; the browser resolves its grants live from the
 	// identity table.
-	p.sessions.SetCookie(w, matched.Identity)
+	if err := p.sessions.SetCookie(w, matched.Identity); err != nil {
+		http.Error(w, "failed to create session", http.StatusInternalServerError)
+		return
+	}
 
 	// OAuth authorization-code flow: if this login was reached via /authorize
 	// (?authz=<id>), finalize it and hand the browser a redirect back to the
@@ -356,6 +359,21 @@ func randomToken() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
+}
+
+// Session authenticates a browser request using the passkey session cookie.
+func (p *Passkeys) Session(r *http.Request) (*SessionInfo, bool) {
+	return p.sessions.ValidateRequest(r)
+}
+
+// CSRFToken derives a form token bound to an authenticated browser session.
+func (p *Passkeys) CSRFToken(session *SessionInfo) string {
+	return p.sessions.CSRFToken(session)
+}
+
+// ValidateCSRF verifies a form token against an authenticated browser session.
+func (p *Passkeys) ValidateCSRF(session *SessionInfo, token string) bool {
+	return p.sessions.ValidateCSRF(session, token)
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

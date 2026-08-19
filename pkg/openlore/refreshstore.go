@@ -46,6 +46,8 @@ type RefreshTokenStore interface {
 	Rotate(oldToken string, newToken RefreshToken) error
 	// RevokeChain deletes every token descending from one login.
 	RevokeChain(chainID string) error
+	// RevokeDelegation revokes every chain issued to actor on behalf of subject.
+	RevokeDelegation(subject, actor string) (int, error)
 }
 
 // fileRefreshStore is a mutex-guarded JSON-file RefreshTokenStore.
@@ -135,6 +137,24 @@ func (s *fileRefreshStore) RevokeChain(chainID string) error {
 	defer s.mu.Unlock()
 	s.revokeChainLocked(chainID)
 	return s.persist()
+}
+
+func (s *fileRefreshStore) RevokeDelegation(subject, actor string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	chains := map[string]bool{}
+	for _, rt := range s.tokens {
+		if rt.Subject == subject && rt.Actor == actor {
+			chains[rt.ChainID] = true
+		}
+	}
+	for chainID := range chains {
+		s.revokeChainLocked(chainID)
+	}
+	if err := s.persist(); err != nil {
+		return 0, err
+	}
+	return len(chains), nil
 }
 
 func (s *fileRefreshStore) revokeChainLocked(chainID string) {
