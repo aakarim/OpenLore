@@ -21,6 +21,7 @@ type mcpConfig struct {
 	instructions     string
 	shellDescription string
 	envVars          map[string]string
+	readOnly         bool
 	// shellFactory, when set, builds the shell for each `shell` tool call from
 	// the request context (used to scope the shell per authenticated identity).
 	// When nil, a shell is built from the fixed filesystem plus envVars.
@@ -50,6 +51,13 @@ func WithMCPEnvVars(vars map[string]string) MCPOption {
 	return func(c *mcpConfig) { c.envVars = vars }
 }
 
+// WithMCPReadOnly describes whether the shell's filesystem is globally
+// read-only. The hint is reported to MCP clients and does not replace runtime
+// filesystem or identity-level authorization.
+func WithMCPReadOnly(readOnly bool) MCPOption {
+	return func(c *mcpConfig) { c.readOnly = readOnly }
+}
+
 // withMCPShellFactory sets a per-request shell factory. Used internally by the
 // server to scope the `shell` tool to the authenticated identity resolved from
 // the request context. Unexported: external callers scope by passing their own
@@ -62,7 +70,7 @@ func withMCPShellFactory(fn func(ctx context.Context) *shell.Shell) MCPOption {
 // returned server exposes two tools — `shell` and `list_commands` — that let
 // agents browse and operate on the filesystem via a restricted shell.
 func NewMCPServer(fs vfs.FileSystem, opts ...MCPOption) *mcp.Server {
-	var cfg mcpConfig
+	cfg := mcpConfig{readOnly: true}
 	for _, opt := range opts {
 		opt(&cfg)
 	}
@@ -85,14 +93,28 @@ func NewMCPServer(fs vfs.FileSystem, opts ...MCPOption) *mcp.Server {
 	if cfg.shellDescription != "" {
 		shellDesc = cfg.shellDescription
 	}
+	destructive := !cfg.readOnly
+	openWorld := false
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "shell",
 		Description: shellDesc,
+		Annotations: &mcp.ToolAnnotations{
+			Title:           "OpenLore Shell",
+			ReadOnlyHint:    cfg.readOnly,
+			DestructiveHint: &destructive,
+			OpenWorldHint:   &openWorld,
+		},
 	}, newMCPShellHandler(fs, cfg.envVars, cfg.shellFactory))
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_commands",
 		Description: "List all available shell commands.",
+		Annotations: &mcp.ToolAnnotations{
+			Title:          "List OpenLore Commands",
+			ReadOnlyHint:   true,
+			IdempotentHint: true,
+			OpenWorldHint:  &openWorld,
+		},
 	}, newMCPListCommandsHandler())
 
 	return server
