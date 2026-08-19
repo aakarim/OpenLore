@@ -57,7 +57,15 @@ jobs:
             sudo systemctl stop openlore
             cp /tmp/openlore /opt/openlore/openlore
             chmod +x /opt/openlore/openlore
-            mkdir -p /opt/openlore/published /opt/openlore/config
+            mkdir -p /opt/openlore/published /opt/openlore/config /opt/openlore/data
+            if [ -f /opt/openlore/lore.json ] && [ ! -f /opt/openlore/config/lore.json ]; then
+              mv /opt/openlore/lore.json /opt/openlore/config/lore.json
+            fi
+            sudo sed -i \
+              -e "s|--auth /opt/openlore/lore.json|--auth /opt/openlore/config/lore.json|" \
+              -e "s|^ReadWritePaths=.*|ReadWritePaths=/opt/openlore/.ssh /opt/openlore/published /opt/openlore/config /opt/openlore/data|" \
+              /etc/systemd/system/openlore.service
+            sudo systemctl daemon-reload
             sudo systemctl start openlore
             sleep 2
             sudo systemctl is-active openlore
