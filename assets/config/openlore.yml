@@ -10,7 +10,7 @@ http_port: 8080
 metrics_port: 0
 default_cwd: /
 
-auth_file: ./lore.json
+auth_file: ./config/lore.json
 data_dir: ./data
 
 # Disk-backed lore is overlaid at the virtual root. Its directory hierarchy is

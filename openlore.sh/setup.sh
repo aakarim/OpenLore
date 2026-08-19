@@ -25,7 +25,7 @@ fi
 
 echo "==> Setting up $INSTALL_DIR..."
 mkdir -p "$INSTALL_DIR/skills" "$INSTALL_DIR/.ssh"
-mkdir -p "$INSTALL_DIR/published"
+mkdir -p "$INSTALL_DIR/published" "$INSTALL_DIR/config" "$INSTALL_DIR/data"
 
 echo "==> Installing binary..."
 cp "$BINARY" "$INSTALL_DIR/openlore"
@@ -38,7 +38,7 @@ fi
 
 echo "==> Installing auth config..."
 if [ -f "$LORE_JSON" ]; then
-    cp "$LORE_JSON" "$INSTALL_DIR/lore.json"
+    cp "$LORE_JSON" "$INSTALL_DIR/config/lore.json"
 fi
 
 chown -R "$USER:$USER" "$INSTALL_DIR"
@@ -54,7 +54,7 @@ Type=simple
 User=$USER
 Group=$USER
 WorkingDirectory=$INSTALL_DIR
-ExecStart=$INSTALL_DIR/openlore --skills-dir $INSTALL_DIR/skills -p 2222 --http-port 8080 --metrics-port 0 --host-key $INSTALL_DIR/.ssh/openlore_ed25519 --auth $INSTALL_DIR/lore.json
+ExecStart=$INSTALL_DIR/openlore --skills-dir $INSTALL_DIR/skills -p 2222 --http-port 8080 --metrics-port 0 --host-key $INSTALL_DIR/.ssh/openlore_ed25519 --auth $INSTALL_DIR/config/lore.json
 Restart=always
 RestartSec=5
 
@@ -62,7 +62,7 @@ RestartSec=5
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=$INSTALL_DIR/.ssh $INSTALL_DIR/published
+ReadWritePaths=$INSTALL_DIR/.ssh $INSTALL_DIR/published $INSTALL_DIR/config $INSTALL_DIR/data
 PrivateTmp=yes
 ProtectKernelTunables=yes
 ProtectControlGroups=yes
