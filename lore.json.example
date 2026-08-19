@@ -5,7 +5,7 @@
   "roles": {
     "engineer": {
       "comment": "Engineering agents",
-      "allow": { "capabilities": ["spawn"] }
+      "allow": { "capabilities": ["spawn", "lore:config:edit"] }
     },
     "reviewer": {
       "allow": { "capabilities": ["review"] },
@@ -35,7 +35,19 @@
       "comment": "Backend automation",
       "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleBackendKeyHere backend-agent",
       "roles": ["engineer", "reviewer"],
-      "home": "engineer-home"
+      "home": "engineer-home",
+      "delegates": [
+        {
+          "identity": "claude@claude.ai",
+          "deny_docsets": ["backend"],
+          "deny_capabilities": ["lore:config:edit"]
+        }
+      ]
+    },
+    {
+      "name": "claude@claude.ai",
+      "comment": "Display: Claude Desktop",
+      "created_by": "oauth"
     },
     {
       "name": "passkey-only-reviewer",

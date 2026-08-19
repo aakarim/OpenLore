@@ -2,8 +2,14 @@ package openlore
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"testing"
 	"testing/fstest"
@@ -266,6 +272,96 @@ func TestOIDCVerifier_RejectsUnsupportedMode(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error for unsupported jwks mode")
+	}
+}
+
+func TestOIDCVerifier_URLModeRequiresURL(t *testing.T) {
+	_, err := newOIDCVerifier("https://openlore.test", []config.OIDCIssuer{
+		{IssuerURL: "https://idp.example", JWKS: config.JWKSSpec{Mode: "url"}},
+	})
+	if err == nil {
+		t.Fatal("jwks mode \"url\" without jwks.url must be rejected")
+	}
+}
+
+func TestOIDCVerifier_DiscoveryRejectsStrayURL(t *testing.T) {
+	_, err := newOIDCVerifier("https://openlore.test", []config.OIDCIssuer{
+		{IssuerURL: "https://idp.example", JWKS: config.JWKSSpec{Mode: "discovery", URL: "https://idp.example/keys"}},
+	})
+	if err == nil {
+		t.Fatal("jwks.url with discovery mode must be rejected")
+	}
+}
+
+func TestOIDCVerifier_URLModeVerifiesJWTSVID(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	jwksDoc, err := json.Marshal(map[string]any{
+		"keys": []map[string]any{{
+			"kty": "EC", "crv": "P-256", "alg": "ES256", "use": "sig", "kid": "test-key",
+			"x": base64.RawURLEncoding.EncodeToString(key.PublicKey.X.Bytes()),
+			"y": base64.RawURLEncoding.EncodeToString(key.PublicKey.Y.Bytes()),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("marshal jwks: %v", err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/keys" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(jwksDoc)
+	}))
+	defer srv.Close()
+
+	const issuer = "https://spire.example"
+	const audience = "https://openlore.test"
+	v, err := newOIDCVerifier(audience, []config.OIDCIssuer{
+		{IssuerURL: issuer, JWKS: config.JWKSSpec{Mode: "url", URL: srv.URL + "/keys"}},
+	})
+	if err != nil {
+		t.Fatalf("newOIDCVerifier: %v", err)
+	}
+
+	sign := func(key *ecdsa.PrivateKey, claims jwt.MapClaims) string {
+		t.Helper()
+		tok := jwt.NewWithClaims(jwt.SigningMethodES256, claims)
+		tok.Header["kid"] = "test-key"
+		signed, err := tok.SignedString(key)
+		if err != nil {
+			t.Fatalf("sign: %v", err)
+		}
+		return signed
+	}
+	assertion := func(aud any) jwt.MapClaims {
+		return jwt.MapClaims{
+			"iss": issuer,
+			"sub": "spiffe://spire.example/ns/agents/indexer",
+			"aud": aud,
+			"exp": time.Now().Add(5 * time.Minute).Unix(),
+		}
+	}
+
+	claims, err := v.Verify(context.Background(), sign(key, assertion([]string{audience})))
+	if err != nil {
+		t.Fatalf("verify valid assertion: %v", err)
+	}
+	if claims.Subject != "spiffe://spire.example/ns/agents/indexer" {
+		t.Errorf("subject = %q", claims.Subject)
+	}
+	if _, err := v.Verify(context.Background(), sign(key, assertion([]string{"https://other.service"}))); err == nil {
+		t.Fatal("wrong-audience assertion must be rejected")
+	}
+	otherKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate forged key: %v", err)
+	}
+	if _, err := v.Verify(context.Background(), sign(otherKey, assertion([]string{audience}))); err == nil {
+		t.Fatal("assertion signed by an untrusted key must be rejected")
 	}
 }
 

@@ -488,6 +488,47 @@ func main() {
 			}
 			return
 
+		case "oauth":
+			if len(os.Args) < 4 || os.Args[2] != "keys" || os.Args[3] != "rotate" {
+				fmt.Fprintln(os.Stderr, "Usage: openlore oauth keys rotate [--revoke-previous] [--config openlore.yml]")
+				os.Exit(1)
+			}
+			rotateCmd := flag.NewFlagSet("oauth keys rotate", flag.ExitOnError)
+			revokePrevious := rotateCmd.Bool("revoke-previous", false, "immediately remove previous keys and invalidate outstanding access tokens")
+			configPath := rotateCmd.String("config", "./openlore.yml", "path to openlore.yml")
+			rotateCmd.Parse(os.Args[4:])
+			cfg, err := config.New(config.WithConfigFile(*configPath))
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "error:", err)
+				os.Exit(1)
+			}
+			issuer, err := openlore.NewIssuerFromConfig(cfg)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "error:", err)
+				os.Exit(1)
+			}
+			keys, ok := issuer.(openlore.SigningKeyStore)
+			if !ok {
+				fmt.Fprintln(os.Stderr, "error: configured issuer does not support key rotation")
+				os.Exit(1)
+			}
+			oldKid := keys.ActiveKeyID()
+			newKid, err := keys.Rotate(*revokePrevious)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "error:", err)
+				os.Exit(1)
+			}
+			dataDir := cfg.DataDir
+			if dataDir == "" {
+				dataDir = "."
+			}
+			audit := openlore.NewJSONLAuditLog(filepath.Join(dataDir, "audit", "events.jsonl"))
+			_ = audit.Record(context.Background(), openlore.AuditEvent{Type: "oauth.key_rotate", Attribution: openlore.Attribution{Principal: "operator"}, Details: map[string]any{
+				"old_kid": oldKid, "new_kid": newKid, "revoke_previous": *revokePrevious,
+			}})
+			fmt.Println(newKid)
+			return
+
 		case "token":
 			if len(os.Args) < 3 {
 				fmt.Fprintf(os.Stderr, "Usage: openlore token <command>\n\n")
@@ -520,7 +561,7 @@ func main() {
 					fmt.Fprintf(os.Stderr, "error: %v\n", err)
 					os.Exit(1)
 				}
-				token, exp, err := issuer.Mint(*identity, *scope, *ttl)
+				token, exp, err := issuer.Mint(openlore.Attribution{Principal: *identity}, *scope, *ttl)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "error: minting token: %v\n", err)
 					os.Exit(1)

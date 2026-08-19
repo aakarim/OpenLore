@@ -68,6 +68,13 @@ api:
 # tls_cert: ./cert.pem
 # tls_key: ./key.pem
 
+# Optional best-effort client-certificate corroboration for authenticated OAuth
+# clients. OpenLore must terminate TLS itself. Clients without a certificate can
+# still connect; a presented certificate must chain to this CA bundle.
+# auth:
+#   mtls:
+#     ca_bundle: /etc/openlore/openai-connectors-ca.pem
+
 # Path to the SSH host key. Auto-generated on first run if missing.
 # Uses ed25519 by default.
 host_key_path: .ssh/openlore_ed25519
@@ -150,6 +157,10 @@ host_key_path: .ssh/openlore_ed25519
 # tokens via the OAuth authorization-code + PKCE flow at /authorize →
 # /oauth/token. Mint a debug/local token with:
 #   openlore token mint --identity NAME --config ./openlore.yml
+# Rotate the ES256 signing key without downtime with:
+#   openlore oauth keys rotate --config ./openlore.yml
+# Add --revoke-previous only for compromise response; it immediately invalidates
+# access tokens signed by every previous key.
 #
 # tokens:
 #   issuer: https://docs.example.com      # `iss` claim + JWKS base URL
@@ -166,6 +177,10 @@ host_key_path: .ssh/openlore_ed25519
 #   - issuer_url: https://token.actions.githubusercontent.com
 #     jwks:
 #       mode: discovery
+#   - issuer_url: https://spire.example
+#     jwks:
+#       mode: url
+#       url: https://spire.example/keys  # direct JWKS/trust-bundle endpoint
 
 # ── Inbox HTTP uploads ────────────────────────────────
 # Inbox credentials are separate, revocable webhook secrets. They may only

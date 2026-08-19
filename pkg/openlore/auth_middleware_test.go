@@ -91,7 +91,7 @@ func grantsString(grants map[string]string) string {
 
 func mint(t *testing.T, s *Server, sub, scope string) string {
 	t.Helper()
-	tok, _, err := s.issuer.Mint(sub, scope, 30*time.Minute)
+	tok, _, err := s.issuer.Mint(Attribution{Principal: sub}, scope, 30*time.Minute)
 	if err != nil {
 		t.Fatalf("Mint: %v", err)
 	}

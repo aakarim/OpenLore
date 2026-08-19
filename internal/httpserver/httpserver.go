@@ -3,6 +3,7 @@ package httpserver
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -19,14 +20,15 @@ type MuxExtender interface {
 
 // Config holds HTTP server configuration.
 type Config struct {
-	Port          int
-	TLSCert       string
-	TLSKey        string
-	HostKeyPath   string
-	SSHPort       int
-	Logger        *slog.Logger
-	Extenders     []MuxExtender
-	ExtraHandlers map[string]http.Handler
+	Port           int
+	TLSCert        string
+	TLSKey         string
+	ClientCABundle string
+	HostKeyPath    string
+	SSHPort        int
+	Logger         *slog.Logger
+	Extenders      []MuxExtender
+	ExtraHandlers  map[string]http.Handler
 }
 
 // Server is the HTTP front page server.
@@ -36,7 +38,7 @@ type Server struct {
 }
 
 // New creates a new HTTP server serving the given filesystem.
-func New(fsys fs.FS, cfg Config) *Server {
+func New(fsys fs.FS, cfg Config) (*Server, error) {
 	mux := http.NewServeMux()
 
 	if cfg.HostKeyPath != "" {
@@ -61,9 +63,23 @@ func New(fsys fs.FS, cfg Config) *Server {
 		srv.TLSConfig = &tls.Config{
 			MinVersion: tls.VersionTLS12,
 		}
+		if cfg.ClientCABundle != "" {
+			pemBytes, err := os.ReadFile(cfg.ClientCABundle)
+			if err != nil {
+				return nil, fmt.Errorf("reading mTLS CA bundle: %w", err)
+			}
+			pool := x509.NewCertPool()
+			if !pool.AppendCertsFromPEM(pemBytes) {
+				return nil, fmt.Errorf("mTLS CA bundle contains no certificates")
+			}
+			srv.TLSConfig.ClientAuth = tls.VerifyClientCertIfGiven
+			srv.TLSConfig.ClientCAs = pool
+		}
+	} else if cfg.ClientCABundle != "" {
+		return nil, fmt.Errorf("mTLS requires OpenLore TLS termination")
 	}
 
-	return &Server{srv: srv, config: cfg}
+	return &Server{srv: srv, config: cfg}, nil
 }
 
 // hostKeyHandler returns an HTTP handler that serves the SSH host public key.

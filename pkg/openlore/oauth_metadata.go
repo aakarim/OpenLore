@@ -14,8 +14,10 @@ const (
 	jwksPath                      = "/.well-known/jwks.json"
 	registrationPath              = "/register"
 	tokenPath                     = "/oauth/token"
+	revocationPath                = "/oauth/revoke"
 	authorizePath                 = "/authorize"
 	authorizePublicPath           = "/authorize/public"
+	authorizeConsentPath          = "/authorize/consent"
 )
 
 // oauthRoutes returns the OAuth endpoints mounted whenever token auth is
@@ -28,9 +30,11 @@ const (
 func (s *Server) oauthRoutes() map[string]http.Handler {
 	return map[string]http.Handler{
 		tokenPath:                     s.tokens,
+		revocationPath:                http.HandlerFunc(s.tokens.revoke),
 		jwksPath:                      jwksHandler(s.issuer),
 		authorizePath:                 http.HandlerFunc(s.authorizeHandler),
 		authorizePublicPath:           http.HandlerFunc(s.authorizePublicHandler),
+		authorizeConsentPath:          http.HandlerFunc(s.authorizeConsentHandler),
 		registrationPath:              http.HandlerFunc(s.registrationHandler),
 		protectedResourceMetadataPath: http.HandlerFunc(s.resourceMetadata),
 		authServerMetadataPath:        http.HandlerFunc(s.authServerMetadata),
@@ -70,11 +74,13 @@ func (s *Server) authServerMetadata(w http.ResponseWriter, r *http.Request) {
 		"issuer":                                base,
 		"authorization_endpoint":                base + authorizePath,
 		"token_endpoint":                        base + tokenPath,
+		"revocation_endpoint":                   base + revocationPath,
 		"registration_endpoint":                 base + registrationPath,
 		"jwks_uri":                              base + jwksPath,
 		"response_types_supported":              []string{"code"},
-		"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
-		"token_endpoint_auth_methods_supported": []string{"none"},
+		"grant_types_supported":                 []string{"authorization_code", "refresh_token", delegationGrantType},
+		"token_endpoint_auth_methods_supported": []string{"none", "private_key_jwt"},
+		"client_id_metadata_document_supported": true,
 		"code_challenge_methods_supported":      []string{"S256"},
 		"scopes_supported":                      []string{ScopeFull},
 	})

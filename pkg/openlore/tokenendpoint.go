@@ -9,9 +9,12 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
+
+const delegationGrantType = "urn:openlore:oauth:grant-type:delegation"
 
 // authCodeStore holds short-lived OAuth authorization codes issued by the login
 // ceremony (passkey in Phase 2) and consumed once at the token endpoint.
@@ -23,12 +26,14 @@ type authCodeStore struct {
 
 type authCode struct {
 	Subject string
+	Actor   string
 	Scope   string
 	Expires time.Time
 
 	// ClientID binds the code to the DCR client that requested it (empty for
 	// native/debug codes). When set, the token request's client_id must match.
 	ClientID string
+	Client   OAuthClient
 	// Resource is the RFC 8707 resource indicator carried from /authorize; when
 	// set, a resource on the token request must match it.
 	Resource string
@@ -99,13 +104,21 @@ type tokenEndpoint struct {
 	// wif performs the jwt-bearer (WIF) exchange: verify an external IdP
 	// assertion, match it to a rule, and return the subject/scope/TTL to mint.
 	// nil when no OIDC issuers are configured (grant stays unsupported).
-	wif wifExchanger
+	wif        wifExchanger
+	delegation delegationExchanger
+	cimd       CIMDResolver
+	clientAuth ClientAuthenticator
+	audit      AuditLog
 }
 
 // wifExchanger verifies an external IdP assertion and resolves it to the
 // subject/scope/TTL of the OpenLore token to mint. The Server implements it.
 type wifExchanger interface {
 	ExchangeAssertion(ctx context.Context, assertion string) (sub, scope string, ttl time.Duration, err error)
+}
+
+type delegationExchanger interface {
+	ExchangeDelegation(context.Context, string, string) (Attribution, string, time.Duration, error)
 }
 
 type tokenResponse struct {
@@ -133,6 +146,8 @@ func (t *tokenEndpoint) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		t.handleRefreshToken(w, r)
 	case "urn:ietf:params:oauth:grant-type:jwt-bearer":
 		t.handleJWTBearer(w, r)
+	case delegationGrantType:
+		t.handleTokenExchange(w, r)
 	default:
 		oauthError(w, http.StatusBadRequest, "unsupported_grant_type", "unsupported grant_type")
 	}
@@ -154,6 +169,19 @@ func (t *tokenEndpoint) handleAuthorizationCode(w http.ResponseWriter, r *http.R
 	if c.ClientID != "" && r.Form.Get("client_id") != c.ClientID {
 		oauthError(w, http.StatusBadRequest, "invalid_grant", "client_id mismatch")
 		return
+	}
+	clientAuth := baselineClientAuth(c.Client)
+	if c.Client.CIMD != nil {
+		if t.clientAuth == nil {
+			oauthError(w, http.StatusUnauthorized, "invalid_client", "client authentication unavailable")
+			return
+		}
+		var err error
+		clientAuth, err = t.clientAuth.Authenticate(r, c.Client.CIMD)
+		if err != nil {
+			oauthError(w, http.StatusUnauthorized, "invalid_client", err.Error())
+			return
+		}
 	}
 	// A resource indicator on the token request must match the one bound at
 	// /authorize (RFC 8707).
@@ -178,7 +206,7 @@ func (t *tokenEndpoint) handleAuthorizationCode(w http.ResponseWriter, r *http.R
 			return
 		}
 	}
-	t.issue(w, c.Subject, c.Scope, randomToken())
+	t.issue(w, Attribution{Principal: c.Subject, Actor: c.Actor, ClientAuth: clientAuth}, c.Scope, randomToken(), c.ClientID)
 }
 
 // verifyPKCE checks a code_verifier against a stored code_challenge per RFC 7636.
@@ -231,16 +259,34 @@ func (t *tokenEndpoint) handleJWTBearer(w http.ResponseWriter, r *http.Request) 
 		}
 		return
 	}
-	t.issueAccessOnly(w, sub, scope, ttl)
+	t.issueAccessOnly(w, Attribution{Principal: sub}, scope, ttl)
+}
+
+func (t *tokenEndpoint) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
+	if t.delegation == nil {
+		oauthError(w, http.StatusBadRequest, "unsupported_grant_type", "token exchange is not enabled")
+		return
+	}
+	actorToken, principal := r.Form.Get("actor_token"), r.Form.Get("act_for")
+	if actorToken == "" || principal == "" {
+		oauthError(w, http.StatusBadRequest, "invalid_request", "actor_token and act_for are required")
+		return
+	}
+	attribution, scope, ttl, err := t.delegation.ExchangeDelegation(r.Context(), actorToken, principal)
+	if err != nil {
+		oauthError(w, http.StatusForbidden, "invalid_grant", "delegation is not authorized")
+		return
+	}
+	t.issueAccessOnly(w, attribution, scope, ttl)
 }
 
 // issueAccessOnly mints an access token with an explicit TTL and no refresh
 // token (used by the WIF exchange).
-func (t *tokenEndpoint) issueAccessOnly(w http.ResponseWriter, sub, scope string, ttl time.Duration) {
+func (t *tokenEndpoint) issueAccessOnly(w http.ResponseWriter, attribution Attribution, scope string, ttl time.Duration) {
 	if scope == "" {
 		scope = ScopeFull
 	}
-	access, exp, err := t.issuer.Mint(sub, scope, ttl)
+	access, exp, err := t.issuer.Mint(attribution, scope, ttl)
 	if err != nil {
 		oauthError(w, http.StatusInternalServerError, "server_error", "mint failed")
 		return
@@ -263,38 +309,49 @@ func (t *tokenEndpoint) handleRefreshToken(w http.ResponseWriter, r *http.Reques
 		oauthError(w, http.StatusBadRequest, "invalid_grant", "unknown refresh token")
 		return
 	}
+	clientAuth, err := t.authenticateBoundClient(r, old)
+	if err != nil {
+		oauthError(w, http.StatusUnauthorized, "invalid_client", err.Error())
+		return
+	}
 	// Rotate: mint a new refresh token in the same chain and consume the old.
 	newRefresh := RefreshToken{
-		Token:     randomToken(),
-		Subject:   old.Subject,
-		Scope:     old.Scope,
-		ChainID:   old.ChainID,
-		ExpiresAt: time.Now().Add(t.refreshTTL),
+		Token:      randomToken(),
+		Subject:    old.Subject,
+		Actor:      old.Actor,
+		ClientID:   old.ClientID,
+		ClientAuth: clientAuth,
+		Scope:      old.Scope,
+		ChainID:    old.ChainID,
+		ExpiresAt:  time.Now().Add(t.refreshTTL),
 	}
 	if err := t.refresh.Rotate(presented, newRefresh); err != nil {
 		// Reuse or invalid → deny (chain already revoked on reuse).
 		oauthError(w, http.StatusBadRequest, "invalid_grant", "refresh token rejected")
 		return
 	}
-	t.issueRotated(w, old.Subject, old.Scope, newRefresh.Token)
+	t.issueRotated(w, Attribution{Principal: old.Subject, Actor: old.Actor, ClientAuth: clientAuth}, old.Scope, newRefresh.Token)
 }
 
 // issue mints access+refresh for a fresh login (new chain).
-func (t *tokenEndpoint) issue(w http.ResponseWriter, sub, scope, chainID string) {
+func (t *tokenEndpoint) issue(w http.ResponseWriter, attribution Attribution, scope, chainID, clientID string) {
 	if scope == "" {
 		scope = ScopeFull
 	}
-	access, exp, err := t.issuer.Mint(sub, scope, t.accessTTL)
+	access, exp, err := t.issuer.Mint(attribution, scope, t.accessTTL)
 	if err != nil {
 		oauthError(w, http.StatusInternalServerError, "server_error", "mint failed")
 		return
 	}
 	refreshTok := RefreshToken{
-		Token:     randomToken(),
-		Subject:   sub,
-		Scope:     scope,
-		ChainID:   chainID,
-		ExpiresAt: time.Now().Add(t.refreshTTL),
+		Token:      randomToken(),
+		Subject:    attribution.Principal,
+		Actor:      attribution.Actor,
+		ClientID:   clientID,
+		ClientAuth: attribution.ClientAuth,
+		Scope:      scope,
+		ChainID:    chainID,
+		ExpiresAt:  time.Now().Add(t.refreshTTL),
 	}
 	if err := t.refresh.Save(refreshTok); err != nil {
 		oauthError(w, http.StatusInternalServerError, "server_error", "refresh save failed")
@@ -305,11 +362,11 @@ func (t *tokenEndpoint) issue(w http.ResponseWriter, sub, scope, chainID string)
 
 // issueRotated mints a new access token alongside an already-persisted rotated
 // refresh token.
-func (t *tokenEndpoint) issueRotated(w http.ResponseWriter, sub, scope, refreshTok string) {
+func (t *tokenEndpoint) issueRotated(w http.ResponseWriter, attribution Attribution, scope, refreshTok string) {
 	if scope == "" {
 		scope = ScopeFull
 	}
-	access, exp, err := t.issuer.Mint(sub, scope, t.accessTTL)
+	access, exp, err := t.issuer.Mint(attribution, scope, t.accessTTL)
 	if err != nil {
 		oauthError(w, http.StatusInternalServerError, "server_error", "mint failed")
 		return
@@ -327,6 +384,63 @@ func writeTokenResponse(w http.ResponseWriter, access, refresh, scope string, ex
 		RefreshToken: refresh,
 		Scope:        scope,
 	})
+}
+
+// revoke implements RFC 7009 for refresh tokens. The response is deliberately
+// 200 for unknown tokens so callers cannot probe the refresh-token store.
+func (t *tokenEndpoint) revoke(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		oauthError(w, http.StatusMethodNotAllowed, "invalid_request", "POST required")
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		oauthError(w, http.StatusBadRequest, "invalid_request", "malformed form")
+		return
+	}
+	presented := r.Form.Get("token")
+	if presented != "" {
+		if token, ok, err := t.refresh.Lookup(presented); err != nil {
+			oauthError(w, http.StatusInternalServerError, "server_error", "lookup failed")
+			return
+		} else if ok {
+			clientAuth, authErr := t.authenticateBoundClient(r, token)
+			if authErr != nil {
+				oauthError(w, http.StatusUnauthorized, "invalid_client", authErr.Error())
+				return
+			}
+			if err := t.refresh.RevokeChain(token.ChainID); err != nil {
+				oauthError(w, http.StatusInternalServerError, "server_error", "revoke failed")
+				return
+			}
+			if t.audit != nil {
+				_ = t.audit.Record(r.Context(), AuditEvent{Type: "token.revoke", Attribution: Attribution{
+					Principal: token.Subject, Actor: token.Actor, ClientAuth: clientAuth,
+				}, Details: map[string]any{"chain_id": token.ChainID}})
+			}
+		}
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+}
+
+func (t *tokenEndpoint) authenticateBoundClient(r *http.Request, token RefreshToken) (ClientAuthLevel, error) {
+	if token.ClientID == "" {
+		return token.ClientAuth, nil
+	}
+	if r.Form.Get("client_id") != token.ClientID {
+		return "", errors.New("client_id mismatch")
+	}
+	if strings.HasPrefix(token.ClientID, "https://") {
+		if t.cimd == nil || t.clientAuth == nil {
+			return "", errors.New("client authentication unavailable")
+		}
+		client, err := t.cimd.Resolve(r.Context(), token.ClientID)
+		if err != nil {
+			return "", errors.New("client metadata unavailable")
+		}
+		return t.clientAuth.Authenticate(r, client)
+	}
+	return token.ClientAuth, nil
 }
 
 func oauthError(w http.ResponseWriter, status int, code, desc string) {

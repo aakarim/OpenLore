@@ -177,8 +177,11 @@ https://your-host/authorize
 ```
 
 OpenLore validates the request and shows the passkey login page. On successful
-authentication it redirects the browser back to your `redirect_uri` with an
-authorization `code` (and your `state`). The client then exchanges the code:
+authentication, dynamically registered clients see a consent screen that
+selects or creates their `name@redirect-domain` identity and can subtract
+docsets and capabilities from the human's authority. OpenLore then redirects
+the browser back to your `redirect_uri` with an authorization `code` (and your
+`state`). The client exchanges the code:
 
 ```bash
 curl -X POST https://your-host/oauth/token \
@@ -189,9 +192,16 @@ curl -X POST https://your-host/oauth/token \
 # => {"access_token":"...","refresh_token":"...","token_type":"Bearer","expires_in":1800}
 ```
 
-`redirect_uri` must be a loopback address (`http://127.0.0.1` / `localhost`) or
-a custom application scheme (e.g. `obsidian://…`); remote origins are rejected
-to prevent open redirects.
+Delegated access tokens retain the human in `sub` for compatibility and carry
+the OAuth client in the RFC 8693 actor claim:
+
+```json
+{"sub":"adil","act":{"sub":"claude@claude.ai"}}
+```
+
+`redirect_uri` must be an HTTPS origin or a loopback address
+(`http://127.0.0.1` / `localhost`). Other HTTP origins and custom application
+schemes are rejected.
 
 ## Obsidian plugin setup
 

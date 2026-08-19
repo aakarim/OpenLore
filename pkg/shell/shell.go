@@ -46,6 +46,10 @@ type Shell struct {
 	skillsManagement     bool
 	skillsRemoteTimeout  time.Duration
 	skillsRemoteMaxBytes int64
+	attribution          cmds.JobAttribution
+	configReload         cmds.ConfigReloadBackend
+	history              cmds.HistoryBackend
+	jobs                 cmds.JobBackend
 }
 
 // UnsupportedUsage describes a command or shell syntax that OpenLore does not
@@ -146,8 +150,16 @@ func (s *Shell) SkillsManagementEnabled() bool           { return s.skillsManage
 func (s *Shell) SetSkillsRemoteConfig(timeout time.Duration, maxBytes int64) {
 	s.skillsRemoteTimeout, s.skillsRemoteMaxBytes = timeout, maxBytes
 }
-func (s *Shell) SkillsRemoteTimeout() time.Duration { return s.skillsRemoteTimeout }
-func (s *Shell) SkillsRemoteMaxBytes() int64        { return s.skillsRemoteMaxBytes }
+func (s *Shell) SkillsRemoteTimeout() time.Duration                { return s.skillsRemoteTimeout }
+func (s *Shell) SkillsRemoteMaxBytes() int64                       { return s.skillsRemoteMaxBytes }
+func (s *Shell) SetCommandAttribution(a cmds.JobAttribution)       { s.attribution = a }
+func (s *Shell) CommandAttribution() cmds.JobAttribution           { return s.attribution }
+func (s *Shell) SetConfigReloadBackend(b cmds.ConfigReloadBackend) { s.configReload = b }
+func (s *Shell) ConfigReloadBackend() cmds.ConfigReloadBackend     { return s.configReload }
+func (s *Shell) SetHistoryBackend(b cmds.HistoryBackend)           { s.history = b }
+func (s *Shell) HistoryBackend() cmds.HistoryBackend               { return s.history }
+func (s *Shell) SetJobBackend(b cmds.JobBackend)                   { s.jobs = b }
+func (s *Shell) JobBackend() cmds.JobBackend                       { return s.jobs }
 
 // --- CmdContext interface implementation ---
 

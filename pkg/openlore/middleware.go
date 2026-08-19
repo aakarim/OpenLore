@@ -6,16 +6,24 @@ import (
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
 
-// Actor is non-durable context about the principal that triggered an operation.
-// It flows into middleware for decisions, gating, and audit. It is deliberately
-// NOT part of vfs.ChangeSet: proposer/approver identity is the consumer's record
-// and decision input, never part of the content-addressed change.
-type Actor struct {
-	ID    string
-	Extra map[string]string
+// Attribution identifies the principal whose authority is being exercised and,
+// for delegated execution, the actor exercising it. It remains outside the
+// content-addressed ChangeSet and is persisted alongside each commit.
+type Attribution struct {
+	Principal  string            `json:"principal"`
+	Actor      string            `json:"actor,omitempty"`
+	ClientAuth ClientAuthLevel   `json:"client_auth,omitempty"`
+	Extra      map[string]string `json:"-"`
 	// internal is an unforgeable package capability. Public callers can set ID
 	// for attribution, but only OpenLore's own submission path can set this bit.
 	internal bool
+}
+
+func (a Attribution) String() string {
+	if a.Actor == "" {
+		return a.Principal
+	}
+	return a.Principal + "/" + a.Actor
 }
 
 // ── Admission (pre-commit write) chain ──────────────────────────────────────
@@ -35,14 +43,14 @@ type Actor struct {
 
 // WriteOp is the input to the admission chain.
 type WriteOp struct {
-	changeSet vfs.ChangeSet
-	Actor     Actor
+	changeSet   vfs.ChangeSet
+	Attribution Attribution
 }
 
 // NewWriteOp constructs an immutable admission operation. The changeset is
 // intentionally not exposed: policy middleware must inspect every leaf.
-func NewWriteOp(actor Actor, cs vfs.ChangeSet) WriteOp {
-	return WriteOp{changeSet: cloneWriteChangeSet(cs), Actor: actor}
+func NewWriteOp(attribution Attribution, cs vfs.ChangeSet) WriteOp {
+	return WriteOp{changeSet: cloneWriteChangeSet(cs), Attribution: attribution}
 }
 
 // Leaves returns every proposed mutation in execution order.
@@ -147,9 +155,9 @@ func chainWrite(terminal WriteHandler, mws ...WriteMiddleware) WriteHandler {
 
 // CommitInfo describes a committed change.
 type CommitInfo struct {
-	ChangeSet vfs.ChangeSet
-	Hash      string
-	Actor     Actor
+	ChangeSet   vfs.ChangeSet
+	Hash        string
+	Attribution Attribution
 }
 
 // PostCommitHandler processes a committed change.
@@ -191,9 +199,9 @@ const (
 
 // ReadOp is the input to the read chain.
 type ReadOp struct {
-	Path  string
-	Kind  ReadKind
-	Actor Actor
+	Path        string
+	Kind        ReadKind
+	Attribution Attribution
 }
 
 // ReadHandler runs the before-read step. A non-nil error aborts the read.

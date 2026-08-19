@@ -67,14 +67,14 @@ func TestAgentSkillsUsesDynamicMarkersForDiscoveryAndAdmission(t *testing.T) {
 	bad := vfs.ChangeSet{Target: "/skills/valid/SKILL.md", Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: skillBytes("wrong")}}
 	reached := false
 	h := p.WriteMiddleware()[0](func(context.Context, WriteOp) (WriteResult, error) { reached = true; return WriteResult{}, nil })
-	if _, err := h(context.Background(), NewWriteOp(Actor{}, bad)); err == nil || reached {
+	if _, err := h(context.Background(), NewWriteOp(Attribution{}, bad)); err == nil || reached {
 		t.Fatalf("invalid marked write reached terminal: %v", err)
 	}
 	if err := d.RemoveXattr("/skills", agentSkillsMarker); err != nil {
 		t.Fatal(err)
 	}
 	reached = false
-	if _, err := h(context.Background(), NewWriteOp(Actor{}, bad)); err != nil || !reached {
+	if _, err := h(context.Background(), NewWriteOp(Attribution{}, bad)); err != nil || !reached {
 		t.Fatalf("removed marker was not dynamically observed: reached=%v err=%v", reached, err)
 	}
 }
@@ -82,7 +82,7 @@ func TestAgentSkillsUsesDynamicMarkersForDiscoveryAndAdmission(t *testing.T) {
 func TestAgentSkillsDeletionAllowedAndDisabledExcluded(t *testing.T) {
 	d := markedSkillsFS(t)
 	p := newAgentSkills(map[string]config.DocsetSpec{"skills": {Paths: []config.PathMapping{{Source: "/skills", Display: "/skills"}}}}, d, nil, slog.Default())
-	if err := p.validateMutation(Actor{}, vfs.ChangeSet{Target: "/skills/valid/SKILL.md", Action: vfs.ChangeActionRemove}); err != nil {
+	if err := p.validateMutation(Attribution{}, vfs.ChangeSet{Target: "/skills/valid/SKILL.md", Action: vfs.ChangeActionRemove}); err != nil {
 		t.Fatalf("deletion rejected: %v", err)
 	}
 	disabled := []byte("---\nname: valid\ndescription: useful\nmetadata:\n  agent_skill: disable\n---\n")
@@ -104,13 +104,13 @@ func TestAgentSkillsMarkerSetValidatesEntireTreeAtPreApply(t *testing.T) {
 	}
 	p := newAgentSkills(map[string]config.DocsetSpec{"skills": {Paths: []config.PathMapping{{Source: "/skills", Display: "/skills"}}}}, d, nil, slog.Default())
 	cs := vfs.ChangeSet{Target: "/skills", Action: vfs.ChangeActionSetXattr, Xattr: &vfs.XattrChange{Name: agentSkillsMarker}}
-	if err := p.validateMutation(Actor{}, cs); err == nil {
+	if err := p.validateMutation(Attribution{}, cs); err == nil {
 		t.Fatal("invalid recursive collection accepted before marker commit")
 	}
 	if err := os.WriteFile(filepath.Join(d.root, "skills", "bad", "SKILL.md"), skillBytes("bad"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.validateMutation(Actor{}, cs); err != nil {
+	if err := p.validateMutation(Attribution{}, cs); err != nil {
 		t.Fatalf("valid recursive collection rejected: %v", err)
 	}
 }
@@ -143,7 +143,7 @@ func TestAgentSkillsNormalizesSurgicalRemoteEditBeforeAdmission(t *testing.T) {
 		return WriteResult{}, nil
 	})
 	cs := vfs.ChangeSet{Target: "/skills/valid/SKILL.md", Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: incoming}}
-	if _, err := h(context.Background(), NewWriteOp(Actor{}, cs)); err != nil {
+	if _, err := h(context.Background(), NewWriteOp(Attribution{}, cs)); err != nil {
 		t.Fatal(err)
 	}
 	remote, linked, err := agentskills.ReadRemote(committed)
@@ -172,7 +172,7 @@ func TestAgentSkillsRejectsInvalidSurgicalRemote(t *testing.T) {
 		return WriteResult{}, nil
 	})
 	cs := vfs.ChangeSet{Target: "/skills/valid/SKILL.md", Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: incoming}}
-	if _, err := h(context.Background(), NewWriteOp(Actor{}, cs)); err == nil || reached {
+	if _, err := h(context.Background(), NewWriteOp(Attribution{}, cs)); err == nil || reached {
 		t.Fatalf("invalid remote reached terminal: reached=%v err=%v", reached, err)
 	}
 }
@@ -196,7 +196,7 @@ func TestAgentSkillsLinkedProtectionRequiresEffectiveCollection(t *testing.T) {
 		reached = true
 		return WriteResult{}, nil
 	})
-	if _, err := h(context.Background(), NewWriteOp(Actor{}, cs)); err != nil || !reached {
+	if _, err := h(context.Background(), NewWriteOp(Attribution{}, cs)); err != nil || !reached {
 		t.Fatalf("ineffective linked skill stayed protected: reached=%v err=%v", reached, err)
 	}
 }
@@ -208,7 +208,7 @@ func TestAgentSkillsEmptyChangesSingletonStaysValid(t *testing.T) {
 	h := p.WriteMiddleware()[0](func(_ context.Context, op WriteOp) (WriteResult, error) {
 		return WriteResult{}, vfs.ValidateChangeSet(op.persistenceChangeSet())
 	})
-	if _, err := h(context.Background(), NewWriteOp(Actor{}, cs)); err != nil {
+	if _, err := h(context.Background(), NewWriteOp(Attribution{}, cs)); err != nil {
 		t.Fatalf("singleton with empty changes rejected: %v", err)
 	}
 }
@@ -329,13 +329,13 @@ func TestAgentSkillsPreApplyBypassIsActorScoped(t *testing.T) {
 	}
 	p := newAgentSkills(map[string]config.DocsetSpec{"skills": {Paths: []config.PathMapping{{Source: "/skills", Display: "/skills"}}}}, d, nil, slog.Default())
 	change := vfs.ChangeSet{Target: "/skills/valid/local.md", Action: vfs.ChangeActionRemove}
-	if err := p.validateMutation(Actor{ID: "user"}, change); err == nil {
+	if err := p.validateMutation(Attribution{Principal: "user"}, change); err == nil {
 		t.Fatal("user mutation bypassed linked-skill protection")
 	}
-	if err := p.validateMutation(Actor{ID: "agent_skills_remote", internal: true}, change); err != nil {
+	if err := p.validateMutation(Attribution{Principal: "agent_skills_remote", internal: true}, change); err != nil {
 		t.Fatalf("internal actor was not trusted: %v", err)
 	}
-	if err := p.validateMutation(Actor{ID: "agent_skills_remote"}, change); err == nil {
+	if err := p.validateMutation(Attribution{Principal: "agent_skills_remote"}, change); err == nil {
 		t.Fatal("spoofed internal actor ID bypassed protection")
 	}
 }

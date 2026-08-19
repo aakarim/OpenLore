@@ -135,6 +135,13 @@ transport. A connection is handled entirely against a virtual filesystem:
 4. **Contribute safely** — if writing is enabled, authorize and validate a
    whole-file change before committing it atomically or routing it for approval.
 
+OAuth clients use delegated identities, so durable write provenance distinguishes
+direct work by `adil` from work performed as `adil/claude@claude.ai`. Delegates
+can inherit no more authority than their principal and can be narrowed by
+docset and capability deny lists. CIMD clients can additionally authenticate
+with vendor-hosted metadata and `private_key_jwt`; see
+[Authenticated OAuth Clients](docs/authenticated-oauth-clients.md).
+
 The normal shell cannot invoke `bash`, `exec`, `curl`, or arbitrary host
 processes. Embedded documentation is always read-only. Explicitly trusted
 identities can be granted narrowly scoped asynchronous processing through the

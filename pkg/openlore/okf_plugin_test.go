@@ -28,7 +28,7 @@ func runOKF(p *okfPlugin, cs vfs.ChangeSet) (reachedTerminal bool, err error) {
 		return WriteResult{Hash: "ok"}, nil
 	}
 	h := mws[0](terminal)
-	_, err = h(context.Background(), NewWriteOp(Actor{}, cs))
+	_, err = h(context.Background(), NewWriteOp(Attribution{}, cs))
 	return reachedTerminal, err
 }
 

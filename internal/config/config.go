@@ -52,6 +52,7 @@ type Config struct {
 	APIPath      string
 	TLSCert      string
 	TLSKey       string
+	MTLS         MTLSConfig
 	CAKeysFile   string
 	HostCertFile string
 	Files        FilesConfig
@@ -293,11 +294,14 @@ type OIDCIssuer struct {
 	JWKS      JWKSSpec `yaml:"jwks" json:"jwks,omitempty"`
 }
 
-// JWKSSpec configures how an OIDC issuer's public keys are obtained. Only
-// "discovery" (fetch from the issuer's .well-known/openid-configuration) is
-// supported today; empty defaults to discovery.
+// JWKSSpec configures how an OIDC issuer's public keys are obtained.
+// "discovery" (default) fetches them via the issuer's
+// .well-known/openid-configuration; "url" fetches a JWKS document directly from
+// URL, for issuers that publish keys without a discovery document (e.g. a SPIRE
+// trust-bundle endpoint).
 type JWKSSpec struct {
-	Mode string `yaml:"mode" json:"mode,omitempty"` // "discovery" (default)
+	Mode string `yaml:"mode" json:"mode,omitempty"` // "discovery" (default) or "url"
+	URL  string `yaml:"url" json:"url,omitempty"`   // JWKS document URL; required iff mode is "url"
 }
 
 // DocsetSpec defines a named set of path mappings.
@@ -377,8 +381,10 @@ func (p *PathMapping) UnmarshalJSON(data []byte) error {
 
 // AuthIdentity defines a user identity and its role membership.
 type AuthIdentity struct {
-	Name    string `json:"name"`
-	Comment string `json:"comment,omitempty"`
+	Name             string            `json:"name"`
+	Comment          string            `json:"comment,omitempty"`
+	CreatedBy        string            `json:"created_by,omitempty"`
+	ClientIDMetadata *ClientIDMetadata `json:"client_id_metadata,omitempty"`
 	// PublicKey is optional: an identity may exist purely as a passkey/token
 	// login target (no SSH key). Empty = no SSH public-key auth for this identity.
 	PublicKey string   `json:"public_key,omitempty"`
@@ -399,6 +405,47 @@ type AuthIdentity struct {
 	// Name resolves here implicitly. WIF exchanges (jwt-bearer) match on
 	// `sub`/`sub_prefix`/`aud`/`claims` entries with narrowing `scope`/`ttl`.
 	Match []IdentityMatch `json:"match,omitempty"`
+	// Delegates are identities permitted to act on behalf of this principal.
+	// An omitted Roles field inherits all principal roles; a present field is
+	// intersected with the principal's roles. Denials always subtract authority.
+	Delegates []DelegateEntry `json:"delegates,omitempty"`
+}
+
+type ClientIDMetadata struct {
+	URL        string    `json:"url"`
+	PinnedName string    `json:"pinned_name"`
+	FirstSeen  time.Time `json:"first_seen"`
+}
+
+// DelegateEntry grants an identity permission to act for a principal while
+// capping its authority at the principal's current authority.
+type DelegateEntry struct {
+	Identity         string   `json:"identity"`
+	Roles            []string `json:"roles,omitempty"`
+	DenyDocsets      []string `json:"deny_docsets,omitempty"`
+	DenyCapabilities []string `json:"deny_capabilities,omitempty"`
+}
+
+// MarshalJSON preserves the semantic distinction between an omitted roles
+// field (inherit all principal roles) and an explicitly empty list (inherit no
+// roles). encoding/json's ordinary omitempty handling collapses those states.
+func (d DelegateEntry) MarshalJSON() ([]byte, error) {
+	type wire struct {
+		Identity         string   `json:"identity"`
+		Roles            []string `json:"roles,omitempty"`
+		DenyDocsets      []string `json:"deny_docsets,omitempty"`
+		DenyCapabilities []string `json:"deny_capabilities,omitempty"`
+	}
+	if d.Roles == nil {
+		return json.Marshal(wire(d))
+	}
+	type wireWithRoles struct {
+		Identity         string   `json:"identity"`
+		Roles            []string `json:"roles"`
+		DenyDocsets      []string `json:"deny_docsets,omitempty"`
+		DenyCapabilities []string `json:"deny_capabilities,omitempty"`
+	}
+	return json.Marshal(wireWithRoles(d))
 }
 
 // IdentityMatch is a token-claim predicate attached to an AuthIdentity. When a
@@ -420,38 +467,47 @@ type Option func(*Config) error
 
 // fileConfig mirrors Config for YAML deserialization.
 type fileConfig struct {
-	ConfigVersion       string           `yaml:"version"`
-	Debug               bool             `yaml:"debug"`
-	Port                int              `yaml:"port"`
-	MetricsPort         int              `yaml:"metrics_port"`
-	HostKeyPath         string           `yaml:"host_key_path"`
-	MOTD                string           `yaml:"motd"`
-	MOTDFile            string           `yaml:"motd_file"`
-	AuthFile            string           `yaml:"auth_file"`
-	SkillsDir           string           `yaml:"skills_dir"`
-	WritableDir         string           `yaml:"writable_dir"`
-	DataDir             string           `yaml:"data_dir"`
-	HTTPPort            int              `yaml:"http_port"`
-	ExternalSSHPort     int              `yaml:"external_ssh_port"`
-	MCP                 *mcpYAML         `yaml:"mcp"`
-	API                 *apiYAML         `yaml:"api"`
-	TLSCert             string           `yaml:"tls_cert"`
-	TLSKey              string           `yaml:"tls_key"`
-	CAKeysFile          string           `yaml:"ca_keys_file"`
-	HostCertFile        string           `yaml:"host_cert_file"`
-	DefaultCwd          string           `yaml:"default_cwd"`
-	Files               *filesYAML       `yaml:"files"`
-	Passkeys            *passkeysYAML    `yaml:"passkeys"`
-	Shellexec           *ShellexecConfig `yaml:"shellexec"`
-	Readonly            *bool            `yaml:"readonly"`
-	WriteConflictPolicy string           `yaml:"write_conflict_policy"`
-	MaxJobs             int              `yaml:"max_jobs"`
+	ConfigVersion       string                 `yaml:"version"`
+	Debug               bool                   `yaml:"debug"`
+	Port                int                    `yaml:"port"`
+	MetricsPort         int                    `yaml:"metrics_port"`
+	HostKeyPath         string                 `yaml:"host_key_path"`
+	MOTD                string                 `yaml:"motd"`
+	MOTDFile            string                 `yaml:"motd_file"`
+	AuthFile            string                 `yaml:"auth_file"`
+	SkillsDir           string                 `yaml:"skills_dir"`
+	WritableDir         string                 `yaml:"writable_dir"`
+	DataDir             string                 `yaml:"data_dir"`
+	HTTPPort            int                    `yaml:"http_port"`
+	ExternalSSHPort     int                    `yaml:"external_ssh_port"`
+	MCP                 *mcpYAML               `yaml:"mcp"`
+	API                 *apiYAML               `yaml:"api"`
+	TLSCert             string                 `yaml:"tls_cert"`
+	TLSKey              string                 `yaml:"tls_key"`
+	Auth                authInfrastructureYAML `yaml:"auth"`
+	CAKeysFile          string                 `yaml:"ca_keys_file"`
+	HostCertFile        string                 `yaml:"host_cert_file"`
+	DefaultCwd          string                 `yaml:"default_cwd"`
+	Files               *filesYAML             `yaml:"files"`
+	Passkeys            *passkeysYAML          `yaml:"passkeys"`
+	Shellexec           *ShellexecConfig       `yaml:"shellexec"`
+	Readonly            *bool                  `yaml:"readonly"`
+	WriteConflictPolicy string                 `yaml:"write_conflict_policy"`
+	MaxJobs             int                    `yaml:"max_jobs"`
 	// Tokens + OIDCIssuers are server infrastructure (bearer-token issuance for
 	// the MCP + HTTP API), hence configured here rather than in lore.json.
 	Tokens      *AuthTokensConfig `yaml:"tokens"`
 	OIDCIssuers []OIDCIssuer      `yaml:"oidc_issuers"`
 	Inbox       *inboxYAML        `yaml:"inbox"`
 	Plugins     pluginsYAML       `yaml:"plugins"`
+}
+
+type authInfrastructureYAML struct {
+	MTLS MTLSConfig `yaml:"mtls"`
+}
+
+type MTLSConfig struct {
+	CABundle string `yaml:"ca_bundle" json:"ca_bundle,omitempty"`
 }
 
 type pluginsYAML struct {
@@ -633,6 +689,7 @@ func WithConfigFile(path string) Option {
 		if fc.TLSKey != "" {
 			cfg.TLSKey = fc.TLSKey
 		}
+		cfg.MTLS = fc.Auth.MTLS
 		if fc.CAKeysFile != "" {
 			cfg.CAKeysFile = fc.CAKeysFile
 		}
@@ -752,6 +809,7 @@ func WithEmbeddedConfig(data []byte, motdFallback string) Option {
 			if fc.TLSKey != "" {
 				cfg.TLSKey = fc.TLSKey
 			}
+			cfg.MTLS = fc.Auth.MTLS
 			if fc.CAKeysFile != "" {
 				cfg.CAKeysFile = fc.CAKeysFile
 			}
@@ -1152,6 +1210,12 @@ func ValidateAuthConfig(auth *AuthConfig) error {
 		if ident.Name == "" || strings.TrimSpace(ident.Name) != ident.Name {
 			return fmt.Errorf("invalid identity name %q", ident.Name)
 		}
+		if strings.Contains(ident.Name, "/") || (strings.Contains(ident.Name, "@") && ident.CreatedBy != "oauth") {
+			return fmt.Errorf("identity name %q uses a reserved character", ident.Name)
+		}
+		if ident.CreatedBy != "" && ident.CreatedBy != "oauth" {
+			return fmt.Errorf("identity %q has unsupported created_by %q", ident.Name, ident.CreatedBy)
+		}
 		if ident.Name == "guest" || ident.Name == "anonymous" {
 			return fmt.Errorf("identity %q is reserved", ident.Name)
 		}
@@ -1181,6 +1245,35 @@ func ValidateAuthConfig(auth *AuthConfig) error {
 				return fmt.Errorf("identity %q references unknown role %q", ident.Name, role)
 			}
 		}
+		delegateNames := map[string]bool{}
+		for _, delegate := range ident.Delegates {
+			if delegate.Identity == "" || strings.TrimSpace(delegate.Identity) != delegate.Identity || strings.Contains(delegate.Identity, "/") {
+				return fmt.Errorf("identity %q has invalid delegate %q", ident.Name, delegate.Identity)
+			}
+			if delegateNames[delegate.Identity] {
+				return fmt.Errorf("identity %q has duplicate delegate %q", ident.Name, delegate.Identity)
+			}
+			delegateNames[delegate.Identity] = true
+			if err := validateNames(fmt.Sprintf("identity %q delegate %q roles", ident.Name, delegate.Identity), delegate.Roles); err != nil {
+				return err
+			}
+			for _, role := range delegate.Roles {
+				if _, ok := auth.Roles[role]; !ok {
+					return fmt.Errorf("identity %q delegate %q references unknown role %q", ident.Name, delegate.Identity, role)
+				}
+			}
+			if err := validateNames(fmt.Sprintf("identity %q delegate %q denied docsets", ident.Name, delegate.Identity), delegate.DenyDocsets); err != nil {
+				return err
+			}
+			for _, docset := range delegate.DenyDocsets {
+				if _, ok := auth.Docsets[docset]; !ok {
+					return fmt.Errorf("identity %q delegate %q denies unknown docset %q", ident.Name, delegate.Identity, docset)
+				}
+			}
+			if err := validateNames(fmt.Sprintf("identity %q delegate %q denied capabilities", ident.Name, delegate.Identity), delegate.DenyCapabilities); err != nil {
+				return err
+			}
+		}
 		if ident.Home != "" {
 			if _, ok := auth.Docsets[ident.Home]; !ok {
 				return fmt.Errorf("identity %q references unknown home docset %q", ident.Name, ident.Home)
@@ -1189,6 +1282,13 @@ func ValidateAuthConfig(auth *AuthConfig) error {
 				return fmt.Errorf("identities %q and %q share home docset %q", other, ident.Name, ident.Home)
 			}
 			homes[ident.Home] = ident.Name
+		}
+	}
+	for _, ident := range auth.Identities {
+		for _, delegate := range ident.Delegates {
+			if !identities[delegate.Identity] {
+				return fmt.Errorf("identity %q references unknown delegate identity %q", ident.Name, delegate.Identity)
+			}
 		}
 	}
 	for docset, ds := range auth.Docsets {

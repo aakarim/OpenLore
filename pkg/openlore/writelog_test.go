@@ -58,6 +58,10 @@ type wlGatedFS struct {
 	gate    chan struct{}
 }
 
+type failingCommitRecorder struct{ err error }
+
+func (r failingCommitRecorder) RecordCommit(context.Context, CommitRecord) error { return r.err }
+
 func (g *wlGatedFS) WriteFileAtomic(name string, data []byte, opts vfs.WriteOpts) (string, error) {
 	g.entered <- name
 	<-g.gate
@@ -78,7 +82,7 @@ func TestWriteLog_AppliesInOrderAndAwaits(t *testing.T) {
 	defer l.Close(context.Background())
 
 	for _, p := range []string{"/a", "/b", "/c"} {
-		h, err := l.Submit(context.Background(), Actor{}, writeCS(p))
+		h, err := l.Submit(context.Background(), Attribution{}, writeCS(p))
 		if err != nil {
 			t.Fatalf("submit %s: %v", p, err)
 		}
@@ -103,7 +107,7 @@ func TestWriteLog_PostCommitRunsWithActorAndDoesNotBlockSubmit(t *testing.T) {
 	l := newWriteLog(fs, pc, nil, 4)
 	defer l.Close(context.Background())
 
-	h, err := l.Submit(context.Background(), Actor{ID: "agent-9"}, writeCS("/a"))
+	h, err := l.Submit(context.Background(), Attribution{Principal: "agent-9"}, writeCS("/a"))
 	if err != nil {
 		t.Fatalf("submit err (post-commit failure must not surface): %v", err)
 	}
@@ -112,11 +116,26 @@ func TestWriteLog_PostCommitRunsWithActorAndDoesNotBlockSubmit(t *testing.T) {
 	}
 	select {
 	case info := <-seen:
-		if info.Actor.ID != "agent-9" || info.Hash != "h:/a" || info.ChangeSet.Target != "/a" {
+		if info.Attribution.Principal != "agent-9" || info.Hash != "h:/a" || info.ChangeSet.Target != "/a" {
 			t.Fatalf("post-commit info = %+v", info)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("post-commit chain did not run")
+	}
+}
+
+func TestWriteLog_RecorderFailureDoesNotTurnCommittedWriteIntoFailure(t *testing.T) {
+	fs := &wlRecordingFS{}
+	l := newWriteLog(fs, nil, nil, 1)
+	l.SetCommitRecorder(failingCommitRecorder{err: errors.New("history disk full")})
+	defer l.Close(context.Background())
+
+	hash, err := l.Submit(context.Background(), Attribution{Principal: "alice"}, writeCS("/committed"))
+	if err != nil || hash != "h:/committed" {
+		t.Fatalf("durable commit reported hash=%q err=%v", hash, err)
+	}
+	if got := fs.order(); len(got) != 1 || got[0] != "/committed" {
+		t.Fatalf("applied=%v", got)
 	}
 }
 
@@ -128,7 +147,7 @@ func TestWriteLog_ApplyErrorSkipsPostCommit(t *testing.T) {
 	l := newWriteLog(fs, pc, nil, 4)
 	defer l.Close(context.Background())
 
-	if _, err := l.Submit(context.Background(), Actor{}, writeCS("/x")); !errors.Is(err, boom) {
+	if _, err := l.Submit(context.Background(), Attribution{}, writeCS("/x")); !errors.Is(err, boom) {
 		t.Fatalf("want cas drift, got %v", err)
 	}
 	select {
@@ -144,7 +163,7 @@ func TestWriteLog_ApplyErrorPropagates(t *testing.T) {
 	l := newWriteLog(fs, nil, nil, 4)
 	defer l.Close(context.Background())
 
-	_, err := l.Submit(context.Background(), Actor{}, writeCS("/x"))
+	_, err := l.Submit(context.Background(), Attribution{}, writeCS("/x"))
 	if !errors.Is(err, boom) {
 		t.Fatalf("want cas drift error, got %v", err)
 	}
@@ -155,7 +174,7 @@ func TestWriteLog_SubmitAfterCloseReturnsClosed(t *testing.T) {
 	if err := l.Close(context.Background()); err != nil {
 		t.Fatalf("close: %v", err)
 	}
-	if _, err := l.Submit(context.Background(), Actor{}, writeCS("/a")); !errors.Is(err, ErrLogClosed) {
+	if _, err := l.Submit(context.Background(), Attribution{}, writeCS("/a")); !errors.Is(err, ErrLogClosed) {
 		t.Fatalf("want ErrLogClosed, got %v", err)
 	}
 	// Close is idempotent.
@@ -172,7 +191,7 @@ func TestWriteLog_CloseDrainsInFlightAndQueued(t *testing.T) {
 	l := newWriteLog(fs, nil, nil, 8)
 
 	results := make(chan error, 2)
-	go func() { _, err := l.Submit(context.Background(), Actor{}, writeCS("/a")); results <- err }()
+	go func() { _, err := l.Submit(context.Background(), Attribution{}, writeCS("/a")); results <- err }()
 
 	// Applier has consumed /a and is blocked applying it.
 	if got := <-fs.entered; got != "/a" {
@@ -180,7 +199,7 @@ func TestWriteLog_CloseDrainsInFlightAndQueued(t *testing.T) {
 	}
 
 	// Submit /b; it lands in the buffer (applier is busy on /a).
-	go func() { _, err := l.Submit(context.Background(), Actor{}, writeCS("/b")); results <- err }()
+	go func() { _, err := l.Submit(context.Background(), Attribution{}, writeCS("/b")); results <- err }()
 	waitFor(t, func() bool { return len(l.ch) == 1 }) // /b is buffered
 
 	// Close now: channel closes while /a is in-flight and /b is queued.
@@ -227,7 +246,7 @@ func TestWriteLogPreflightsWholeBatchBeforeFirstMutation(t *testing.T) {
 		{Target: "/skills/imported", Action: vfs.ChangeActionMkdir},
 		{Target: "/skills/imported/payload.exe", Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: []byte("bad")}},
 	}}
-	if _, err := log.Submit(context.Background(), Actor{}, cs); err == nil {
+	if _, err := log.Submit(context.Background(), Attribution{}, cs); err == nil {
 		t.Fatal("policy-invalid batch accepted")
 	}
 	if _, err := dir.Stat("/skills/imported"); !errors.Is(err, os.ErrNotExist) {

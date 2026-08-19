@@ -37,14 +37,14 @@ const jobDrainTimeout = 5 * time.Second
 // persisted — a server restart loses in-flight jobs, which is acceptable for
 // ad-hoc operational write-back.
 type Job struct {
-	ID        string
-	Command   string
-	Target    string
-	Identity  string
-	State     JobState
-	Note      string // terminal detail: bytes written, pending request id, or error
-	StartedAt time.Time
-	EndedAt   time.Time
+	ID          string
+	Command     string
+	Target      string
+	Attribution Attribution
+	State       JobState
+	Note        string // terminal detail: bytes written, pending request id, or error
+	StartedAt   time.Time
+	EndedAt     time.Time
 }
 
 // JobManager runs JobSpecs on a bounded worker pool and keeps an in-memory
@@ -87,12 +87,12 @@ func (m *JobManager) Submit(spec cmds.JobSpec) (string, error) {
 		return "", err
 	}
 	job := &Job{
-		ID:        id,
-		Command:   spec.Command,
-		Target:    spec.Target,
-		Identity:  spec.Identity,
-		State:     JobRunning,
-		StartedAt: time.Now(),
+		ID:          id,
+		Command:     spec.Command,
+		Target:      spec.Target,
+		Attribution: Attribution{Principal: spec.Attribution.Principal, Actor: spec.Attribution.Actor, ClientAuth: ClientAuthLevel(spec.Attribution.ClientAuth)},
+		State:       JobRunning,
+		StartedAt:   time.Now(),
 	}
 	m.mu.Lock()
 	m.jobs[id] = job
@@ -135,13 +135,15 @@ func (m *JobManager) finish(job *Job, state JobState, note string) {
 	job.Note = note
 	job.EndedAt = time.Now()
 	m.mu.Unlock()
-	m.logger.Info("job finished", "job", job.ID, "state", state, "target", job.Target, "identity", job.Identity, "note", note)
+	m.logger.Info("job finished", "job", job.ID, "state", state, "target", job.Target, "identity", job.Attribution.String(), "note", note)
 }
 
 // jobEnv builds the environment for the spawned command.
 func (m *JobManager) jobEnv(spec cmds.JobSpec) []string {
 	return []string{
-		"OPENLORE_JOB_IDENTITY=" + spec.Identity,
+		"OPENLORE_IDENTITY=" + spec.Attribution.Principal,
+		"OPENLORE_ACTOR=" + spec.Attribution.Actor,
+		"OPENLORE_CLIENT_AUTH=" + spec.Attribution.ClientAuth,
 		"OPENLORE_JOB_TARGET=" + spec.Target,
 	}
 }
@@ -207,7 +209,7 @@ func renderJob(j Job) []byte {
 	var b strings.Builder
 	fmt.Fprintf(&b, "job:      %s\n", j.ID)
 	fmt.Fprintf(&b, "state:    %s\n", j.State)
-	fmt.Fprintf(&b, "identity: %s\n", j.Identity)
+	fmt.Fprintf(&b, "identity: %s\n", j.Attribution.String())
 	fmt.Fprintf(&b, "target:   %s\n", j.Target)
 	fmt.Fprintf(&b, "command:  %s\n", j.Command)
 	fmt.Fprintf(&b, "started:  %s\n", j.StartedAt.UTC().Format(time.RFC3339))

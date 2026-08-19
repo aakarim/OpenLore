@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/aakarim/go-openlore/internal/config"
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
 
@@ -57,7 +58,7 @@ func (r *recordPostCommit) snapshot() []CommitInfo {
 
 func newSeamServer(t *testing.T, root vfs.WritableFS) *Server {
 	t.Helper()
-	s, err := NewServerWithRootFS(root, WithReadonly(false))
+	s, err := NewServerWithRootFS(root, WithReadonly(false), config.WithDataDir(t.TempDir()))
 	if err != nil {
 		t.Fatalf("NewServerWithRootFS: %v", err)
 	}
@@ -71,7 +72,7 @@ func TestNewServerWithRootFS_WriteLogLive(t *testing.T) {
 	fs := &wlRecordingFS{}
 	s := newSeamServer(t, fs)
 
-	res, err := s.CommitChangeSet(context.Background(), Actor{ID: "a"}, writeCS("/x"))
+	res, err := s.CommitChangeSet(context.Background(), Attribution{Principal: "a"}, writeCS("/x"))
 	if err != nil {
 		t.Fatalf("CommitChangeSet: %v", err)
 	}
@@ -143,7 +144,7 @@ func TestRegisterPlugin_WriteMiddlewareGatesLaterWrite(t *testing.T) {
 	chain := s.writeChain()
 
 	// A gated write is deferred (parked) and never reaches the substrate.
-	_, err := chain(context.Background(), NewWriteOp(Actor{ID: "a"}, writeCS("/gated/a")))
+	_, err := chain(context.Background(), NewWriteOp(Attribution{Principal: "a"}, writeCS("/gated/a")))
 	var pce *vfs.PendingChangeError
 	if !errors.As(err, &pce) || pce.Ref != "held-1" {
 		t.Fatalf("gated write: want PendingChangeError held-1, got %v", err)
@@ -153,7 +154,7 @@ func TestRegisterPlugin_WriteMiddlewareGatesLaterWrite(t *testing.T) {
 	}
 
 	// An ungated write commits.
-	res, err := chain(context.Background(), NewWriteOp(Actor{ID: "a"}, writeCS("/ok")))
+	res, err := chain(context.Background(), NewWriteOp(Attribution{Principal: "a"}, writeCS("/ok")))
 	if err != nil || res.Hash != "h:/ok" {
 		t.Fatalf("ungated write: h=%q err=%v", res.Hash, err)
 	}
@@ -172,7 +173,7 @@ func TestRegisterPlugin_DefersBatchWhenLaterLeafMatches(t *testing.T) {
 		writeCS("/safe").Leaves()[0],
 		writeCS("/gated/later").Leaves()[0],
 	}}
-	_, err := s.writeChain()(context.Background(), NewWriteOp(Actor{ID: "a"}, cs))
+	_, err := s.writeChain()(context.Background(), NewWriteOp(Attribution{Principal: "a"}, cs))
 	var pending *vfs.PendingChangeError
 	if !errors.As(err, &pending) || pending.Ref != "held-batch" || len(pending.ChangeSet.Changes) != 2 || len(fs.order()) != 0 {
 		t.Fatalf("whole batch not deferred: pending=%+v applied=%v err=%v", pending, fs.order(), err)
@@ -188,7 +189,7 @@ func TestRegisterPlugin_PostCommitFiresAfterConstruction(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := s.CommitChangeSet(context.Background(), Actor{ID: "alice", Extra: map[string]string{"approver": "bob"}}, writeCS("/x"))
+	_, err := s.CommitChangeSet(context.Background(), Attribution{Principal: "alice", Extra: map[string]string{"approver": "bob"}}, writeCS("/x"))
 	if err != nil {
 		t.Fatalf("CommitChangeSet: %v", err)
 	}
@@ -196,8 +197,8 @@ func TestRegisterPlugin_PostCommitFiresAfterConstruction(t *testing.T) {
 	if len(infos) != 1 {
 		t.Fatalf("post-commit fired %d times, want 1", len(infos))
 	}
-	if infos[0].Actor.ID != "alice" || infos[0].Actor.Extra["approver"] != "bob" {
-		t.Fatalf("actor = %+v", infos[0].Actor)
+	if infos[0].Attribution.Principal != "alice" || infos[0].Attribution.Extra["approver"] != "bob" {
+		t.Fatalf("attribution = %+v", infos[0].Attribution)
 	}
 	if infos[0].Hash != "h:/x" || infos[0].ChangeSet.Target != "/x" {
 		t.Fatalf("commit info = %+v", infos[0])
@@ -214,12 +215,12 @@ func TestCommitChangeSet_SkipsAdmission(t *testing.T) {
 	}
 
 	// Sanity: admission defers.
-	if _, err := s.writeChain()(context.Background(), NewWriteOp(Actor{ID: "a"}, writeCS("/x"))); err == nil {
+	if _, err := s.writeChain()(context.Background(), NewWriteOp(Attribution{Principal: "a"}, writeCS("/x"))); err == nil {
 		t.Fatal("admission chain should defer every write in this test")
 	}
 
 	// CommitChangeSet bypasses admission and commits directly.
-	res, err := s.CommitChangeSet(context.Background(), Actor{ID: "a"}, writeCS("/x"))
+	res, err := s.CommitChangeSet(context.Background(), Attribution{Principal: "a"}, writeCS("/x"))
 	if err != nil {
 		t.Fatalf("CommitChangeSet must skip admission and commit: %v", err)
 	}
@@ -236,7 +237,7 @@ func TestCommitChangeSet_CASErrorPropagates(t *testing.T) {
 	fs := &wlRecordingFS{errFor: map[string]error{"/x": &vfs.PreconditionError{Path: "/x", Current: "now"}}}
 	s := newSeamServer(t, fs)
 
-	_, err := s.CommitChangeSet(context.Background(), Actor{ID: "a"}, vfs.ChangeSet{
+	_, err := s.CommitChangeSet(context.Background(), Attribution{Principal: "a"}, vfs.ChangeSet{
 		Target: "/x",
 		Action: vfs.ChangeActionWrite,
 		Write:  &vfs.WriteChange{Bytes: []byte("x"), Opts: vfs.WriteOpts{IfMatch: &base}},
@@ -253,7 +254,7 @@ func TestCommitChangeSet_ReadonlyServer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
-	if _, err := s.CommitChangeSet(context.Background(), Actor{}, writeCS("/x")); err == nil {
+	if _, err := s.CommitChangeSet(context.Background(), Attribution{}, writeCS("/x")); err == nil {
 		t.Fatal("CommitChangeSet on a read-only server must return an error")
 	}
 }

@@ -21,6 +21,14 @@ type LoreSub struct {
 // loreSubs is the registry of `lore` subcommands, keyed by name.
 var loreSubs = map[string]LoreSub{}
 
+type ConfigReloadBackend interface {
+	Reload(JobAttribution) error
+}
+
+type configReloadContext interface {
+	ConfigReloadBackend() ConfigReloadBackend
+}
+
 // RegisterLoreSub adds (or replaces) a core `lore` subcommand.
 func RegisterLoreSub(sub LoreSub) {
 	loreSubs[sub.Name] = sub
@@ -70,8 +78,27 @@ func init() {
 		Summary: "List the docsets you can access, their paths, and attributes",
 		Run:     cmdLoreDocsets,
 	})
+	RegisterLoreSub(LoreSub{Name: "config", Summary: "Manage the running OpenLore configuration", Run: cmdLoreConfig})
 	// `lore meta` is registered by the openlore package (its scanning logic is
 	// domain logic, so it lives there and plugs into this dispatcher).
+}
+
+func cmdLoreConfig(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.Reader) int {
+	if len(args) != 1 || args[0] != "reload" {
+		fmt.Fprintln(errW, "usage: lore config reload")
+		return 1
+	}
+	provider, ok := ctx.(configReloadContext)
+	if !ok || provider.ConfigReloadBackend() == nil {
+		fmt.Fprintln(errW, "lore config: reload is unavailable")
+		return 1
+	}
+	if err := provider.ConfigReloadBackend().Reload(commandAttribution(ctx)); err != nil {
+		fmt.Fprintf(errW, "lore config reload: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(w, "configuration reloaded")
+	return 0
 }
 
 // cmdLoreDocsets prints an aligned, greppable table of the session's accessible

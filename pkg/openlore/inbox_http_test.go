@@ -418,7 +418,7 @@ func TestInboxHTTPMultipartMetadataAtomicAdmissionOrdering(t *testing.T) {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 	paths := responsePaths(t, rec)
-	if len(paths) != 4 || len(cap.ops) != 1 || len(cap.ops[0].Leaves()) != 4 || cap.ops[0].Actor.ID != "alice" {
+	if len(paths) != 4 || len(cap.ops) != 1 || len(cap.ops[0].Leaves()) != 4 || cap.ops[0].Attribution.Principal != "alice" {
 		t.Fatalf("paths=%v ops=%+v", paths, cap.ops)
 	}
 	for i := 0; i < 4; i += 2 {

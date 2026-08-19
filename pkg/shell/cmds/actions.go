@@ -59,6 +59,9 @@ func RegisterAction(name string, a Action) {
 // otherwise read-only command into a mutation — notably `sed -i`, which edits
 // in place and is therefore a write.
 func InvocationAction(name string, args []string) Action {
+	if name == "lore" && len(args) >= 2 && args[0] == "config" && args[1] == "reload" {
+		return ActionAdmin
+	}
 	if name == "sed" && hasInPlaceFlag(args) {
 		return ActionWrite
 	}

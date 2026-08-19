@@ -53,8 +53,68 @@ auth_file: ./lore.json
 readonly: false # keep true if no role should be able to write
 ```
 
-Then start OpenLore normally. No role-management commands are required; edit
-`lore.json` and restart the server after changing file-backed policy.
+Then start OpenLore normally. No role-management commands are required.
+
+## Delegated identities
+
+OAuth clients act through a durable client identity such as
+`claude@claude.ai`, while the human remains the principal. The resulting token
+keeps the principal in `sub` and records the client in `act.sub`; write history
+renders the pair as `principal/actor`.
+
+```json
+{
+  "name": "adil",
+  "roles": ["engineer"],
+  "delegates": [{
+    "identity": "claude@claude.ai",
+    "deny_docsets": ["private-notes"],
+    "deny_capabilities": ["lore:config:edit"]
+  }]
+},
+{
+  "name": "claude@claude.ai",
+  "comment": "Display: Claude Desktop",
+  "created_by": "oauth"
+}
+```
+
+An omitted delegate `roles` list inherits all principal roles. A present list
+is intersected with the principal's roles, and both deny lists subtract from
+that authority. OAuth creates base identities with no roles, home, keys, or
+match rules. Grant those fields later to promote the same identity to a
+standalone agent without changing historical attribution.
+
+Standalone agents can request delegated tokens with their own OpenLore JWT:
+
+```bash
+curl -X POST https://your-host/oauth/token \
+  -d grant_type=urn:openlore:oauth:grant-type:delegation \
+  -d actor_token="$OPENLORE_AGENT_TOKEN" \
+  -d act_for=adil
+```
+
+## Live configuration
+
+Grant `lore:config:edit` through a role to expose the validated configuration at
+`/opt/openlore/lore.json`. Whole-file writes are atomically persisted but do not
+change running policy until explicitly activated:
+
+```bash
+cat /opt/openlore/lore.json
+cat updated.json > /opt/openlore/lore.json
+lore config reload
+```
+
+Invalid writes are rejected before touching disk. Configuration operations use
+the separate host-local audit log, not the content write log.
+
+Content history remains independently queryable by either side of a delegation:
+
+```bash
+history --principal adil
+history --actor claude@claude.ai
+```
 
 ### How access is resolved
 

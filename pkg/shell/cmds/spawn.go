@@ -16,11 +16,17 @@ import (
 // commit its stdout to Target through WriteCtx (a frozen, session-detached write
 // context). Append selects `>` vs `>>` semantics. Identity is for provenance.
 type JobSpec struct {
-	Command  string
-	Target   string
-	Append   bool
-	Identity string
-	WriteCtx CmdContext
+	Command     string
+	Target      string
+	Append      bool
+	Attribution JobAttribution
+	WriteCtx    CmdContext
+}
+
+type JobAttribution struct {
+	Principal  string
+	Actor      string
+	ClientAuth string
 }
 
 // JobBackend schedules and runs JobSpecs. The server supplies the
@@ -30,9 +36,20 @@ type JobBackend interface {
 	Submit(spec JobSpec) (id string, err error)
 }
 
-// Jobs is the active job backend, set by the server at startup. Nil when the
-// server has no job manager (e.g. an embedded read-only server).
-var Jobs JobBackend
+type jobContext interface {
+	JobBackend() JobBackend
+}
+
+type attributionContext interface {
+	CommandAttribution() JobAttribution
+}
+
+func commandAttribution(ctx CmdContext) JobAttribution {
+	if provider, ok := ctx.(attributionContext); ok {
+		return provider.CommandAttribution()
+	}
+	return JobAttribution{}
+}
 
 // CmdSpawn runs an external command asynchronously and writes its stdout back
 // into the lore once it finishes — without blocking the caller.
@@ -43,7 +60,8 @@ var Jobs JobBackend
 // submit time otherwise. The command runs as the OpenLore service user, so the
 // verb is gated by ActionSpawn (operator-trusted identities only).
 func CmdSpawn(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.Reader) int {
-	if Jobs == nil {
+	provider, ok := ctx.(jobContext)
+	if !ok || provider.JobBackend() == nil {
 		fmt.Fprintln(errW, "spawn: async jobs are not enabled on this server")
 		return 1
 	}
@@ -92,12 +110,12 @@ func CmdSpawn(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin 
 	}
 
 	command := strings.Join(cmdParts, " ")
-	id, err := Jobs.Submit(JobSpec{
-		Command:  command,
-		Target:   resolved,
-		Append:   appendMode,
-		Identity: ctx.GetEnv("OPENLORE_IDENTITY"),
-		WriteCtx: newFrozenContext(ctx, resolved),
+	id, err := provider.JobBackend().Submit(JobSpec{
+		Command:     command,
+		Target:      resolved,
+		Append:      appendMode,
+		Attribution: commandAttribution(ctx),
+		WriteCtx:    newFrozenContext(ctx, resolved),
 	})
 	if err != nil {
 		fmt.Fprintf(errW, "spawn: %s\n", err)

@@ -551,8 +551,8 @@ func (p *agentSkillsPlugin) ContentTransforms() []ContentTransform {
 // validateMutation is used both by admission middleware and by the serialized
 // applier immediately before commit. The latter closes the validation-to-marker
 // race for `skills enable`.
-func (p *agentSkillsPlugin) validateMutation(actor Actor, cs vfs.ChangeSet) error {
-	if actor.internal && actor.ID == "agent_skills_remote" {
+func (p *agentSkillsPlugin) validateMutation(attribution Attribution, cs vfs.ChangeSet) error {
+	if attribution.internal && attribution.Principal == "agent_skills_remote" {
 		return nil
 	}
 	for _, leaf := range cs.Leaves() {
@@ -602,7 +602,7 @@ func (p *agentSkillsPlugin) WriteMiddleware() []WriteMiddleware {
 			} else if len(leaves) == 1 {
 				normalized.Write = leaves[0].Write
 			}
-			op = NewWriteOp(op.Actor, normalized)
+			op = NewWriteOp(op.Attribution, normalized)
 			for _, leaf := range op.Leaves() {
 				cs := vfs.ChangeSet{Target: leaf.Target, Action: leaf.Action, Write: leaf.Write, RemoveAll: leaf.RemoveAll, Xattr: leaf.Xattr, XattrRepair: leaf.XattrRepair, XattrMigration: leaf.XattrMigration}
 				if err := p.validateChange(cs); err != nil {
