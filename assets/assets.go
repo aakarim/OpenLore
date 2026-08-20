@@ -27,6 +27,9 @@ var defaultMOTD string
 //go:embed config/VERSION
 var versionString string
 
+//go:embed oiya-icon.svg
+var oiyaIcon []byte
+
 // Lore returns the embedded docs filesystem (rooted inside lore/).
 // Returns nil if the lore directory contains only the placeholder.
 func Lore() fs.FS {
@@ -57,6 +60,11 @@ func DefaultMOTD() string {
 // Version returns the embedded version string.
 func Version() string {
 	return strings.TrimSpace(versionString)
+}
+
+// OiyaIcon returns the Oiya brand icon as SVG.
+func OiyaIcon() []byte {
+	return oiyaIcon
 }
 
 // Skills returns the embedded skills filesystem (rooted inside skills/).

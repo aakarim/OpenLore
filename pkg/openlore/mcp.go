@@ -3,10 +3,12 @@ package openlore
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"sort"
 	"strings"
 
+	"github.com/aakarim/go-openlore/assets"
 	"github.com/aakarim/go-openlore/pkg/shell"
 	"github.com/aakarim/go-openlore/pkg/shell/cmds"
 	"github.com/aakarim/go-openlore/pkg/vfs"
@@ -85,7 +87,15 @@ func NewMCPServer(fs vfs.FileSystem, opts ...MCPOption) *mcp.Server {
 		serverName = cfg.serverName
 	}
 	server := mcp.NewServer(
-		&mcp.Implementation{Name: serverName, Version: "1.0.0"},
+		&mcp.Implementation{
+			Name:    serverName,
+			Version: "1.0.0",
+			Icons: []mcp.Icon{{
+				Source:   "data:image/svg+xml;base64," + base64.StdEncoding.EncodeToString(assets.OiyaIcon()),
+				MIMEType: "image/svg+xml",
+				Sizes:    []string{"any"},
+			}},
+		},
 		serverOpts,
 	)
 
