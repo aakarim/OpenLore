@@ -60,7 +60,7 @@ keys (JWKS) to verify assertion signatures.
 tokens:
   issuer: https://openlore.example       # your OpenLore instance (iss + JWKS base)
   audience: https://openlore.example     # one audience per instance
-  access_ttl: 30m
+  access_ttl: 1h
   refresh_ttl: 720h
 
 oidc_issuers:

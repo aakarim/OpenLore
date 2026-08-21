@@ -1,6 +1,7 @@
 package openlore
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -48,6 +49,9 @@ func TestTokenEndpoint_AuthorizationCodeGrant(t *testing.T) {
 	}
 	if resp.AccessToken == "" || resp.RefreshToken == "" {
 		t.Fatalf("missing tokens in response: %+v", resp)
+	}
+	if resp.ExpiresIn < 3590 || resp.ExpiresIn > 3600 {
+		t.Fatalf("expires_in = %d, want approximately one hour", resp.ExpiresIn)
 	}
 	// The minted access token verifies and carries the right subject.
 	claims, err := s.issuer.Verify(resp.AccessToken)
@@ -124,18 +128,34 @@ func TestTokenEndpoint_RefreshRotation(t *testing.T) {
 	}
 }
 
-func TestTokenEndpoint_RefreshReuseRejected(t *testing.T) {
+func TestTokenEndpoint_RefreshRetryReturnsSameSuccessor(t *testing.T) {
 	s := newTokenTestServer(t, true, "allow")
+	audit := &captureRefreshAudit{}
+	s.tokens.audit = audit
 	code, _ := s.IssueAuthCode("alice", ScopeFull)
 	_, first := postForm(t, s.tokens, url.Values{"grant_type": {"authorization_code"}, "code": {code}})
 
 	// First refresh succeeds (rotates).
-	postForm(t, s.tokens, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {first.RefreshToken}})
-	// Re-using the now-consumed refresh token is rejected.
-	rec, _ := postForm(t, s.tokens, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {first.RefreshToken}})
-	if rec.Code == http.StatusOK {
-		t.Fatalf("reused refresh token should be rejected, got 200")
+	_, second := postForm(t, s.tokens, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {first.RefreshToken}})
+	// An immediate retry succeeds with the already-issued successor rather than
+	// revoking the chain or creating another branch.
+	rec, retry := postForm(t, s.tokens, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {first.RefreshToken}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("retry status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
+	if retry.RefreshToken != second.RefreshToken {
+		t.Fatalf("retry refresh token = %q, want original successor %q", retry.RefreshToken, second.RefreshToken)
+	}
+	if len(audit.events) != 2 || audit.events[0].Details["outcome"] != "success" || audit.events[1].Details["outcome"] != "retry" {
+		t.Fatalf("refresh audit events = %+v", audit.events)
+	}
+}
+
+type captureRefreshAudit struct{ events []AuditEvent }
+
+func (a *captureRefreshAudit) Record(_ context.Context, event AuditEvent) error {
+	a.events = append(a.events, event)
+	return nil
 }
 
 // With no OIDC issuers configured, WIF is disabled and the jwt-bearer grant is

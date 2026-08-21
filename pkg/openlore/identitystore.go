@@ -58,7 +58,7 @@ func (s *Server) initAuth() error {
 		if err != nil {
 			return err
 		}
-		iss.retireGrace = parseDurationDefault(tc.AccessTTL, 30*time.Minute)
+		iss.retireGrace = parseDurationDefault(tc.AccessTTL, time.Hour)
 		s.issuer = iss
 	}
 	if s.refreshStore == nil {
@@ -95,7 +95,7 @@ func (s *Server) initAuth() error {
 		issuer:       s.issuer,
 		refresh:      s.refreshStore,
 		codes:        s.authCodes,
-		accessTTL:    parseDurationDefault(tc.AccessTTL, 30*time.Minute),
+		accessTTL:    parseDurationDefault(tc.AccessTTL, time.Hour),
 		refreshTTL:   parseDurationDefault(tc.RefreshTTL, 720*time.Hour),
 		audience:     tc.Audience,
 		delegation:   s,

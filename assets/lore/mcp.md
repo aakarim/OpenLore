@@ -140,7 +140,7 @@ access policy):
 tokens:
   issuer: https://your-host
   audience: https://your-host
-  access_ttl: 30m
+  access_ttl: 1h
   refresh_ttl: 720h
 ```
 

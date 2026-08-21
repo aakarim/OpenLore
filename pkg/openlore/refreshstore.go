@@ -10,12 +10,19 @@ import (
 	"time"
 )
 
-// ErrRefreshReuse signals that an already-used refresh token was presented — a
-// theft indicator. The store revokes the whole chain when this happens.
+// ErrRefreshReuse signals that an already-used refresh token was presented
+// outside the short retry window. The store revokes the whole chain when this
+// happens.
 var ErrRefreshReuse = errors.New("refresh token reuse detected")
 
 // ErrRefreshInvalid signals an unknown or expired refresh token.
 var ErrRefreshInvalid = errors.New("invalid refresh token")
+
+// refreshRetryGrace lets an OAuth client safely retry a refresh request whose
+// response was lost, or issue concurrent refreshes during reconnect. Both
+// requests receive the same successor refresh token. Reuse after this window
+// remains a theft signal and revokes the chain.
+const refreshRetryGrace = 30 * time.Second
 
 // RefreshToken is a stateful, revocable credential. Tokens in the same ChainID
 // descend from one login; rotation issues a new token in the chain and marks
@@ -30,6 +37,13 @@ type RefreshToken struct {
 	ChainID    string          `json:"chain_id"`
 	ExpiresAt  time.Time       `json:"expires_at"`
 	Used       bool            `json:"used"`
+	RotatedAt  time.Time       `json:"rotated_at,omitempty"`
+	ReplacedBy string          `json:"replaced_by,omitempty"`
+}
+
+type RefreshRotation struct {
+	Token   RefreshToken
+	Retried bool
 }
 
 // RefreshTokenStore persists refresh tokens with rotation and reuse detection.
@@ -40,10 +54,11 @@ type RefreshTokenStore interface {
 	Save(rt RefreshToken) error
 	// Lookup returns the token if present.
 	Lookup(token string) (RefreshToken, bool, error)
-	// Rotate consumes oldToken and stores newToken (same chain) atomically. If
-	// oldToken was already used it revokes the whole chain and returns
-	// ErrRefreshReuse; if unknown/expired it returns ErrRefreshInvalid.
-	Rotate(oldToken string, newToken RefreshToken) error
+	// Rotate consumes oldToken and stores newToken (same chain) atomically.
+	// Immediate retries return the previously stored successor. Reuse outside
+	// the retry window revokes the chain and returns ErrRefreshReuse;
+	// unknown/expired tokens return ErrRefreshInvalid.
+	Rotate(oldToken string, newToken RefreshToken) (RefreshRotation, error)
 	// RevokeChain deletes every token descending from one login.
 	RevokeChain(chainID string) error
 	// RevokeDelegation revokes every chain issued to actor on behalf of subject.
@@ -102,34 +117,45 @@ func (s *fileRefreshStore) Lookup(token string) (RefreshToken, bool, error) {
 	return rt, ok, nil
 }
 
-func (s *fileRefreshStore) Rotate(oldToken string, newToken RefreshToken) error {
+func (s *fileRefreshStore) Rotate(oldToken string, newToken RefreshToken) (RefreshRotation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	old, ok := s.tokens[oldToken]
 	if !ok {
-		return ErrRefreshInvalid
+		return RefreshRotation{}, ErrRefreshInvalid
 	}
 	if old.Used {
+		elapsed := time.Since(old.RotatedAt)
+		if elapsed >= 0 && elapsed <= refreshRetryGrace {
+			if successor, ok := s.tokens[old.ReplacedBy]; ok {
+				return RefreshRotation{Token: successor, Retried: true}, nil
+			}
+		}
 		// Reuse of a rotated token → theft. Revoke the whole chain.
 		s.revokeChainLocked(old.ChainID)
 		if err := s.persist(); err != nil {
-			return err
+			return RefreshRotation{}, err
 		}
-		return ErrRefreshReuse
+		return RefreshRotation{}, ErrRefreshReuse
 	}
 	if !old.ExpiresAt.IsZero() && old.ExpiresAt.Before(time.Now()) {
 		delete(s.tokens, oldToken)
 		if err := s.persist(); err != nil {
-			return err
+			return RefreshRotation{}, err
 		}
-		return ErrRefreshInvalid
+		return RefreshRotation{}, ErrRefreshInvalid
 	}
 
 	old.Used = true
+	old.RotatedAt = time.Now()
+	old.ReplacedBy = newToken.Token
 	s.tokens[oldToken] = old
 	s.tokens[newToken.Token] = newToken
-	return s.persist()
+	if err := s.persist(); err != nil {
+		return RefreshRotation{}, err
+	}
+	return RefreshRotation{Token: newToken}, nil
 }
 
 func (s *fileRefreshStore) RevokeChain(chainID string) error {

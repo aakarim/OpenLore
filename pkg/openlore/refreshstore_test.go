@@ -37,27 +37,54 @@ func TestRefreshStore_RotateIssuesNewAndConsumesOld(t *testing.T) {
 	rs.Save(old)
 
 	next := RefreshToken{Token: "new", Subject: "alice", ChainID: "c1", ExpiresAt: time.Now().Add(time.Hour)}
-	if err := rs.Rotate("old", next); err != nil {
+	rotation, err := rs.Rotate("old", next)
+	if err != nil {
 		t.Fatalf("Rotate: %v", err)
+	}
+	if rotation.Token.Token != "new" || rotation.Retried {
+		t.Fatalf("rotation = %+v", rotation)
 	}
 	// New token is present and unused.
 	if got, ok, _ := rs.Lookup("new"); !ok || got.Used {
 		t.Fatalf("new token missing or already used: ok=%v", ok)
 	}
 	// Old token is now marked used.
-	if got, ok, _ := rs.Lookup("old"); !ok || !got.Used {
-		t.Fatalf("old token should be marked used: ok=%v used=%v", ok, got.Used)
+	if got, ok, _ := rs.Lookup("old"); !ok || !got.Used || got.ReplacedBy != "new" || got.RotatedAt.IsZero() {
+		t.Fatalf("old token should point to its replacement: ok=%v token=%+v", ok, got)
 	}
 }
 
-func TestRefreshStore_ReuseRevokesChain(t *testing.T) {
+func TestRefreshStore_ImmediateRetryReturnsSameSuccessor(t *testing.T) {
 	rs := testRefreshStore(t)
-	// A chain of two rotated tokens.
 	rs.Save(RefreshToken{Token: "old", Subject: "alice", ChainID: "c1", ExpiresAt: time.Now().Add(time.Hour)})
-	rs.Rotate("old", RefreshToken{Token: "new", Subject: "alice", ChainID: "c1", ExpiresAt: time.Now().Add(time.Hour)})
+	if _, err := rs.Rotate("old", RefreshToken{Token: "new", Subject: "alice", ChainID: "c1", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
 
-	// Re-presenting the already-used "old" is theft → revoke whole chain.
-	err := rs.Rotate("old", RefreshToken{Token: "attacker", Subject: "alice", ChainID: "c1", ExpiresAt: time.Now().Add(time.Hour)})
+	rotation, err := rs.Rotate("old", RefreshToken{Token: "discarded", Subject: "alice", ChainID: "c1", ExpiresAt: time.Now().Add(time.Hour)})
+	if err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if rotation.Token.Token != "new" || !rotation.Retried {
+		t.Fatalf("retry rotation = %+v", rotation)
+	}
+	if _, ok, _ := rs.Lookup("discarded"); ok {
+		t.Fatal("retry candidate must not be stored")
+	}
+}
+
+func TestRefreshStore_ReuseAfterGraceRevokesChain(t *testing.T) {
+	rs := testRefreshStore(t)
+	rs.Save(RefreshToken{Token: "old", Subject: "alice", ChainID: "c1", ExpiresAt: time.Now().Add(time.Hour)})
+	if _, err := rs.Rotate("old", RefreshToken{Token: "new", Subject: "alice", ChainID: "c1", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	old := rs.tokens["old"]
+	old.RotatedAt = time.Now().Add(-refreshRetryGrace - time.Second)
+	rs.tokens["old"] = old
+
+	// Re-presenting the used token after the retry grace is theft → revoke.
+	_, err := rs.Rotate("old", RefreshToken{Token: "attacker", Subject: "alice", ChainID: "c1", ExpiresAt: time.Now().Add(time.Hour)})
 	if !errors.Is(err, ErrRefreshReuse) {
 		t.Fatalf("expected ErrRefreshReuse, got %v", err)
 	}
@@ -72,7 +99,7 @@ func TestRefreshStore_ReuseRevokesChain(t *testing.T) {
 
 func TestRefreshStore_RotateUnknownInvalid(t *testing.T) {
 	rs := testRefreshStore(t)
-	err := rs.Rotate("nope", RefreshToken{Token: "x", ChainID: "c1"})
+	_, err := rs.Rotate("nope", RefreshToken{Token: "x", ChainID: "c1"})
 	if !errors.Is(err, ErrRefreshInvalid) {
 		t.Fatalf("expected ErrRefreshInvalid, got %v", err)
 	}
@@ -113,14 +140,18 @@ func TestRefreshStore_Persistence(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "refresh.json")
 	rs, _ := newFileRefreshStore(path)
-	rs.Save(RefreshToken{Token: "a", Subject: "alice", ChainID: "c1", ExpiresAt: time.Now().Add(time.Hour)})
+	rs.Save(RefreshToken{Token: "old", Subject: "alice", ChainID: "c1", ExpiresAt: time.Now().Add(time.Hour)})
+	if _, err := rs.Rotate("old", RefreshToken{Token: "new", Subject: "alice", ChainID: "c1", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
 
-	// A fresh store reading the same file sees the token.
+	// A fresh store reading the same file can safely satisfy an in-flight retry.
 	rs2, err := newFileRefreshStore(path)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	if _, ok, _ := rs2.Lookup("a"); !ok {
-		t.Fatalf("token did not persist across reopen")
+	rotation, err := rs2.Rotate("old", RefreshToken{Token: "discarded", ChainID: "c1"})
+	if err != nil || !rotation.Retried || rotation.Token.Token != "new" {
+		t.Fatalf("persisted retry: rotation=%+v err=%v", rotation, err)
 	}
 }

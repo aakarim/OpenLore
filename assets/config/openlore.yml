@@ -62,5 +62,5 @@ passkeys:
 tokens:
   issuer: https://openlore.sh
   audience: https://openlore.sh
-  access_ttl: 30m
+  access_ttl: 1h
   refresh_ttl: 720h
