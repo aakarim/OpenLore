@@ -13,9 +13,11 @@ import (
 )
 
 const (
-	permissionsPath       = "/settings/permissions"
-	permissionsUpdatePath = "/settings/permissions/update"
-	permissionsRemovePath = "/settings/permissions/remove"
+	// permissionsPath is shared with the lore browser's identity menu, which
+	// links here from internal/passkeys.
+	permissionsPath       = passkeys.PermissionsPath
+	permissionsUpdatePath = permissionsPath + "/update"
+	permissionsRemovePath = permissionsPath + "/remove"
 )
 
 type permissionToggle struct {
