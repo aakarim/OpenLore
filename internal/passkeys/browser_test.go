@@ -27,7 +27,7 @@ func TestRenderFileIncludesBreadcrumbsIframeAndParentCloseLink(t *testing.T) {
 	req := httptest.NewRequest("GET", "/lore/guides/setup.md", nil)
 	rec := httptest.NewRecorder()
 
-	pk.renderFile(rec, req, "/lore", "/guides/setup.md", []FileHistoryEntry{{
+	pk.renderFile(rec, req, "/lore", "/guides/setup.md", "adil", []FileHistoryEntry{{
 		Time: time.Date(2026, time.August, 19, 12, 30, 0, 0, time.UTC), Attribution: "adil/claude", Action: "write", Hash: "abc123",
 	}}, true)
 
@@ -49,6 +49,9 @@ func TestRenderFileIncludesBreadcrumbsIframeAndParentCloseLink(t *testing.T) {
 		`datetime="2026-08-19T12:30:00Z"`,
 		`title="abc123">abc123`,
 		`history.hidden=open`,
+		`id="identity-button"`,
+		`<span class="identity-name">adil</span>`,
+		`href="/settings/permissions">Permission settings`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("file view missing %q", want)
@@ -95,7 +98,7 @@ func TestRenderDirUsesSingleTapActionsAndDoubleTapNavigation(t *testing.T) {
 	pk := &Passkeys{}
 	rec := httptest.NewRecorder()
 
-	pk.renderDir(rec, browserTestFS{}, "/lore", "/docs")
+	pk.renderDir(rec, browserTestFS{}, "/lore", "/docs", "adil")
 
 	body := rec.Body.String()
 	for _, want := range []string{
@@ -108,6 +111,10 @@ func TestRenderDirUsesSingleTapActionsAndDoubleTapNavigation(t *testing.T) {
 		`window.location.assign(selected.href)`,
 		`setTimeout(()=>{tapTimer=null;show(link)},275)`,
 		`window.location.assign(link.href)`,
+		`class="brand" href="/lore/"`,
+		`id="identity-button"`,
+		`<span class="identity-name">adil</span>`,
+		`href="/settings/permissions">Permission settings`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("directory view missing %q", want)
