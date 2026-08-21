@@ -334,6 +334,9 @@ func (t *tokenEndpoint) handleRefreshToken(w http.ResponseWriter, r *http.Reques
 		oauthError(w, http.StatusUnauthorized, "invalid_client", err.Error())
 		return
 	}
+	// Subsequent audit events describe the authentication achieved by this
+	// request, which may be stronger than the level stored on the old token.
+	old.ClientAuth = clientAuth
 	// Rotate: mint a new refresh token in the same chain and consume the old.
 	newRefresh := RefreshToken{
 		Token:      randomToken(),

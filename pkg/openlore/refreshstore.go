@@ -18,6 +18,10 @@ var ErrRefreshReuse = errors.New("refresh token reuse detected")
 // ErrRefreshInvalid signals an unknown or expired refresh token.
 var ErrRefreshInvalid = errors.New("invalid refresh token")
 
+// ErrRefreshStaleRetry signals that an immediate retry's successor has already
+// been consumed or expired. The current chain remains valid and is not revoked.
+var ErrRefreshStaleRetry = errors.New("stale refresh retry")
+
 // refreshRetryGrace lets an OAuth client safely retry a refresh request whose
 // response was lost, or issue concurrent refreshes during reconnect. Both
 // requests receive the same successor refresh token. Reuse after this window
@@ -129,8 +133,12 @@ func (s *fileRefreshStore) Rotate(oldToken string, newToken RefreshToken) (Refre
 		elapsed := time.Since(old.RotatedAt)
 		if elapsed >= 0 && elapsed <= refreshRetryGrace {
 			if successor, ok := s.tokens[old.ReplacedBy]; ok {
+				if successor.Used || (!successor.ExpiresAt.IsZero() && successor.ExpiresAt.Before(time.Now())) {
+					return RefreshRotation{}, ErrRefreshStaleRetry
+				}
 				return RefreshRotation{Token: successor, Retried: true}, nil
 			}
+			return RefreshRotation{}, ErrRefreshStaleRetry
 		}
 		// Reuse of a rotated token → theft. Revoke the whole chain.
 		s.revokeChainLocked(old.ChainID)

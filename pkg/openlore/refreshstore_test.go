@@ -73,6 +73,29 @@ func TestRefreshStore_ImmediateRetryReturnsSameSuccessor(t *testing.T) {
 	}
 }
 
+func TestRefreshStore_StaleRetryDoesNotRevokeCurrentChain(t *testing.T) {
+	rs := testRefreshStore(t)
+	expires := time.Now().Add(time.Hour)
+	rs.Save(RefreshToken{Token: "old", Subject: "alice", ChainID: "c1", ExpiresAt: expires})
+	if _, err := rs.Rotate("old", RefreshToken{Token: "new", Subject: "alice", ChainID: "c1", ExpiresAt: expires}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rs.Rotate("new", RefreshToken{Token: "newest", Subject: "alice", ChainID: "c1", ExpiresAt: expires}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := rs.Rotate("old", RefreshToken{Token: "discarded", Subject: "alice", ChainID: "c1", ExpiresAt: expires})
+	if !errors.Is(err, ErrRefreshStaleRetry) {
+		t.Fatalf("expected ErrRefreshStaleRetry, got %v", err)
+	}
+	if current, ok, _ := rs.Lookup("newest"); !ok || current.Used {
+		t.Fatalf("stale retry revoked current token: ok=%v token=%+v", ok, current)
+	}
+	if _, err := rs.Rotate("newest", RefreshToken{Token: "next", Subject: "alice", ChainID: "c1", ExpiresAt: expires}); err != nil {
+		t.Fatalf("current chain is unusable after stale retry: %v", err)
+	}
+}
+
 func TestRefreshStore_ReuseAfterGraceRevokesChain(t *testing.T) {
 	rs := testRefreshStore(t)
 	rs.Save(RefreshToken{Token: "old", Subject: "alice", ChainID: "c1", ExpiresAt: time.Now().Add(time.Hour)})
