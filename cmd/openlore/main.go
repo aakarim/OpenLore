@@ -543,7 +543,7 @@ func main() {
 				tokCmd := flag.NewFlagSet("token mint", flag.ExitOnError)
 				identity := tokCmd.String("identity", "", "identity name = token `sub` (required)")
 				scope := tokCmd.String("scope", openlore.ScopeFull, "token scope")
-				ttl := tokCmd.Duration("ttl", 30*time.Minute, "access token lifetime")
+				ttl := tokCmd.Duration("ttl", time.Hour, "access token lifetime")
 				configPath := tokCmd.String("config", "./openlore.yml", "path to openlore.yml (holds the tokens block + data dir)")
 				tokCmd.Parse(os.Args[3:])
 

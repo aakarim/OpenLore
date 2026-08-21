@@ -165,7 +165,7 @@ host_key_path: .ssh/openlore_ed25519
 # tokens:
 #   issuer: https://docs.example.com      # `iss` claim + JWKS base URL
 #   audience: https://docs.example.com    # required `aud`; one per instance
-#   access_ttl: 30m                       # access-token lifetime
+#   access_ttl: 1h                        # access-token lifetime
 #   refresh_ttl: 720h                     # refresh-token lifetime
 #
 # Workload Identity Federation (WIF): external IdPs whose JWTs are exchanged for

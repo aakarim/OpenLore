@@ -313,23 +313,30 @@ func (t *tokenEndpoint) issueAccessOnly(w http.ResponseWriter, attribution Attri
 func (t *tokenEndpoint) handleRefreshToken(w http.ResponseWriter, r *http.Request) {
 	presented := r.Form.Get("refresh_token")
 	if presented == "" {
+		t.recordRefresh(r.Context(), "missing_token", RefreshToken{}, nil)
 		oauthError(w, http.StatusBadRequest, "invalid_request", "refresh_token required")
 		return
 	}
 	old, ok, err := t.refresh.Lookup(presented)
 	if err != nil {
+		t.recordRefresh(r.Context(), "lookup_failed", RefreshToken{}, err)
 		oauthError(w, http.StatusInternalServerError, "server_error", "lookup failed")
 		return
 	}
 	if !ok {
+		t.recordRefresh(r.Context(), "unknown_token", RefreshToken{}, nil)
 		oauthError(w, http.StatusBadRequest, "invalid_grant", "unknown refresh token")
 		return
 	}
 	clientAuth, err := t.authenticateBoundClient(r, old)
 	if err != nil {
+		t.recordRefresh(r.Context(), "invalid_client", old, err)
 		oauthError(w, http.StatusUnauthorized, "invalid_client", err.Error())
 		return
 	}
+	// Subsequent audit events describe the authentication achieved by this
+	// request, which may be stronger than the level stored on the old token.
+	old.ClientAuth = clientAuth
 	// Rotate: mint a new refresh token in the same chain and consume the old.
 	newRefresh := RefreshToken{
 		Token:      randomToken(),
@@ -341,12 +348,57 @@ func (t *tokenEndpoint) handleRefreshToken(w http.ResponseWriter, r *http.Reques
 		ChainID:    old.ChainID,
 		ExpiresAt:  time.Now().Add(t.refreshTTL),
 	}
-	if err := t.refresh.Rotate(presented, newRefresh); err != nil {
+	rotation, err := t.refresh.Rotate(presented, newRefresh)
+	if err != nil {
 		// Reuse or invalid → deny (chain already revoked on reuse).
+		t.recordRefresh(r.Context(), "rotation_rejected", old, err)
 		oauthError(w, http.StatusBadRequest, "invalid_grant", "refresh token rejected")
 		return
 	}
-	t.issueRotated(w, Attribution{Principal: old.Subject, Actor: old.Actor, ClientAuth: clientAuth}, old.Scope, newRefresh.Token)
+	if !t.issueRotated(w, Attribution{Principal: old.Subject, Actor: old.Actor, ClientAuth: clientAuth}, old.Scope, rotation.Token.Token) {
+		t.recordRefresh(r.Context(), "mint_failed", old, nil)
+		return
+	}
+	outcome := "success"
+	if rotation.Retried {
+		outcome = "retry"
+	}
+	t.recordRefresh(r.Context(), outcome, old, nil)
+}
+
+func (t *tokenEndpoint) recordRefresh(ctx context.Context, outcome string, token RefreshToken, refreshErr error) {
+	details := map[string]any{"outcome": outcome}
+	if token.ClientID != "" {
+		details["client_id"] = token.ClientID
+	}
+	if token.ChainID != "" {
+		details["chain_id"] = token.ChainID
+	}
+	if refreshErr != nil {
+		details["error"] = refreshErr.Error()
+	}
+	attribution := Attribution{Principal: token.Subject, Actor: token.Actor, ClientAuth: token.ClientAuth}
+	// Only durable-audit attempts tied to a known chain. The endpoint is public;
+	// persisting arbitrary missing/unknown-token probes would allow log spam.
+	if t.audit != nil && token.ChainID != "" {
+		_ = t.audit.Record(ctx, AuditEvent{Type: "token.refresh", Attribution: attribution, Details: details})
+	}
+	logger := t.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	args := []any{"outcome", outcome, "principal", token.Subject, "actor", token.Actor, "client_id", token.ClientID}
+	if refreshErr != nil {
+		args = append(args, "error", refreshErr)
+	}
+	switch outcome {
+	case "success", "retry":
+		logger.InfoContext(ctx, "oauth token refresh", args...)
+	case "lookup_failed", "mint_failed":
+		logger.ErrorContext(ctx, "oauth token refresh", args...)
+	default:
+		logger.WarnContext(ctx, "oauth token refresh", args...)
+	}
 }
 
 // issue mints access+refresh for a fresh login (new chain).
@@ -378,16 +430,17 @@ func (t *tokenEndpoint) issue(w http.ResponseWriter, attribution Attribution, sc
 
 // issueRotated mints a new access token alongside an already-persisted rotated
 // refresh token.
-func (t *tokenEndpoint) issueRotated(w http.ResponseWriter, attribution Attribution, scope, refreshTok string) {
+func (t *tokenEndpoint) issueRotated(w http.ResponseWriter, attribution Attribution, scope, refreshTok string) bool {
 	if scope == "" {
 		scope = ScopeFull
 	}
 	access, exp, err := t.issuer.Mint(attribution, scope, t.accessTTL)
 	if err != nil {
 		oauthError(w, http.StatusInternalServerError, "server_error", "mint failed")
-		return
+		return false
 	}
 	writeTokenResponse(w, access, refreshTok, scope, exp)
+	return true
 }
 
 func writeTokenResponse(w http.ResponseWriter, access, refresh, scope string, exp time.Time) {

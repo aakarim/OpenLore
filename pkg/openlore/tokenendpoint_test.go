@@ -1,12 +1,14 @@
 package openlore
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -48,6 +50,9 @@ func TestTokenEndpoint_AuthorizationCodeGrant(t *testing.T) {
 	}
 	if resp.AccessToken == "" || resp.RefreshToken == "" {
 		t.Fatalf("missing tokens in response: %+v", resp)
+	}
+	if resp.ExpiresIn < 3590 || resp.ExpiresIn > 3600 {
+		t.Fatalf("expires_in = %d, want approximately one hour", resp.ExpiresIn)
 	}
 	// The minted access token verifies and carries the right subject.
 	claims, err := s.issuer.Verify(resp.AccessToken)
@@ -124,18 +129,119 @@ func TestTokenEndpoint_RefreshRotation(t *testing.T) {
 	}
 }
 
-func TestTokenEndpoint_RefreshReuseRejected(t *testing.T) {
+func TestTokenEndpoint_RefreshRetryReturnsSameSuccessor(t *testing.T) {
 	s := newTokenTestServer(t, true, "allow")
+	audit := &captureRefreshAudit{}
+	s.tokens.audit = audit
 	code, _ := s.IssueAuthCode("alice", ScopeFull)
 	_, first := postForm(t, s.tokens, url.Values{"grant_type": {"authorization_code"}, "code": {code}})
 
 	// First refresh succeeds (rotates).
-	postForm(t, s.tokens, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {first.RefreshToken}})
-	// Re-using the now-consumed refresh token is rejected.
-	rec, _ := postForm(t, s.tokens, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {first.RefreshToken}})
-	if rec.Code == http.StatusOK {
-		t.Fatalf("reused refresh token should be rejected, got 200")
+	_, second := postForm(t, s.tokens, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {first.RefreshToken}})
+	// An immediate retry succeeds with the already-issued successor rather than
+	// revoking the chain or creating another branch.
+	rec, retry := postForm(t, s.tokens, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {first.RefreshToken}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("retry status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
+	if retry.RefreshToken != second.RefreshToken {
+		t.Fatalf("retry refresh token = %q, want original successor %q", retry.RefreshToken, second.RefreshToken)
+	}
+	if len(audit.events) != 2 || audit.events[0].Details["outcome"] != "success" || audit.events[1].Details["outcome"] != "retry" {
+		t.Fatalf("refresh audit events = %+v", audit.events)
+	}
+}
+
+func TestTokenEndpoint_ConcurrentRefreshReturnsUsableSuccessor(t *testing.T) {
+	s := newTokenTestServer(t, true, "allow")
+	code, _ := s.IssueAuthCode("alice", ScopeFull)
+	_, first := postForm(t, s.tokens, url.Values{"grant_type": {"authorization_code"}, "code": {code}})
+
+	type result struct {
+		status int
+		body   string
+		token  tokenResponse
+		err    error
+	}
+	start := make(chan struct{})
+	results := make(chan result, 2)
+	var ready sync.WaitGroup
+	ready.Add(2)
+	for range 2 {
+		go func() {
+			form := url.Values{"grant_type": {"refresh_token"}, "refresh_token": {first.RefreshToken}}
+			req := httptest.NewRequest(http.MethodPost, "/oauth/token", strings.NewReader(form.Encode()))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			ready.Done()
+			<-start
+			rec := httptest.NewRecorder()
+			s.tokens.ServeHTTP(rec, req)
+			var token tokenResponse
+			err := json.Unmarshal(rec.Body.Bytes(), &token)
+			results <- result{status: rec.Code, body: rec.Body.String(), token: token, err: err}
+		}()
+	}
+	ready.Wait()
+	close(start)
+
+	firstResult, secondResult := <-results, <-results
+	for i, got := range []result{firstResult, secondResult} {
+		if got.status != http.StatusOK || got.err != nil {
+			t.Fatalf("concurrent refresh %d: status=%d err=%v body=%s", i, got.status, got.err, got.body)
+		}
+	}
+	if firstResult.token.RefreshToken != secondResult.token.RefreshToken {
+		t.Fatalf("concurrent successors differ: %q != %q", firstResult.token.RefreshToken, secondResult.token.RefreshToken)
+	}
+
+	// The shared successor is active, not merely repeated in both responses.
+	rec, next := postForm(t, s.tokens, url.Values{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {firstResult.token.RefreshToken},
+	})
+	if rec.Code != http.StatusOK || next.RefreshToken == firstResult.token.RefreshToken {
+		t.Fatalf("successor was not usable: status=%d response=%+v body=%s", rec.Code, next, rec.Body.String())
+	}
+}
+
+func TestTokenEndpoint_RefreshAuditUsesCurrentClientAuth(t *testing.T) {
+	s := newTokenTestServer(t, true, "allow")
+	const clientID = "https://chatgpt.com/oauth/client.json"
+	s.tokens.cimd = &fixedCIMDResolver{client: &CIMDClient{ClientID: clientID}}
+	s.tokens.clientAuth = fixedClientAuthenticator{level: AuthPrivateKeyJWTMTLS}
+	audit := &captureRefreshAudit{}
+	s.tokens.audit = audit
+	if err := s.refreshStore.Save(RefreshToken{
+		Token: "refresh", Subject: "alice", ClientID: clientID,
+		ClientAuth: AuthCIMD, Scope: ScopeFull, ChainID: "chain",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	rec, _ := postForm(t, s.tokens, url.Values{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {"refresh"},
+		"client_id":     {clientID},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("refresh status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(audit.events) != 1 || audit.events[0].Attribution.ClientAuth != AuthPrivateKeyJWTMTLS {
+		t.Fatalf("refresh audit events = %+v", audit.events)
+	}
+}
+
+type fixedClientAuthenticator struct{ level ClientAuthLevel }
+
+func (a fixedClientAuthenticator) Authenticate(*http.Request, *CIMDClient) (ClientAuthLevel, error) {
+	return a.level, nil
+}
+
+type captureRefreshAudit struct{ events []AuditEvent }
+
+func (a *captureRefreshAudit) Record(_ context.Context, event AuditEvent) error {
+	a.events = append(a.events, event)
+	return nil
 }
 
 // With no OIDC issuers configured, WIF is disabled and the jwt-bearer grant is

@@ -55,3 +55,8 @@ openlore oauth keys rotate --revoke-previous --config ./openlore.yml
 The server observes CLI rotations without restarting. Clients can disconnect by
 posting their refresh token to `/oauth/revoke`; OpenLore revokes the full refresh
 chain, while already-issued access tokens expire at their normal short TTL.
+
+Access tokens last one hour by default. Refresh tokens rotate on use. OpenLore
+returns the same successor refresh token when a client retries within 30 seconds,
+so a lost response or concurrent reconnect does not revoke an otherwise valid
+session. Reuse after that grace period still revokes the full refresh chain.

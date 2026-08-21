@@ -283,7 +283,7 @@ type DocsetAccess struct {
 type AuthTokensConfig struct {
 	Issuer     string `yaml:"issuer" json:"issuer,omitempty"`           // `iss` claim + JWKS base
 	Audience   string `yaml:"audience" json:"audience,omitempty"`       // required `aud`; one per instance
-	AccessTTL  string `yaml:"access_ttl" json:"access_ttl,omitempty"`   // duration string, default 30m
+	AccessTTL  string `yaml:"access_ttl" json:"access_ttl,omitempty"`   // duration string, default 1h
 	RefreshTTL string `yaml:"refresh_ttl" json:"refresh_ttl,omitempty"` // duration string, default 720h
 }
 

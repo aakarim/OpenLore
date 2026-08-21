@@ -79,7 +79,7 @@ func NewIssuerFromConfig(cfg config.Config) (Issuer, error) {
 	}
 	issuer, err := newESIssuer(cfg.Tokens.Issuer, cfg.Tokens.Audience, filepath.Join(dataDir, "auth", "es256.pem"))
 	if err == nil {
-		issuer.retireGrace = parseDurationDefault(cfg.Tokens.AccessTTL, 30*time.Minute)
+		issuer.retireGrace = parseDurationDefault(cfg.Tokens.AccessTTL, time.Hour)
 	}
 	return issuer, err
 }
@@ -115,7 +115,7 @@ func newESIssuer(issuer, audience, keyPath string) (*esIssuer, error) {
 		audience: audience,
 		key:      key,
 		kid:      keyID(&key.PublicKey),
-		keyPath:  keyPath + ".keys.json", retireGrace: 30 * time.Minute,
+		keyPath:  keyPath + ".keys.json", retireGrace: time.Hour,
 	}
 	if err := e.loadKeySet(); err != nil {
 		return nil, err
