@@ -7,18 +7,27 @@
       "allow": {
         "capabilities": ["lore:config:edit"]
       }
-    }
+    },
+    "agent": {}
   },
   "docsets": {
     "onboarding-home": {
       "paths": ["/user/onboarding"]
+    },
+    "general": {
+      "paths": ["/channel/general"],
+      "access": {
+        "allow": {
+          "agent": "rw"
+        }
+      }
     }
   },
   "identities": [
     {
       "name": "onboarding",
       "home": "onboarding-home",
-      "roles": ["administrator"]
+      "roles": ["administrator", "agent"]
     }
   ]
 }

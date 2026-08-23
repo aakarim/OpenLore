@@ -181,3 +181,128 @@ func TestCommandPolicyValidationFailures(t *testing.T) {
 		})
 	}
 }
+
+func TestPrepareDeploymentSeedsOnce(t *testing.T) {
+	root := t.TempDir()
+	configSeed := filepath.Join(root, "seed-openlore.yml")
+	authSeed := filepath.Join(root, "seed-lore.json")
+	configFile := filepath.Join(root, "state", "config", "openlore.yml")
+	authFile := filepath.Join(root, "state", "config", "lore.json")
+	runtimeDirs := []string{
+		filepath.Join(root, "state", "data"),
+		filepath.Join(root, "state", "published"),
+		filepath.Join(root, "state", "ssh"),
+	}
+	if err := os.WriteFile(configSeed, []byte("version: \"1\"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	seed := config.AuthConfig{
+		Roles:      map[string]config.RoleSpec{"agent": {}},
+		Docsets:    map[string]config.DocsetSpec{"home": {Paths: []config.PathMapping{{Source: "/user/onboarding"}}}},
+		Identities: []config.AuthIdentity{{Name: "onboarding", Home: "home", Roles: []string{"agent"}}},
+	}
+	b, err := json.Marshal(seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(authSeed, b, 0644); err != nil {
+		t.Fatal(err)
+	}
+	public, _, err := ed25519.GenerateKey(bytes.NewReader(bytes.Repeat([]byte{9}, ed25519.SeedSize)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sshKey, err := gossh.NewPublicKey(public)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyText := strings.TrimSpace(string(gossh.MarshalAuthorizedKey(sshKey))) + " onboarding@example"
+	t.Setenv("OPENLORE_CONFIG_SEED", configSeed)
+	t.Setenv("OPENLORE_AUTH_SEED", authSeed)
+	t.Setenv("OPENLORE_AUTH_FILE", authFile)
+	t.Setenv("OPENLORE_INIT_DIRS", strings.Join(runtimeDirs, ","))
+	t.Setenv("OPENLORE_ONBOARDING_PUBLIC_KEY", keyText)
+
+	if err := prepareDeployment(configFile); err != nil {
+		t.Fatal(err)
+	}
+	if got := readPolicy(t, authFile).Identities[0].PublicKey; got != keyText {
+		t.Fatalf("public key = %q, want %q", got, keyText)
+	}
+	info, err := os.Stat(authFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Fatalf("auth file mode = %v, want 0600", info.Mode().Perm())
+	}
+	for _, dir := range runtimeDirs {
+		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+			t.Fatalf("runtime directory %q: info = %v, error = %v", dir, info, err)
+		}
+	}
+
+	if err := os.WriteFile(configFile, []byte("operator config\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	auth := readPolicy(t, authFile)
+	auth.Identities[0].PublicKey = ""
+	if err := savePolicy(authFile, auth); err != nil {
+		t.Fatal(err)
+	}
+	if err := prepareDeployment(configFile); err != nil {
+		t.Fatal(err)
+	}
+	configData, err := os.ReadFile(configFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(configData) != "operator config\n" {
+		t.Fatalf("config was overwritten: %q", configData)
+	}
+	if got := readPolicy(t, authFile).Identities[0].PublicKey; got != "" {
+		t.Fatalf("persisted public key was overwritten: %q", got)
+	}
+}
+
+func TestEnvironmentPort(t *testing.T) {
+	t.Setenv("RAILWAY_TCP_PROXY_PORT", "13722")
+	if got, err := environmentPort(); err != nil || got != 13722 {
+		t.Fatalf("environmentPort() = %d, %v", got, err)
+	}
+	t.Setenv("OPENLORE_EXTERNAL_SSH_PORT", "22")
+	if got, err := environmentPort(); err != nil || got != 22 {
+		t.Fatalf("environmentPort() override = %d, %v", got, err)
+	}
+	t.Setenv("OPENLORE_EXTERNAL_SSH_PORT", "invalid")
+	if _, err := environmentPort(); err == nil {
+		t.Fatal("environmentPort() accepted an invalid port")
+	}
+	t.Setenv("OPENLORE_METRICS_PORT", "0")
+	if got, set, err := environmentMetricsPort(); err != nil || !set || got != 0 {
+		t.Fatalf("environmentMetricsPort() = %d, %t, %v", got, set, err)
+	}
+}
+
+func TestOnboardingPolicy(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "deploy", "onboarding", "lore.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var auth config.AuthConfig
+	if err := json.Unmarshal(b, &auth); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.ValidateAuthConfig(&auth); err != nil {
+		t.Fatal(err)
+	}
+	if got := auth.Docsets["general"].Access.Allow["agent"]; got != "rw" {
+		t.Fatalf("general agent grant = %q, want rw", got)
+	}
+	if got := auth.Docsets["general"].Paths[0].Source; got != "/channel/general" {
+		t.Fatalf("general path = %q", got)
+	}
+	if got := auth.Identities[0].Roles; len(got) != 2 || got[1] != "agent" {
+		t.Fatalf("onboarding roles = %v", got)
+	}
+}

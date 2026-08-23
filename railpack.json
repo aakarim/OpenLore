@@ -10,15 +10,22 @@
     }
   },
   "deploy": {
-    "startCommand": "sh start.sh",
+    "startCommand": "./out",
+    "variables": {
+      "OPENLORE_CONFIG_FILE": "/var/lib/openlore/config/openlore.yml",
+      "OPENLORE_CONFIG_SEED": "/app/openlore.yml",
+      "OPENLORE_AUTH_FILE": "/var/lib/openlore/config/lore.json",
+      "OPENLORE_AUTH_SEED": "/app/lore.json",
+      "OPENLORE_INIT_DIRS": "/var/lib/openlore/data,/var/lib/openlore/published,/var/lib/openlore/ssh",
+      "OPENLORE_METRICS_PORT": "0"
+    },
     "inputs": [
       "...",
       {
         "local": true,
         "include": [
           "deploy/onboarding/lore.json",
-          "deploy/onboarding/openlore.yml",
-          "deploy/onboarding/start.sh"
+          "deploy/onboarding/openlore.yml"
         ]
       }
     ]
