@@ -1,6 +1,7 @@
 package openlore
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/aakarim/go-openlore/internal/config"
+	"github.com/aakarim/go-openlore/pkg/shell"
 )
 
 func newTestAPI(t *testing.T) http.Handler {
@@ -23,7 +25,7 @@ func newTestAPI(t *testing.T) http.Handler {
 	fs := NewDirFS(dir, config.FilesConfig{})
 	server := NewMCPServer(fs)
 
-	api := NewMCPHTTPAPI(server)
+	api := NewMCPHTTPAPI(server, func(context.Context) *shell.Shell { return shell.NewShell(fs) })
 	return api.Handler("/api")
 }
 

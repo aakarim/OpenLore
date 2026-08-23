@@ -44,7 +44,7 @@ func newScopedTestAPI(t *testing.T) http.Handler {
 	s.authorizationStore = fileAuthorizationStore{auth: s.auth}
 
 	server := NewMCPServer(s.merge, withMCPShellFactory(s.shellForContext))
-	return NewMCPHTTPAPI(server).Handler("/api")
+	return NewMCPHTTPAPI(server, s.shellForContext).Handler("/api")
 }
 
 // runShell posts a command to the JSON API and returns the tool output.

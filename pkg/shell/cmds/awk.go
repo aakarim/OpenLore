@@ -843,7 +843,7 @@ func (a *awkInterpreter) evalExpr(expr string) string {
 	}
 
 	// Array access: arr[key]
-	if bIdx := strings.Index(expr, "["); bIdx > 0 {
+	if bIdx := strings.Index(expr, "["); bIdx > 0 && strings.HasSuffix(expr, "]") {
 		arrName := expr[:bIdx]
 		key := expr[bIdx+1 : len(expr)-1]
 		key = a.evalExpr(key)
