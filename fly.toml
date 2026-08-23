@@ -36,8 +36,3 @@ kill_timeout = 30
 
   [[services.ports]]
     port = 22
-
-[[vm]]
-  cpu_kind = "shared"
-  cpus = 1
-  memory = "256mb"
