@@ -73,6 +73,26 @@ func TestRefreshStore_ImmediateRetryReturnsSameSuccessor(t *testing.T) {
 	}
 }
 
+func TestRefreshStore_RetryAfterClientBackoffReturnsSameSuccessor(t *testing.T) {
+	rs := testRefreshStore(t)
+	expires := time.Now().Add(time.Hour)
+	rs.Save(RefreshToken{Token: "old", Subject: "alice", ChainID: "c1", ExpiresAt: expires})
+	if _, err := rs.Rotate("old", RefreshToken{Token: "new", Subject: "alice", ChainID: "c1", ExpiresAt: expires}); err != nil {
+		t.Fatal(err)
+	}
+	old := rs.tokens["old"]
+	old.RotatedAt = time.Now().Add(-45 * time.Second)
+	rs.tokens["old"] = old
+
+	rotation, err := rs.Rotate("old", RefreshToken{Token: "discarded", Subject: "alice", ChainID: "c1", ExpiresAt: expires})
+	if err != nil {
+		t.Fatalf("retry after client backoff: %v", err)
+	}
+	if rotation.Token.Token != "new" || !rotation.Retried {
+		t.Fatalf("retry rotation = %+v", rotation)
+	}
+}
+
 func TestRefreshStore_StaleRetryDoesNotRevokeCurrentChain(t *testing.T) {
 	rs := testRefreshStore(t)
 	expires := time.Now().Add(time.Hour)
