@@ -50,7 +50,7 @@ func savePolicy(path string, auth openlore.AuthConfig) error {
 
 func runIdentityCommand(args []string, out io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: identity add|role")
+		return fmt.Errorf("usage: identity add|key|role")
 	}
 	if args[0] == "add" {
 		fs := flag.NewFlagSet("identity add", flag.ContinueOnError)
@@ -110,6 +110,36 @@ func runIdentityCommand(args []string, out io.Writer) error {
 		fmt.Fprintf(out, "Added identity %q\n", *name)
 		return nil
 	}
+	if args[0] == "key" {
+		fs := flag.NewFlagSet("identity key", flag.ContinueOnError)
+		identity := fs.String("identity", "", "")
+		key := fs.String("key", "", "")
+		path := fs.String("auth", "./lore.json", "")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if *identity == "" || strings.TrimSpace(*key) == "" {
+			return fmt.Errorf("identity and key are required")
+		}
+		if _, _, _, _, err := gossh.ParseAuthorizedKey([]byte(*key)); err != nil {
+			return fmt.Errorf("invalid SSH public key: %w", err)
+		}
+		auth, err := loadPolicy(*path)
+		if err != nil {
+			return err
+		}
+		for i := range auth.Identities {
+			if auth.Identities[i].Name == *identity {
+				auth.Identities[i].PublicKey = strings.TrimSpace(*key)
+				if err := savePolicy(*path, auth); err != nil {
+					return err
+				}
+				fmt.Fprintf(out, "Updated public key for identity %q\n", *identity)
+				return nil
+			}
+		}
+		return fmt.Errorf("unknown identity %q", *identity)
+	}
 	if args[0] == "role" && len(args) > 1 {
 		fs := flag.NewFlagSet("identity role", flag.ContinueOnError)
 		identity := fs.String("identity", "", "")
@@ -150,7 +180,7 @@ func runIdentityCommand(args []string, out io.Writer) error {
 		}
 		return fmt.Errorf("unknown identity %q", *identity)
 	}
-	return fmt.Errorf("usage: identity add|role add|remove")
+	return fmt.Errorf("usage: identity add|key|role add|remove")
 }
 
 func runRoleCommand(args []string, out io.Writer) error {
@@ -472,7 +502,7 @@ func main() {
 
 		case "identity":
 			if len(os.Args) < 3 {
-				fmt.Fprintln(os.Stderr, "Usage: openlore identity add|role add|remove")
+				fmt.Fprintln(os.Stderr, "Usage: openlore identity add|key|role add|remove")
 				os.Exit(1)
 			}
 			if err := runIdentityCommand(os.Args[2:], os.Stdout); err != nil {
@@ -619,6 +649,7 @@ func main() {
 
 	port := flag.Int("port", 0, "SSH server port (default 2222)")
 	flag.IntVar(port, "p", 0, "SSH server port (shorthand)")
+	externalSSHPort := flag.Int("external-ssh-port", 0, "external SSH port advertised behind a TCP proxy")
 	metricsPort := flag.Int("metrics-port", 0, "Prometheus metrics port (0 to disable, default 3000)")
 	hostKey := flag.String("host-key", "", "path to host key file (default .ssh/openlore_ed25519)")
 	motd := flag.String("motd", "", "inline MOTD string shown on connect")
@@ -679,6 +710,9 @@ func main() {
 
 	if *port != 0 {
 		opts = append(opts, openlore.WithPort(*port))
+	}
+	if *externalSSHPort != 0 {
+		opts = append(opts, openlore.WithExternalSSHPort(*externalSSHPort))
 	}
 	if isFlagSet("metrics-port") {
 		opts = append(opts, openlore.WithMetricsPort(*metricsPort))

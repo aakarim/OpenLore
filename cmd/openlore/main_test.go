@@ -110,6 +110,21 @@ func TestRoleAndIdentityCommands(t *testing.T) {
 			t.Fatalf("roles = %v", got)
 		}
 	})
+	t.Run("identity key", func(t *testing.T) {
+		public, _, err := ed25519.GenerateKey(bytes.NewReader(bytes.Repeat([]byte{8}, ed25519.SeedSize)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		key, err := gossh.NewPublicKey(public)
+		if err != nil {
+			t.Fatal(err)
+		}
+		keyText := strings.TrimSpace(string(gossh.MarshalAuthorizedKey(key))) + " onboarding@example"
+		identity("key", "-identity", "nobody", "-key", keyText)
+		if got := readPolicy(t, p).Identities[1].PublicKey; got != keyText {
+			t.Fatalf("public key = %q, want %q", got, keyText)
+		}
+	})
 	t.Run("guest docset", func(t *testing.T) {
 		role("grant", "-role", "guest", "-docset", "docs", "-grant", "ro")
 		if got := readPolicy(t, p).Docsets["docs"].Access.Allow["guest"]; got != "ro" {

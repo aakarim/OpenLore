@@ -878,6 +878,15 @@ func WithPort(port int) Option {
 	}
 }
 
+// WithExternalSSHPort sets the SSH port advertised to HTTP clients when a
+// TCP proxy exposes the server on a different external port.
+func WithExternalSSHPort(port int) Option {
+	return func(cfg *Config) error {
+		cfg.ExternalSSHPort = port
+		return nil
+	}
+}
+
 // WithMetricsPort sets the metrics HTTP port. 0 disables metrics.
 func WithMetricsPort(port int) Option {
 	return func(cfg *Config) error {

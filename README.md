@@ -3,6 +3,7 @@
 [![Release](https://img.shields.io/github/v/release/aakarim/go-openlore)](https://github.com/aakarim/go-openlore/releases/latest)
 [![Go Reference](https://pkg.go.dev/badge/github.com/aakarim/go-openlore.svg)](https://pkg.go.dev/github.com/aakarim/go-openlore)
 [![Deploy with Fly.io](https://img.shields.io/badge/Deploy%20with-Fly.io-7B3FF2?logo=flydotio&logoColor=white)](#deploy-on-flyio)
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/openlore?utm_medium=integration&utm_source=button&utm_campaign=openlore)
 
 Sponsored by <a href="https://oiya.ai/?utm_source=github&amp;utm_medium=referral&amp;utm_campaign=openlore&amp;utm_content=sponsor_logo"><img src="assets/oiya-logo.svg" alt="Oiya" height="24" align="absmiddle"></a>
 
@@ -244,6 +245,37 @@ declarative: edit that file and run `fly deploy`; it is installed into
 `/etc/openlore/lore.json` on every start. A dedicated IPv4 address and the
 always-running Machine incur charges under
 [Fly.io pricing](https://fly.io/docs/about/pricing/).
+
+### Deploy on Railway
+
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/openlore?utm_medium=integration&utm_source=button&utm_campaign=openlore)
+
+The Railway template deploys the Railpack-built
+`ghcr.io/aakarim/openlore:latest` image with a persistent 1 GB volume at
+`/var/lib/openlore`. It exposes the web UI, HTTP API, and MCP on HTTPS and
+creates a TCP proxy to OpenLore's internal SSH port `2222`.
+
+Enter your complete SSH public key in `OPENLORE_ONBOARDING_PUBLIC_KEY` when
+prompted. Keyless access is disabled, there is no public docset, and the
+`onboarding` identity starts in its writable `/user/onboarding` home.
+
+Railway assigns the TCP proxy a public hostname and port. Find both under
+**OpenLore → Settings → Networking → TCP Proxy**, then connect with:
+
+```bash
+ssh -p ASSIGNED_PORT onboarding@ASSIGNED_HOSTNAME
+```
+
+To expose standard SSH port `22`, point a domain at an external TCP load
+balancer that listens on `22` and forwards to the assigned Railway endpoint.
+One load-balancer IP cannot route several SSH domains on port `22`, because raw
+SSH has no hostname or SNI routing; use one IP per server or distinct ports.
+
+The container workflow publishes `latest` from `main`; releases also publish
+`VERSION`, `vVERSION`, major, and minor image tags. Railway currently omits
+image auto-update schedules when generating reusable templates. To follow
+`latest`, enable **Configure Auto Updates → Anytime** once under the deployed
+service's **Settings → Source**.
 
 ### HTTP inbox uploads
 

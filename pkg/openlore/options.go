@@ -34,6 +34,7 @@ var (
 	WithConfigFile      = config.WithConfigFile
 	WithEmbeddedConfig  = config.WithEmbeddedConfig
 	WithPort            = config.WithPort
+	WithExternalSSHPort = config.WithExternalSSHPort
 	WithMetricsPort     = config.WithMetricsPort
 	WithHostKeyPath     = config.WithHostKeyPath
 	WithAllowKeyless    = config.WithAllowKeyless
