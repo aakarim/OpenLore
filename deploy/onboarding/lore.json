@@ -1,0 +1,17 @@
+{
+  "allow_keyless": false,
+  "unknown_identity": "deny",
+  "default_cwd": "/user/onboarding",
+  "roles": {},
+  "docsets": {
+    "onboarding-home": {
+      "paths": ["/user/onboarding"]
+    }
+  },
+  "identities": [
+    {
+      "name": "onboarding",
+      "home": "onboarding-home"
+    }
+  ]
+}

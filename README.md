@@ -236,11 +236,14 @@ curl https://<your-app>.fly.dev/api/commands
 ```
 
 The deployment creates a 1 GB Fly Volume for the SSH host key, server data, and
-published documents. It starts with keyless, read-only public access. To
-configure identities and SSH public keys declaratively, edit
-`deploy/fly/lore.json` and run `fly deploy`; the policy is installed on every
-start. A dedicated IPv4 address and the always-running Machine incur charges
-under [Fly.io pricing](https://fly.io/docs/about/pricing/).
+published documents under `/var/lib/openlore`. It starts with keyless SSH access
+disabled, no public docset, and an `onboarding` identity whose writable home is
+`/user/onboarding`. Add the identity's `public_key` to
+`deploy/onboarding/lore.json` before deploying. Later policy changes remain
+declarative: edit that file and run `fly deploy`; it is installed into
+`/etc/openlore/lore.json` on every start. A dedicated IPv4 address and the
+always-running Machine incur charges under
+[Fly.io pricing](https://fly.io/docs/about/pricing/).
 
 ### HTTP inbox uploads
 

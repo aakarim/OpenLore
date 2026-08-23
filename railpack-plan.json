@@ -19,8 +19,8 @@
       },
       {
         "include": [
-          "deploy/fly/lore.json",
-          "deploy/fly/start.sh"
+          "deploy/onboarding/lore.json",
+          "deploy/onboarding/start.sh"
         ],
         "local": true
       }
@@ -104,8 +104,8 @@
       ],
       "commands": [
         {
-          "cmd": "sh -c 'cp deploy/fly/openlore.yml assets/config/openlore.yml'",
-          "customName": "cp deploy/fly/openlore.yml assets/config/openlore.yml"
+          "cmd": "sh -c 'cp deploy/onboarding/openlore.yml assets/config/openlore.yml'",
+          "customName": "cp deploy/onboarding/openlore.yml assets/config/openlore.yml"
         },
         {
           "cmd": "sh -c 'go build -o out ./cmd/openlore'",
