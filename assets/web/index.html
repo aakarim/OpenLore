@@ -3,173 +3,358 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OpenLore — Serve your docs to AI agents</title>
+    <title>OpenLore — Agent-native knowledge base</title>
     <style>
+        @font-face {
+            font-family: 'Outfit';
+            font-style: normal;
+            font-weight: 100 900;
+            font-display: swap;
+            src: url('/outfit.woff2') format('woff2');
+        }
+        @font-face {
+            font-family: 'Familjen Grotesk';
+            font-style: normal;
+            font-weight: 400 700;
+            font-display: swap;
+            src: url('/familjen-grotesk.woff2') format('woff2');
+        }
         :root {
-            --bg: #0d1117;
-            --surface: #161b22;
-            --border: #30363d;
-            --text: #e6edf3;
-            --text-muted: #8b949e;
-            --accent: #58a6ff;
-            --accent-hover: #79c0ff;
-            --green: #3fb950;
-            --code-bg: #0d1117;
+            color-scheme: dark;
+            --bg: #1d1a23;
+            --bg-soft: #252130;
+            --bg-mute: #2f2a3c;
+            --border: #363046;
+            --border-hover: #4a4160;
+            --text-1: rgba(255, 253, 248, 0.88);
+            --text-2: rgba(238, 233, 245, 0.6);
+            --text-3: rgba(238, 233, 245, 0.38);
+            --brand: #ff8a50;
+            --brand-light: #ffa06e;
+            --purple: #a880ff;
+            --orange: #ff8a50;
+            --mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+            --display: 'Familjen Grotesk', ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
         }
         * { margin: 0; padding: 0; box-sizing: border-box; }
+        html { scroll-behavior: smooth; }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+            font-family: Outfit, ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
             background: var(--bg);
-            color: var(--text);
-            line-height: 1.6;
+            color: var(--text-1);
+            line-height: 1.7;
+            -webkit-font-smoothing: antialiased;
         }
-        .container {
-            max-width: 800px;
+        a { color: var(--brand); text-decoration: none; transition: color 0.25s; }
+        a:hover { color: var(--brand-light); }
+
+        /* ── Nav ─────────────────────────────────────────── */
+        .nav {
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            backdrop-filter: saturate(180%) blur(12px);
+            -webkit-backdrop-filter: saturate(180%) blur(12px);
+            background: rgba(27, 27, 31, 0.75);
+            border-bottom: 1px solid var(--border);
+        }
+        .nav-inner {
+            max-width: 1152px;
             margin: 0 auto;
-            padding: 2rem 1.5rem;
+            padding: 0 1.5rem;
+            height: 56px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
         }
-        header {
+        .nav-brand {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-family: var(--display);
+            font-weight: 600;
+            font-size: 1rem;
+            color: var(--text-1);
+        }
+        .nav-links {
+            display: flex;
+            align-items: center;
+            gap: 1.5rem;
+            font-size: 0.875rem;
+            font-weight: 500;
+        }
+        .nav-links a { color: var(--text-2); }
+        .nav-links a:hover { color: var(--text-1); }
+
+        /* ── Hero ────────────────────────────────────────── */
+        .hero {
+            position: relative;
+            max-width: 1152px;
+            margin: 0 auto;
+            padding: 4.5rem 1.5rem 3rem;
             text-align: center;
-            padding: 3rem 0 2rem;
+            overflow: visible;
         }
-        .logo {
-            font-size: 4rem;
-            margin-bottom: 0.5rem;
-        }
-        h1 {
-            font-size: 2.5rem;
-            font-weight: 700;
-            margin-bottom: 0.5rem;
-        }
-        .tagline {
-            color: var(--text-muted);
-            font-size: 1.2rem;
-        }
-        .hero-code {
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 1.5rem;
-            margin: 2rem 0;
-            overflow-x: auto;
-        }
-        .hero-code pre {
-            font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
-            font-size: 0.9rem;
-            line-height: 1.8;
-        }
-        .hero-code .comment { color: var(--text-muted); }
-        .hero-code .cmd { color: var(--green); }
-        .hero-code .flag { color: var(--accent); }
-        section {
-            margin: 3rem 0;
-        }
-        h2 {
-            font-size: 1.5rem;
+        .hero .logo {
+            font-size: 4.5rem;
+            line-height: 1;
             margin-bottom: 1rem;
-            color: var(--accent);
+        }
+        .hero h1 {
+            font-family: var(--display);
+            font-size: clamp(3rem, 8vw, 4.5rem);
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            line-height: 1.1;
+            color: var(--text-1);
+        }
+        .hero .subtitle {
+            max-width: 620px;
+            margin: 1.5rem auto 0;
+            font-size: 1.2rem;
+            color: var(--text-2);
+        }
+        .hero-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+            justify-content: center;
+            margin-top: 2rem;
+        }
+        .btn {
+            display: inline-block;
+            padding: 0.6rem 1.4rem;
+            border-radius: 20px;
+            font-size: 0.875rem;
+            font-weight: 600;
+            transition: background-color 0.25s, border-color 0.25s, color 0.25s;
+        }
+        .btn-brand {
+            background: var(--brand);
+            color: #2b2138;
+        }
+        .btn-brand:hover { background: var(--brand-light); color: #2b2138; }
+        .btn-alt {
+            background: var(--bg-mute);
+            color: var(--text-1);
+            border: 1px solid transparent;
+        }
+        .btn-alt:hover { background: var(--border-hover); color: var(--text-1); }
+
+        /* ── Code windows ────────────────────────────────── */
+        .code-window {
+            max-width: 720px;
+            margin: 2.5rem auto 0;
+            background: var(--bg-soft);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+            text-align: left;
+        }
+        .code-window-bar {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 0.65rem 1rem;
+            border-bottom: 1px solid var(--border);
+        }
+        .code-window-bar .dot {
+            width: 11px;
+            height: 11px;
+            border-radius: 50%;
+            background: var(--bg-mute);
+        }
+        .code-window-bar .dot:nth-child(1) { background: #f87171; }
+        .code-window-bar .dot:nth-child(2) { background: #fbbf24; }
+        .code-window-bar .dot:nth-child(3) { background: #34d399; }
+        .code-window-bar .title {
+            margin-left: 0.5rem;
+            font-family: var(--mono);
+            font-size: 0.75rem;
+            color: var(--text-3);
+        }
+        .code-window pre {
+            padding: 1.25rem 1.5rem;
+            overflow-x: auto;
+            font-family: var(--mono);
+            font-size: 0.85rem;
+            line-height: 1.9;
+        }
+        .code-window .comment { color: var(--text-3); }
+        .code-window .cmd { color: var(--orange); }
+        .code-window .flag { color: var(--purple); }
+
+        /* ── Layout ──────────────────────────────────────── */
+        .container {
+            max-width: 960px;
+            margin: 0 auto;
+            padding: 0 1.5rem;
+        }
+        section { margin: 5rem 0; }
+        h2 {
+            font-family: var(--display);
+            font-size: 1.75rem;
+            font-weight: 700;
+            letter-spacing: -0.01em;
+            margin-bottom: 1rem;
+        }
+        h2::after {
+            content: '';
+            display: block;
+            width: 40px;
+            height: 3px;
+            margin-top: 0.6rem;
+            border-radius: 2px;
+            background: var(--brand);
         }
         h3 {
-            font-size: 1.1rem;
+            font-size: 1.05rem;
+            font-weight: 600;
             margin: 1.5rem 0 0.5rem;
         }
-        p {
-            margin-bottom: 1rem;
-            color: var(--text-muted);
-        }
+        p { margin-bottom: 1rem; color: var(--text-2); }
+        strong { color: var(--text-1); }
         code {
-            font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
-            background: var(--surface);
-            padding: 0.15em 0.4em;
-            border-radius: 4px;
+            font-family: var(--mono);
+            background: var(--bg-mute);
+            padding: 0.15em 0.45em;
+            border-radius: 6px;
             font-size: 0.85em;
+            color: var(--text-1);
         }
         pre {
-            background: var(--surface);
+            background: var(--bg-soft);
             border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 1rem 1.5rem;
+            border-radius: 12px;
+            padding: 1.1rem 1.4rem;
             overflow-x: auto;
             margin: 1rem 0;
-            font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+            font-family: var(--mono);
             font-size: 0.85rem;
-            line-height: 1.6;
+            line-height: 1.7;
         }
+        pre code { background: none; padding: 0; }
+
+        /* ── Feature cards ───────────────────────────────── */
         .grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
             gap: 1rem;
-            margin: 1rem 0;
+            margin: 1.5rem 0;
         }
         .card {
-            background: var(--surface);
-            border: 1px solid var(--border);
+            background: var(--bg-soft);
+            border: 1px solid var(--bg-soft);
+            border-radius: 12px;
+            padding: 1.5rem;
+            transition: border-color 0.25s;
+        }
+        .card:hover { border-color: var(--brand); }
+        .card .icon {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 44px;
+            height: 44px;
+            margin-bottom: 1.1rem;
             border-radius: 8px;
-            padding: 1.25rem;
+            background: var(--bg-mute);
+            font-size: 1.4rem;
         }
-        .card h3 { margin-top: 0; color: var(--text); }
-        .card p { margin-bottom: 0; font-size: 0.9rem; }
-        footer {
-            text-align: center;
-            padding: 3rem 0;
-            color: var(--text-muted);
-            font-size: 0.85rem;
-            border-top: 1px solid var(--border);
-            margin-top: 3rem;
-        }
-        a { color: var(--accent); text-decoration: none; }
-        a:hover { color: var(--accent-hover); text-decoration: underline; }
-        .badge {
-            display: inline-block;
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 20px;
-            padding: 0.25rem 0.75rem;
-            font-size: 0.8rem;
-            margin: 0.25rem;
-        }
-        .host-key-box {
-            position: relative;
-        }
+        .card h3 { margin: 0 0 0.5rem; font-size: 0.95rem; color: var(--text-1); }
+        .card p { margin-bottom: 0; font-size: 0.875rem; color: var(--text-2); }
+
+        /* ── Host key ────────────────────────────────────── */
+        .host-key-box { position: relative; }
         .host-key-box pre {
             word-break: break-all;
             white-space: pre-wrap;
+            padding-right: 4.5rem;
         }
         .copy-btn {
             position: absolute;
-            top: 0.5rem;
-            right: 0.5rem;
-            background: var(--border);
-            color: var(--text);
-            border: none;
-            border-radius: 4px;
-            padding: 0.3rem 0.6rem;
+            top: 0.6rem;
+            right: 0.6rem;
+            background: var(--bg-mute);
+            color: var(--text-2);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 0.3rem 0.7rem;
             font-size: 0.75rem;
+            font-weight: 500;
             cursor: pointer;
             font-family: inherit;
+            transition: background-color 0.25s, color 0.25s, border-color 0.25s;
         }
-        .copy-btn:hover { background: var(--accent); }
+        .copy-btn:hover {
+            background: var(--brand);
+            border-color: var(--brand);
+            color: #2b2138;
+        }
+
+        /* ── Footer ──────────────────────────────────────── */
+        footer {
+            border-top: 1px solid var(--border);
+            margin-top: 5rem;
+            padding: 2.5rem 0;
+            text-align: center;
+            color: var(--text-3);
+            font-size: 0.85rem;
+        }
+        footer a { color: var(--text-2); }
+        footer a:hover { color: var(--text-1); }
+
+        @media (max-width: 640px) {
+            .nav-links { gap: 1rem; }
+            section { margin: 3.5rem 0; }
+        }
     </style>
 </head>
 <body>
-    <div class="container">
-        <header>
-            <div class="logo">📜</div>
-            <h1>OpenLore</h1>
-            <p class="tagline">Serve your docs to AI agents over SSH</p>
-        </header>
+    <nav class="nav">
+        <div class="nav-inner">
+            <a class="nav-brand" href="#">
+                <span>📜</span>
+                <span>OpenLore</span>
+            </a>
+            <div class="nav-links">
+                <a href="#quick-start">Quick Start</a>
+                <a href="#mcp">MCP</a>
+                <a href="https://github.com/aakarim/go-openlore">GitHub</a>
+            </div>
+        </div>
+    </nav>
 
-        <div class="hero-code">
+    <header class="hero">
+        <div class="logo">📜</div>
+        <h1>OpenLore</h1>
+        <p class="subtitle">
+            OpenLore is a minimal, extensible, agent-native knowledge base
+            that keeps shared context current and inspectable.
+        </p>
+        <div class="hero-actions">
+            <a class="btn btn-brand" href="#quick-start">Get Started</a>
+            <a class="btn btn-alt" href="https://github.com/aakarim/go-openlore">View on GitHub</a>
+        </div>
+
+        <div class="code-window">
+            <div class="code-window-bar">
+                <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+                <span class="title">terminal</span>
+            </div>
             <pre><span class="comment"># Teach your agent how to use OpenLore</span>
 <span class="cmd">ssh</span><span data-ssh-port></span> <span class="flag" data-server-host></span> teach <span class="flag">|</span> your-agent-cli
 
 <span class="comment"># Add documentation access to your AGENTS.md</span>
-<span class="cmd">ssh</span><span data-ssh-port></span> <span class="flag" data-server-host></span> agents <span class="flag">>></span> AGENTS.md
+<span class="cmd">ssh</span><span data-ssh-port></span> <span class="flag" data-server-host></span> agents <span class="flag">&gt;&gt;</span> AGENTS.md
 
 <span class="comment"># Explore documentation</span>
 <span class="cmd">ssh</span><span data-ssh-port></span> <span class="flag" data-server-host></span> <span class="cmd">tree</span> -L 2 /</pre>
         </div>
+    </header>
 
+    <div class="container">
         <section>
             <h2>What is OpenLore?</h2>
             <p>
@@ -180,6 +365,23 @@
                 No RAG pipelines. No copy-pasting into context windows. Just a
                 shell — over SSH, or over MCP when your client prefers it.
             </p>
+            <div class="grid">
+                <div class="card">
+                    <div class="icon">⚡</div>
+                    <h3>Native Agent Interface</h3>
+                    <p>Agents already know <code>grep</code> and <code>cat</code>. No new protocols or client libraries to learn.</p>
+                </div>
+                <div class="card">
+                    <div class="icon">📦</div>
+                    <h3>Single Binary</h3>
+                    <p>Docs baked in with Go's <code>embed</code>. Share one file; anyone who runs it serves your knowledge.</p>
+                </div>
+                <div class="card">
+                    <div class="icon">🔒</div>
+                    <h3>Read-Only by Design</h3>
+                    <p>A sandboxed shell over your documentation. Agents explore freely without touching anything else.</p>
+                </div>
+            </div>
         </section>
 
         <section>
@@ -189,14 +391,17 @@
             <p>The <code>teach</code> skill walks your agent through:</p>
             <div class="grid">
                 <div class="card">
+                    <div class="icon">🛠️</div>
                     <h3>Pull &amp; Embed</h3>
                     <p>Clone the repo, drop your docs in <code>assets/lore/</code>, build a single binary with everything baked in.</p>
                 </div>
                 <div class="card">
+                    <div class="icon">🔑</div>
                     <h3>Access Control</h3>
                     <p>Set up <code>lore.json</code> with per-agent path access — different agents see different docs.</p>
                 </div>
                 <div class="card">
+                    <div class="icon">🚀</div>
                     <h3>Distribute</h3>
                     <p>Share the binary. Anyone who runs it gets an SSH server with your documentation. Agents connect and explore.</p>
                 </div>
@@ -220,7 +425,7 @@
             </p>
         </section>
 
-        <section>
+        <section id="quick-start">
             <h2>Quick Start</h2>
             <pre># Install
 go install github.com/aakarim/go-openlore/cmd/openlore@latest
@@ -235,7 +440,7 @@ ssh -p 2222 localhost
 ssh -p 2222 localhost "grep -r 'authentication' /docs"</pre>
         </section>
 
-        <section>
+        <section id="mcp">
             <h2>MCP Support</h2>
             <p>
                 Prefer the Model Context Protocol? The server also exposes an
