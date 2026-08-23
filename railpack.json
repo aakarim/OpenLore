@@ -1,0 +1,25 @@
+{
+  "$schema": "https://schema.railpack.com",
+  "provider": "golang",
+  "steps": {
+    "build": {
+      "commands": [
+        "cp deploy/fly/openlore.yml assets/config/openlore.yml",
+        "go build -o out ./cmd/openlore"
+      ]
+    }
+  },
+  "deploy": {
+    "startCommand": "sh start.sh",
+    "inputs": [
+      "...",
+      {
+        "local": true,
+        "include": [
+          "deploy/fly/lore.json",
+          "deploy/fly/start.sh"
+        ]
+      }
+    ]
+  }
+}

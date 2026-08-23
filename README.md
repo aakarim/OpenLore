@@ -2,6 +2,7 @@
 
 [![Release](https://img.shields.io/github/v/release/aakarim/go-openlore)](https://github.com/aakarim/go-openlore/releases/latest)
 [![Go Reference](https://pkg.go.dev/badge/github.com/aakarim/go-openlore.svg)](https://pkg.go.dev/github.com/aakarim/go-openlore)
+[![Deploy with Fly.io](https://img.shields.io/badge/Deploy%20with-Fly.io-7B3FF2?logo=flydotio&logoColor=white)](#deploy-on-flyio)
 
 Sponsored by <a href="https://oiya.ai/?utm_source=github&amp;utm_medium=referral&amp;utm_campaign=openlore&amp;utm_content=sponsor_logo"><img src="assets/oiya-logo.svg" alt="Oiya" height="24" align="absmiddle"></a>
 
@@ -207,6 +208,39 @@ Produce cross-platform binaries with your docs embedded:
 
 See [Ways to use OpenLore](docs/usage.md) for MCP stdio, MCPB desktop
 packaging, SSHFS, and Go library usage.
+
+### Deploy on Fly.io
+
+The repository includes a [Railpack](https://railpack.com/) build and Fly
+configuration. Fly serves the web UI, HTTP API, and MCP endpoint over HTTPS and
+forwards public TCP port `22` to OpenLore's SSH server on port `2222`.
+
+Install and authenticate the [Fly CLI](https://fly.io/docs/flyctl/install/),
+then launch OpenLore from the repository template:
+
+```bash
+mkdir openlore-fly && cd openlore-fly
+fly launch --from https://github.com/aakarim/go-openlore.git --no-deploy
+
+# A dedicated IPv4 address is required for raw TCP traffic on port 22.
+fly ips allocate-v4
+fly deploy
+```
+
+After deployment, connect to the three public interfaces:
+
+```bash
+ssh <your-app>.fly.dev
+curl https://<your-app>.fly.dev/api/commands
+# MCP: https://<your-app>.fly.dev/mcp
+```
+
+The deployment creates a 1 GB Fly Volume for the SSH host key, server data, and
+published documents. It starts with keyless, read-only public access. To
+configure identities and SSH public keys declaratively, edit
+`deploy/fly/lore.json` and run `fly deploy`; the policy is installed on every
+start. A dedicated IPv4 address and the always-running Machine incur charges
+under [Fly.io pricing](https://fly.io/docs/about/pricing/).
 
 ### HTTP inbox uploads
 

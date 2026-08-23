@@ -1,0 +1,132 @@
+{
+  "$schema": "https://schema.railpack.com",
+  "caches": {
+    "go-build": {
+      "directory": "/root/.cache/go-build",
+      "type": "shared"
+    }
+  },
+  "deploy": {
+    "base": {
+      "image": "ghcr.io/railwayapp/railpack-runtime:mise-2026.8.6"
+    },
+    "inputs": [
+      {
+        "include": [
+          "."
+        ],
+        "step": "build"
+      },
+      {
+        "include": [
+          "deploy/fly/lore.json",
+          "deploy/fly/start.sh"
+        ],
+        "local": true
+      }
+    ],
+    "startCommand": "sh start.sh",
+    "variables": {
+      "RAILPACK_VERSION": "0.37.0"
+    }
+  },
+  "steps": [
+    {
+      "assets": {
+        "generated-mise-toml": "[tools]\n  go = \"1.26.2\"\n\n[settings]\n  idiomatic_version_file_enable_tools = [\"python\", \"node\", \"ruby\", \"elixir\", \"go\", \"java\", \"yarn\", \"bun\", \"deno\", \"dotnet\", \"rust\"]\n  minimum_release_age = \"14d\"\n  paranoid = true\n  trusted_config_paths = [\"/app\"]\n  [settings.node]\n    verify = false\n"
+      },
+      "commands": [
+        {
+          "path": "/mise/shims"
+        },
+        {
+          "customName": "create mise config",
+          "name": "generated-mise-toml",
+          "path": "/etc/mise/config.toml"
+        },
+        {
+          "cmd": "mise install",
+          "customName": "install mise packages: go"
+        }
+      ],
+      "inputs": [
+        {
+          "image": "ghcr.io/railwayapp/railpack-builder:mise-2026.8.6"
+        }
+      ],
+      "name": "packages:mise",
+      "variables": {
+        "MISE_CACHE_DIR": "/mise/cache",
+        "MISE_CONFIG_DIR": "/mise",
+        "MISE_DATA_DIR": "/mise",
+        "MISE_INSTALLS_DIR": "/mise/installs",
+        "MISE_SHIMS_DIR": "/mise/shims"
+      }
+    },
+    {
+      "caches": [
+        "go-build"
+      ],
+      "commands": [
+        {
+          "path": "/go/bin"
+        },
+        {
+          "dest": "go.mod",
+          "src": "go.mod"
+        },
+        {
+          "dest": "go.sum",
+          "src": "go.sum"
+        },
+        {
+          "cmd": "go mod download"
+        }
+      ],
+      "inputs": [
+        {
+          "step": "packages:mise"
+        }
+      ],
+      "name": "install",
+      "secrets": [
+        "*"
+      ],
+      "variables": {
+        "CGO_ENABLED": "0",
+        "GOBIN": "/go/bin",
+        "GOPATH": "/go"
+      }
+    },
+    {
+      "caches": [
+        "go-build"
+      ],
+      "commands": [
+        {
+          "cmd": "sh -c 'cp deploy/fly/openlore.yml assets/config/openlore.yml'",
+          "customName": "cp deploy/fly/openlore.yml assets/config/openlore.yml"
+        },
+        {
+          "cmd": "sh -c 'go build -o out ./cmd/openlore'",
+          "customName": "go build -o out ./cmd/openlore"
+        }
+      ],
+      "inputs": [
+        {
+          "step": "install"
+        },
+        {
+          "include": [
+            "."
+          ],
+          "local": true
+        }
+      ],
+      "name": "build",
+      "secrets": [
+        "*"
+      ]
+    }
+  ]
+}

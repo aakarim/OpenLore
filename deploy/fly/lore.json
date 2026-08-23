@@ -1,0 +1,17 @@
+{
+  "allow_keyless": true,
+  "unknown_identity": "allow",
+  "default_cwd": "/",
+  "roles": {},
+  "docsets": {
+    "public": {
+      "paths": ["/"],
+      "access": {
+        "allow": {
+          "guest": "ro"
+        }
+      }
+    }
+  },
+  "identities": []
+}
