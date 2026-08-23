@@ -240,10 +240,13 @@ The deployment creates a 1 GB Fly Volume for the SSH host key, server data, and
 published documents under `/var/lib/openlore`. It starts with keyless SSH access
 disabled, no public docset, and an `onboarding` identity whose writable home is
 `/user/onboarding`. Add the identity's `public_key` to
-`deploy/onboarding/lore.json` before deploying. Later policy changes remain
-declarative: edit that file and run `fly deploy`; it is installed into
-`/etc/openlore/lore.json` on every start. A dedicated IPv4 address and the
-always-running Machine incur charges under
+`deploy/onboarding/lore.json` before the first deployment. The initial
+configuration is seeded once under `/var/lib/openlore/config`; later image
+updates do not overwrite operator edits. The `onboarding` administrator can
+edit the validated policy at `/opt/openlore/lore.json` and activate it with
+`lore config reload`. Edit `openlore.yml` on the volume and restart the Machine
+for server-level changes. A dedicated IPv4 address and the always-running
+Machine incur charges under
 [Fly.io pricing](https://fly.io/docs/about/pricing/).
 
 ### Deploy on Railway
@@ -257,7 +260,11 @@ creates a TCP proxy to OpenLore's internal SSH port `2222`.
 
 Enter your complete SSH public key in `OPENLORE_ONBOARDING_PUBLIC_KEY` when
 prompted. Keyless access is disabled, there is no public docset, and the
-`onboarding` identity starts in its writable `/user/onboarding` home.
+`onboarding` administrator starts in its writable `/user/onboarding` home. The
+key and default configuration are seeded only on the first start. Both
+configuration files then persist under `/var/lib/openlore/config` and image
+updates do not overwrite edits. Edit the policy through
+`/opt/openlore/lore.json`, then run `lore config reload` to activate it.
 
 Railway assigns the TCP proxy a public hostname and port. Find both under
 **OpenLore → Settings → Networking → TCP Proxy**, then connect with:

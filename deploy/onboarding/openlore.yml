@@ -7,7 +7,7 @@ metrics_port: 0
 default_cwd: /user/onboarding
 
 host_key_path: /var/lib/openlore/ssh/openlore_ed25519
-auth_file: /etc/openlore/lore.json
+auth_file: /var/lib/openlore/config/lore.json
 data_dir: /var/lib/openlore/data
 writable_dir: /var/lib/openlore/published
 readonly: false

@@ -4,7 +4,7 @@
   "steps": {
     "build": {
       "commands": [
-        "cp deploy/onboarding/openlore.yml assets/config/openlore.yml",
+        "rm assets/config/openlore.yml",
         "go build -o out ./cmd/openlore"
       ]
     }
@@ -17,6 +17,7 @@
         "local": true,
         "include": [
           "deploy/onboarding/lore.json",
+          "deploy/onboarding/openlore.yml",
           "deploy/onboarding/start.sh"
         ]
       }
