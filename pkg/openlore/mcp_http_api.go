@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/aakarim/go-openlore/pkg/shell"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -15,24 +16,27 @@ import (
 // simple REST-style endpoints that any HTTP client can call, while still
 // routing every request through the MCP server's tools.
 //
-// Each request runs on its own short-lived in-process MCP session. The session
-// is connected with the request's context, so the server-side tool handler sees
-// the caller's identity (via auth.TokenInfoFromContext) exactly as the
-// Streamable transport does — identity always flows through the connection
-// context, never through client-supplied tool arguments.
+// Stateless requests run on a short-lived in-process MCP session. Clients that
+// need shell state across commands can create a logical session. Each logical
+// session owns one Shell while all sessions share the same HTTP listener.
 //
 // It mirrors the MCP server's two tools:
 //
 //	POST {prefix}/shell     -> body {"command": "..."} runs the `shell` tool
 //	GET  {prefix}/commands  -> runs the `list_commands` tool
+//	POST {prefix}/sessions  -> creates a persistent logical shell session
+//	POST {prefix}/sessions/{id}/shell -> runs a command in that session
+//	POST {prefix}/sessions/{id}/touch -> extends that session's idle lifetime
+//	DELETE {prefix}/sessions/{id} -> closes that session
 type MCPHTTPAPI struct {
-	server *mcp.Server
+	server   *mcp.Server
+	sessions *httpShellSessions
 }
 
-// NewMCPHTTPAPI returns an API that forwards HTTP requests to the given MCP
-// server's tools, one in-process session per request.
-func NewMCPHTTPAPI(server *mcp.Server) *MCPHTTPAPI {
-	return &MCPHTTPAPI{server: server}
+// NewMCPHTTPAPI returns an API backed by the given MCP server. shellFactory
+// builds identity-scoped shells for persistent logical sessions.
+func NewMCPHTTPAPI(server *mcp.Server, shellFactory func(context.Context) *shell.Shell) *MCPHTTPAPI {
+	return &MCPHTTPAPI{server: server, sessions: newHTTPShellSessions(shellFactory)}
 }
 
 // Handler returns an http.Handler serving the API under the given path prefix
@@ -43,6 +47,10 @@ func (a *MCPHTTPAPI) Handler(prefix string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST "+prefix+"/shell", a.handleShell)
 	mux.HandleFunc("GET "+prefix+"/commands", a.handleListCommands)
+	mux.HandleFunc("POST "+prefix+"/sessions", a.sessions.handleCreate)
+	mux.HandleFunc("POST "+prefix+"/sessions/{id}/shell", a.sessions.handleShell)
+	mux.HandleFunc("POST "+prefix+"/sessions/{id}/touch", a.sessions.handleTouch)
+	mux.HandleFunc("DELETE "+prefix+"/sessions/{id}", a.sessions.handleDelete)
 	return mux
 }
 

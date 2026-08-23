@@ -219,6 +219,7 @@ func TestParseSyntax(t *testing.T) {
 		{"for loop", "for x in a b c; do echo $x; done"},
 		{"while loop", "x=0; while test $x = 0; do echo loop; x=1; done"},
 		{"command substitution", "echo $(echo hello)"},
+		{"quoted command substitution argument", `echo A: $(grep -c "Final (v2)" /docs/file.md)`},
 		{"nested cmd sub", "echo $(echo $(echo deep))"},
 		{"variable assignment", "FOO=bar; echo $FOO"},
 		{"double quotes with var", `echo "hello $WHO"`},
@@ -243,6 +244,19 @@ func TestParseSyntax(t *testing.T) {
 			if len(f.Stmts) == 0 {
 				t.Fatal("no statements parsed")
 			}
+		})
+	}
+}
+
+func TestUnterminatedQuoteInCommandSubstitutionDoesNotPanic(t *testing.T) {
+	inputs := []string{
+		`echo $(grep "unterminated)`,
+		`echo $(grep 'unterminated)`,
+		`echo $(grep "trailing escape\)`,
+	}
+	for _, input := range inputs {
+		t.Run(input, func(t *testing.T) {
+			_, _ = parser.Parse(input)
 		})
 	}
 }

@@ -623,14 +623,23 @@ func parseWordParts(s string, inDblQuote bool) []WordPart {
 						for i < len(s) && s[i] != '\'' {
 							i++
 						}
+						if i < len(s) {
+							i++
+						}
+						continue
 					} else if s[i] == '"' {
 						i++
 						for i < len(s) && s[i] != '"' {
-							if s[i] == '\\' {
-								i++
+							if s[i] == '\\' && i+1 < len(s) {
+								i += 2
+								continue
 							}
 							i++
 						}
+						if i < len(s) {
+							i++
+						}
+						continue
 					}
 					i++
 				}

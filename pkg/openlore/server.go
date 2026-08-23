@@ -1508,7 +1508,7 @@ func (s *Server) ListenAndServe() error {
 			// endpoints: POST {path}/shell and GET {path}/commands.
 			if s.config.APIEnabled && s.config.APIPath != "" {
 				apiPath := "/" + strings.Trim(s.config.APIPath, "/")
-				api := NewMCPHTTPAPI(mcpServer)
+				api := NewMCPHTTPAPI(mcpServer, s.shellForContext)
 				httpCfg.ExtraHandlers[apiPath+"/"] = s.authMiddleware(api.Handler(apiPath), !s.config.AllowKeyless)
 				s.logger.Info("HTTP API mounted", "path", apiPath, "http_port", s.config.HTTPPort)
 			}
