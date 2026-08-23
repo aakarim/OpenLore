@@ -26,7 +26,7 @@ var ErrRefreshStaleRetry = errors.New("stale refresh retry")
 // response was lost, or issue concurrent refreshes during reconnect. Both
 // requests receive the same successor refresh token. Reuse after this window
 // remains a theft signal and revokes the chain.
-const refreshRetryGrace = 30 * time.Second
+const refreshRetryGrace = 2 * time.Minute
 
 // RefreshToken is a stateful, revocable credential. Tokens in the same ChainID
 // descend from one login; rotation issues a new token in the chain and marks
