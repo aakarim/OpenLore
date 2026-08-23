@@ -1,0 +1,21 @@
+version: "1"
+
+port: 2222
+external_ssh_port: 22
+http_port: 8080
+metrics_port: 0
+default_cwd: /user/onboarding
+
+host_key_path: /var/lib/openlore/ssh/openlore_ed25519
+auth_file: /etc/openlore/lore.json
+data_dir: /var/lib/openlore/data
+writable_dir: /var/lib/openlore/published
+readonly: false
+
+mcp:
+  enabled: true
+  path: /mcp
+
+api:
+  enabled: true
+  path: /api
