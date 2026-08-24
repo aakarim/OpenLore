@@ -1,6 +1,7 @@
 # Deploy OpenLore to Railway
 
-Deliver one production OpenLore server on Railway with HTTPS/MCP, authenticated OpenLore SSH, a persistent volume, and `railway ssh` administrative access.
+Deliver one production OpenLore server on Railway with HTTPS/MCP, authenticated
+OpenLore SSH, a persistent volume, and `railway ssh` administrative access.
 
 ## Preconditions and safety
 

@@ -1,6 +1,8 @@
 # Deploy OpenLore to Google Cloud
 
-Deliver one production OpenLore server on Google Cloud with persistent disk state, HTTPS/MCP, authenticated OpenLore SSH, and Compute Engine administrative access.
+Deliver one production OpenLore server on Google Cloud with persistent disk
+state, HTTPS/MCP, authenticated OpenLore SSH, and Compute Engine administrative
+access.
 
 ## Preconditions and plan
 

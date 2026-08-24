@@ -1,6 +1,7 @@
 # Deploy OpenLore to Microsoft Azure
 
-Deliver one production OpenLore server on Azure with managed-disk persistence, HTTPS/MCP, authenticated OpenLore SSH, and Azure administrative access.
+Deliver one production OpenLore server on Azure with managed-disk persistence,
+HTTPS/MCP, authenticated OpenLore SSH, and Azure administrative access.
 
 ## Preconditions and plan
 

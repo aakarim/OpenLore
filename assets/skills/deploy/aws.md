@@ -1,6 +1,8 @@
 # Deploy OpenLore to AWS
 
-Deliver one production OpenLore server on AWS with durable EBS state, HTTPS/MCP, authenticated OpenLore SSH, and provider administrative session access.
+Deliver one production OpenLore server on AWS with durable EBS state,
+HTTPS/MCP, authenticated OpenLore SSH, and provider administrative session
+access.
 
 ## Preconditions and plan
 

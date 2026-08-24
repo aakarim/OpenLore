@@ -18,27 +18,27 @@
     },
     "deploy-fly": {
       "description": "Deploy OpenLore to Fly.io",
-      "file": "deploy-fly.md"
+      "file": "deploy/fly.md"
     },
     "deploy-railway": {
       "description": "Deploy OpenLore to Railway",
-      "file": "deploy-railway.md"
+      "file": "deploy/railway.md"
     },
     "deploy-aws": {
       "description": "Deploy OpenLore to AWS",
-      "file": "deploy-aws.md"
+      "file": "deploy/aws.md"
     },
     "deploy-gcp": {
       "description": "Deploy OpenLore to Google Cloud",
-      "file": "deploy-gcp.md"
+      "file": "deploy/gcp.md"
     },
     "deploy-azure": {
       "description": "Deploy OpenLore to Microsoft Azure",
-      "file": "deploy-azure.md"
+      "file": "deploy/azure.md"
     },
     "deploy-digitalocean": {
       "description": "Deploy OpenLore to DigitalOcean",
-      "file": "deploy-digitalocean.md"
+      "file": "deploy/digitalocean.md"
     },
     "upgrade": {
       "description": "Prepare an OpenLore base-image version upgrade",

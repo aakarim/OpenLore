@@ -1,6 +1,7 @@
 # Deploy OpenLore to DigitalOcean
 
-Deliver one production OpenLore server on DigitalOcean with volume persistence, HTTPS/MCP, authenticated OpenLore SSH, and Droplet administrative access.
+Deliver one production OpenLore server on DigitalOcean with volume persistence,
+HTTPS/MCP, authenticated OpenLore SSH, and Droplet administrative access.
 
 ## Preconditions and plan
 

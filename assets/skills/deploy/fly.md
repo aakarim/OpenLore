@@ -1,6 +1,7 @@
 # Deploy OpenLore to Fly.io
 
-Deliver one production OpenLore server on Fly.io with HTTPS/MCP, authenticated OpenLore SSH, durable state, and Fly administrative shell access.
+Deliver one production OpenLore server on Fly.io with HTTPS/MCP, authenticated
+OpenLore SSH, durable state, and Fly administrative shell access.
 
 ## Preconditions and safety
 
