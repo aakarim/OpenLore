@@ -6,7 +6,8 @@ it matters, recommend a default, and define unfamiliar terms just in time. If
 there is no safe default, say why a choice is required. Use restrained emojis.
 Run checks quietly and mention only failures or decisions. After each stage give
 a short ✅ plain-language summary, never “acceptance evidence”. Use an official
-release; do not clone, fork, vendor, or add OpenLore as a submodule.
+release; do not clone, fork, vendor, or add OpenLore as a submodule. After fixing
+a failure, summarize its user impact—not a technical postmortem—unless asked.
 
 ## Outcome
 
@@ -135,7 +136,8 @@ deployed server creates its own operational state.
 
 Put `compose.yml` and `runtime.env` inside `.local/`. Use this minimal structure,
 replacing the project name with the team slug; its mounts keep config, content,
-data, and host keys outside the image and persistent:
+data, and host keys outside the image and persistent. Inherit the image command,
+which already loads the mounted config; do not override `command` or `entrypoint`:
 
 ```yaml
 name: team-lore
@@ -145,7 +147,6 @@ services:
       context: ..
       dockerfile: Containerfile
     restart: unless-stopped
-    command: ["./out", "--config", "/var/lib/openlore/config/openlore.yml"]
     ports:
       - "${OPENLORE_SSH_PORT}:2222"
       - "${OPENLORE_HTTP_PORT}:8080"
@@ -193,7 +194,8 @@ Quietly run all checks; setup is not successful until they pass:
 
 1. HTTP readiness succeeds.
 2. `/mcp` completes an MCP initialization exchange.
-3. `ssh -F .local/ssh_config lore-local` authenticates `onboarding`.
+3. The mounted config is active: keyless login fails and
+   `ssh -F .local/ssh_config lore-local` authenticates `onboarding`.
 4. The SSH session starts at `/user/onboarding`.
 5. Both default READMEs are visible; a unique disposable document can be
    written to `/channel/general`, read back, and removed.
