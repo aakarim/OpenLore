@@ -210,6 +210,42 @@ Produce cross-platform binaries with your docs embedded:
 See [Ways to use OpenLore](docs/usage.md) for MCP stdio, MCPB desktop
 packaging, SSHFS, and Go library usage.
 
+### Create a customized deployment
+
+Use the bundled `setup` skill to create `<team>-lore`, a small customer-owned
+repository containing `openlore.yml`, a thin `Containerfile` pinned to an
+official OpenLore release, and deployment artifacts. It builds a working local
+server and verifies HTTP, MCP, authenticated SSH, writes, and persistence before
+deployment:
+
+```bash
+ssh openlore.sh setup | amp
+```
+
+The generated repository keeps initial `lore.json` policy and SSH-visible files
+under gitignored `.local/`. The first deployment initializes an empty persistent
+volume from that state; later server edits are authoritative and are never
+overwritten by image updates. Root `openlore.yml` remains the Git/IaC authority
+for server configuration.
+
+Additional instruction commands support the full lifecycle:
+
+- `onboarding` adds initial identities, roles, homes, and folders locally;
+- `deploy` selects Fly.io, Railway, AWS, Google Cloud, Azure, DigitalOcean, or a
+  custom deployment and verifies a shared persistence/networking contract;
+- `upgrade` prepares only the pinned base-image version change so existing CD
+  can deploy it.
+
+Provider deployments require HTTPS/MCP, authenticated OpenLore SSH,
+administrative shell access, and a persistent `/var/lib/openlore` volume. Where
+the provider supports it, deployment configures public port 22 to forward to
+OpenLore port 2222. Otherwise it reports the assigned port and recommends an
+external TCP forwarding system.
+
+The Fly.io and Railway options below remain quick initial deployments. Use the
+skill-driven project when configuration, provider choice, local verification,
+or future image customization needs to be owned in a repository.
+
 ### Deploy on Fly.io
 
 The repository includes a [Railpack](https://railpack.com/) build and Fly

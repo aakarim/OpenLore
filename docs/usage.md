@@ -44,9 +44,26 @@ command list.
 ```
 
 OpenLore skills output instructions to stdout rather than appearing in the
-filesystem. Built-ins are `teach` for setup and `agents` for an `AGENTS.md`
-snippet. Run `skills` for Agent Skills management instructions and a list of
-built-in and configured runtime instruction commands.
+filesystem. `setup` creates and locally verifies a team deployment project;
+`onboarding` adds initial identities and folders; `deploy` provisions and
+verifies one authoritative server; and `upgrade` prepares a pinned image
+version change. Provider deployment guides cover Fly.io, Railway, AWS, Google
+Cloud, Azure, and DigitalOcean. `teach` covers general OpenLore setup and
+`agents` emits an `AGENTS.md` snippet. Run `skills` for Agent Skills management
+instructions and a list of built-in and configured runtime instruction
+commands.
+
+Pipe an instruction command from a public OpenLore server into your coding
+agent, for example:
+
+```bash
+ssh openlore.sh setup | amp
+```
+
+The generated `<team>-lore` repository tracks `openlore.yml`, a thin
+`Containerfile` based on a stable OpenLore release, and provider artifacts under
+`deploy/`. Initial policy and filesystem state live in gitignored `.local/`
+until the first verified deployment initializes its persistent volume.
 
 ## Embed docs in a binary
 
