@@ -13,7 +13,7 @@
     "inputs": [
       {
         "include": [
-          "."
+          "out"
         ],
         "step": "build"
       }
