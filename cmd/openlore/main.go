@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
@@ -49,108 +48,9 @@ func savePolicy(path string, auth openlore.AuthConfig) error {
 	return os.WriteFile(path, append(b, '\n'), 0644)
 }
 
-func setIdentityPublicKey(path, identity, key string) error {
-	key = strings.TrimSpace(key)
-	if _, _, _, _, err := gossh.ParseAuthorizedKey([]byte(key)); err != nil {
-		return fmt.Errorf("invalid SSH public key: %w", err)
-	}
-	auth, err := loadPolicy(path)
-	if err != nil {
-		return err
-	}
-	for i := range auth.Identities {
-		if auth.Identities[i].Name == identity {
-			auth.Identities[i].PublicKey = key
-			return savePolicy(path, auth)
-		}
-	}
-	return fmt.Errorf("unknown identity %q", identity)
-}
-
-func seedFile(source, target string, mode os.FileMode) (bool, error) {
-	if source == "" || target == "" {
-		return false, nil
-	}
-	in, err := os.Open(source)
-	if err != nil {
-		return false, fmt.Errorf("opening seed file %q: %w", source, err)
-	}
-	defer in.Close()
-	if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
-		return false, fmt.Errorf("creating directory for %q: %w", target, err)
-	}
-	out, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
-	if os.IsExist(err) {
-		return false, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("creating %q: %w", target, err)
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		os.Remove(target)
-		return false, fmt.Errorf("seeding %q: %w", target, err)
-	}
-	if err := out.Close(); err != nil {
-		os.Remove(target)
-		return false, fmt.Errorf("closing %q: %w", target, err)
-	}
-	return true, nil
-}
-
-func prepareDeployment(configFile string) error {
-	for _, dir := range splitAndTrim(os.Getenv("OPENLORE_INIT_DIRS")) {
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			return fmt.Errorf("creating runtime directory %q: %w", dir, err)
-		}
-	}
-	if _, err := seedFile(os.Getenv("OPENLORE_CONFIG_SEED"), configFile, 0644); err != nil {
-		return err
-	}
-	authFile := os.Getenv("OPENLORE_AUTH_FILE")
-	created, err := seedFile(os.Getenv("OPENLORE_AUTH_SEED"), authFile, 0600)
-	if err != nil {
-		return err
-	}
-	key := strings.TrimSpace(os.Getenv("OPENLORE_ONBOARDING_PUBLIC_KEY"))
-	if created && key != "" {
-		if err := setIdentityPublicKey(authFile, "onboarding", key); err != nil {
-			return fmt.Errorf("setting onboarding public key: %w", err)
-		}
-	}
-	return nil
-}
-
-func environmentPort() (int, error) {
-	value := os.Getenv("OPENLORE_EXTERNAL_SSH_PORT")
-	if value == "" {
-		value = os.Getenv("RAILWAY_TCP_PROXY_PORT")
-	}
-	if value == "" {
-		return 0, nil
-	}
-	port, err := strconv.Atoi(value)
-	if err != nil || port < 1 || port > 65535 {
-		return 0, fmt.Errorf("invalid external SSH port %q", value)
-	}
-	return port, nil
-}
-
-func environmentMetricsPort() (int, bool, error) {
-	value, set := os.LookupEnv("OPENLORE_METRICS_PORT")
-	if !set {
-		return 0, false, nil
-	}
-	port, err := strconv.Atoi(value)
-	if err != nil || port < 0 || port > 65535 {
-		return 0, true, fmt.Errorf("invalid metrics port %q", value)
-	}
-	return port, true, nil
-}
-
 func runIdentityCommand(args []string, out io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: identity add|key|role")
+		return fmt.Errorf("usage: identity add|role")
 	}
 	if args[0] == "add" {
 		fs := flag.NewFlagSet("identity add", flag.ContinueOnError)
@@ -210,23 +110,6 @@ func runIdentityCommand(args []string, out io.Writer) error {
 		fmt.Fprintf(out, "Added identity %q\n", *name)
 		return nil
 	}
-	if args[0] == "key" {
-		fs := flag.NewFlagSet("identity key", flag.ContinueOnError)
-		identity := fs.String("identity", "", "")
-		key := fs.String("key", "", "")
-		path := fs.String("auth", "./lore.json", "")
-		if err := fs.Parse(args[1:]); err != nil {
-			return err
-		}
-		if *identity == "" || strings.TrimSpace(*key) == "" {
-			return fmt.Errorf("identity and key are required")
-		}
-		if err := setIdentityPublicKey(*path, *identity, *key); err != nil {
-			return err
-		}
-		fmt.Fprintf(out, "Updated public key for identity %q\n", *identity)
-		return nil
-	}
 	if args[0] == "role" && len(args) > 1 {
 		fs := flag.NewFlagSet("identity role", flag.ContinueOnError)
 		identity := fs.String("identity", "", "")
@@ -267,7 +150,7 @@ func runIdentityCommand(args []string, out io.Writer) error {
 		}
 		return fmt.Errorf("unknown identity %q", *identity)
 	}
-	return fmt.Errorf("usage: identity add|key|role add|remove")
+	return fmt.Errorf("usage: identity add|role add|remove")
 }
 
 func runRoleCommand(args []string, out io.Writer) error {
@@ -589,7 +472,7 @@ func main() {
 
 		case "identity":
 			if len(os.Args) < 3 {
-				fmt.Fprintln(os.Stderr, "Usage: openlore identity add|key|role add|remove")
+				fmt.Fprintln(os.Stderr, "Usage: openlore identity add|role add|remove")
 				os.Exit(1)
 			}
 			if err := runIdentityCommand(os.Args[2:], os.Stdout); err != nil {
@@ -734,31 +617,15 @@ func main() {
 		}
 	}
 
-	externalPortDefault, err := environmentPort()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
-		os.Exit(1)
-	}
-	metricsPortDefault, metricsPortFromEnv, err := environmentMetricsPort()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
-		os.Exit(1)
-	}
-	configDefault := os.Getenv("OPENLORE_CONFIG_FILE")
-	if configDefault == "" {
-		configDefault = "./openlore.yml"
-	}
-
 	port := flag.Int("port", 0, "SSH server port (default 2222)")
 	flag.IntVar(port, "p", 0, "SSH server port (shorthand)")
-	externalSSHPort := flag.Int("external-ssh-port", externalPortDefault, "external SSH port advertised behind a TCP proxy")
-	metricsPort := flag.Int("metrics-port", metricsPortDefault, "Prometheus metrics port (0 to disable, default 3000)")
+	metricsPort := flag.Int("metrics-port", 0, "Prometheus metrics port (0 to disable, default 3000)")
 	hostKey := flag.String("host-key", "", "path to host key file (default .ssh/openlore_ed25519)")
 	motd := flag.String("motd", "", "inline MOTD string shown on connect")
 	motdFile := flag.String("motd-file", "", "path to MOTD file shown on connect")
 	authFile := flag.String("auth", "", "path to auth.json for identity-based access control")
-	configFile := flag.String("config", configDefault, "path to config file")
-	flag.StringVar(configFile, "c", configDefault, "path to config file (shorthand)")
+	configFile := flag.String("config", "./openlore.yml", "path to config file")
+	flag.StringVar(configFile, "c", "./openlore.yml", "path to config file (shorthand)")
 	httpPort := flag.Int("http-port", 0, "HTTP front page port (default 8080, 0 to disable)")
 	mcpPath := flag.String("mcp-path", "", "path to mount the MCP-over-HTTP endpoint on the HTTP server (default /mcp)")
 	tlsCert := flag.String("tls-cert", "", "TLS certificate file for HTTP server")
@@ -781,10 +648,6 @@ func main() {
 	}
 
 	flag.Parse()
-	if err := prepareDeployment(*configFile); err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
-		os.Exit(1)
-	}
 
 	// Determine directory to serve (if provided)
 	var rootDir string
@@ -817,10 +680,7 @@ func main() {
 	if *port != 0 {
 		opts = append(opts, openlore.WithPort(*port))
 	}
-	if *externalSSHPort != 0 {
-		opts = append(opts, openlore.WithExternalSSHPort(*externalSSHPort))
-	}
-	if metricsPortFromEnv || isFlagSet("metrics-port") {
+	if isFlagSet("metrics-port") {
 		opts = append(opts, openlore.WithMetricsPort(*metricsPort))
 	}
 	if *hostKey != "" {

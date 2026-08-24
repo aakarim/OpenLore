@@ -63,7 +63,10 @@ ssh openlore.sh setup | amp
 The generated `<team>-lore` repository tracks `openlore.yml`, a thin
 `Containerfile` based on a stable OpenLore release, and provider artifacts under
 `deploy/`. Initial policy and filesystem state live in gitignored `.local/`
-until the first verified deployment initializes its persistent volume.
+until the first verified deployment initializes its persistent volume. The
+deployment copies tracked `openlore.yml` separately into the volume (or projects
+it through a facility such as a Kubernetes ConfigMap); it is not baked into the
+container image.
 
 ## Embed docs in a binary
 

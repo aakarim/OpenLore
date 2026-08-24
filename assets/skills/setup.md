@@ -52,18 +52,12 @@ create this `Containerfile` with an exact base tag:
 
 ```dockerfile
 FROM ghcr.io/aakarim/openlore:1.2.3
-
-COPY openlore.yml /etc/openlore/openlore.yml
-
-ENV OPENLORE_CONFIG_FILE=/etc/openlore/openlore.yml \
-    OPENLORE_CONFIG_SEED="" \
-    OPENLORE_AUTH_SEED=""
 ```
 
 Do not use `latest`, a range, a Git branch, or a digest-only reference for the
-initial project. This packages the Git-controlled server configuration while
-preventing the base image's onboarding files from seeding over project state.
-The Containerfile remains the extension point for custom packages later.
+initial project. The Containerfile only selects the published OpenLore build
+today and remains the extension point for custom packages later. Do not bake
+`openlore.yml`, `lore.json`, or bootstrap files into the image.
 
 Ask the user to select an existing SSH public key. Offer separate keys for the
 OpenLore principal and infrastructure administration, but default to using the
@@ -168,13 +162,14 @@ Put `compose.yml` and `runtime.env` inside `.local/`, not at project root. The
 Compose definition must:
 
 - build the root `Containerfile`;
-- use the root `openlore.yml` packaged by that image;
+- mount root `openlore.yml` read-only at
+  `/var/lib/openlore/config/openlore.yml`;
 - mount `.local/lore.json` at `/var/lib/openlore/config/lore.json`;
 - mount `.local/filesystem` at `/var/lib/openlore/published`;
 - use named local volumes for `/var/lib/openlore/data` and
   `/var/lib/openlore/ssh` so operational state is not bootstrap state;
 - map the free local HTTP and SSH ports recorded in `runtime.env`;
-- run the image's default `./out` command directly.
+- run `./out --config /var/lib/openlore/config/openlore.yml` directly.
 
 Use this minimal structure, replacing the Compose project name with the team
 slug:
@@ -187,10 +182,12 @@ services:
       context: ..
       dockerfile: Containerfile
     restart: unless-stopped
+    command: ["./out", "--config", "/var/lib/openlore/config/openlore.yml"]
     ports:
       - "${OPENLORE_SSH_PORT}:2222"
       - "${OPENLORE_HTTP_PORT}:8080"
     volumes:
+      - ../openlore.yml:/var/lib/openlore/config/openlore.yml:ro
       - ./lore.json:/var/lib/openlore/config/lore.json
       - ./filesystem:/var/lib/openlore/published
       - openlore-data:/var/lib/openlore/data
@@ -216,8 +213,7 @@ changing the project architecture:
 4. Create an ignored `.local/openlore.local.yml` derived from root
    `openlore.yml`, replacing `/var/lib/openlore` paths with absolute paths below
    this project's `.local/`. Do not modify the tracked production config.
-5. Run the binary with `OPENLORE_METRICS_PORT=0` and
-   `--config .local/openlore.local.yml`.
+5. Run the binary with `--config .local/openlore.local.yml`.
 
 Do not commit the clone, binary, or local config. Run the same acceptance suite
 regardless of which local runtime was used.

@@ -19,7 +19,7 @@ func TestEmbeddedDeploymentSkills(t *testing.T) {
 			"<team-slug>-lore",
 			".local/lore.json",
 			"/channel/general",
-			"COPY openlore.yml /etc/openlore/openlore.yml",
+			"Do not bake",
 			"Require local acceptance",
 		},
 		"onboarding": {
@@ -29,7 +29,9 @@ func TestEmbeddedDeploymentSkills(t *testing.T) {
 		},
 		"deploy": {
 			"Required outcome specification",
+			"/var/lib/openlore/config/openlore.yml",
 			"/var/lib/openlore/config/lore.json",
+			"Kubernetes ConfigMap",
 			"deploy-digitalocean",
 			"Required production acceptance",
 		},
@@ -44,6 +46,7 @@ func TestEmbeddedDeploymentSkills(t *testing.T) {
 			"openlore.yml",
 			"/var/lib/openlore",
 			".local/lore.json",
+			"./out --config /var/lib/openlore/config/openlore.yml",
 			"image digest",
 		}
 	}

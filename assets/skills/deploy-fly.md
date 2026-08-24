@@ -13,8 +13,8 @@ Deliver one production OpenLore server on Fly.io with HTTPS/MCP, authenticated O
 
 1. Inspect `openlore.yml`, `.gitignore`, and existing deployment assets. Show every proposed diff.
 2. Create discoverable, rerunnable deployment scripts and non-secret resource metadata only under `deploy/fly/`. Make operations idempotent by discovering resources before creating them. Do not commit unless explicitly approved.
-3. Create a root `Containerfile` derived from an explicitly pinned semver image, for example `FROM ghcr.io/aakarim/openlore:1.2.3` (never `latest` or a range). Deploy this derivative image, even if it currently adds nothing, so future packages can be customized there.
-4. Make root `openlore.yml` the Git/IaC authority and configure:
+3. Create a root `Containerfile` derived from an explicitly pinned semver image, for example `FROM ghcr.io/aakarim/openlore:1.2.3` (never `latest` or a range). Deploy this derivative image, even if it currently adds nothing, so future packages can be customized there. Do not bake configuration into it.
+4. Make root `openlore.yml` the Git/IaC authority, deploy it separately at `/var/lib/openlore/config/openlore.yml`, and configure:
    - `auth_file: /var/lib/openlore/config/lore.json`
    - `writable_dir: /var/lib/openlore/published`
    - `data_dir: /var/lib/openlore/data`
@@ -25,6 +25,7 @@ Deliver one production OpenLore server on Fly.io with HTTPS/MCP, authenticated O
 ## Provision and deploy
 
 - Use a Fly app with one Machine and a Fly Volume mounted at `/var/lib/openlore`. Keep the Machine and volume in the same region. Disable automatic stop if it would violate restart availability.
+- Start OpenLore as `./out --config /var/lib/openlore/config/openlore.yml`. Copy or reconcile root `openlore.yml` onto the volume independently of the image before starting or restarting the Machine.
 - Configure an HTTP service for the OpenLore web/MCP port, health checks, Fly HTTPS termination, and the production domain.
 - Prefer a dedicated Fly TCP service/public IP mapping public TCP `22` to Machine port `2222`; do not also expose public `2222`. Confirm this mapping is supported for the chosen shared/dedicated IP arrangement before creation. If it is not feasible, publish `2222` and explicitly report standard-port SSH as optional/pending.
 - Use `fly deploy` and record the deployed immutable image digest, app, Machine, volume, region, hostname, and service mappings under `deploy/fly/`.
@@ -32,7 +33,7 @@ Deliver one production OpenLore server on Fly.io with HTTPS/MCP, authenticated O
 
 ## Bootstrap without data loss
 
-Before transfer, inspect the mounted volume through `fly ssh console`. Transfer `.local/lore.json` and `.local/filesystem` only if the remote `/var/lib/openlore/config/lore.json` does not exist **and** the remote published/data state is empty. Create the standard directories with restrictive permissions and copy bootstrap filesystem content into the intended persistent paths. If any remote state exists, stop and preserve it; never merge over or overwrite remote `lore.json` or filesystem data.
+Before transfer, inspect the mounted volume through `fly ssh console`. Deploy root `openlore.yml` to `/var/lib/openlore/config/openlore.yml`. Transfer `.local/lore.json` and `.local/filesystem` only if the remote lore file does not exist **and** the remote published/data state is empty. Create the standard directories with restrictive permissions and copy bootstrap filesystem content into the intended persistent paths. If mutable remote state exists, stop and preserve it; never merge over or overwrite remote `lore.json` or filesystem data.
 
 ## Required production verification
 

@@ -10,7 +10,7 @@ Work only from a directory containing root `openlore.yml`. Inspect before
 changing anything:
 
 - `Containerfile` must derive from a pinned semantic
-  `ghcr.io/aakarim/openlore:<version>` image and package root `openlore.yml`;
+  `ghcr.io/aakarim/openlore:<version>` image without configuration baked in;
 - root `openlore.yml` is the Git/IaC authority;
 - `.local/lore.json` and `.local/filesystem` are gitignored bootstrap state;
 - provider scripts and non-secret deployment metadata belong under `deploy/`;
@@ -47,13 +47,16 @@ Every implementation must provide:
 3. Valid HTTPS and a reachable MCP endpoint.
 4. Authenticated OpenLore SSH.
 5. A persistent volume mounted at `/var/lib/openlore`.
-6. Root `openlore.yml` applied with:
+6. Root `openlore.yml` deployed separately to
+   `/var/lib/openlore/config/openlore.yml` and started with
+   `./out --config /var/lib/openlore/config/openlore.yml`. It must configure:
    - `auth_file: /var/lib/openlore/config/lore.json`
    - `writable_dir: /var/lib/openlore/published`
    - `data_dir: /var/lib/openlore/data`
    - `host_key_path: /var/lib/openlore/ssh/openlore_ed25519`
-7. `lore.json`, the SSH-visible filesystem, server data, and host key surviving
-   container and machine replacement supported by that provider.
+7. `openlore.yml`, `lore.json`, the SSH-visible filesystem, server data, and
+   host key surviving container and machine replacement supported by that
+   provider.
 
 Use provider defaults for administrative SSH. Do not install or expose another
 OS SSH daemon merely for OpenLore.
@@ -76,10 +79,11 @@ dedicated address/listener rather than HTTP hostname routing.
   duplicating machines, disks, load balancers, records, or repositories.
 - Preserve partial resources for diagnosis/resume. Never delete, replace,
   reformat, or overwrite a persistent disk automatically.
-- Root `openlore.yml` follows IaC and is packaged in the derivative image.
-  Detect runtime drift and ask whether to import it or reconcile from Git.
-  Dynamic remote `lore.json` and filesystem edits are not drift and must never
-  be overwritten.
+- Root `openlore.yml` follows IaC and is deployed separately from the image to
+  the persistent config directory. A platform-native projection such as a
+  Kubernetes ConfigMap is valid. Detect runtime drift and ask whether to import
+  it or reconcile from Git. Dynamic remote `lore.json` and filesystem edits are
+  not drift and must never be overwritten.
 - Store scripts plus non-secret resource IDs, endpoints, image digest, and
   verification status under `deploy/<provider>/`. Show diffs and offer a commit
   only after explicit approval; never push automatically.
@@ -87,13 +91,20 @@ dedicated address/listener rather than HTTP hostname routing.
 ## Bootstrap exactly once
 
 Before OpenLore first starts against a new volume, prove the volume is empty.
-Transfer `.local/lore.json` to `/var/lib/openlore/config/lore.json` and
-`.local/filesystem` into `/var/lib/openlore/published`. Generate operational
-host keys, signing keys, logs, and databases on the remote server itself.
+Copy root `openlore.yml` to `/var/lib/openlore/config/openlore.yml`, transfer
+`.local/lore.json` to `/var/lib/openlore/config/lore.json`, and transfer
+`.local/filesystem` into `/var/lib/openlore/published`. Put no bootstrap or
+mutation logic in the OpenLore process. Generate operational host keys, signing
+keys, logs, and databases on the remote server itself.
 
 If remote `lore.json` or filesystem state exists, stop initialization and
 preserve it. A missing local metadata file never authorizes reseeding. Never
 merge or synchronize `.local` over initialized remote state.
+
+On later deployments, reconcile only tracked `openlore.yml` to its persistent
+path (or update the provider's equivalent external config projection), then
+restart OpenLore. Never replace `lore.json` or the SSH-visible filesystem as
+part of continuous deployment.
 
 ## Required production acceptance
 

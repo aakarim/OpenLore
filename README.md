@@ -2,8 +2,6 @@
 
 [![Release](https://img.shields.io/github/v/release/aakarim/go-openlore)](https://github.com/aakarim/go-openlore/releases/latest)
 [![Go Reference](https://pkg.go.dev/badge/github.com/aakarim/go-openlore.svg)](https://pkg.go.dev/github.com/aakarim/go-openlore)
-[![Deploy with Fly.io](https://img.shields.io/badge/Deploy%20with-Fly.io-7B3FF2?logo=flydotio&logoColor=white)](#deploy-on-flyio)
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/openlore?utm_medium=integration&utm_source=button&utm_campaign=openlore)
 
 Sponsored by <a href="https://oiya.ai/?utm_source=github&amp;utm_medium=referral&amp;utm_campaign=openlore&amp;utm_content=sponsor_logo"><img src="assets/oiya-logo.svg" alt="Oiya" height="24" align="absmiddle"></a>
 
@@ -224,9 +222,10 @@ ssh openlore.sh setup | amp
 
 The generated repository keeps initial `lore.json` policy and SSH-visible files
 under gitignored `.local/`. The first deployment initializes an empty persistent
-volume from that state; later server edits are authoritative and are never
-overwritten by image updates. Root `openlore.yml` remains the Git/IaC authority
-for server configuration.
+volume from that state. Root `openlore.yml` remains the Git/IaC authority and is
+deployed separately to `/var/lib/openlore/config/openlore.yml`; it is not baked
+into the image. Later `lore.json` and filesystem edits on the server are
+authoritative and are never overwritten by image updates.
 
 Additional instruction commands support the full lifecycle:
 
@@ -242,86 +241,29 @@ the provider supports it, deployment configures public port 22 to forward to
 OpenLore port 2222. Otherwise it reports the assigned port and recommends an
 external TCP forwarding system.
 
-The Fly.io and Railway options below remain quick initial deployments. Use the
-skill-driven project when configuration, provider choice, local verification,
-or future image customization needs to be owned in a repository.
-
-### Deploy on Fly.io
-
-The repository includes a [Railpack](https://railpack.com/) build and Fly
-configuration. Fly serves the web UI, HTTP API, and MCP endpoint over HTTPS and
-forwards public TCP port `22` to OpenLore's SSH server on port `2222`.
-
-Install and authenticate the [Fly CLI](https://fly.io/docs/flyctl/install/),
-then launch OpenLore from the repository template:
+The published container contains only OpenLore. It deliberately contains no
+onboarding policy or server configuration. Before the service starts, the
+deployment must put `openlore.yml` and `lore.json` in the persistent config
+directory and run:
 
 ```bash
-mkdir openlore-fly && cd openlore-fly
-fly launch --from https://github.com/aakarim/go-openlore.git --no-deploy
-
-# A dedicated IPv4 address is required for raw TCP traffic on port 22.
-fly ips allocate-v4
-fly deploy
+./out --config /var/lib/openlore/config/openlore.yml
 ```
 
-After deployment, connect to the three public interfaces:
+This keeps configuration independently deployable: a simple deployment can
+copy `openlore.yml` onto the volume, while Kubernetes can project the same file
+from a ConfigMap. Use the `deploy` skill for Fly.io, Railway, AWS, Google Cloud,
+Azure, DigitalOcean, or custom infrastructure. The repository's Railpack and
+Fly files provide the image, persistent-volume, and port wiring; they do not
+seed or mutate configuration at process startup.
 
-```bash
-ssh <your-app>.fly.dev
-curl https://<your-app>.fly.dev/api/commands
-# MCP: https://<your-app>.fly.dev/mcp
-```
-
-The deployment creates a 1 GB Fly Volume for the SSH host key, server data, and
-published documents under `/var/lib/openlore`. It starts with keyless SSH access
-disabled, no public docset, and an `onboarding` identity whose writable home is
-`/user/onboarding`. It also includes a writable `general` docset at
-`/channel/general`, granted to the `agent` role assigned to `onboarding`. Add
-the identity's `public_key` to `deploy/onboarding/lore.json` before the first
-deployment. The initial configuration is seeded once under
-`/var/lib/openlore/config`; later image updates do not overwrite operator
-edits. The `onboarding` administrator can edit the validated policy at
-`/opt/openlore/lore.json` and activate it with `lore config reload`. Edit
-`openlore.yml` on the volume and restart the Machine for server-level changes.
-A dedicated IPv4 address and the always-running Machine incur charges under
-[Fly.io pricing](https://fly.io/docs/about/pricing/).
-
-### Deploy on Railway
-
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/openlore?utm_medium=integration&utm_source=button&utm_campaign=openlore)
-
-The Railway template deploys the Railpack-built
-`ghcr.io/aakarim/openlore:latest` image with a persistent 1 GB volume at
-`/var/lib/openlore`. It exposes the web UI, HTTP API, and MCP on HTTPS and
-creates a TCP proxy to OpenLore's internal SSH port `2222`.
-
-Enter your complete SSH public key in `OPENLORE_ONBOARDING_PUBLIC_KEY` when
-prompted. Keyless access is disabled, there is no public docset, and the
-`onboarding` administrator starts in its writable `/user/onboarding` home. The
-identity also has the `agent` role, which can write to the `general` docset at
-`/channel/general`. The key and default configuration are seeded only on the
-first start. Both configuration files then persist under
-`/var/lib/openlore/config` and image updates do not overwrite edits. Edit the
-policy through `/opt/openlore/lore.json`, then run `lore config reload` to
-activate it.
-
-Railway assigns the TCP proxy a public hostname and port. Find both under
-**OpenLore → Settings → Networking → TCP Proxy**, then connect with:
-
-```bash
-ssh -p ASSIGNED_PORT onboarding@ASSIGNED_HOSTNAME
-```
-
-To expose standard SSH port `22`, point a domain at an external TCP load
-balancer that listens on `22` and forwards to the assigned Railway endpoint.
-One load-balancer IP cannot route several SSH domains on port `22`, because raw
-SSH has no hostname or SNI routing; use one IP per server or distinct ports.
+Railway assigns its SSH TCP proxy a public hostname and port. Standard SSH port
+22 requires an external raw TCP load balancer. Fly.io can map public port 22 to
+OpenLore's internal port 2222 with a dedicated address. Raw SSH has no hostname
+or SNI routing, so one listener cannot route multiple domains on port 22.
 
 The container workflow publishes `latest` from `main`; releases also publish
-`VERSION`, `vVERSION`, major, and minor image tags. Railway currently omits
-image auto-update schedules when generating reusable templates. To follow
-`latest`, enable **Configure Auto Updates → Anytime** once under the deployed
-service's **Settings → Source**.
+`VERSION`, `vVERSION`, major, and minor image tags.
 
 ### HTTP inbox uploads
 
