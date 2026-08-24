@@ -4,22 +4,15 @@
   "steps": {
     "build": {
       "commands": [
-        "cp deploy/onboarding/openlore.yml assets/config/openlore.yml",
+        "rm assets/config/openlore.yml",
         "go build -o out ./cmd/openlore"
       ]
     }
   },
   "deploy": {
-    "startCommand": "sh start.sh",
+    "startCommand": "./out --config /var/lib/openlore/config/openlore.yml",
     "inputs": [
-      "...",
-      {
-        "local": true,
-        "include": [
-          "deploy/onboarding/lore.json",
-          "deploy/onboarding/start.sh"
-        ]
-      }
+      "..."
     ]
   }
 }

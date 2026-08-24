@@ -2,7 +2,6 @@
 
 [![Release](https://img.shields.io/github/v/release/aakarim/go-openlore)](https://github.com/aakarim/go-openlore/releases/latest)
 [![Go Reference](https://pkg.go.dev/badge/github.com/aakarim/go-openlore.svg)](https://pkg.go.dev/github.com/aakarim/go-openlore)
-[![Deploy with Fly.io](https://img.shields.io/badge/Deploy%20with-Fly.io-7B3FF2?logo=flydotio&logoColor=white)](#deploy-on-flyio)
 
 Sponsored by <a href="https://oiya.ai/?utm_source=github&amp;utm_medium=referral&amp;utm_campaign=openlore&amp;utm_content=sponsor_logo"><img src="assets/oiya-logo.svg" alt="Oiya" height="24" align="absmiddle"></a>
 
@@ -209,41 +208,62 @@ Produce cross-platform binaries with your docs embedded:
 See [Ways to use OpenLore](docs/usage.md) for MCP stdio, MCPB desktop
 packaging, SSHFS, and Go library usage.
 
-### Deploy on Fly.io
+### Create a customized deployment
 
-The repository includes a [Railpack](https://railpack.com/) build and Fly
-configuration. Fly serves the web UI, HTTP API, and MCP endpoint over HTTPS and
-forwards public TCP port `22` to OpenLore's SSH server on port `2222`.
-
-Install and authenticate the [Fly CLI](https://fly.io/docs/flyctl/install/),
-then launch OpenLore from the repository template:
-
-```bash
-mkdir openlore-fly && cd openlore-fly
-fly launch --from https://github.com/aakarim/go-openlore.git --no-deploy
-
-# A dedicated IPv4 address is required for raw TCP traffic on port 22.
-fly ips allocate-v4
-fly deploy
-```
-
-After deployment, connect to the three public interfaces:
+Use the bundled `setup` skill to create `<team>-lore`, a small customer-owned
+repository containing `openlore.yml`, a thin `Containerfile` pinned to an
+official OpenLore release, and deployment artifacts. It builds a working local
+server and verifies HTTP, MCP, authenticated SSH, writes, and persistence before
+deployment:
 
 ```bash
-ssh <your-app>.fly.dev
-curl https://<your-app>.fly.dev/api/commands
-# MCP: https://<your-app>.fly.dev/mcp
+ssh openlore.sh setup | amp
 ```
 
-The deployment creates a 1 GB Fly Volume for the SSH host key, server data, and
-published documents under `/var/lib/openlore`. It starts with keyless SSH access
-disabled, no public docset, and an `onboarding` identity whose writable home is
-`/user/onboarding`. Add the identity's `public_key` to
-`deploy/onboarding/lore.json` before deploying. Later policy changes remain
-declarative: edit that file and run `fly deploy`; it is installed into
-`/etc/openlore/lore.json` on every start. A dedicated IPv4 address and the
-always-running Machine incur charges under
-[Fly.io pricing](https://fly.io/docs/about/pricing/).
+The generated repository keeps initial `lore.json` policy and SSH-visible files
+under gitignored `.local/`. The first deployment initializes an empty persistent
+volume from that state. Root `openlore.yml` remains the Git/IaC authority and is
+deployed separately to `/var/lib/openlore/config/openlore.yml`; it is not baked
+into the image. Later `lore.json` and filesystem edits on the server are
+authoritative and are never overwritten by image updates.
+
+Additional instruction commands support the full lifecycle:
+
+- `onboarding` adds initial identities, roles, homes, and folders locally;
+- `deploy` selects Fly.io, Railway, AWS, Google Cloud, Azure, DigitalOcean, or a
+  custom deployment and verifies a shared persistence/networking contract;
+- `upgrade` prepares only the pinned base-image version change so existing CD
+  can deploy it.
+
+Provider deployments require HTTPS/MCP, authenticated OpenLore SSH,
+administrative shell access, and a persistent `/var/lib/openlore` volume. Where
+the provider supports it, deployment configures public port 22 to forward to
+OpenLore port 2222. Otherwise it reports the assigned port and recommends an
+external TCP forwarding system.
+
+The published container contains only OpenLore. It deliberately contains no
+onboarding policy or server configuration. Before the service starts, the
+deployment must put `openlore.yml` and `lore.json` in the persistent config
+directory and run:
+
+```bash
+./out --config /var/lib/openlore/config/openlore.yml
+```
+
+This keeps configuration independently deployable: a simple deployment can
+copy `openlore.yml` onto the volume, while Kubernetes can project the same file
+from a ConfigMap. Use the `deploy` skill for Fly.io, Railway, AWS, Google Cloud,
+Azure, DigitalOcean, or custom infrastructure. The repository's Railpack and
+Fly files provide the image, persistent-volume, and port wiring; they do not
+seed or mutate configuration at process startup.
+
+Railway assigns its SSH TCP proxy a public hostname and port. Standard SSH port
+22 requires an external raw TCP load balancer. Fly.io can map public port 22 to
+OpenLore's internal port 2222 with a dedicated address. Raw SSH has no hostname
+or SNI routing, so one listener cannot route multiple domains on port 22.
+
+The container workflow publishes `latest` from `main`; releases also publish
+`VERSION`, `vVERSION`, major, and minor image tags.
 
 ### HTTP inbox uploads
 

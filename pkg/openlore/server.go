@@ -1,6 +1,7 @@
 package openlore
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -435,6 +436,11 @@ func (s *Server) advertisedSSHPort() int {
 	return s.config.Port
 }
 
+func publicKeyMatches(configured string, presented gossh.PublicKey) bool {
+	parsed, _, _, _, err := gossh.ParseAuthorizedKey([]byte(configured))
+	return err == nil && bytes.Equal(parsed.Marshal(), presented.Marshal())
+}
+
 // OnConnect registers a callback for new connections.
 func (s *Server) OnConnect(fn OnConnectFunc) {
 	s.onConnect = fn
@@ -481,15 +487,10 @@ func (s *Server) resolveIdentity(sess ssh.Session) Identity {
 			cert = c
 			matchKey = c.Key
 		}
-		// MarshalAuthorizedKey appends a trailing newline; stored keys are
-		// TrimSpace'd (e.g. by `identity add`). Compare trimmed so the newline
-		// mismatch doesn't silently drop every pubkey match.
-		keyStr := strings.TrimSpace(string(gossh.MarshalAuthorizedKey(matchKey)))
-
 		// First: match by public key. An authenticated key holds the identity's
 		// full authority (shared with token resolution).
 		for _, ident := range s.currentAuth().Identities {
-			if ident.PublicKey != "" && strings.TrimSpace(ident.PublicKey) == keyStr {
+			if publicKeyMatches(ident.PublicKey, matchKey) {
 				return withConn(conn, s.identityFromAuth(ident))
 			}
 		}
@@ -1371,12 +1372,8 @@ func (s *Server) ListenAndServe() error {
 					matchKey = c.Key
 				}
 
-				// MarshalAuthorizedKey appends a trailing newline; stored keys
-				// are TrimSpace'd. Compare trimmed so a valid key isn't denied
-				// admission before resolveIdentity ever runs.
-				keyStr := strings.TrimSpace(string(gossh.MarshalAuthorizedKey(matchKey)))
 				for _, ident := range s.currentAuth().Identities {
-					if ident.PublicKey != "" && strings.TrimSpace(ident.PublicKey) == keyStr {
+					if publicKeyMatches(ident.PublicKey, matchKey) {
 						return true
 					}
 				}

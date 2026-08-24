@@ -16,16 +16,9 @@
           "."
         ],
         "step": "build"
-      },
-      {
-        "include": [
-          "deploy/onboarding/lore.json",
-          "deploy/onboarding/start.sh"
-        ],
-        "local": true
       }
     ],
-    "startCommand": "sh start.sh",
+    "startCommand": "./out --config /var/lib/openlore/config/openlore.yml",
     "variables": {
       "RAILPACK_VERSION": "0.37.0"
     }
@@ -104,8 +97,8 @@
       ],
       "commands": [
         {
-          "cmd": "sh -c 'cp deploy/onboarding/openlore.yml assets/config/openlore.yml'",
-          "customName": "cp deploy/onboarding/openlore.yml assets/config/openlore.yml"
+          "cmd": "sh -c 'rm assets/config/openlore.yml'",
+          "customName": "rm assets/config/openlore.yml"
         },
         {
           "cmd": "sh -c 'go build -o out ./cmd/openlore'",
