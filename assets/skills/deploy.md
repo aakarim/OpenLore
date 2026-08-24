@@ -56,6 +56,7 @@ Every implementation must provide:
    - `writable_dir: /var/lib/openlore/published`
    - `data_dir: /var/lib/openlore/data`
    - `host_key_path: /var/lib/openlore/ssh/openlore_ed25519`
+   - passkeys enabled with public HTTPS RP ID/origin and `/var/lib/openlore/data/passkeys.json`
 7. `openlore.yml`, `lore.json`, the SSH-visible filesystem, server data, and
    host key surviving container and machine replacement supported by that
    provider.
@@ -69,7 +70,6 @@ SSH has no hostname/SNI routing, so standard-port ingress needs a
 dedicated address/listener rather than HTTP hostname routing.
 
 ## Safety and IaC rules
-
 - Use locally authenticated provider CLIs. Never request credentials or private
   keys in chat and never commit secrets.
 - Discover existing resources and state before planning.

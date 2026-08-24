@@ -561,7 +561,7 @@ type apiYAML struct {
 }
 
 type passkeysYAML struct {
-	Enabled      bool     `yaml:"enabled"`
+	Enabled      *bool    `yaml:"enabled"`
 	RPID         string   `yaml:"rp_id"`
 	RPName       string   `yaml:"rp_name"`
 	RPOrigins    []string `yaml:"rp_origins"`
@@ -595,7 +595,16 @@ func New(opts ...Option) (Config, error) {
 		WriteConflictPolicy: vfs.DefaultWriteConflictPolicy, // "hash": overwrites are compare-and-swap
 		MaxJobs:             8,                              // bound concurrent async spawn jobs
 		Plugins:             PluginsConfig{Skills: SkillsPluginConfig{RemoteCheckTTL: 60 * time.Second, RemoteTimeout: 3 * time.Second, RemoteMaxBytes: 10 * 1024 * 1024}},
-		Inbox:               InboxConfig{MaxUploadSize: DefaultInboxMaxUploadSize, AllowedTypes: map[string]string{".md": "text/markdown", ".markdown": "text/markdown"}},
+		Passkeys: PasskeysConfig{
+			Enabled:      true,
+			RPID:         "localhost",
+			RPName:       "OpenLore",
+			RPOrigins:    []string{"http://localhost:8080"},
+			LorePath:     "/lore",
+			PasskeysFile: "./config/passkeys.json",
+			SessionTTL:   "24h",
+		},
+		Inbox: InboxConfig{MaxUploadSize: DefaultInboxMaxUploadSize, AllowedTypes: map[string]string{".md": "text/markdown", ".markdown": "text/markdown"}},
 		Files: FilesConfig{
 			Allowed: []string{
 				"*.md", "*.markdown", "*.txt",
@@ -1129,7 +1138,9 @@ func applyPasskeysConfig(cfg *Config, pk *passkeysYAML) {
 	if pk == nil {
 		return
 	}
-	cfg.Passkeys.Enabled = pk.Enabled
+	if pk.Enabled != nil {
+		cfg.Passkeys.Enabled = *pk.Enabled
+	}
 	if pk.RPID != "" {
 		cfg.Passkeys.RPID = pk.RPID
 	}

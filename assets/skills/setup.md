@@ -94,6 +94,15 @@ mcp:
 api:
   enabled: true
   path: /api
+
+passkeys:
+  enabled: true
+  rp_id: localhost
+  rp_name: "<team display name> Lore"
+  rp_origins: ["http://localhost:<selected HTTP port>"]
+  lore_path: /lore
+  passkeys_file: /var/lib/openlore/data/passkeys.json
+  session_ttl: 24h
 ```
 
 These standard Unix paths are identical locally and remotely. Dynamic policy
@@ -194,7 +203,7 @@ Quietly run all checks; setup is not successful until they pass:
 
 1. HTTP readiness succeeds.
 2. `/mcp` completes an MCP initialization exchange.
-3. The mounted config is active: keyless login fails and
+3. `passkey` is available; the mounted config is active: keyless login fails and
    `ssh -F .local/ssh_config lore-local` authenticates `onboarding`.
 4. The SSH session starts at `/user/onboarding`.
 5. Both default READMEs are visible; a unique disposable document can be
