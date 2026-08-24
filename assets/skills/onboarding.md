@@ -1,61 +1,55 @@
 # Onboard Initial OpenLore Identities
 
-Customize identities, roles, docsets, and initial SSH-visible folders in an
-OpenLore project's local bootstrap state before its first deployment.
+Before its first deployment, customize who can connect and what they can use.
+Open with “👋 Let's add someone to your lore server.” Ask one question at a time
+and wait; explain why it matters, define jargon just in time, and give the
+recommended default. Use restrained emojis, validate quietly, mention only
+failures, and end each identity with a plain-language ✅ summary.
 
 ## Preconditions
 
-1. Work only from a directory containing root `openlore.yml`.
-2. Require `.local/lore.json` and `.local/filesystem`; if `.local` was discarded
-   after deployment, stop. Live administration belongs on the server and this
-   initial-onboarding skill must not recreate local state from guesses.
-3. Inspect `deploy/` for a verified authoritative deployment. If one exists,
-   stop and direct the user to edit the live policy through OpenLore or the
-   provider administrative shell.
-4. Parse and validate the current policy before proposing changes. Never remove
-   or weaken existing access as an incidental side effect.
+Require root `openlore.yml`, `.local/lore.json`, and `.local/filesystem`. If
+`.local` was discarded or `deploy/` records a verified deployment, stop: edit
+the authoritative server instead. Validate current policy before changes; never
+incidentally remove or weaken access.
 
 ## Interview for each identity
 
-Ask for:
+Ask in order, one per turn:
 
-- identity name;
-- an existing SSH public key;
-- home path, defaulting to `/user/<identity>`;
-- roles;
-- additional readable or writable docsets;
-- initial folders or documents.
+- identity name (their OpenLore account name; required, no safe default);
+- SSH public key and matching local private-key path (only used to prove login;
+  never copied or displayed);
+- home folder (default `/user/<identity>`, their private login location);
+- roles (permission bundles; default `agent`);
+- additional knowledge folders and read/write needs (default only shared
+  `/channel/general` through `agent`);
+- initial folders/documents (default a short `README.md` in each empty docset).
 
 Offer the existing `agent` role by default so the identity can write the shared
 `general` docset at `/channel/general`. A unique home docset is implicitly
 writable by its owner. Explain administrator capabilities and require explicit
 confirmation before adding `administrator` or `lore:config:edit`.
 
-Public-key comments are allowed. Validate keys by parsed key material. Detect
-duplicate identity names, keys, homes, role names, path collisions, nested
-docset boundaries, and invalid grants before writing anything. Never access or
-store a private key.
+Validate parsed key material, duplicates, homes, roles, path collisions, nested
+docset boundaries, and grants before writing. Never access or store private keys.
 
 ## Apply coherently
 
-Edit `.local/lore.json` as one validated change and create matching paths under
-`.local/filesystem/`, for example:
+Edit `.local/lore.json` atomically and create matching virtual paths (for example
+`.local/filesystem/user/alice/` and `channel/general/`). Never
+put host keys, signing material, logs, or databases in bootstrap state.
+Put a short `README.md` in every newly created empty docset so its purpose and
+successful visibility are obvious; never overwrite existing content.
 
-```text
-.local/filesystem/user/alice/
-.local/filesystem/channel/general/
-```
-
-Initial files mirror their final OpenLore virtual paths. Do not put generated
-host keys, signing material, audit logs, or runtime databases in `.local`.
-
-Use OpenLore's policy validation and existing identity/role commands where they
-cover the operation. For policy structures those commands do not create, make a
-minimal JSON edit, validate the complete result, and preserve stable formatting.
+Use OpenLore policy validation and commands where applicable; otherwise make a
+minimal JSON edit, validate the whole result, and preserve formatting.
 
 ## Verify locally
 
-Start or restart `.local/compose.yml`, then prove:
+Restart Compose. Refresh only this project's `.local/known_hosts` entry if the
+host key changed; extend `.local/ssh_config` for the key with strict checking.
+Quietly connect directly and prove:
 
 1. the new public key resolves to the intended identity;
 2. login starts in the intended home;
@@ -64,5 +58,9 @@ Start or restart `.local/compose.yml`, then prove:
 5. changes survive a container restart.
 
 Remove only disposable verification files. Report the exact SSH command and
-the resulting identity, home, roles, and grants. `.local` is gitignored, so do
-not offer to commit its policy or filesystem contents.
+finish with a friendly ✅ summary of the identity, home, roles, visible folders,
+and what read/write means in practice. Give a ready-to-run terminal command and
+an example that reads the new home `README.md`. `.local` is gitignored, so do
+not offer to commit its policy or filesystem contents. Ask whether to add
+another identity; if not, offer to continue with “run deploy” or later via
+`ssh openlore.sh deploy | <agent-cli>`.

@@ -1,8 +1,12 @@
 # Set Up an OpenLore Project
 
-Create a new, locally verified OpenLore project that deploys a thin derivative
-of an official OpenLore release. Do not clone, fork, vendor, or add OpenLore as
-a submodule.
+You are installing OpenLore, not merely generating files. Open with “👋 Let's
+set up your lore server.” Interview one question at a time and wait; explain why
+it matters, recommend a default, and define unfamiliar terms just in time. If
+there is no safe default, say why a choice is required. Use restrained emojis.
+Run checks quietly and mention only failures or decisions. After each stage give
+a short ✅ plain-language summary, never “acceptance evidence”. Use an official
+release; do not clone, fork, vendor, or add OpenLore as a submodule.
 
 ## Outcome
 
@@ -18,9 +22,11 @@ Produce one Git repository named from the user's team with this shape:
 └── .local/
     ├── compose.yml
     ├── lore.json
+    ├── known_hosts
+    ├── ssh_config
     ├── filesystem/
-    │   ├── user/onboarding/
-    │   └── channel/general/
+    │   ├── user/onboarding/README.md
+    │   └── channel/general/README.md
     └── runtime.env
 ```
 
@@ -28,41 +34,39 @@ Produce one Git repository named from the user's team with this shape:
 configuration. `.local/` is gitignored bootstrap state. It is never part of the
 image and is never committed.
 
-## 1. Inspect before changing anything
+## 1. Interview and inspect
 
-1. Ask for the team display name, not a project name.
+Ask in order, one per turn, with its reason and default:
+1. Team display name (required to identify its owner; no safe default).
 2. Derive a lowercase slug using letters, numbers, and single hyphens, then
-   suffix it with `-lore` (for example, `Acme Research` becomes
-   `acme-research-lore`). Show the result and allow correction.
-3. Ask where to create it; default to a new child of the current directory.
-4. If the destination exists and is not empty, show what conflicts and require
-   explicit approval before touching it. Never overwrite an existing
-   `openlore.yml`.
-5. Detect Docker Compose or Podman Compose and available ports. Prefer local
-   ports 2222 and 8080, but choose free ports when occupied.
+   suffix `-lore` (`Acme Research` → `acme-research-lore`); allow correction.
+3. Creation location (default: a new child of the current directory).
+4. SSH public key and matching private-key path. Explain that this key identifies
+   their first account; the private key stays put for their SSH client. Default
+   to one key for OpenLore and infrastructure, but offer separate keys.
+
+Silently inspect the destination, Compose tooling, and ports. For a non-empty
+destination show conflicts and require approval; never overwrite `openlore.yml`.
+Prefer Docker then Podman Compose. Default to ports 2222/8080; choose free ones
+when occupied and report them in the stage summary.
 
 ## 2. Select the OpenLore release and SSH key
 
-Find the latest stable semantic tag that actually exists on the public
-`ghcr.io/aakarim/openlore` image. Do not assume a GitHub release has a matching
-container tag. Ignore prereleases unless the user asks for one. If no stable
-container tag exists, explain that and ask whether to use `latest` temporarily
-or stop; never silently substitute it. Confirm the selected version, then
-create this `Containerfile` with an exact base tag:
+Find the latest stable semantic tag that exists on `ghcr.io/aakarim/openlore`;
+do not infer it from GitHub releases. Ignore prereleases unless requested. If
+none exists, explain and ask whether to use `latest` temporarily or stop. Confirm
+the version, then create this `Containerfile`:
 
 ```dockerfile
 FROM ghcr.io/aakarim/openlore:1.2.3
 ```
 
-Do not use `latest`, a range, a Git branch, or a digest-only reference for the
-initial project. The Containerfile only selects the published OpenLore build
-today and remains the extension point for custom packages later. Do not bake
-`openlore.yml`, `lore.json`, or bootstrap files into the image.
+Otherwise never use `latest`, ranges, branches, or digest-only references. The
+Containerfile selects OpenLore and permits later extension. Do not bake config or
+bootstrap state into it.
 
-Ask the user to select an existing SSH public key. Offer separate keys for the
-OpenLore principal and infrastructure administration, but default to using the
-same selected key for both. Never read, copy, print, generate, replace, or
-commit a private key without explicit need and approval.
+Validate the selected public/private key pair by authentication, not by printing
+private material. Never copy, print, generate, replace, or commit a private key.
 
 ## 3. Create tracked configuration
 
@@ -105,74 +109,33 @@ Create `.local/lore.json` with:
 
 - `allow_keyless: false`;
 - unknown identities denied;
-- one `onboarding` identity using the selected public key;
-- a unique writable home docset at `/user/onboarding`;
+- one `onboarding` identity using the selected public key—explain that an
+  identity is the account OpenLore recognizes when that key connects;
+- a unique writable home docset at `/user/onboarding`—explain that a docset is
+  a permission-controlled knowledge folder and this one is their private start;
 - an `administrator` role with `lore:config:edit`;
-- an `agent` role;
+- an `agent` role—explain that roles group permissions;
 - a `general` docset rooted at `/channel/general` granting `agent` `rw`;
 - `onboarding` assigned both `administrator` and `agent`.
 
-Use this shape, substituting the selected public key:
+Use exactly those fields and validate the complete JSON. The `onboarding-home`
+docset has `paths: ["/user/onboarding"]`; `general` has
+`paths: ["/channel/general"]` and grants role `agent` `rw`; the identity has
+`name: "onboarding"`, the selected `public_key`, `home: "onboarding-home"`, and
+roles `["administrator", "agent"]`.
 
-```json
-{
-  "allow_keyless": false,
-  "unknown_identity": "deny",
-  "default_cwd": "/user/onboarding",
-  "roles": {
-    "administrator": {
-      "allow": {
-        "capabilities": ["lore:config:edit"]
-      }
-    },
-    "agent": {}
-  },
-  "docsets": {
-    "onboarding-home": {
-      "paths": ["/user/onboarding"]
-    },
-    "general": {
-      "paths": ["/channel/general"],
-      "access": {
-        "allow": {
-          "agent": "rw"
-        }
-      }
-    }
-  },
-  "identities": [
-    {
-      "name": "onboarding",
-      "public_key": "<selected SSH public key>",
-      "home": "onboarding-home",
-      "roles": ["administrator", "agent"]
-    }
-  ]
-}
-```
-
-Create matching empty directories below `.local/filesystem/`. This directory is
-the initial SSH-visible filesystem. Do not put generated host private keys,
+Create both paths below `.local/filesystem/` and put a short `README.md` in each,
+describing the private onboarding area and shared general area respectively, so
+the first login always has visible content. Do not overwrite user content. This
+is the initial SSH-visible filesystem. Do not put generated host private keys,
 signing keys, audit logs, tokens, or runtime databases in bootstrap state; each
 deployed server creates its own operational state.
 
 ## 5. Create disposable local Compose state
 
-Put `compose.yml` and `runtime.env` inside `.local/`, not at project root. The
-Compose definition must:
-
-- build the root `Containerfile`;
-- mount root `openlore.yml` read-only at
-  `/var/lib/openlore/config/openlore.yml`;
-- mount `.local/lore.json` at `/var/lib/openlore/config/lore.json`;
-- mount `.local/filesystem` at `/var/lib/openlore/published`;
-- use named local volumes for `/var/lib/openlore/data` and
-  `/var/lib/openlore/ssh` so operational state is not bootstrap state;
-- map the free local HTTP and SSH ports recorded in `runtime.env`;
-- run `./out --config /var/lib/openlore/config/openlore.yml` directly.
-
-Use this minimal structure, replacing the Compose project name with the team
-slug:
+Put `compose.yml` and `runtime.env` inside `.local/`. Use this minimal structure,
+replacing the project name with the team slug; its mounts keep config, content,
+data, and host keys outside the image and persistent:
 
 ```yaml
 name: team-lore
@@ -220,14 +183,20 @@ regardless of which local runtime was used.
 
 ## 6. Require local acceptance
 
-Build and start the local server. Setup is not successful until all checks pass:
+Build and start the local server. Capture its host key into
+`.local/known_hosts`, replacing only a stale entry for this loopback host and
+port. Create `.local/ssh_config` with the selected private-key path, `User
+onboarding`, the chosen port, `UserKnownHostsFile`, and strict host-key checking.
+Never disable host-key checking or mutate global `~/.ssh/known_hosts`.
+
+Quietly run all checks; setup is not successful until they pass:
 
 1. HTTP readiness succeeds.
 2. `/mcp` completes an MCP initialization exchange.
-3. The selected key authenticates the `onboarding` identity over OpenLore SSH.
+3. `ssh -F .local/ssh_config lore-local` authenticates `onboarding`.
 4. The SSH session starts at `/user/onboarding`.
-5. A uniquely named disposable document can be written to
-   `/channel/general`, read back, and removed.
+5. Both default READMEs are visible; a unique disposable document can be
+   written to `/channel/general`, read back, and removed.
 6. After restarting the container, authentication, filesystem contents, and
    the SSH host key persist.
 
@@ -237,10 +206,20 @@ authentication or hardcode around a failed check.
 ## 7. Finish reviewably
 
 Initialize Git if needed. Show all tracked files and prove `.local/` is ignored.
-Summarize the selected image version, local URLs, exact SSH command, key used,
-and acceptance evidence. Offer to make an initial commit only after explicit
-approval; never push automatically.
+Finish with a friendly ✅ summary: what was created, what Compose now does
+(builds and keeps the local server running with persistent state), selected
+image version, local URLs, identity/home, ports, and key used. Do not narrate
+successful internal checks. Give these commands for a new terminal:
 
-Tell the user to run `onboarding` for more initial identities or folders and
-`deploy` when the local server is ready. One project represents one
-authoritative deployed server; do not create staging environments.
+```bash
+ssh -F .local/ssh_config lore-local
+ssh -F .local/ssh_config lore-local 'cat /channel/general/README.md'
+```
+
+Offer an initial commit only after explicit approval; never push automatically.
+
+Then ask whether to continue in this session (“run onboarding”) or later with
+`ssh openlore.sh onboarding | <agent-cli>` to add people/folders; deployment is
+similarly “run deploy” or `ssh openlore.sh deploy | <agent-cli>`. Explain that
+setup is complete and onboarding is optional customization. One project is one
+authoritative server; do not create staging environments.
