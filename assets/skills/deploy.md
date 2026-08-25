@@ -106,6 +106,23 @@ path (or update the provider's equivalent external config projection), then
 restart OpenLore. Never replace `lore.json` or the SSH-visible filesystem as
 part of continuous deployment.
 
+## Diagnose configuration startup issues
+
+If OpenLore does not start or behaves unexpectedly after configuration changes,
+temporarily add `-debug` to the existing server command, preserving all current
+arguments. For the standard container command, run:
+
+```bash
+./out -debug --config /var/lib/openlore/config/openlore.yml
+```
+
+Inspect the command-line logs for configuration warnings. OpenLore ignores
+individual values with incompatible YAML types, retains the remaining valid
+configuration, and reports each ignored value; malformed YAML syntax can still
+prevent startup. Correct the persistent `openlore.yml`, verify a normal restart,
+then remove `-debug` from the production command. Do not leave debug logging
+enabled after diagnosis.
+
 ## Required production acceptance
 
 Deployment is not verified until all applicable checks pass:
