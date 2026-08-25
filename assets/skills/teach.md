@@ -1,8 +1,82 @@
-# Setting Up OpenLore
+# Teach: Get Started with OpenLore
 
-OpenLore serves your documentation to AI agents over SSH. Here's how to set it up for your project.
+You are welcoming someone to OpenLore and guiding them to the right path. Be
+warm and clear. Use restrained emojis. Ask one question at a time and wait for
+the answer.
 
-## Quick Start
+Open with:
+
+> 👋📜 **Welcome to OpenLore!**
+>
+> OpenLore is a minimal, customisable, agent-native knowledge base that keeps
+> your context current and inspectable.
+
+Then ask the initial question and wait:
+
+> **What Lore server do you want to use?**
+>
+> - **A. 🆕 A new Lore server** — I'll help you create one.
+> - **B. 🔗 An existing Lore server** — tell me its address (for example
+>   `docs.internal` or `openlore.sh`).
+> - **C. ❓ What is a Lore server?**
+
+Accept the letter, the words, or an address given directly. If the person gives
+an address with option B in one message, do not ask again — use it.
+
+## If they choose C — What is a Lore server?
+
+Explain in Simple Technical English. Use short sentences. Use the active voice.
+Give one idea in each sentence. Do not use jargon. You can use this text:
+
+> 📜 A Lore server stores the documents for your project.
+>
+> AI agents connect to the server with SSH. The agents read the documents with
+> simple commands, such as `cat` and `grep`. The agents can also write notes
+> back to the server, if you permit it.
+>
+> You control access with SSH keys and roles. You can run the server on your
+> machine, or you can run it in the cloud. One binary contains the server and
+> the documents.
+
+Then ask the initial question again (options A and B).
+
+## If they choose B — connect to an existing Lore server
+
+1. Ask for the server address and SSH port if they have not given them.
+   Default port: 2222 (openlore.sh uses 22).
+2. Verify the connection:
+   ```bash
+   ssh -p 2222 <address>
+   ```
+3. Show them how to explore:
+   ```bash
+   tree -L 2 /          # list all documentation
+   grep -r "term" /docs # search across docs
+   cat /docs/README.md  # read a file
+   help                 # full command list
+   ```
+4. Offer to install OpenLore access as a skill in their agent harness and add
+   the `AGENTS.md` pointer — follow "Onboarding Agents (Agent Types)" below.
+5. Finish with a short ✅ plain-language summary of what now works.
+
+## If they choose A — set up a new Lore server
+
+Refer them to the `setup` skill. It creates and locally verifies a deployable
+OpenLore project, one question at a time:
+
+```bash
+ssh openlore.sh setup | <agent-cli>
+```
+
+If you are the agent helping them right now, fetch the instructions yourself
+with `ssh openlore.sh setup` (or `ssh -p <port> <this-server> setup`) and
+follow them. Then stop here — the `setup` skill takes over, and `onboarding`
+and `deploy` continue after it.
+
+Only if they explicitly want a quick, keyless, local-only server without the
+guided setup, walk them through the reference below, one step at a time.
+
+### Quick Start
 
 1. Install OpenLore:
    ```bash
@@ -22,7 +96,7 @@ OpenLore serves your documentation to AI agents over SSH. Here's how to set it u
 Run this way, OpenLore serves the directory you pass on the command line and
 runs keyless (any client can connect) — no config file needed.
 
-## Embedding Docs into a Binary
+### Embedding Docs into a Binary
 
 The real power of OpenLore is baking your docs into a single binary that anyone
 can run.
@@ -79,7 +153,7 @@ can run.
    docs. No directory argument is needed: with no path on the command line, the
    binary serves its embedded `assets/lore/` docs.
 
-## Setting Up Access Control
+### Setting Up Access Control
 
 If you want different agents to have different access, create a `lore.json`
 next to `openlore.yml`. This quick start gives keyless visitors read-only access
@@ -145,9 +219,54 @@ Set `allow_keyless` to `false` if every SSH connection must present a known
 key. Set `unknown_identity` to `allow` only if unknown keys should receive the
 built-in `guest` role.
 
+### Using the GitHub Action
+
+For automated builds, use the OpenLore GitHub Action:
+
+```yaml
+- uses: aakarim/openlore@v1
+  with:
+    docs-dir: ./docs
+    config: ./openlore.yml
+```
+
+This produces binaries for Linux, macOS, and Windows.
+
+### Setting Up Passkeys (Browser Access for Humans)
+
+Passkeys let humans browse your docs in a web browser using WebAuthn (Face ID,
+Touch ID, security keys).
+
+1. Add to your `openlore.yml`:
+   ```yaml
+   passkeys:
+     enabled: true
+     rp_id: localhost                       # or your domain
+     rp_origins: ["http://localhost:8080"]  # must match the HTTP server origin
+   ```
+
+2. Start the server, connect via SSH, and register:
+   ```bash
+   ssh -p 2222 localhost "passkey register --name 'My Laptop'"
+   ```
+
+3. Open the printed URL in a browser to complete registration.
+
+4. Browse docs at `http://localhost:8080/lore/`.
+
+Run `passkey help` in the SSH shell for all options.
+
+### Exporting Embedded Docs
+
+To extract docs from an existing OpenLore binary:
+
+```bash
+openlore export -o ./extracted-docs
+```
+
 ## Onboarding Agents (Agent Types)
 
-Once the server runs, install OpenLore access as a **skill** in your own
+Once a server runs, install OpenLore access as a **skill** in the agent
 harness, then use `AGENTS.md` to tell future sessions when to reach for it.
 If you are an agent reading this: do these steps now.
 
@@ -190,47 +309,8 @@ Agent-type-specific variants are named `agents-<type>`:
 Run `skills` on the server to list every instruction command it ships,
 including agent types added by your deployment through `skills_dir`.
 
-## Using the GitHub Action
+## Wrap up
 
-For automated builds, use the OpenLore GitHub Action:
-
-```yaml
-- uses: aakarim/openlore@v1
-  with:
-    docs-dir: ./docs
-    config: ./openlore.yml
-```
-
-This produces binaries for Linux, macOS, and Windows.
-
-## Setting Up Passkeys (Browser Access for Humans)
-
-Passkeys let humans browse your docs in a web browser using WebAuthn (Face ID,
-Touch ID, security keys).
-
-1. Add to your `openlore.yml`:
-   ```yaml
-   passkeys:
-     enabled: true
-     rp_id: localhost                       # or your domain
-     rp_origins: ["http://localhost:8080"]  # must match the HTTP server origin
-   ```
-
-2. Start the server, connect via SSH, and register:
-   ```bash
-   ssh -p 2222 localhost "passkey register --name 'My Laptop'"
-   ```
-
-3. Open the printed URL in a browser to complete registration.
-
-4. Browse docs at `http://localhost:8080/lore/`.
-
-Run `passkey help` in the SSH shell for all options.
-
-## Exporting Embedded Docs
-
-To extract docs from an existing OpenLore binary:
-
-```bash
-openlore export -o ./extracted-docs
-```
+After any path completes, give a short ✅ plain-language summary and offer the
+next step: `onboarding` to add identities, or `deploy` to put the server on
+real infrastructure.
