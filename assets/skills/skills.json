@@ -50,15 +50,15 @@
     },
     "openlore-skill": {
       "description": "Get an installable Agent Skills SKILL.md for accessing this server",
-      "file": "agents/skill.md"
+      "file": "agents/openlore/SKILL.md"
     },
     "agents-shellm": {
       "description": "Get a headlong/shellm SKILL.md for accessing this server",
-      "file": "agents/shellm.md"
+      "file": "agents/shellm/openlore/SKILL.md"
     },
     "agents-shellm-housekeeping": {
       "description": "Get a headlong/shellm SKILL.md for knowledge-base housekeeping",
-      "file": "agents/shellm-housekeeping.md"
+      "file": "agents/shellm/openlore-housekeeping/SKILL.md"
     },
     "passkeys": {
       "description": "Register passkeys for browser access to docs",
