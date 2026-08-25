@@ -98,6 +98,12 @@ type Config struct {
 	// Track sources for conflict detection.
 	configFileLoaded   bool
 	embeddedConfigUsed bool
+	warnings           []string
+}
+
+// Warnings returns non-fatal problems encountered while loading configuration.
+func (c Config) Warnings() []string {
+	return append([]string(nil), c.warnings...)
 }
 
 type PluginsConfig struct{ Skills SkillsPluginConfig }
@@ -648,10 +654,11 @@ func WithConfigFile(path string) Option {
 			return fmt.Errorf("reading config file: %w", err)
 		}
 
-		var fc fileConfig
-		if err := yaml.Unmarshal(data, &fc); err != nil {
+		fc, warnings, err := decodeFileConfig(data)
+		if err != nil {
 			return fmt.Errorf("parsing config file: %w", err)
 		}
+		cfg.warnings = append(cfg.warnings, warnings...)
 
 		cfg.configFileLoaded = true
 
@@ -770,10 +777,11 @@ func WithEmbeddedConfig(data []byte, motdFallback string) Option {
 		if len(data) > 0 {
 			cfg.embeddedConfigUsed = true
 
-			var fc fileConfig
-			if err := yaml.Unmarshal(data, &fc); err != nil {
+			fc, warnings, err := decodeFileConfig(data)
+			if err != nil {
 				return fmt.Errorf("parsing embedded config: %w", err)
 			}
+			cfg.warnings = append(cfg.warnings, warnings...)
 
 			if fc.ConfigVersion != "" {
 				cfg.ConfigVersion = fc.ConfigVersion
@@ -877,6 +885,24 @@ func WithEmbeddedConfig(data []byte, motdFallback string) Option {
 
 		return nil
 	}
+}
+
+// decodeFileConfig keeps values that YAML can decode while reporting type
+// mismatches for individual values. yaml.v3 populates the rest of the target
+// when it returns a TypeError, which lets a server start with safe defaults for
+// malformed settings instead of rejecting the entire configuration.
+func decodeFileConfig(data []byte) (fileConfig, []string, error) {
+	var fc fileConfig
+	err := yaml.Unmarshal(data, &fc)
+	if err == nil {
+		return fc, nil, nil
+	}
+
+	var typeErr *yaml.TypeError
+	if !errors.As(err, &typeErr) {
+		return fileConfig{}, nil, err
+	}
+	return fc, append([]string(nil), typeErr.Errors...), nil
 }
 
 // WithPort sets the SSH server port.

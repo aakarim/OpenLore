@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -129,6 +131,25 @@ func TestUnsupportedShellUsageIsLoggedOnlyInDebugMode(t *testing.T) {
 				t.Fatalf("unknown-command arguments leaked into logs:\n%s", got)
 			}
 		})
+	}
+}
+
+func TestNewServerWarnsForInvalidConfigurationValue(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "openlore.yml")
+	if err := os.WriteFile(path, []byte("passkeys: true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+
+	if _, err := NewServer("", WithConfigFile(path), WithLogger(logger)); err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	got := logs.String()
+	if !strings.Contains(got, `"level":"WARN"`) ||
+		!strings.Contains(got, `"msg":"ignoring invalid configuration value"`) ||
+		!strings.Contains(got, "passkeysYAML") {
+		t.Fatalf("warning log = %q", got)
 	}
 }
 
