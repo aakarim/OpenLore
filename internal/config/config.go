@@ -615,7 +615,7 @@ func New(opts ...Option) (Config, error) {
 			Allowed: []string{
 				"*.md", "*.markdown", "*.txt",
 				"*.html", "*.htm", "*.css", "*.js",
-				"*.json", "*.yaml", "*.yml",
+				"*.json", "*.jsonl", "*.yaml", "*.yml",
 				"*.csv", "*.tsv", "*.xml", "*.toml",
 				"*.png", "*.jpg", "*.jpeg", "*.gif", "*.svg", "*.webp",
 			},

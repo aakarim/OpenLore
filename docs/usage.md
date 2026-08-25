@@ -49,7 +49,16 @@ filesystem. `setup` creates and locally verifies a team deployment project;
 verifies one authoritative server; and `upgrade` prepares a pinned image
 version change. Provider deployment guides cover Fly.io, Railway, AWS, Google
 Cloud, Azure, and DigitalOcean. `teach` covers general OpenLore setup and
-`agents` emits an `AGENTS.md` snippet. Run `skills` for Agent Skills management
+`agents` emits an `AGENTS.md` snippet. Commands named `agents-<type>` emit
+instructions for specific agent types: `openlore-skill` emits a portable
+Agent Skills `SKILL.md` for installation into any harness's skills directory
+(Amp, Claude Code, headlong, …), while `agents-shellm` and
+`agents-shellm-housekeeping` emit
+[headlong/shellm](https://github.com/laude-institute/headlong)-format
+`SKILL.md` files for accessing and maintaining the server (install with
+`ssh <server> agents-shellm > .skills/openlore/SKILL.md`;
+see [shellm.md](shellm.md) for Docker caveats and trajectory sharing).
+Run `skills` for Agent Skills management
 instructions and a list of built-in and configured runtime instruction
 commands.
 
