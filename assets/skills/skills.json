@@ -50,7 +50,7 @@
     },
     "openlore-skill": {
       "description": "Get an installable Agent Skills SKILL.md for accessing this server",
-      "file": "agents/openlore/SKILL.md"
+      "file": "openlore/SKILL.md"
     },
     "agents-shellm": {
       "description": "Get a headlong/shellm SKILL.md for accessing this server",
