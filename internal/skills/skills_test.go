@@ -19,6 +19,8 @@ func TestEmbeddedDeploymentSkills(t *testing.T) {
 			"<team-slug>-lore",
 			".local/lore.json",
 			"/channel/general",
+			"Who is this for?",
+			"/channel/general/INDEX.md",
 			"Do not bake",
 			"Require local acceptance",
 		},
