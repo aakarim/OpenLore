@@ -47,29 +47,29 @@ Every implementation must provide:
 3. Valid HTTPS and a reachable MCP endpoint.
 4. Authenticated OpenLore SSH.
 5. A persistent volume mounted at `/var/lib/openlore`.
-6. Root `openlore.yml` deployed separately to
-   `/var/lib/openlore/config/openlore.yml` and started with
-   `./out --config /var/lib/openlore/config/openlore.yml`. It must configure:
+6. Deploy root `openlore.yml` separately at
+   `/var/lib/openlore/config/openlore.yml`. Keep the inherited command/entrypoint,
+   which runs `./out --config /var/lib/openlore/config/openlore.yml`; never
+   override it with an argument array. If required, pass the whole command as
+   one shell string. The config must set:
    - `auth_file: /var/lib/openlore/config/lore.json`
    - `writable_dir: /var/lib/openlore/published`
    - `data_dir: /var/lib/openlore/data`
    - `host_key_path: /var/lib/openlore/ssh/openlore_ed25519`
+   - passkeys enabled with public HTTPS RP ID/origin and `/var/lib/openlore/data/passkeys.json`
 7. `openlore.yml`, `lore.json`, the SSH-visible filesystem, server data, and
    host key surviving container and machine replacement supported by that
    provider.
 
-Use provider defaults for administrative SSH. Do not install or expose another
-OS SSH daemon merely for OpenLore.
-
-When the provider can configure TCP ingress, prefer public domain port 22
-forwarded to OpenLore port 2222. Do not expose 2222 publicly when that ingress
-exists. If the provider cannot do this, expose the assigned/approved 2222
-endpoint and explicitly suggest an external TCP load balancer or forwarding
-system. Raw SSH has no hostname/SNI routing, so standard-port ingress needs a
+Use provider defaults for administrative SSH; do not add an OS SSH daemon for
+OpenLore.
+When the provider supports TCP ingress, prefer public port 22 forwarded to
+OpenLore 2222 and do not also expose 2222. Otherwise expose the assigned 2222
+endpoint and suggest an external TCP load balancer or forwarding system. Raw
+SSH has no hostname/SNI routing, so standard-port ingress needs a
 dedicated address/listener rather than HTTP hostname routing.
 
 ## Safety and IaC rules
-
 - Use locally authenticated provider CLIs. Never request credentials or private
   keys in chat and never commit secrets.
 - Discover existing resources and state before planning.

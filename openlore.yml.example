@@ -128,10 +128,9 @@ host_key_path: .ssh/openlore_ed25519
 
 # ── Passkeys / WebAuthn ───────────────────────────────
 #
-# Enable browser-based passkey authentication for human access
-# to documentation via the HTTP server. When enabled, users can
-# register passkeys from the SSH shell (`passkey` command) and
-# then browse docs at /lore/ in a web browser.
+# Browser passkeys default to enabled for http://localhost:8080. Users can
+# register from SSH (`passkey`) and browse at /lore/. Set `enabled: false` to
+# disable them. For deployment, configure the public HTTPS domain explicitly:
 #
 # passkeys:
 #   enabled: true
