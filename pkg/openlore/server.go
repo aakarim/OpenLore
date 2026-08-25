@@ -168,6 +168,9 @@ func newServerWithRoot(rootDir string, rootFS, lowerFS vfs.FileSystem, opts ...c
 			logger = slog.Default()
 		}
 	}
+	for _, warning := range cfg.Warnings() {
+		logger.Warn("ignoring invalid configuration value", "error", warning)
+	}
 
 	s := &Server{
 		config: cfg,
