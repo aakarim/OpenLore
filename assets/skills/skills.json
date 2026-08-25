@@ -1,7 +1,7 @@
 {
   "skills": {
     "teach": {
-      "description": "Learn how to set up OpenLore for your project",
+      "description": "Set up a new Lore server, connect to an existing one, or learn what a Lore server is",
       "file": "teach.md"
     },
     "setup": {
