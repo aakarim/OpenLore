@@ -27,7 +27,7 @@ Produce one Git repository named from the user's team with this shape:
     ├── ssh_config
     ├── filesystem/
     │   ├── user/onboarding/README.md
-    │   └── channel/general/README.md
+    │   └── channel/general/INDEX.md
     └── runtime.env
 ```
 
@@ -39,10 +39,13 @@ image and is never committed.
 
 Ask in order, one per turn, with its reason and default:
 1. Team display name (required to identify its owner; no safe default).
-2. Derive a lowercase slug using letters, numbers, and single hyphens, then
+2. “Who is this for?” Ask for a short description of the organization, person,
+   and team where applicable. Explain that this seeds useful shared context
+   instead of an empty server; a sentence or two is enough, with no factual default.
+3. Derive a lowercase slug using letters, numbers, and single hyphens, then
    suffix `-lore` (`Acme Research` → `acme-research-lore`); allow correction.
-3. Creation location (default: a new child of the current directory).
-4. SSH public key and matching private-key path. Explain that this key identifies
+4. Creation location (default: a new child of the current directory).
+5. SSH public key and matching private-key path. Explain that this key identifies
    their first account; the private key stays put for their SSH client. Default
    to one key for OpenLore and infrastructure, but offer separate keys.
 
@@ -134,10 +137,11 @@ docset has `paths: ["/user/onboarding"]`; `general` has
 `name: "onboarding"`, the selected `public_key`, `home: "onboarding-home"`, and
 roles `["administrator", "agent"]`.
 
-Create both paths below `.local/filesystem/` and put a short `README.md` in each,
-describing the private onboarding area and shared general area respectively, so
-the first login always has visible content. Do not overwrite user content. This
-is the initial SSH-visible filesystem. Do not put generated host private keys,
+Create both paths below `.local/filesystem/`. Put a short `README.md` in the
+private home. Put a concise summary of the confirmed “Who is this for?” answer
+at the very top of `/channel/general/INDEX.md`, followed by useful organization,
+person, and team details without inventing facts. Do not overwrite user content.
+This is the initial SSH-visible filesystem. Do not put generated host private keys,
 signing keys, audit logs, tokens, or runtime databases in bootstrap state; each
 deployed server creates its own operational state.
 
@@ -206,7 +210,7 @@ Quietly run all checks; setup is not successful until they pass:
 3. `passkey` is available; the mounted config is active: keyless login fails and
    `ssh -F .local/ssh_config lore-local` authenticates `onboarding`.
 4. The SSH session starts at `/user/onboarding`.
-5. Both default READMEs are visible; a unique disposable document can be
+5. The home README and shared INDEX are visible; a unique disposable document can be
    written to `/channel/general`, read back, and removed.
 6. After restarting the container, authentication, filesystem contents, and
    the SSH host key persist.
@@ -224,7 +228,7 @@ successful internal checks. Give these commands for a new terminal:
 
 ```bash
 ssh -F .local/ssh_config lore-local
-ssh -F .local/ssh_config lore-local 'cat /channel/general/README.md'
+ssh -F .local/ssh_config lore-local 'cat /channel/general/INDEX.md'
 ```
 
 Offer an initial commit only after explicit approval; never push automatically.
