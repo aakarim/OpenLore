@@ -8,7 +8,8 @@ Open with:
 
 > 👋📜 **Welcome to OpenLore!**
 >
-> OpenLore serves your documentation to AI agents over SSH.
+> OpenLore is a minimal, customisable, agent-native knowledge base that keeps
+> your context current and inspectable.
 
 Then ask the initial question and wait:
 
