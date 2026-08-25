@@ -55,10 +55,8 @@ Then ask the initial question again (options A and B).
    cat /docs/README.md  # read a file
    help                 # full command list
    ```
-4. Offer to add the server to their `AGENTS.md` so their agents can use it:
-   ```bash
-   ssh -p 2222 <address> agents >> AGENTS.md
-   ```
+4. Offer to install OpenLore access as a skill in their agent harness and add
+   the `AGENTS.md` pointer — follow "Onboarding Agents (Agent Types)" below.
 5. Finish with a short ✅ plain-language summary of what now works.
 
 ## If they choose A — set up a new Lore server
@@ -265,6 +263,51 @@ To extract docs from an existing OpenLore binary:
 ```bash
 openlore export -o ./extracted-docs
 ```
+
+## Onboarding Agents (Agent Types)
+
+Once a server runs, install OpenLore access as a **skill** in the agent
+harness, then use `AGENTS.md` to tell future sessions when to reach for it.
+If you are an agent reading this: do these steps now.
+
+1. **Install the skill.** Fetch the portable Agent Skills file and save it in
+   your harness's skills directory. The directory must be named `openlore` to
+   match the skill's frontmatter name:
+
+   | Harness | Skills location |
+   |---|---|
+   | Amp (project) | `.agents/skills/openlore/SKILL.md` |
+   | Amp (personal) | `~/.config/agents/skills/openlore/SKILL.md` |
+   | Claude Code | `.claude/skills/openlore/SKILL.md` |
+   | headlong / shellm | `.skills/openlore/SKILL.md` (use `agents-shellm` instead, below) |
+
+   ```bash
+   mkdir -p .agents/skills/openlore
+   ssh -p <port> <host> openlore-skill > .agents/skills/openlore/SKILL.md
+   ```
+
+2. **Fill in the server block.** The installed file has a `## Server` section
+   with placeholders. Record the real host, port, key requirements, and the
+   server's top-level layout (run `ssh -p <port> <host> "tree -L 2 /"` once).
+   A skill without its server address is useless.
+
+3. **Add the AGENTS.md pointer.** Append the snippet so sessions that do not
+   scan skills still learn the knowledge base exists and when to use it:
+
+   ```bash
+   ssh -p <port> <host> agents >> AGENTS.md
+   ```
+
+Agent-type-specific variants are named `agents-<type>`:
+
+| Agent type | Command | Output |
+|---|---|---|
+| Any harness with Agent Skills support | `ssh <server> openlore-skill` | Portable `SKILL.md` (steps above) |
+| headlong / shellm | `ssh <server> agents-shellm` | `SKILL.md` with headlong specifics (Docker sandbox caveats, `$OPENLORE_SSH`, trajectory sync) |
+| headlong / shellm (maintenance) | `ssh <server> agents-shellm-housekeeping` | A `SKILL.md` that audits the knowledge base and publishes reports |
+
+Run `skills` on the server to list every instruction command it ships,
+including agent types added by your deployment through `skills_dir`.
 
 ## Wrap up
 
