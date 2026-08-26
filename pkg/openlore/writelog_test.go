@@ -2,10 +2,16 @@ package openlore
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -14,34 +20,231 @@ import (
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
 
-// wlRecordingFS is a minimal WritableFS that records applied write targets in
-// order and returns a deterministic hash. A per-target error can be programmed.
+// wlRecordingFS is a small in-memory WritableFS that records applied write
+// targets in order. It enforces the same write and whole-tree preconditions as
+// a real substrate. A per-target error can be programmed.
 type wlRecordingFS struct {
 	mu      sync.Mutex
 	applied []string
 	errFor  map[string]error
+	nodes   map[string]*vfs.FileInfo
 }
 
-func (f *wlRecordingFS) Stat(string) (*vfs.FileInfo, error)     { return nil, errors.New("no") }
-func (f *wlRecordingFS) ReadDir(string) ([]vfs.FileInfo, error) { return nil, errors.New("no") }
-func (f *wlRecordingFS) ReadFile(string) ([]byte, error)        { return nil, errors.New("no") }
-func (f *wlRecordingFS) SetWriteable() error                    { return nil }
-func (f *wlRecordingFS) SetReadonly() error                     { return nil }
-func (f *wlRecordingFS) Mkdir(string) error                     { return nil }
-func (f *wlRecordingFS) MkdirAll(string) error                  { return nil }
-func (f *wlRecordingFS) Remove(string) error                    { return nil }
-func (f *wlRecordingFS) RemoveAll(string, vfs.RemoveOpts) error { return nil }
+func (f *wlRecordingFS) ensureNodesLocked() {
+	if f.nodes == nil {
+		f.nodes = map[string]*vfs.FileInfo{
+			"/": {FileName: "/", FilePath: "/", Dir: true},
+		}
+	}
+}
 
-func (f *wlRecordingFS) WriteFileAtomic(name string, _ []byte, _ vfs.WriteOpts) (string, error) {
+func (f *wlRecordingFS) Stat(name string) (*vfs.FileInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureNodesLocked()
+	info, ok := f.nodes[vfs.CleanPath(name)]
+	if !ok {
+		return nil, fs.ErrNotExist
+	}
+	copy := *info
+	copy.Content = append([]byte(nil), info.Content...)
+	return &copy, nil
+}
+
+func (f *wlRecordingFS) ReadDir(name string) ([]vfs.FileInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureNodesLocked()
+	clean := vfs.CleanPath(name)
+	info, ok := f.nodes[clean]
+	if !ok {
+		return nil, fs.ErrNotExist
+	}
+	if !info.Dir {
+		return nil, vfs.ErrNotDirectory(clean)
+	}
+	var children []vfs.FileInfo
+	for candidate, child := range f.nodes {
+		if candidate != clean && path.Dir(candidate) == clean {
+			copy := *child
+			copy.Content = append([]byte(nil), child.Content...)
+			children = append(children, copy)
+		}
+	}
+	sort.Slice(children, func(i, j int) bool { return children[i].FileName < children[j].FileName })
+	return children, nil
+}
+
+func (f *wlRecordingFS) ReadFile(name string) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureNodesLocked()
+	info, ok := f.nodes[vfs.CleanPath(name)]
+	if !ok {
+		return nil, fs.ErrNotExist
+	}
+	if info.Dir {
+		return nil, vfs.ErrIsDirectory(name)
+	}
+	return append([]byte(nil), info.Content...), nil
+}
+
+func (f *wlRecordingFS) SetWriteable() error { return nil }
+func (f *wlRecordingFS) SetReadonly() error  { return nil }
+
+func (f *wlRecordingFS) Mkdir(name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureNodesLocked()
+	clean := vfs.CleanPath(name)
+	if _, exists := f.nodes[clean]; exists {
+		return fs.ErrExist
+	}
+	parent, ok := f.nodes[path.Dir(clean)]
+	if !ok {
+		return fs.ErrNotExist
+	}
+	if !parent.Dir {
+		return vfs.ErrNotDirectory(path.Dir(clean))
+	}
+	f.nodes[clean] = &vfs.FileInfo{FileName: path.Base(clean), FilePath: clean, Dir: true}
+	return nil
+}
+
+func (f *wlRecordingFS) mkdirAllLocked(name string) error {
+	current := "/"
+	for _, part := range strings.Split(strings.Trim(vfs.CleanPath(name), "/"), "/") {
+		if part == "" {
+			continue
+		}
+		current = path.Join(current, part)
+		if info, ok := f.nodes[current]; ok {
+			if !info.Dir {
+				return vfs.ErrNotDirectory(current)
+			}
+			continue
+		}
+		f.nodes[current] = &vfs.FileInfo{FileName: path.Base(current), FilePath: current, Dir: true}
+	}
+	return nil
+}
+
+func (f *wlRecordingFS) MkdirAll(name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureNodesLocked()
+	return f.mkdirAllLocked(name)
+}
+
+func (f *wlRecordingFS) Remove(name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureNodesLocked()
+	clean := vfs.CleanPath(name)
+	if _, exists := f.nodes[clean]; !exists {
+		return fs.ErrNotExist
+	}
+	for candidate := range f.nodes {
+		if candidate != clean && strings.HasPrefix(candidate, clean+"/") {
+			return errors.New("directory not empty")
+		}
+	}
+	delete(f.nodes, clean)
+	return nil
+}
+
+func (f *wlRecordingFS) RemoveAll(name string, opts vfs.RemoveOpts) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureNodesLocked()
+	clean := vfs.CleanPath(name)
+	if _, exists := f.nodes[clean]; !exists {
+		return fs.ErrNotExist
+	}
+	if opts.Expected != nil && !wlSnapshotsEqual(opts.Expected, f.snapshotLocked(clean)) {
+		return &vfs.TreeStaleError{Path: clean, Detail: "subtree does not match expected snapshot"}
+	}
+	for candidate := range f.nodes {
+		if candidate == clean || strings.HasPrefix(candidate, clean+"/") {
+			delete(f.nodes, candidate)
+		}
+	}
+	return nil
+}
+
+func (f *wlRecordingFS) WriteFileAtomic(name string, data []byte, opts vfs.WriteOpts) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.errFor != nil {
 		if err := f.errFor[name]; err != nil {
 			return "", err
 		}
 	}
-	f.mu.Lock()
-	f.applied = append(f.applied, name)
-	f.mu.Unlock()
-	return "h:" + name, nil
+	f.ensureNodesLocked()
+	clean := vfs.CleanPath(name)
+	current, exists := f.nodes[clean]
+	currentHash := ""
+	if exists && !current.Dir {
+		currentHash = wlHash(current.Content)
+	}
+	if opts.IfNoneMatch && exists {
+		return "", &vfs.PreconditionError{Path: clean, Current: currentHash}
+	}
+	if opts.IfMatch != nil && (!exists || current.Dir || currentHash != *opts.IfMatch) {
+		return "", &vfs.PreconditionError{Path: clean, Current: currentHash}
+	}
+	if err := f.mkdirAllLocked(path.Dir(clean)); err != nil {
+		return "", err
+	}
+	if exists && current.Dir {
+		return "", vfs.ErrIsDirectory(clean)
+	}
+	copy := append([]byte(nil), data...)
+	f.nodes[clean] = &vfs.FileInfo{FileName: path.Base(clean), FilePath: clean, Content: copy, FileSize: int64(len(copy))}
+	f.applied = append(f.applied, clean)
+	return wlHash(copy), nil
+}
+
+func (f *wlRecordingFS) snapshotLocked(root string) *vfs.TreeSnapshot {
+	snapshot := &vfs.TreeSnapshot{Root: root}
+	for candidate, info := range f.nodes {
+		if candidate != root && !strings.HasPrefix(candidate, root+"/") {
+			continue
+		}
+		rel := "."
+		if candidate != root {
+			rel = strings.TrimPrefix(candidate, root+"/")
+		}
+		op := vfs.TreeOp{RelPath: rel, Kind: "dir"}
+		if !info.Dir {
+			op.Kind = "file"
+			op.Hash = wlHash(info.Content)
+			op.Size = int64(len(info.Content))
+		}
+		snapshot.Ops = append(snapshot.Ops, op)
+	}
+	return snapshot
+}
+
+func wlSnapshotsEqual(want, got *vfs.TreeSnapshot) bool {
+	if want.Root != got.Root || len(want.Ops) != len(got.Ops) {
+		return false
+	}
+	wantByPath := make(map[string]vfs.TreeOp, len(want.Ops))
+	for _, op := range want.Ops {
+		wantByPath[op.RelPath] = op
+	}
+	for _, op := range got.Ops {
+		if expected, ok := wantByPath[op.RelPath]; !ok || expected != op {
+			return false
+		}
+	}
+	return true
+}
+
+func wlHash(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }
 
 func (f *wlRecordingFS) order() []string {
@@ -86,14 +289,78 @@ func TestWriteLog_AppliesInOrderAndAwaits(t *testing.T) {
 		if err != nil {
 			t.Fatalf("submit %s: %v", p, err)
 		}
-		if h != "h:"+p {
-			t.Fatalf("hash = %q, want h:%s", h, p)
+		if h != wlHash([]byte("x")) {
+			t.Fatalf("hash = %q, want SHA-256 of committed bytes", h)
 		}
 	}
 	got := fs.order()
 	want := []string{"/a", "/b", "/c"}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("apply order = %v, want %v", got, want)
+	}
+}
+
+func TestWriteLogPreservesAndEnforcesWritePreconditions(t *testing.T) {
+	fs := &wlRecordingFS{}
+	l := newWriteLog(fs, nil, nil, 4)
+	defer l.Close(context.Background())
+
+	base, err := l.Submit(context.Background(), Attribution{}, writeCS("/cas"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := "stale"
+	for name, opts := range map[string]vfs.WriteOpts{
+		"IfMatch":     {IfMatch: &stale},
+		"IfNoneMatch": {IfNoneMatch: true},
+	} {
+		cs := vfs.ChangeSet{Target: "/cas", Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: []byte("lost"), Opts: opts}}
+		_, err := l.Submit(context.Background(), Attribution{}, cs)
+		var precondition *vfs.PreconditionError
+		if !errors.As(err, &precondition) {
+			t.Fatalf("%s: want PreconditionError, got %v", name, err)
+		}
+	}
+	if got, err := fs.ReadFile("/cas"); err != nil || string(got) != "x" {
+		t.Fatalf("failed precondition changed file: content=%q err=%v", got, err)
+	}
+
+	cs := vfs.ChangeSet{Target: "/cas", Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: []byte("updated"), Opts: vfs.WriteOpts{IfMatch: &base}}}
+	if _, err := l.Submit(context.Background(), Attribution{}, cs); err != nil {
+		t.Fatalf("matching IfMatch: %v", err)
+	}
+}
+
+func TestWriteLogPreservesAndEnforcesRemovePrecondition(t *testing.T) {
+	fs := &wlRecordingFS{}
+	l := newWriteLog(fs, nil, nil, 4)
+	defer l.Close(context.Background())
+
+	if _, err := l.Submit(context.Background(), Attribution{}, vfs.ChangeSet{Target: "/tree", Action: vfs.ChangeActionMkdirAll}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.Submit(context.Background(), Attribution{}, writeCS("/tree/a")); err != nil {
+		t.Fatal(err)
+	}
+	fs.mu.Lock()
+	expected := fs.snapshotLocked("/tree")
+	fs.mu.Unlock()
+	if _, err := l.Submit(context.Background(), Attribution{}, writeCS("/tree/concurrent")); err != nil {
+		t.Fatal(err)
+	}
+
+	cs := vfs.ChangeSet{
+		Target:    "/tree",
+		Action:    vfs.ChangeActionRemoveAll,
+		RemoveAll: &vfs.RemoveAllChange{Opts: vfs.RemoveOpts{Expected: expected}},
+	}
+	_, err := l.Submit(context.Background(), Attribution{}, cs)
+	var stale *vfs.TreeStaleError
+	if !errors.As(err, &stale) {
+		t.Fatalf("want TreeStaleError, got %v", err)
+	}
+	if _, err := fs.Stat("/tree/concurrent"); err != nil {
+		t.Fatalf("stale removal changed tree: %v", err)
 	}
 }
 
@@ -111,12 +378,12 @@ func TestWriteLog_PostCommitRunsWithActorAndDoesNotBlockSubmit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("submit err (post-commit failure must not surface): %v", err)
 	}
-	if h != "h:/a" {
+	if h != wlHash([]byte("x")) {
 		t.Fatalf("hash = %q", h)
 	}
 	select {
 	case info := <-seen:
-		if info.Attribution.Principal != "agent-9" || info.Hash != "h:/a" || info.ChangeSet.Target != "/a" {
+		if info.Attribution.Principal != "agent-9" || info.Hash != wlHash([]byte("x")) || info.ChangeSet.Target != "/a" {
 			t.Fatalf("post-commit info = %+v", info)
 		}
 	case <-time.After(2 * time.Second):
@@ -131,7 +398,7 @@ func TestWriteLog_RecorderFailureDoesNotTurnCommittedWriteIntoFailure(t *testing
 	defer l.Close(context.Background())
 
 	hash, err := l.Submit(context.Background(), Attribution{Principal: "alice"}, writeCS("/committed"))
-	if err != nil || hash != "h:/committed" {
+	if err != nil || hash != wlHash([]byte("x")) {
 		t.Fatalf("durable commit reported hash=%q err=%v", hash, err)
 	}
 	if got := fs.order(); len(got) != 1 || got[0] != "/committed" {
