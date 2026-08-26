@@ -78,8 +78,8 @@ func TestNewServerWithRootFS_WriteLogLive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CommitChangeSet: %v", err)
 	}
-	if res.Hash != "h:/x" {
-		t.Fatalf("hash = %q, want h:/x", res.Hash)
+	if res.Hash != wlHash([]byte("x")) {
+		t.Fatalf("hash = %q, want SHA-256 of committed bytes", res.Hash)
 	}
 	if got := fs.order(); len(got) != 1 || got[0] != "/x" {
 		t.Fatalf("applied = %v, want [/x]", got)
@@ -176,7 +176,7 @@ func TestRegisterPlugin_WriteMiddlewareGatesLaterWrite(t *testing.T) {
 
 	// An ungated write commits.
 	res, err := chain(context.Background(), NewWriteOp(Attribution{Principal: "a"}, writeCS("/ok")))
-	if err != nil || res.Hash != "h:/ok" {
+	if err != nil || res.Hash != wlHash([]byte("x")) {
 		t.Fatalf("ungated write: h=%q err=%v", res.Hash, err)
 	}
 	if got := fs.order(); len(got) != 1 || got[0] != "/ok" {
@@ -221,7 +221,7 @@ func TestRegisterPlugin_PostCommitFiresAfterConstruction(t *testing.T) {
 	if infos[0].Attribution.Principal != "alice" || infos[0].Attribution.Extra["approver"] != "bob" {
 		t.Fatalf("attribution = %+v", infos[0].Attribution)
 	}
-	if infos[0].Hash != "h:/x" || infos[0].ChangeSet.Target != "/x" {
+	if infos[0].Hash != wlHash([]byte("x")) || infos[0].ChangeSet.Target != "/x" {
 		t.Fatalf("commit info = %+v", infos[0])
 	}
 }
@@ -245,8 +245,8 @@ func TestCommitChangeSet_SkipsAdmission(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CommitChangeSet must skip admission and commit: %v", err)
 	}
-	if res.Hash != "h:/x" {
-		t.Fatalf("hash = %q, want h:/x", res.Hash)
+	if res.Hash != wlHash([]byte("x")) {
+		t.Fatalf("hash = %q, want SHA-256 of committed bytes", res.Hash)
 	}
 	if got := fs.order(); len(got) != 1 || got[0] != "/x" {
 		t.Fatalf("applied = %v, want [/x]", got)

@@ -1,6 +1,8 @@
 package vfs
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io/fs"
 	"path"
@@ -182,20 +184,31 @@ func (f *rollbackFS) MkdirAll(target string) error {
 	}
 	return nil
 }
-func (f *rollbackFS) WriteFileAtomic(target string, data []byte, _ WriteOpts) (string, error) {
+func (f *rollbackFS) WriteFileAtomic(target string, data []byte, opts WriteOpts) (string, error) {
 	target = CleanPath(target)
 	if target == f.failTarget && !f.failed {
 		f.failed = true
 		return "", errors.New("injected I/O failure")
 	}
+	existing, exists := f.nodes[target]
+	currentHash := ""
+	if exists && !existing.Dir {
+		currentHash = testContentHash(existing.Content)
+	}
+	if opts.IfNoneMatch && exists {
+		return "", &PreconditionError{Path: target, Current: currentHash}
+	}
+	if opts.IfMatch != nil && (!exists || existing.Dir || currentHash != *opts.IfMatch) {
+		return "", &PreconditionError{Path: target, Current: currentHash}
+	}
 	if err := f.MkdirAll(path.Dir(target)); err != nil {
 		return "", err
 	}
-	if existing := f.nodes[target]; existing != nil && existing.Dir {
+	if existing != nil && existing.Dir {
 		return "", ErrIsDirectory(target)
 	}
 	f.nodes[target] = &FileInfo{FileName: path.Base(target), FilePath: target, Content: append([]byte(nil), data...), FileSize: int64(len(data))}
-	return "hash", nil
+	return testContentHash(data), nil
 }
 func (f *rollbackFS) Remove(target string) error {
 	target = CleanPath(target)
@@ -210,10 +223,13 @@ func (f *rollbackFS) Remove(target string) error {
 	delete(f.nodes, target)
 	return nil
 }
-func (f *rollbackFS) RemoveAll(target string, _ RemoveOpts) error {
+func (f *rollbackFS) RemoveAll(target string, opts RemoveOpts) error {
 	target = CleanPath(target)
 	if _, ok := f.nodes[target]; !ok {
 		return fs.ErrNotExist
+	}
+	if opts.Expected != nil && !testTreeSnapshotsEqual(opts.Expected, f.treeSnapshot(target)) {
+		return &TreeStaleError{Path: target, Detail: "subtree does not match expected snapshot"}
 	}
 	for candidate := range f.nodes {
 		if candidate == target || strings.HasPrefix(candidate, target+"/") {
@@ -221,6 +237,46 @@ func (f *rollbackFS) RemoveAll(target string, _ RemoveOpts) error {
 		}
 	}
 	return nil
+}
+func (f *rollbackFS) treeSnapshot(root string) *TreeSnapshot {
+	root = CleanPath(root)
+	snapshot := &TreeSnapshot{Root: root}
+	for candidate, info := range f.nodes {
+		if candidate != root && !strings.HasPrefix(candidate, root+"/") {
+			continue
+		}
+		rel := "."
+		if candidate != root {
+			rel = strings.TrimPrefix(candidate, root+"/")
+		}
+		op := TreeOp{RelPath: rel, Kind: "dir"}
+		if !info.Dir {
+			op.Kind = "file"
+			op.Hash = testContentHash(info.Content)
+			op.Size = int64(len(info.Content))
+		}
+		snapshot.Ops = append(snapshot.Ops, op)
+	}
+	return snapshot
+}
+func testTreeSnapshotsEqual(want, got *TreeSnapshot) bool {
+	if want.Root != got.Root || len(want.Ops) != len(got.Ops) {
+		return false
+	}
+	wantByPath := make(map[string]TreeOp, len(want.Ops))
+	for _, op := range want.Ops {
+		wantByPath[op.RelPath] = op
+	}
+	for _, op := range got.Ops {
+		if expected, ok := wantByPath[op.RelPath]; !ok || expected != op {
+			return false
+		}
+	}
+	return true
+}
+func testContentHash(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }
 func (f *rollbackFS) dump() string {
 	var rows []string
@@ -233,6 +289,39 @@ func (f *rollbackFS) dump() string {
 	}
 	sort.Strings(rows)
 	return strings.Join(rows, "\n")
+}
+
+func TestRollbackFSHonorsPreconditions(t *testing.T) {
+	f := newRollbackFS()
+	base, err := f.WriteFileAtomic("/tree/a.md", []byte("original"), WriteOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleHash := "stale"
+	_, err = f.WriteFileAtomic("/tree/a.md", []byte("lost"), WriteOpts{IfMatch: &staleHash})
+	var precondition *PreconditionError
+	if !errors.As(err, &precondition) {
+		t.Fatalf("stale IfMatch: want PreconditionError, got %v", err)
+	}
+	if got, _ := f.ReadFile("/tree/a.md"); string(got) != "original" {
+		t.Fatalf("stale IfMatch changed content to %q", got)
+	}
+	if _, err := f.WriteFileAtomic("/tree/a.md", []byte("updated"), WriteOpts{IfMatch: &base}); err != nil {
+		t.Fatalf("matching IfMatch: %v", err)
+	}
+
+	expected := f.treeSnapshot("/tree")
+	if _, err := f.WriteFileAtomic("/tree/concurrent.md", []byte("concurrent"), WriteOpts{}); err != nil {
+		t.Fatal(err)
+	}
+	err = f.RemoveAll("/tree", RemoveOpts{Expected: expected})
+	var treeStale *TreeStaleError
+	if !errors.As(err, &treeStale) {
+		t.Fatalf("stale tree snapshot: want TreeStaleError, got %v", err)
+	}
+	if _, err := f.Stat("/tree/concurrent.md"); err != nil {
+		t.Fatalf("stale tree removal mutated state: %v", err)
+	}
 }
 
 func TestCommitChangeSetRollsBackFailedBatch(t *testing.T) {
