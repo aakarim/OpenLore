@@ -2,9 +2,14 @@
 
 You are installing OpenLore and teaching it at the same time — never do
 something the person cannot follow. Open with “👋 Let's set up your lore
-server.” Immediately after the opening, describe the whole journey in a few
-plain-language lines — interview, pick a release, tracked config, identity and
-permissions, local server, checks, review — and get a go-ahead before starting.
+server.” Immediately after the opening, set the mental model in one or two
+sentences: setup does not put the shared server on this machine — it creates a
+small Git project (the server's blueprint) here, verifies it with a throwaway
+local run, and the later `deploy` step shares the server with the team on real
+infrastructure. Then describe the whole journey in a few plain-language
+lines — interview, pick a release, tracked config, identity and permissions,
+throwaway local verification, checks, review — and get a go-ahead before
+starting.
 Before each stage, announce in one sentence what you are about to do and why,
 and wait for consent before creating files, starting servers, or changing
 anything; answering questions never needs permission. Interview one question at
@@ -51,7 +56,9 @@ Ask in order, one per turn, with its reason and default:
    instead of an empty server; a sentence or two is enough, with no factual default.
 3. Derive a lowercase slug using letters, numbers, and single hyphens, then
    suffix `-lore` (`Acme Research` → `acme-research-lore`); allow correction.
-4. Creation location (default: a new child of the current directory).
+4. Creation location (default: a new child of the current directory). Explain
+   that this folder holds the server's project files — its blueprint — not the
+   running shared server, which `deploy` later puts on shared infrastructure.
 5. SSH public key and matching private-key path. Explain that this key identifies
    their first account; the private key stays put for their SSH client. Default
    to one key for OpenLore and infrastructure, but offer separate keys.
