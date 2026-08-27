@@ -62,5 +62,5 @@ finish with a friendly ✅ summary of the identity, home, roles, visible folders
 and what read/write means in practice. Give a ready-to-run terminal command and
 an example that reads the new home `README.md`. `.local` is gitignored, so do
 not offer to commit its policy or filesystem contents. Ask whether to add
-another identity; if not, offer to continue with “run deploy” or later via
-`ssh openlore.sh deploy | <agent-cli>`.
+another identity; if not, offer to continue with “run deploy” — to share the
+server with the team — or later via `ssh openlore.sh deploy | <agent-cli>`.

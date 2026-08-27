@@ -76,7 +76,7 @@ ssh openlore.sh setup
 ```
 
 Then stop here — the `setup` skill takes over. After it, `onboarding` adds
-identities and `deploy` puts the server on real infrastructure:
+identities and `deploy` shares the server with the team:
 
 ```bash
 ssh openlore.sh onboarding

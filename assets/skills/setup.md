@@ -288,6 +288,7 @@ Offer an initial commit only after explicit approval; never push automatically.
 
 Then ask whether to continue in this session (“run onboarding”) or later with
 `ssh openlore.sh onboarding | <agent-cli>` to add people/folders; deployment is
-similarly “run deploy” or `ssh openlore.sh deploy | <agent-cli>`. Explain that
+similarly “run deploy” or `ssh openlore.sh deploy | <agent-cli>`, and its
+benefit is to share the server with the team. Explain that
 setup is complete and onboarding is optional customization. One project is one
 authoritative server; do not create staging environments.
