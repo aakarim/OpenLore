@@ -1,13 +1,20 @@
 # Set Up an OpenLore Project
 
-You are installing OpenLore, not merely generating files. Open with “👋 Let's
-set up your lore server.” Interview one question at a time and wait; explain why
-it matters, recommend a default, and define unfamiliar terms just in time. If
-there is no safe default, say why a choice is required. Use restrained emojis.
-Run checks quietly and mention only failures or decisions. After each stage give
-a short ✅ plain-language summary, never “acceptance evidence”. Use an official
-release; do not clone, fork, vendor, or add OpenLore as a submodule. After fixing
-a failure, summarize its user impact—not a technical postmortem—unless asked.
+You are installing OpenLore and teaching it at the same time — never do
+something the person cannot follow. Open with “👋 Let's set up your lore
+server.” Immediately after the opening, describe the whole journey in a few
+plain-language lines — interview, pick a release, tracked config, identity and
+permissions, local server, checks, review — and get a go-ahead before starting.
+Before each stage, announce in one sentence what you are about to do and why,
+and wait for consent before creating files, starting servers, or changing
+anything; answering questions never needs permission. Interview one question at
+a time and wait; explain why it matters, recommend a default, and define
+unfamiliar terms just in time. If there is no safe default, say why a choice is
+required. Use restrained emojis. Run checks quietly and mention only failures
+or decisions. After each stage give a short ✅ plain-language summary, never
+“acceptance evidence”. Use an official release; do not clone, fork, vendor, or
+add OpenLore as a submodule. After fixing a failure, summarize its user
+impact—not a technical postmortem—unless asked.
 
 ## Outcome
 
@@ -118,26 +125,62 @@ provider deployment skills place committed scripts and non-secret resource
 metadata below `deploy/<provider>/`; credentials and runtime state never go
 there.
 
-## 4. Create local bootstrap state
+## 4. Create local bootstrap state (teach the permission model here)
 
-Create `.local/lore.json` with:
+This stage is the heart of the teaching. Before writing anything, explain the
+permission model in a few short sentences and confirm the person is happy with
+what you are about to grant:
 
-- `allow_keyless: false`;
-- unknown identities denied;
-- one `onboarding` identity using the selected public key—explain that an
-  identity is the account OpenLore recognizes when that key connects;
-- a unique writable home docset at `/user/onboarding`—explain that a docset is
-  a permission-controlled knowledge folder and this one is their private start;
-- an `administrator` role with `lore:config:edit`;
-- an `agent` role—explain that roles group permissions;
-- a `general` docset rooted at `/channel/general` granting `agent` `rw`;
-- `onboarding` assigned both `administrator` and `agent`.
+- An **identity** is the account OpenLore recognizes when their SSH key
+  connects. You are creating one named `onboarding`, tied to their public key.
+- A **docset** is a permission-controlled knowledge folder. They get a private
+  home (`/user/onboarding`, writable only by them) and a shared `general`
+  docset (`/channel/general`) for the team.
+- A **role** is a named permission bundle granted to identities; docsets allow
+  roles `ro` or `rw`. Their `agent` role gets `rw` on `general`.
+- The **administrator** role carries the `lore:config:edit` capability — it can
+  change this policy from an SSH session. Say so and get explicit agreement
+  before granting it.
 
-Use exactly those fields and validate the complete JSON. The `onboarding-home`
-docset has `paths: ["/user/onboarding"]`; `general` has
-`paths: ["/channel/general"]` and grants role `agent` `rw`; the identity has
-`name: "onboarding"`, the selected `public_key`, `home: "onboarding-home"`, and
-roles `["administrator", "agent"]`.
+Then create `.local/lore.json` exactly in this schema — field names and nesting
+matter; do not invent variants such as `grants` or `permissions`:
+
+```json
+{
+  "allow_keyless": false,
+  "unknown_identity": "deny",
+  "roles": {
+    "administrator": {
+      "allow": { "capabilities": ["lore:config:edit"] }
+    },
+    "agent": {}
+  },
+  "docsets": {
+    "onboarding-home": {
+      "paths": ["/user/onboarding"]
+    },
+    "general": {
+      "paths": ["/channel/general"],
+      "access": { "allow": { "agent": "rw" } }
+    }
+  },
+  "identities": [
+    {
+      "name": "onboarding",
+      "public_key": "<selected public key>",
+      "roles": ["administrator", "agent"],
+      "home": "onboarding-home"
+    }
+  ]
+}
+```
+
+Validate the complete JSON. A docset without an `access.allow` entry is
+reachable only as an identity's `home`, which is implicitly read/write for its
+owner. If the running server disagrees with this schema, trust
+`docs/configuration-and-identity.md` on the server (`cat
+/docs/configuration-and-identity.md` over SSH) over this template and report
+the difference.
 
 Create both paths below `.local/filesystem/`. Put a short `README.md` in the
 private home. Put a concise summary of the confirmed “Who is this for?” answer
@@ -223,7 +266,9 @@ Quietly run all checks; setup is not successful until they pass:
 6. After restarting the local server (container or Go process), authentication,
    filesystem contents, and the SSH host key persist.
 
-Diagnose failures at their owning layer and rerun the failed check. Never weaken
+Diagnose failures at their owning layer and rerun the failed check. After any
+restart, wait for HTTP readiness before rerunning checks; a write attempted
+while the server is still starting can fail spuriously. Never weaken
 authentication or hardcode around a failed check.
 
 ## 7. Finish reviewably
