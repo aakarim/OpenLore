@@ -49,10 +49,12 @@ Ask in order, one per turn, with its reason and default:
    their first account; the private key stays put for their SSH client. Default
    to one key for OpenLore and infrastructure, but offer separate keys.
 
-Silently inspect the destination, Compose tooling, and ports. For a non-empty
-destination show conflicts and require approval; never overwrite `openlore.yml`.
-Prefer Docker then Podman Compose. Default to ports 2222/8080; choose free ones
-when occupied and report them in the stage summary.
+Silently inspect the destination, the Go toolchain, Compose tooling, and ports.
+For a non-empty destination show conflicts and require approval; never
+overwrite `openlore.yml`. For the local verification runtime, prefer an
+installed Go toolchain that satisfies the selected release's `go.mod`; fall
+back to Compose (Docker, then Podman) only when there is none. Default to ports
+2222/8080; choose free ones when occupied and report them in the stage summary.
 
 ## 2. Select the OpenLore release and SSH key
 
@@ -145,9 +147,11 @@ This is the initial SSH-visible filesystem. Do not put generated host private ke
 signing keys, audit logs, tokens, or runtime databases in bootstrap state; each
 deployed server creates its own operational state.
 
-## 5. Create disposable local Compose state
+## 5. Create disposable local runtime state
 
-Put `compose.yml` and `runtime.env` inside `.local/`. Use this minimal structure,
+Put `compose.yml` and `runtime.env` inside `.local/` regardless of which local
+runtime will run the server; they document deployment parity and serve hosts
+without Go. Use this minimal structure,
 replacing the project name with the team slug; its mounts keep config, content,
 data, and host keys outside the image and persistent. Inherit the image command,
 which already loads the mounted config; do not override `command` or `entrypoint`:
@@ -174,13 +178,16 @@ volumes:
   openlore-ssh:
 ```
 
-Write `OPENLORE_SSH_PORT` and `OPENLORE_HTTP_PORT` to `runtime.env`, and always
-invoke Compose with
+Write `OPENLORE_SSH_PORT` and `OPENLORE_HTTP_PORT` to `runtime.env`. When
+Compose is the local runtime, always invoke it with
 `docker compose --env-file .local/runtime.env -f .local/compose.yml` (or the
 Podman equivalent) so interpolation is deterministic.
 
-If Compose is unavailable, explain the direct-Go fallback rather than silently
-changing the project architecture:
+Run the local server directly with Go when the inspected toolchain satisfies
+the selected release's `go.mod`. This avoids image pulls and emulation on hosts
+whose architecture does not match the published images, and it changes only how
+the local server runs — the tracked Containerfile remains the deployment
+architecture:
 
 1. Clone OpenLore into a separate temporary directory and check out the
    selected release.
@@ -192,8 +199,9 @@ changing the project architecture:
    this project's `.local/`. Do not modify the tracked production config.
 5. Run the binary with `--config .local/openlore.local.yml`.
 
-Do not commit the clone, binary, or local config. Run the same acceptance suite
-regardless of which local runtime was used.
+Do not commit the clone, binary, or local config. Use Compose only when no
+suitable Go toolchain exists. Run the same acceptance suite regardless of which
+local runtime was used.
 
 ## 6. Require local acceptance
 
@@ -212,8 +220,8 @@ Quietly run all checks; setup is not successful until they pass:
 4. The SSH session starts at `/user/onboarding`.
 5. The home README and shared INDEX are visible; a unique disposable document can be
    written to `/channel/general`, read back, and removed.
-6. After restarting the container, authentication, filesystem contents, and
-   the SSH host key persist.
+6. After restarting the local server (container or Go process), authentication,
+   filesystem contents, and the SSH host key persist.
 
 Diagnose failures at their owning layer and rerun the failed check. Never weaken
 authentication or hardcode around a failed check.
@@ -221,10 +229,10 @@ authentication or hardcode around a failed check.
 ## 7. Finish reviewably
 
 Initialize Git if needed. Show all tracked files and prove `.local/` is ignored.
-Finish with a friendly ✅ summary: what was created, what Compose now does
-(builds and keeps the local server running with persistent state), selected
-image version, local URLs, identity/home, ports, and key used. Do not narrate
-successful internal checks. Give these commands for a new terminal:
+Finish with a friendly ✅ summary: what was created, which local runtime is
+serving (Go binary or Compose) and how to restart it, selected release version,
+local URLs, identity/home, ports, and key used. Do not narrate successful
+internal checks. Give these commands for a new terminal:
 
 ```bash
 ssh -F .local/ssh_config lore-local
