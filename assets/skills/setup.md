@@ -141,16 +141,26 @@ This stage is the heart of the teaching. Before writing anything, explain the
 permission model in a few short sentences and confirm the person is happy with
 what you are about to grant:
 
-- An **identity** is the account OpenLore recognizes when their SSH key
-  connects. You are creating one named `onboarding`, tied to their public key.
-- A **docset** is a permission-controlled knowledge folder. They get a private
-  home (`/user/onboarding`, writable only by them) and a shared `general`
-  docset (`/channel/general`) for the team.
+- An **identity** is the account OpenLore recognizes when an SSH key connects.
+  You are creating two: `onboarding` for the person, tied to their public key,
+  and one for yourself — the agent running this setup. Name the agent identity
+  after your product in lowercase (for example `claude` or `amp`) and generate
+  it a fresh keypair with `ssh-keygen -t ed25519 -f .local/id_agent -N "" -C
+  "<agent name>"`; like the rest of `.local/`, the keypair is gitignored
+  bootstrap state.
+- A **docset** is a permission-controlled knowledge folder. The person gets a
+  private home (`/user/onboarding`, writable only by them) and the team gets a
+  shared `general` docset (`/channel/general`).
 - A **role** is a named permission bundle granted to identities; docsets allow
-  roles `ro` or `rw`. Their `agent` role gets `rw` on `general`.
+  roles `ro` or `rw`. People carry the `user` role and agents the `agent`
+  role; both get `rw` on `general`.
+- A **delegate** is an identity permitted to act on the person's behalf with
+  the person's permissions; writes are attributed to `onboarding/<agent
+  name>`. The agent identity becomes a delegate of the person.
 - The **administrator** role carries the `lore:config:edit` capability — it can
   change this policy from an SSH session. Say so and get explicit agreement
-  before granting it.
+  before granting it. The delegate entry denies that capability, so the agent
+  cannot edit policy while acting for the person.
 
 Then create `.local/lore.json` exactly in this schema — field names and nesting
 matter; do not invent variants such as `grants` or `permissions`:
@@ -163,6 +173,7 @@ matter; do not invent variants such as `grants` or `permissions`:
     "administrator": {
       "allow": { "capabilities": ["lore:config:edit"] }
     },
+    "user": {},
     "agent": {}
   },
   "docsets": {
@@ -171,15 +182,26 @@ matter; do not invent variants such as `grants` or `permissions`:
     },
     "general": {
       "paths": ["/channel/general"],
-      "access": { "allow": { "agent": "rw" } }
+      "access": { "allow": { "user": "rw", "agent": "rw" } }
     }
   },
   "identities": [
     {
       "name": "onboarding",
       "public_key": "<selected public key>",
-      "roles": ["administrator", "agent"],
-      "home": "onboarding-home"
+      "roles": ["administrator", "user"],
+      "home": "onboarding-home",
+      "delegates": [
+        {
+          "identity": "<agent name>",
+          "deny_capabilities": ["lore:config:edit"]
+        }
+      ]
+    },
+    {
+      "name": "<agent name>",
+      "public_key": "<contents of .local/id_agent.pub>",
+      "roles": ["agent"]
     }
   ]
 }
@@ -260,19 +282,23 @@ local runtime was used.
 
 Build and start the local server. Capture its host key into
 `.local/known_hosts`, replacing only a stale entry for this loopback host and
-port. Create `.local/ssh_config` with the selected private-key path, `User
-onboarding`, the chosen port, `UserKnownHostsFile`, and strict host-key checking.
-Never disable host-key checking or mutate global `~/.ssh/known_hosts`.
+port. Create `.local/ssh_config` with two host aliases: `lore-local` using the
+selected private-key path and `User onboarding`, and `lore-local-agent` using
+`.local/id_agent` and the agent identity's name as user. Both use the chosen
+port, `UserKnownHostsFile`, and strict host-key checking. Never disable
+host-key checking or mutate global `~/.ssh/known_hosts`.
 
 Quietly run all checks; setup is not successful until they pass:
 
 1. HTTP readiness succeeds.
 2. `/mcp` completes an MCP initialization exchange.
-3. `passkey` is available; the mounted config is active: keyless login fails and
-   `ssh -F .local/ssh_config lore-local` authenticates `onboarding`.
+3. `passkey` is available; the mounted config is active: keyless login fails,
+   `ssh -F .local/ssh_config lore-local` authenticates `onboarding`, and
+   `ssh -F .local/ssh_config lore-local-agent` authenticates the agent identity.
 4. The SSH session starts at `/`.
 5. The home README and shared INDEX are visible; a unique disposable document can be
-   written to `/channel/general`, read back, and removed.
+   written to `/channel/general`, read back, and removed — once as `onboarding`
+   and once as the agent identity.
 6. After restarting the local server (container or Go process), authentication,
    filesystem contents, and the SSH host key persist.
 
