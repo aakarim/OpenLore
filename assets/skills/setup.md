@@ -52,8 +52,11 @@ image and is never committed.
 Ask in order, one per turn, with its reason and default:
 1. Team display name (required to identify its owner; no safe default).
 2. “Who is this for?” Ask for a short description of the organization, person,
-   and team where applicable. Explain that this seeds useful shared context
-   instead of an empty server; a sentence or two is enough, with no factual default.
+   and team where applicable — or their website address, and you will make a
+   best effort to pull the details from it. If they give a website, fetch it,
+   draft the description yourself, and confirm the draft before using it.
+   Explain that this seeds useful shared context instead of an empty server; a
+   sentence or two is enough, with no factual default.
 3. Derive a lowercase slug using letters, numbers, and single hyphens, then
    suffix `-lore` (`Acme Research` → `acme-research-lore`); allow correction.
 4. Creation location (default: a new child of the current directory). Explain
