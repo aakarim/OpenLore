@@ -98,7 +98,7 @@ version: "1"
 port: 2222
 http_port: 8080
 metrics_port: 0
-default_cwd: /user/onboarding
+default_cwd: /
 
 host_key_path: /var/lib/openlore/ssh/openlore_ed25519
 auth_file: /var/lib/openlore/config/lore.json
@@ -267,7 +267,7 @@ Quietly run all checks; setup is not successful until they pass:
 2. `/mcp` completes an MCP initialization exchange.
 3. `passkey` is available; the mounted config is active: keyless login fails and
    `ssh -F .local/ssh_config lore-local` authenticates `onboarding`.
-4. The SSH session starts at `/user/onboarding`.
+4. The SSH session starts at `/`.
 5. The home README and shared INDEX are visible; a unique disposable document can be
    written to `/channel/general`, read back, and removed.
 6. After restarting the local server (container or Go process), authentication,
