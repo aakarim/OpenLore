@@ -146,3 +146,42 @@ Only after every required check passes, ask whether to delete `.local`
 entirely. Explain that the server is now authoritative and deletion removes the
 bootstrap/recovery copy. Default to keeping it. Never delete it without an
 explicit affirmative answer.
+
+## Offer a passkey for the web UI
+
+When this deployment is part of the guided onboarding journey (teach → setup →
+onboarding → deploy), finish by offering browser access. Keep it warm and
+clearly optional — declining is fine and they can register one later with the
+`passkeys` guide.
+
+Explain the purpose in a couple of short sentences before asking:
+
+- Everything so far went through SSH, which suits agents. A **passkey** (Face
+  ID, Touch ID, or a security key) signs a person in to the server's web UI
+  from a browser — no password.
+- Signed in, they can read every document their identity can reach at
+  `https://<domain>/lore/`, share a direct link to any document
+  (`https://<domain>/lore/<path>` starts the login flow and returns to the
+  file), and review what their delegated agents may access at
+  `https://<domain>/settings/permissions`.
+
+If they want one, guide them through it one step at a time:
+
+1. Register over SSH against the deployed server, using their identity name
+   from `lore.json` (for example `onboarding`) and a friendly device label:
+
+   ```bash
+   ssh <domain> passkey register --identity onboarding --name "<their device>"
+   ```
+
+2. The command prints a one-time URL that expires in five minutes. Ask them to
+   open it in their browser and approve the prompt (Face ID, Touch ID, or
+   security key). If it expires, rerun the command — nothing is lost.
+3. Confirm together that `https://<domain>/lore/` shows their documents, then
+   mention `passkey list` and `passkey revoke "<label>"` for later management.
+
+Registration needs the `passkeys:` block with the public HTTPS RP ID and origin
+(already part of the required outcome above); if it fails, check that
+configuration first. Close the onboarding journey with a short ✅ plain-language
+summary of everything that now works: the deployed server, who can connect, and
+where to browse.
