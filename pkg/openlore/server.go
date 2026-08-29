@@ -663,7 +663,38 @@ func (s *Server) shellHandler(next ssh.Handler) ssh.Handler {
 			return
 		}
 
-		sh.RunInteractive(sess, sess, s.motd, "lore")
+		interactiveOpts := shell.InteractiveOptions{Width: 80}
+		if pty, windowChanges, ok := sess.Pty(); ok {
+			interactiveOpts.Width = pty.Window.Width
+			widthChanges := make(chan int, 1)
+			interactiveOpts.WidthChanges = widthChanges
+			go func() {
+				defer close(widthChanges)
+				for {
+					select {
+					case window, ok := <-windowChanges:
+						if !ok {
+							return
+						}
+						select {
+						case widthChanges <- window.Width:
+						default:
+							select {
+							case <-widthChanges:
+							default:
+							}
+							select {
+							case widthChanges <- window.Width:
+							default:
+							}
+						}
+					case <-sess.Context().Done():
+						return
+					}
+				}
+			}()
+		}
+		sh.RunInteractiveWithOptions(sess, sess, s.motd, "lore", interactiveOpts)
 		sess.Exit(0)
 	}
 }

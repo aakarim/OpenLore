@@ -34,6 +34,16 @@ func RegisterLoreSub(sub LoreSub) {
 	loreSubs[sub.Name] = sub
 }
 
+// LoreSubNames returns the registered lore subcommand names in lexical order.
+func LoreSubNames() []string {
+	names := make([]string, 0, len(loreSubs))
+	for name := range loreSubs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
 // CmdLore is the `lore` introspection dispatcher. Bare `lore` prints usage and
 // exits 0; an unknown subcommand errors to stderr and exits 1. Subcommands are
 // resolved from the loreSubs registry.

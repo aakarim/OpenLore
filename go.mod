@@ -9,6 +9,7 @@ require (
 	github.com/fxamacker/cbor/v2 v2.9.1
 	github.com/go-webauthn/webauthn v0.16.4
 	github.com/golang-jwt/jwt/v5 v5.3.1
+	github.com/mattn/go-runewidth v0.0.16
 	github.com/modelcontextprotocol/go-sdk v1.5.0
 	github.com/pkg/sftp v1.13.10
 	github.com/yuin/goldmark v1.8.4
@@ -53,7 +54,6 @@ require (
 	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-localereader v0.0.1 // indirect
-	github.com/mattn/go-runewidth v0.0.16 // indirect
 	github.com/muesli/ansi v0.0.0-20230316100256-276c6243b2f6 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/muesli/termenv v0.16.0 // indirect
