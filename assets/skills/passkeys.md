@@ -1,34 +1,48 @@
 # Passkeys — Browser Access for Humans
 
-Register a passkey so humans can browse docs in a web browser via WebAuthn (Face ID, Touch ID, security keys).
+Register a passkey so humans can browse docs in a web browser via WebAuthn
+(Face ID, Touch ID, security keys).
 
 ## Register a passkey
 
 ```bash
-# Full access to all docsets
-ssh openlore.sh passkey register --name "Adil MacBook" --lore agent-full
-
-# Public docs only
-ssh openlore.sh passkey register --name "Guest" --lore default
+ssh <server> passkey register --identity <identity> --name "Adil MacBook"
 ```
 
-The command outputs a one-time URL (expires in 5 minutes). Give it to the human to open in their browser to complete registration.
+`--identity` (required) names an identity from the server's auth config; the
+passkey signs the person in as that identity and inherits exactly its docset
+access. `--name` labels the device (default: "default").
+
+The command outputs a one-time URL (expires in 5 minutes). Give it to the human
+to open in their browser to complete registration. If it expires, rerun the
+command.
 
 ## Manage passkeys
 
 ```bash
 # List all registered passkeys
-ssh openlore.sh passkey list
+ssh <server> passkey list
 
-# Revoke a passkey
-ssh openlore.sh passkey revoke "Guest"
+# Revoke a passkey by device label
+ssh <server> passkey revoke "Adil MacBook"
 ```
 
 ## After registration
 
-The human can browse docs at `https://openlore.sh/lore/`. They can also go directly to a file, e.g. `https://openlore.sh/lore/knowledge/product/data-fabric.md` — if not logged in, the passkey login flow starts automatically and redirects back to the file.
+The human can browse docs at `https://<domain>/lore/`. They can also go
+directly to a file, e.g. `https://<domain>/lore/docs/README.md` — if not logged
+in, the passkey login flow starts automatically and redirects back to the file.
+`https://<domain>/settings/permissions` shows what their delegated identities
+may access.
 
-## Available lore specs
+## Server requirements
 
-- `default` — OpenLore documentation only
-- `agent-full` — all docsets (docs, knowledge, research, pipeline, runbooks, memory)
+Passkeys must be enabled in `openlore.yml` with the server's public HTTPS
+origin:
+
+```yaml
+passkeys:
+  enabled: true
+  rp_id: docs.example.com
+  rp_origins: ["https://docs.example.com"]
+```
