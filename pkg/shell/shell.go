@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/aakarim/go-openlore/pkg/openlore/meta"
 	"github.com/aakarim/go-openlore/pkg/openlore/validation"
@@ -50,6 +51,7 @@ type Shell struct {
 	configReload         cmds.ConfigReloadBackend
 	history              cmds.HistoryBackend
 	jobs                 cmds.JobBackend
+	exitRequested        bool
 }
 
 // UnsupportedUsage describes a command or shell syntax that OpenLore does not
@@ -212,6 +214,7 @@ func (s *Shell) ExecPipeline(line string, w io.Writer, errW io.Writer, stdin io.
 }
 
 func (s *Shell) execLine(line string, w io.Writer, errW io.Writer, stdin io.Reader) int {
+	s.exitRequested = false
 	line = strings.TrimSpace(line)
 	if line == "" {
 		return 0
@@ -237,6 +240,9 @@ func (s *Shell) execLine(line string, w io.Writer, errW io.Writer, stdin io.Read
 	var exitCode int
 	for _, stmt := range f.Stmts {
 		exitCode = s.execStmt(stmt, w, errW, stdin)
+		if s.exitRequested {
+			break
+		}
 	}
 	return exitCode
 }
@@ -398,6 +404,10 @@ func (s *Shell) execCallInner(call *parser.CallExpr, w io.Writer, errW io.Writer
 
 	if cmdName == "pwd" {
 		fmt.Fprintln(w, s.cwd)
+		return 0
+	}
+	if cmdName == "exit" || cmdName == "quit" {
+		s.exitRequested = true
 		return 0
 	}
 
@@ -724,22 +734,69 @@ func (s *Shell) globExpand(pattern string) []string {
 	return matches
 }
 
-// RunInteractive runs an interactive shell session.
-// rw is used for both reading input and writing output. When running over
-// an SSH session with an allocated PTY, the session's ptyWriter already
-// converts \n to \r\n, so no additional CRLFWriter wrapping is needed.
+// InteractiveOptions describes terminal properties used by the interactive
+// shell. WidthChanges may be nil. Non-positive widths use an 80-column
+// fallback.
+type InteractiveOptions struct {
+	Width        int
+	WidthChanges <-chan int
+}
+
+// RunInteractive runs an interactive shell session with an 80-column terminal.
 func (s *Shell) RunInteractive(rw io.ReadWriter, errW io.Writer, motd string, prompt string) {
+	s.RunInteractiveWithOptions(rw, errW, motd, prompt, InteractiveOptions{Width: 80})
+}
+
+// RunInteractiveWithOptions runs an interactive shell session. rw is used for
+// both reading input and writing output. When running over an SSH session with
+// an allocated PTY, the session's ptyWriter already converts \n to \r\n, so no
+// additional CRLFWriter wrapping is needed.
+func (s *Shell) RunInteractiveWithOptions(rw io.ReadWriter, errW io.Writer, motd string, prompt string, opts InteractiveOptions) {
 	if motd != "" {
 		fmt.Fprintln(rw, motd)
 		fmt.Fprintln(rw, "")
+	}
+	if opts.Width <= 0 {
+		opts.Width = 80
+	}
+	terminalWidth := opts.Width
+	currentWidth := func() int {
+		for opts.WidthChanges != nil {
+			select {
+			case width, ok := <-opts.WidthChanges:
+				if !ok {
+					opts.WidthChanges = nil
+					return terminalWidth
+				}
+				if width > 0 {
+					terminalWidth = width
+				}
+			default:
+				return terminalWidth
+			}
+		}
+		return terminalWidth
 	}
 
 	buf := make([]byte, 0, 4096)
 	tmp := make([]byte, 1)
 	lastWasCR := false
+	var completionLine string
+	var completionCandidates []completionCandidate
+	var confirmCandidates []completionCandidate
 
 	printPrompt := func() {
 		fmt.Fprintf(rw, "%s:%s $ ", prompt, s.cwd)
+	}
+	redraw := func() {
+		fmt.Fprint(rw, "\r\x1b[2K")
+		printPrompt()
+		rw.Write(buf)
+	}
+	listCandidates := func(candidates []completionCandidate) {
+		fmt.Fprint(rw, "\r\n")
+		fmt.Fprint(rw, formatCandidateColumns(candidates, currentWidth()))
+		redraw()
 	}
 
 	printPrompt()
@@ -762,34 +819,100 @@ func (s *Shell) RunInteractive(rw io.ReadWriter, errW io.Writer, motd string, pr
 		}
 		lastWasCR = ch == '\r'
 
+		if confirmCandidates != nil {
+			switch ch {
+			case 'y', 'Y':
+				fmt.Fprint(rw, string(ch))
+				candidates := confirmCandidates
+				confirmCandidates = nil
+				completionLine = ""
+				completionCandidates = nil
+				listCandidates(candidates)
+			case 'n', 'N', 3:
+				if ch != 3 {
+					fmt.Fprint(rw, string(ch))
+				}
+				confirmCandidates = nil
+				completionLine = ""
+				completionCandidates = nil
+				fmt.Fprint(rw, "\r\n")
+				redraw()
+			default:
+				fmt.Fprint(rw, "\a")
+			}
+			continue
+		}
+
 		switch {
 		case ch == 4: // Ctrl-D
 			fmt.Fprintln(rw, "\r\nGoodbye!")
 			return
 		case ch == 3: // Ctrl-C
 			buf = buf[:0]
+			completionLine = ""
+			completionCandidates = nil
 			fmt.Fprint(rw, "\r\n")
 			printPrompt()
 		case ch == 127 || ch == 8: // Backspace
 			if len(buf) > 0 {
-				buf = buf[:len(buf)-1]
-				rw.Write([]byte("\b \b"))
+				_, size := utf8.DecodeLastRune(buf)
+				buf = buf[:len(buf)-size]
+				completionLine = ""
+				completionCandidates = nil
+				redraw()
 			}
 		case ch == '\r' || ch == '\n':
 			fmt.Fprint(rw, "\r\n")
 			line := strings.TrimSpace(string(buf))
 			buf = buf[:0]
+			completionLine = ""
+			completionCandidates = nil
 			if line == "exit" || line == "quit" {
 				fmt.Fprintln(rw, "Goodbye!")
 				return
 			}
 			if line != "" {
+				s.exitRequested = false
 				s.ExecPipeline(line, rw, rw, nil)
+				if s.exitRequested {
+					fmt.Fprintln(rw, "Goodbye!")
+					return
+				}
 			}
 			printPrompt()
-		case ch == '\t': // Tab — ignore
+		case ch == '\t':
+			line := string(buf)
+			if line == completionLine && len(completionCandidates) > 0 {
+				if len(completionCandidates) > 100 {
+					confirmCandidates = completionCandidates
+					fmt.Fprintf(rw, "\r\nDisplay all %d possibilities? (y or n) ", len(confirmCandidates))
+				} else {
+					listCandidates(completionCandidates)
+				}
+				continue
+			}
+			result := s.complete(line)
+			if len(result.candidates) == 0 {
+				completionLine = ""
+				completionCandidates = nil
+				fmt.Fprint(rw, "\a")
+				continue
+			}
+			if result.line != line {
+				buf = append(buf[:0], result.line...)
+				redraw()
+			}
+			if !result.finished {
+				completionLine = string(buf)
+				completionCandidates = result.candidates
+			} else {
+				completionLine = ""
+				completionCandidates = nil
+			}
 		default:
 			buf = append(buf, ch)
+			completionLine = ""
+			completionCandidates = nil
 			rw.Write([]byte{ch})
 		}
 	}

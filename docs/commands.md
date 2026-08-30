@@ -3,6 +3,12 @@
 OpenLore implements a bash-like command language over its virtual filesystem.
 Run `help` in a session for the command list available on that server.
 
+Interactive SSH sessions support Tab completion for permitted command names,
+registered `lore` subcommands, and virtual filesystem paths. The first Tab
+extends a shared prefix; a second Tab lists matching candidates in columns.
+Directories retain a trailing `/`, hidden entries appear only after an explicit
+`.`, and candidate layout follows terminal resize events.
+
 ## Filesystem
 
 | Command | Description |

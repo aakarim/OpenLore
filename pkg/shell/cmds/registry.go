@@ -2,6 +2,7 @@ package cmds
 
 import (
 	"io"
+	"sort"
 )
 
 // CmdFunc is the signature for all shell commands.
@@ -111,4 +112,15 @@ func Register(name string, fn CmdFunc) {
 func IsKnown(name string) bool {
 	_, ok := Registry[name]
 	return ok
+}
+
+// Names returns the registered command names in lexical order. Interactive
+// discovery features use this instead of maintaining a second command list.
+func Names() []string {
+	names := make([]string, 0, len(Registry))
+	for name := range Registry {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
