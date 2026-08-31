@@ -265,24 +265,6 @@ or SNI routing, so one listener cannot route multiple domains on port 22.
 The container workflow publishes `latest` from `main`; releases also publish
 `VERSION`, `vVERSION`, major, and minor image tags.
 
-### HTTP inbox uploads
-
-Configure a docset `inbox` and a role with its `publish` grant, then create a
-credential for an existing identity (the server configuration must name
-`auth_file` so the CLI can validate it):
-
-```bash
-openlore inbox token create --identity alice --label webhook --config openlore.yml
-curl -H 'Authorization: Bearer olin_ID_SECRET' -H 'Content-Type: text/markdown' \
-  --data-binary @note.md 'https://docs.example.com/inbox/docs?name=note.md'
-```
-
-`POST /inbox/{docset}` accepts bearer credentials or an exact-body HMAC using
-`X-OpenLore-Token-Id` and `X-OpenLore-Signature`. OAuth access tokens are used
-only for `POST/GET /inbox/tokens` and `DELETE /inbox/tokens/{id}`; inbox
-credentials are separate and revocable. See
-[Configuration and identity](docs/configuration-and-identity.md#http-inbox-credentials).
-
 ## Documentation
 
 | Guide | Contents |
@@ -290,6 +272,7 @@ credentials are separate and revocable. See
 | [Ways to use OpenLore](docs/usage.md) | SSH, MCP, web, SSHFS, embedded binaries, GitHub Action, MCPB, and library usage |
 | [Command reference](docs/commands.md) | Complete shell, introspection, publishing, syntax, CLI command, and flag reference |
 | [Configuration and identity](docs/configuration-and-identity.md) | `openlore.yml`, authentication, roles, docsets, aliases, homes, and host verification |
+| [HTTP inbox uploads](docs/inbox.md) | Upload documents with bearer or HMAC credentials |
 | [Workload identity federation](docs/workload-identity-federation.md) | Authenticate CI and agents with short-lived external identity tokens |
 | [Writing and publishing](docs/writing.md) | Write modes, inboxes, conflict handling, approvals, and jobs |
 | [Plugins and knowledge formats](docs/plugins.md) | Plugin installation, interfaces, OKF validation, `lore validate`, and `lore meta` |
