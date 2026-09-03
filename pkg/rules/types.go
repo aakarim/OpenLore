@@ -142,6 +142,14 @@ type LayerSource interface {
 	LayersFor(context.Context, string) ([]Layer, error)
 }
 
+// FolderLayerSource additionally supports validating a proposed folder config
+// without reading the current config in that same folder.
+type FolderLayerSource interface {
+	LayerSource
+	LayersAbove(context.Context, string) ([]Layer, error)
+	Invalidate(string)
+}
+
 type CompiledRule struct {
 	Name    string
 	Spec    RuleSpec

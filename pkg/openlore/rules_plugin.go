@@ -2,10 +2,14 @@ package openlore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"path"
 	"sort"
+	"strings"
+	"sync"
 
 	"github.com/aakarim/go-openlore/internal/config"
 	"github.com/aakarim/go-openlore/pkg/openlore/validation"
@@ -19,6 +23,122 @@ import (
 type configRuleLayers struct {
 	global  map[string]rules.RuleSpec
 	docsets map[string]config.DocsetSpec
+}
+
+type folderRuleCacheEntry struct {
+	layer rules.Layer
+	err   error
+	found bool
+}
+
+type folderRuleLayers struct {
+	fs      vfs.FileSystem
+	docsets map[string]config.DocsetSpec
+	mu      sync.RWMutex
+	cache   map[string]folderRuleCacheEntry
+}
+
+func newFolderRuleLayers(fsys vfs.FileSystem, docsets map[string]config.DocsetSpec) *folderRuleLayers {
+	return &folderRuleLayers{fs: fsys, docsets: docsets, cache: map[string]folderRuleCacheEntry{}}
+}
+
+func (s *folderRuleLayers) LayersFor(ctx context.Context, target string) ([]rules.Layer, error) {
+	dir := path.Dir(vfs.CleanPath(target))
+	if rules.IsDirConfigPath(target) {
+		dir = path.Dir(path.Dir(vfs.CleanPath(target)))
+	} else if s.fs != nil {
+		if info, err := s.fs.Stat(target); err == nil && info.Dir {
+			dir = vfs.CleanPath(target)
+		}
+	}
+	return s.layersThrough(ctx, dir, true)
+}
+
+func (s *folderRuleLayers) LayersAbove(ctx context.Context, dir string) ([]rules.Layer, error) {
+	return s.layersThrough(ctx, vfs.CleanPath(dir), false)
+}
+
+func (s *folderRuleLayers) layersThrough(_ context.Context, dir string, includeDir bool) ([]rules.Layer, error) {
+	root, _, _, ok := owningDocset(s.docsets, dir)
+	if !ok || !pathWithinRoot(root, dir) {
+		return nil, nil
+	}
+	dirs := directoriesFrom(root, dir)
+	if !includeDir && len(dirs) != 0 {
+		dirs = dirs[:len(dirs)-1]
+	}
+	var layers []rules.Layer
+	for _, candidate := range dirs {
+		entry := s.load(candidate)
+		if entry.err != nil {
+			return nil, entry.err
+		}
+		if entry.found {
+			layers = append(layers, entry.layer)
+		}
+	}
+	return layers, nil
+}
+
+func directoriesFrom(root, dir string) []string {
+	root, dir = vfs.CleanPath(root), vfs.CleanPath(dir)
+	result := []string{root}
+	if root == dir {
+		return result
+	}
+	rel := strings.TrimPrefix(dir, root)
+	if root == "/" {
+		rel = strings.TrimPrefix(dir, "/")
+	} else {
+		rel = strings.TrimPrefix(rel, "/")
+	}
+	current := root
+	for _, segment := range strings.Split(rel, "/") {
+		if segment == "" {
+			continue
+		}
+		current = path.Join(current, segment)
+		result = append(result, current)
+	}
+	return result
+}
+
+func (s *folderRuleLayers) load(dir string) folderRuleCacheEntry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry, ok := s.cache[dir]
+	if ok {
+		return entry
+	}
+	configPath := path.Join(dir, ".lore/config.yaml")
+	content, err := s.fs.ReadFile(configPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			entry = folderRuleCacheEntry{}
+		} else {
+			entry.err = fmt.Errorf("%s: %w", configPath, err)
+		}
+	} else {
+		fileConfig, decodeErr := rules.DecodeFile(content)
+		if decodeErr != nil {
+			entry.err = fmt.Errorf("%s: %w", configPath, decodeErr)
+		} else {
+			entry = folderRuleCacheEntry{found: true, layer: rules.Layer{Origin: configPath, Scope: dir, Rules: fileConfig.Rules}}
+		}
+	}
+	s.cache[dir] = entry
+	return entry
+}
+
+func (s *folderRuleLayers) Invalidate(dir string) {
+	dir = vfs.CleanPath(dir)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for cached := range s.cache {
+		if cached == dir || strings.HasPrefix(cached, strings.TrimSuffix(dir, "/")+"/") {
+			delete(s.cache, cached)
+		}
+	}
 }
 
 func (s configRuleLayers) LayersFor(_ context.Context, target string) ([]rules.Layer, error) {
@@ -77,44 +197,103 @@ func ruleRoots(docset config.DocsetSpec) []string {
 	return roots
 }
 
-type rulesPlugin struct{ engine *rules.Engine }
+type dirConfigAuthorizer interface {
+	CanEditDirConfig(Attribution, string) bool
+}
 
-func newRulesPlugin(auth *config.AuthConfig, defaults rules.Defaults, logger *slog.Logger) (*rulesPlugin, error) {
+type rulesPlugin struct {
+	engine     *rules.Engine
+	authorizer dirConfigAuthorizer
+	reportInfo bool
+}
+
+func newRulesPlugin(auth *config.AuthConfig, defaults rules.Defaults, fsys vfs.FileSystem, authorizer dirConfigAuthorizer, logger *slog.Logger) (*rulesPlugin, error) {
 	var aliases []string
 	for _, docset := range auth.Docsets {
 		aliases = append(aliases, docset.Aliases...)
 	}
 	sort.Slice(aliases, func(i, j int) bool { return len(aliases[i]) > len(aliases[j]) })
-	engine := rules.New(rules.Options{Registry: rules.DefaultRegistry(), Config: configRuleLayers{global: auth.Rules, docsets: auth.Docsets}, Env: func(string) rules.Env { return rules.Env{Defaults: defaults, Logger: logger, AliasRoots: aliases} }, Logger: logger})
+	configLayers := configRuleLayers{global: auth.Rules, docsets: auth.Docsets}
+	env := func(string) rules.Env { return rules.Env{Defaults: defaults, Logger: logger, AliasRoots: aliases} }
+	bootEngine := rules.New(rules.Options{Registry: rules.DefaultRegistry(), Config: configLayers, Env: env, Logger: logger})
 	// Compile every configured docset at boot so invalid members, parameters,
 	// and unification conflicts fail before the server begins accepting writes.
 	for _, docset := range auth.Docsets {
 		for _, mapping := range docset.Paths {
 			root := displayPath(mapping)
-			if _, err := engine.Effective(context.Background(), path.Join(root, "__rules_boot_check__.md")); err != nil {
+			if _, err := bootEngine.Effective(context.Background(), path.Join(root, "__rules_boot_check__.md")); err != nil {
 				return nil, fmt.Errorf("configuring rules: %w", err)
 			}
 		}
 	}
-	return &rulesPlugin{engine: engine}, nil
+	options := rules.Options{Registry: rules.DefaultRegistry(), Config: configLayers, Env: env, Logger: logger}
+	if fsys != nil {
+		options.Folders = newFolderRuleLayers(fsys, auth.Docsets)
+	}
+	engine := rules.New(options)
+	reportInfo := anyConfiguredRules(auth)
+	for _, docset := range auth.Docsets {
+		reportInfo = reportInfo || docset.Config != nil
+	}
+	return &rulesPlugin{engine: engine, authorizer: authorizer, reportInfo: reportInfo}, nil
 }
 
 func (p *rulesPlugin) WriteMiddleware() []WriteMiddleware {
 	return []WriteMiddleware{func(next WriteHandler) WriteHandler {
 		return func(ctx context.Context, op WriteOp) (WriteResult, error) {
 			for _, leaf := range op.Leaves() {
+				if rules.IsDirConfigPath(leaf.Target) {
+					if p.authorizer == nil || !p.authorizer.CanEditDirConfig(op.Attribution, leaf.Target) {
+						return WriteResult{}, os.ErrPermission
+					}
+					if leaf.Action == vfs.ChangeActionWrite && leaf.Write != nil {
+						dir := path.Dir(path.Dir(leaf.Target))
+						if err := p.engine.CheckConfigFile(ctx, dir, leaf.Write.Bytes); err != nil {
+							return WriteResult{}, err
+						}
+					}
+					continue
+				}
 				if err := p.engine.AdmitLeaf(ctx, leaf, op.Attribution.String(), nil); err != nil {
 					return WriteResult{}, err
 				}
 			}
-			return next(ctx, op)
+			result, err := next(ctx, op)
+			if err == nil {
+				p.invalidateChanges(op.Leaves())
+			}
+			return result, err
+		}
+	}}
+}
+
+func (p *rulesPlugin) invalidateChanges(changes []vfs.Change) {
+	for _, leaf := range changes {
+		if rules.IsDirConfigPath(leaf.Target) {
+			p.engine.Invalidate(path.Dir(path.Dir(leaf.Target)))
+		} else if leaf.Action == vfs.ChangeActionRemoveAll {
+			p.engine.Invalidate(leaf.Target)
+		}
+	}
+}
+
+func (p *rulesPlugin) PostCommitMiddleware() []PostCommitMiddleware {
+	return []PostCommitMiddleware{func(next PostCommitHandler) PostCommitHandler {
+		return func(ctx context.Context, info CommitInfo) error {
+			p.invalidateChanges(info.ChangeSet.Leaves())
+			return next(ctx, info)
 		}
 	}}
 }
 func (p *rulesPlugin) Validators() []validation.Validator {
 	return []validation.Validator{p.engine.Validator()}
 }
-func (p *rulesPlugin) Info() PluginInfo { return PluginInfo{Name: "rules", Version: "0.1.0"} }
+func (p *rulesPlugin) Info() PluginInfo {
+	if !p.reportInfo {
+		return PluginInfo{}
+	}
+	return PluginInfo{Name: "rules", Version: "0.1.0"}
+}
 
 func anyConfiguredRules(auth *config.AuthConfig) bool {
 	if len(auth.Rules) != 0 {
@@ -130,6 +309,7 @@ func anyConfiguredRules(auth *config.AuthConfig) bool {
 
 var (
 	_ WriteMiddlewareProvider = (*rulesPlugin)(nil)
+	_ PostCommitProvider      = (*rulesPlugin)(nil)
 	_ ValidatorProvider       = (*rulesPlugin)(nil)
 	_ PluginInfoProvider      = (*rulesPlugin)(nil)
 )

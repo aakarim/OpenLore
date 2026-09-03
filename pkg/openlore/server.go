@@ -257,19 +257,17 @@ func newServerWithRoot(rootDir string, rootFS, lowerFS vfs.FileSystem, opts ...c
 			return nil, err
 		}
 	}
-	if anyConfiguredRules(s.auth) {
-		rulesPlugin, err := newRulesPlugin(s.auth, rules.Defaults{Growth: cfg.Rules.Growth}, logger)
-		if err != nil {
-			return nil, err
-		}
-		if err := s.registerPlugin(rulesPlugin); err != nil {
-			return nil, err
-		}
-		// OKF metadata remains owned by the existing adapter; admission and
-		// validation are provided exclusively by the rules engine above.
-		if anyDocsetHasOKF(s.auth.Docsets) {
-			s.metaExtenders = append(s.metaExtenders, newOKF(s.auth.Docsets, logger).MetaExtenders()...)
-		}
+	rulesPlugin, err := newRulesPlugin(s.auth, rules.Defaults{Growth: cfg.Rules.Growth}, s.merge, s, logger)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.registerPlugin(rulesPlugin); err != nil {
+		return nil, err
+	}
+	// OKF metadata remains owned by the existing adapter; admission and
+	// validation are provided exclusively by the rules engine above.
+	if anyDocsetHasOKF(s.auth.Docsets) {
+		s.metaExtenders = append(s.metaExtenders, newOKF(s.auth.Docsets, logger).MetaExtenders()...)
 	}
 	if shellPlugin != nil {
 		if err := s.registerPlugin(shellPlugin); err != nil {
@@ -847,7 +845,9 @@ func (s *Server) registerPlugin(p any) error {
 	// inbox plugin, wired by the CLI via RegisterPlugin) too.
 	if ip, ok := p.(PluginInfoProvider); ok && s.logger != nil {
 		info := ip.Info()
-		s.logger.Info("plugin registered", "name", info.Name, "version", info.Version)
+		if info.Name != "" {
+			s.logger.Info("plugin registered", "name", info.Name, "version", info.Version)
+		}
 	}
 	if hp, ok := p.(HTTPRouteProvider); ok {
 		s.httpRoutes = append(s.httpRoutes, hp)

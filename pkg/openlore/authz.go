@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
+	"path"
 	"sort"
 	"strings"
 	"syscall"
@@ -411,6 +412,9 @@ func (s *Server) identityCanWrite(id Identity, action vfs.ChangeAction, p string
 		return false // token scope ceiling: only full authority may write
 	}
 	p = s.canonicalPath(p)
+	if isDirConfigPath(p) && !s.identityHasDirConfigRole(id, p) {
+		return false
+	}
 	if action == vfs.ChangeActionRemoveAll {
 		for _, candidate := range s.currentAuth().Docsets {
 			for _, pm := range candidate.Paths {
@@ -442,6 +446,40 @@ func (s *Server) identityCanWrite(id Identity, action vfs.ChangeAction, p string
 		}
 	}
 	return false
+}
+
+func (s *Server) identityHasDirConfigRole(id Identity, target string) bool {
+	_, docset, ok := s.mostSpecificDocset(path.Dir(path.Dir(target)))
+	if !ok || docset.Config == nil {
+		return false
+	}
+	policy, err := s.currentPolicy(id)
+	if err != nil {
+		return false
+	}
+	for _, allowed := range docset.Config.Edit {
+		for _, role := range policy.Roles {
+			if role == allowed {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// CanEditDirConfig applies the additional role gate for .lore/config.yaml.
+// Ordinary path authorization remains required as well.
+func (s *Server) CanEditDirConfig(attribution Attribution, target string) bool {
+	id := Identity{
+		IdentityName: attribution.Principal,
+		Principal:    AuthenticatedPrincipal{IdentityName: attribution.Principal},
+		Attribution:  attribution,
+		Scopes:       []string{ScopeFull},
+	}
+	if !s.identityCanWrite(id, vfs.ChangeActionWrite, target) {
+		return false
+	}
+	return true
 }
 
 // readableRoots returns the display roots the identity may read: the display

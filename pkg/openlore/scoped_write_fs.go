@@ -1,8 +1,10 @@
 package openlore
 
 import (
-	"github.com/aakarim/go-openlore/pkg/vfs"
+	"os"
 	"syscall"
+
+	"github.com/aakarim/go-openlore/pkg/vfs"
 )
 
 // writeAuthorizer decides whether a session may perform a mutation action on a
@@ -36,6 +38,9 @@ func newScopedWriteFS(base vfs.FileSystem, authz writeAuthorizer) *scopedWriteFS
 
 func (s *scopedWriteFS) WriteFileAtomic(p string, data []byte, opts vfs.WriteOpts) (string, error) {
 	if s.inner == nil || !s.authorize(vfs.ChangeActionWrite, p) {
+		if isDirConfigPath(p) {
+			return "", os.ErrPermission
+		}
 		return "", vfs.ErrReadOnly
 	}
 	return s.inner.WriteFileAtomic(p, data, opts)
@@ -48,6 +53,9 @@ func (s *scopedWriteFS) AdmitChangeSet(cs vfs.ChangeSet) error {
 	}
 	for _, change := range cs.Leaves() {
 		if !s.authorize(change.Action, change.Target) {
+			if isDirConfigPath(change.Target) {
+				return os.ErrPermission
+			}
 			return vfs.ErrReadOnly
 		}
 	}
