@@ -257,7 +257,7 @@ func newServerWithRoot(rootDir string, rootFS, lowerFS vfs.FileSystem, opts ...c
 			return nil, err
 		}
 	}
-	rulesPlugin, err := newRulesPlugin(s.auth, rules.Defaults{Growth: cfg.Rules.Growth}, s.merge, s, logger)
+	rulesPlugin, err := newRulesPlugin(s.auth, rules.Defaults{Growth: cfg.Rules.Growth}, s.merge, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -757,7 +757,7 @@ func (s *Server) AdmitChangeSet(ctx context.Context, id Identity, cs vfs.ChangeS
 	}
 	for _, change := range cs.Leaves() {
 		if !s.identityCanWrite(id, change.Action, change.Target) {
-			return WriteResult{}, vfs.ErrReadOnly
+			return WriteResult{}, mutationDeniedError(s.merge, change.Action, change.Target)
 		}
 	}
 	return s.writeChain()(ctx, NewWriteOp(id.attribution(), cs))
@@ -845,9 +845,7 @@ func (s *Server) registerPlugin(p any) error {
 	// inbox plugin, wired by the CLI via RegisterPlugin) too.
 	if ip, ok := p.(PluginInfoProvider); ok && s.logger != nil {
 		info := ip.Info()
-		if info.Name != "" {
-			s.logger.Info("plugin registered", "name", info.Name, "version", info.Version)
-		}
+		s.logger.Info("plugin registered", "name", info.Name, "version", info.Version)
 	}
 	if hp, ok := p.(HTTPRouteProvider); ok {
 		s.httpRoutes = append(s.httpRoutes, hp)

@@ -2,6 +2,7 @@ package openlore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"path"
@@ -416,6 +417,9 @@ func (s *Server) identityCanWrite(id Identity, action vfs.ChangeAction, p string
 		return false
 	}
 	if action == vfs.ChangeActionRemoveAll {
+		if !s.canEditDirConfigsInTree(id, p) {
+			return false
+		}
 		for _, candidate := range s.currentAuth().Docsets {
 			for _, pm := range candidate.Paths {
 				root := displayPath(pm)
@@ -448,6 +452,23 @@ func (s *Server) identityCanWrite(id Identity, action vfs.ChangeAction, p string
 	return false
 }
 
+func (s *Server) canEditDirConfigsInTree(id Identity, target string) bool {
+	allowed := true
+	err := vfs.WalkDir(s.merge, target, func(candidate string, _ *vfs.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if isDirConfigPath(candidate) && !s.identityHasDirConfigRole(id, candidate) {
+			allowed = false
+		}
+		return nil
+	})
+	if errors.Is(err, fs.ErrNotExist) {
+		return true
+	}
+	return err == nil && allowed
+}
+
 func (s *Server) identityHasDirConfigRole(id Identity, target string) bool {
 	_, docset, ok := s.mostSpecificDocset(path.Dir(path.Dir(target)))
 	if !ok || docset.Config == nil {
@@ -465,21 +486,6 @@ func (s *Server) identityHasDirConfigRole(id Identity, target string) bool {
 		}
 	}
 	return false
-}
-
-// CanEditDirConfig applies the additional role gate for .lore/config.yaml.
-// Ordinary path authorization remains required as well.
-func (s *Server) CanEditDirConfig(attribution Attribution, target string) bool {
-	id := Identity{
-		IdentityName: attribution.Principal,
-		Principal:    AuthenticatedPrincipal{IdentityName: attribution.Principal},
-		Attribution:  attribution,
-		Scopes:       []string{ScopeFull},
-	}
-	if !s.identityCanWrite(id, vfs.ChangeActionWrite, target) {
-		return false
-	}
-	return true
 }
 
 // readableRoots returns the display roots the identity may read: the display

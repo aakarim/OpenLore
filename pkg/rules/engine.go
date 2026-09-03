@@ -16,7 +16,7 @@ import (
 type Options struct {
 	Registry *Registry
 	Config   LayerSource
-	Folders  LayerSource
+	Folders  FolderLayerSource
 	Env      func(string) Env
 	Logger   *slog.Logger
 }
@@ -55,11 +55,7 @@ func (e *Engine) CheckConfigFile(ctx context.Context, dir string, content []byte
 		layers = append(layers, got...)
 	}
 	if e.options.Folders != nil {
-		folders, ok := e.options.Folders.(FolderLayerSource)
-		if !ok {
-			return fmt.Errorf("%s: folder layer source cannot validate config", configPath)
-		}
-		got, err := folders.LayersAbove(ctx, dir)
+		got, err := e.options.Folders.LayersAbove(ctx, dir)
 		if err != nil {
 			return fmt.Errorf("%s: %w", configPath, err)
 		}
@@ -127,18 +123,31 @@ func conflictDetails(conflict *UnificationError, layers []Layer) string {
 
 // Invalidate drops cached folder layers at and below dir.
 func (e *Engine) Invalidate(dir string) {
-	if folders, ok := e.options.Folders.(FolderLayerSource); ok {
-		folders.Invalidate(dir)
+	if e.options.Folders != nil {
+		e.options.Folders.Invalidate(dir)
 	}
 }
 
 func (e *Engine) Effective(ctx context.Context, target string) ([]CompiledRule, error) {
+	return e.effective(ctx, target, path.Dir(vfs.CleanPath(target)))
+}
+
+func (e *Engine) effectiveDir(ctx context.Context, dir string) ([]CompiledRule, error) {
+	dir = vfs.CleanPath(dir)
+	return e.effective(ctx, dir, dir)
+}
+
+func (e *Engine) effective(ctx context.Context, target, dir string) ([]CompiledRule, error) {
 	var layers []Layer
-	for _, source := range []LayerSource{e.options.Config, e.options.Folders} {
-		if source == nil {
-			continue
+	if e.options.Config != nil {
+		got, err := e.options.Config.LayersFor(ctx, target)
+		if err != nil {
+			return nil, err
 		}
-		got, err := source.LayersFor(ctx, target)
+		layers = append(layers, got...)
+	}
+	if e.options.Folders != nil {
+		got, err := e.options.Folders.LayersForDir(ctx, dir)
 		if err != nil {
 			return nil, err
 		}
@@ -201,7 +210,15 @@ func (e *Engine) AdmitLeaf(ctx context.Context, leaf vfs.Change, actor string, e
 
 func IsDirConfigPath(target string) bool {
 	clean := vfs.CleanPath(target)
-	return path.Base(clean) == "config.yaml" && path.Base(path.Dir(clean)) == ".lore"
+	if path.Base(clean) != "config.yaml" || path.Base(path.Dir(clean)) != ".lore" {
+		return false
+	}
+	for _, segment := range strings.Split(strings.Trim(path.Dir(path.Dir(clean)), "/"), "/") {
+		if segment == ".lore" {
+			return false
+		}
+	}
+	return true
 }
 
 func (e *Engine) ValidateFile(ctx context.Context, fsys vfs.FileSystem, bundleRoot, target string, content []byte) []validation.Diagnostic {
@@ -269,7 +286,7 @@ func (e *Engine) Validator() validation.Validator {
 		var bundleRules []CompiledRule
 		if !invalidDirs[vfs.CleanPath(bundle.Root)] {
 			var err error
-			bundleRules, err = e.Effective(context.Background(), bundle.Root)
+			bundleRules, err = e.effectiveDir(context.Background(), bundle.Root)
 			if err != nil {
 				rule := "rules/config"
 				var rootErr *BundleRootError

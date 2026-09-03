@@ -15,6 +15,7 @@ import (
 	"syscall"
 
 	"github.com/aakarim/go-openlore/internal/config"
+	"github.com/aakarim/go-openlore/pkg/rules"
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
 
@@ -283,8 +284,7 @@ func hasReservedPath(p string) bool {
 }
 
 func isDirConfigPath(p string) bool {
-	clean := vfs.CleanPath(p)
-	return path.Base(clean) == "config.yaml" && path.Base(path.Dir(clean)) == ".lore"
+	return rules.IsDirConfigPath(p)
 }
 
 func hasTraversal(p string) bool {

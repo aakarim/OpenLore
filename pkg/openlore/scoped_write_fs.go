@@ -38,10 +38,7 @@ func newScopedWriteFS(base vfs.FileSystem, authz writeAuthorizer) *scopedWriteFS
 
 func (s *scopedWriteFS) WriteFileAtomic(p string, data []byte, opts vfs.WriteOpts) (string, error) {
 	if s.inner == nil || !s.authorize(vfs.ChangeActionWrite, p) {
-		if isDirConfigPath(p) {
-			return "", os.ErrPermission
-		}
-		return "", vfs.ErrReadOnly
+		return "", mutationDeniedError(s.FileSystem, vfs.ChangeActionWrite, p)
 	}
 	return s.inner.WriteFileAtomic(p, data, opts)
 }
@@ -53,10 +50,7 @@ func (s *scopedWriteFS) AdmitChangeSet(cs vfs.ChangeSet) error {
 	}
 	for _, change := range cs.Leaves() {
 		if !s.authorize(change.Action, change.Target) {
-			if isDirConfigPath(change.Target) {
-				return os.ErrPermission
-			}
-			return vfs.ErrReadOnly
+			return mutationDeniedError(s.FileSystem, change.Action, change.Target)
 		}
 	}
 	return a.AdmitChangeSet(cs)
@@ -70,30 +64,49 @@ func (s *scopedWriteFS) CanWrite(p string) bool {
 
 func (s *scopedWriteFS) Mkdir(p string) error {
 	if s.inner == nil || !s.authorize(vfs.ChangeActionMkdir, p) {
-		return vfs.ErrReadOnly
+		return mutationDeniedError(s.FileSystem, vfs.ChangeActionMkdir, p)
 	}
 	return s.inner.Mkdir(p)
 }
 
 func (s *scopedWriteFS) MkdirAll(p string) error {
 	if s.inner == nil || !s.authorize(vfs.ChangeActionMkdirAll, p) {
-		return vfs.ErrReadOnly
+		return mutationDeniedError(s.FileSystem, vfs.ChangeActionMkdirAll, p)
 	}
 	return s.inner.MkdirAll(p)
 }
 
 func (s *scopedWriteFS) Remove(p string) error {
 	if s.inner == nil || !s.authorize(vfs.ChangeActionRemove, p) {
-		return vfs.ErrReadOnly
+		return mutationDeniedError(s.FileSystem, vfs.ChangeActionRemove, p)
 	}
 	return s.inner.Remove(p)
 }
 
 func (s *scopedWriteFS) RemoveAll(p string, opts vfs.RemoveOpts) error {
 	if s.inner == nil || !s.authorize(vfs.ChangeActionRemoveAll, p) {
-		return vfs.ErrReadOnly
+		return mutationDeniedError(s.FileSystem, vfs.ChangeActionRemoveAll, p)
 	}
 	return s.inner.RemoveAll(p, opts)
+}
+
+func mutationDeniedError(fsys vfs.FileSystem, action vfs.ChangeAction, target string) error {
+	if isDirConfigPath(target) {
+		return os.ErrPermission
+	}
+	if action == vfs.ChangeActionRemoveAll {
+		containsConfig := false
+		_ = vfs.WalkDir(fsys, target, func(candidate string, _ *vfs.FileInfo, err error) error {
+			if err == nil && isDirConfigPath(candidate) {
+				containsConfig = true
+			}
+			return nil
+		})
+		if containsConfig {
+			return os.ErrPermission
+		}
+	}
+	return vfs.ErrReadOnly
 }
 func (s *scopedWriteFS) GetXattr(p, name string) ([]byte, error) {
 	x, ok := s.FileSystem.(vfs.XattrReader)

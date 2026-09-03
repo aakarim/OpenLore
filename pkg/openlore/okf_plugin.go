@@ -34,7 +34,7 @@ func newOKF(docsets map[string]config.DocsetSpec, logger *slog.Logger) *okfPlugi
 		auth.Docsets[name] = copy
 	}
 	_ = config.ValidateAuthConfig(auth)
-	plugin, _ := newRulesPlugin(auth, rules.Defaults{Growth: 1.25}, nil, nil, logger)
+	plugin, _ := newRulesPlugin(auth, rules.Defaults{Growth: 1.25}, nil, logger)
 	return &okfPlugin{docsets: docsets, engine: plugin.engine}
 }
 

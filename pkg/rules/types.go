@@ -145,7 +145,7 @@ type LayerSource interface {
 // FolderLayerSource additionally supports validating a proposed folder config
 // without reading the current config in that same folder.
 type FolderLayerSource interface {
-	LayerSource
+	LayersForDir(context.Context, string) ([]Layer, error)
 	LayersAbove(context.Context, string) ([]Layer, error)
 	Invalidate(string)
 }

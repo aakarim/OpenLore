@@ -47,6 +47,9 @@ func TestDirFSExposesOnlyFolderConfig(t *testing.T) {
 	if _, err := d.WriteFileAtomic("/docs/backend/.lore/other.yaml", nil, vfs.WriteOpts{}); err == nil {
 		t.Fatal("write under .lore succeeded")
 	}
+	if _, err := d.WriteFileAtomic("/docs/backend/.lore/xattrs/.lore/config.yaml", nil, vfs.WriteOpts{}); err == nil {
+		t.Fatal("nested .lore config path escaped reservation")
+	}
 	if err := d.Mkdir("/docs/backend/.lore"); err == nil {
 		t.Fatal("mkdir .lore succeeded")
 	}

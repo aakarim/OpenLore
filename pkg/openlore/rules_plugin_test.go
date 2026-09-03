@@ -19,7 +19,7 @@ import (
 
 func newTestRulesPlugin(t *testing.T, auth *config.AuthConfig, logger *slog.Logger) *rulesPlugin {
 	t.Helper()
-	p, err := newRulesPlugin(auth, rules.Defaults{Growth: 1.25}, nil, nil, logger)
+	p, err := newRulesPlugin(auth, rules.Defaults{Growth: 1.25}, nil, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,6 +171,12 @@ func TestFolderRulesPermissionInheritanceInvalidationAndExemption(t *testing.T) 
 	if _, err := server.buildSessionFS(identity("alice")).(vfs.WritableFS).WriteFileAtomic(configPath, []byte(content), vfs.WriteOpts{}); err != nil {
 		t.Fatalf("config editor write: %v", err)
 	}
+	if err := server.buildSessionFS(identity("bob")).(vfs.WritableFS).Remove(configPath); !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("config remove without config.edit = %v", err)
+	}
+	if _, err := server.AdmitChangeSet(context.Background(), identity("bob"), vfs.ChangeSet{Target: configPath, Action: vfs.ChangeActionRemove}); !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("AdmitChangeSet config remove without config.edit = %v", err)
+	}
 	var readOut, readErr bytes.Buffer
 	readerShell := server.buildSessionShell(identity("carol"))
 	if code := readerShell.ExecPipeline("cat "+configPath+"; tree /docs", &readOut, &readErr, nil); code != 0 || !strings.Contains(readOut.String(), "use: size/lines") || !strings.Contains(readOut.String(), ".lore") || !strings.Contains(readOut.String(), "config.yaml") {
@@ -194,6 +200,25 @@ func TestFolderRulesPermissionInheritanceInvalidationAndExemption(t *testing.T) 
 	}
 	if _, err := server.buildSessionFS(identity("alice")).(vfs.WritableFS).WriteFileAtomic("/docs/sub/deep/y.md", []byte("1\n2\n3\n4\n"), vfs.WriteOpts{}); err != nil {
 		t.Fatalf("rule remained after config removal: %v", err)
+	}
+
+	for _, name := range []string{"configured", "plain"} {
+		if err := os.Mkdir(filepath.Join(root, "docs", name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	configuredPath := "/docs/configured/.lore/config.yaml"
+	if _, err := server.buildSessionFS(identity("alice")).(vfs.WritableFS).WriteFileAtomic(configuredPath, []byte("version: 1\nrules: {}\n"), vfs.WriteOpts{}); err != nil {
+		t.Fatalf("nested config write: %v", err)
+	}
+	if err := server.buildSessionFS(identity("bob")).(vfs.WritableFS).RemoveAll("/docs/configured", vfs.RemoveOpts{}); !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("RemoveAll config tree without config.edit = %v", err)
+	}
+	if err := server.buildSessionFS(identity("bob")).(vfs.WritableFS).RemoveAll("/docs/plain", vfs.RemoveOpts{}); err != nil {
+		t.Fatalf("RemoveAll plain tree with rw = %v", err)
+	}
+	if err := server.buildSessionFS(identity("alice")).(vfs.WritableFS).RemoveAll("/docs/configured", vfs.RemoveOpts{}); err != nil {
+		t.Fatalf("RemoveAll config tree with config.edit = %v", err)
 	}
 }
 
