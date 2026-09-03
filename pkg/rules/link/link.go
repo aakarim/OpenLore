@@ -13,8 +13,7 @@ import (
 )
 
 type Member struct {
-	Alias      bool
-	AliasRoots []string
+	Alias bool
 }
 
 func init() {
@@ -28,8 +27,8 @@ func (m Member) Manifest() rules.Manifest {
 	}
 	return rules.Manifest{Path: "link/resolves", Kind: rules.KindRule, Scope: rules.ScopeBundle, Summary: "Require local links to resolve inside the bundle"}
 }
-func (m Member) Compile(_ map[string]any, _ rules.Env) (rules.Check, error) {
-	roots := append([]string(nil), m.AliasRoots...)
+func (m Member) Compile(_ map[string]any, env rules.Env) (rules.Check, error) {
+	roots := append([]string(nil), env.AliasRoots...)
 	sort.Slice(roots, func(i, j int) bool { return len(roots[i]) > len(roots[j]) })
 	return check{alias: m.Alias, aliasRoots: roots}, nil
 }
@@ -40,7 +39,7 @@ type check struct {
 }
 
 func (c check) Evaluate(_ context.Context, subject rules.Subject) ([]rules.Finding, error) {
-	if subject.Bundle == nil || len(subject.Bundle.Files) == 0 || subject.Path != subject.Bundle.Files[0].AbsolutePath {
+	if subject.Bundle == nil {
 		return nil, nil
 	}
 	var findings []rules.Finding

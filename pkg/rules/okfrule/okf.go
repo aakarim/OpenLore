@@ -2,6 +2,7 @@ package okfrule
 
 import (
 	"context"
+	"path"
 
 	"github.com/aakarim/go-openlore/pkg/okf"
 	"github.com/aakarim/go-openlore/pkg/rules"
@@ -29,18 +30,18 @@ type check struct{ bundle bool }
 
 func (c check) Evaluate(_ context.Context, subject rules.Subject) ([]rules.Finding, error) {
 	if !c.bundle {
+		if subject.Mode == rules.ModeValidate && path.Ext(subject.Path) != ".md" {
+			return nil, nil
+		}
 		if err := okf.Validate(subject.Path, subject.Content); err != nil {
-			if subject.Mode == rules.ModeValidate {
-				if okf.IsReserved(subject.Path) {
-					return nil, nil
-				}
-				return []rules.Finding{{Code: "okf/concept", Measured: err.Error()}}, nil
+			if subject.Mode == rules.ModeValidate && okf.IsReserved(subject.Path) {
+				return nil, nil
 			}
-			return nil, err
+			return []rules.Finding{{Code: "okf/concept", Measured: err.Error()}}, nil
 		}
 		return nil, nil
 	}
-	if subject.Bundle == nil || len(subject.Bundle.Files) == 0 || subject.Path != subject.Bundle.Files[0].AbsolutePath {
+	if subject.Bundle == nil {
 		return nil, nil
 	}
 	files := make([]okf.File, 0, len(subject.Bundle.Files))

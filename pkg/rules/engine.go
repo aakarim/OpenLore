@@ -2,6 +2,7 @@ package rules
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path"
@@ -22,6 +23,18 @@ type Options struct {
 
 type Engine struct{ options Options }
 
+// BundleRootError reports that validation was requested above independently
+// governed docsets. Running bundle rules there would silently choose the wrong
+// configuration boundary.
+type BundleRootError struct {
+	Root    string
+	Docsets []string
+}
+
+func (e *BundleRootError) Error() string {
+	return fmt.Sprintf("%s is above docsets %s with bundle rules; run lore validate per docset", e.Root, strings.Join(e.Docsets, ", "))
+}
+
 func New(options Options) *Engine { return &Engine{options: options} }
 
 func (e *Engine) Effective(ctx context.Context, target string) ([]CompiledRule, error) {
@@ -39,16 +52,15 @@ func (e *Engine) Effective(ctx context.Context, target string) ([]CompiledRule, 
 	if len(layers) == 0 {
 		return nil, nil
 	}
-	specs, origins, err := Unify(layers)
+	unified, err := Unify(layers)
 	if err != nil {
 		return nil, err
 	}
-	scope := layers[len(layers)-1].Scope
 	env := e.options.Env
 	if env == nil {
 		env = func(string) Env { return Env{} }
 	}
-	return Compile(e.options.Registry, env, specs, origins, scope)
+	return Compile(e.options.Registry, env, unified)
 }
 
 func (e *Engine) AdmitLeaf(ctx context.Context, leaf vfs.Change, actor string, existing func() ([]byte, bool, error)) error {
@@ -71,13 +83,21 @@ func (e *Engine) AdmitLeaf(ctx context.Context, leaf vfs.Change, actor string, e
 			e.warn(rule, leaf.Target, checkErr.Error())
 			continue
 		}
-		if len(findings) == 0 {
+		var violations []Finding
+		for _, finding := range findings {
+			if finding.Warning {
+				e.warn(rule, leaf.Target, finding.Measured)
+			} else {
+				violations = append(violations, finding)
+			}
+		}
+		if len(violations) == 0 {
 			continue
 		}
 		if rule.Spec.IsEnforcing() {
-			return &Rejection{Path: leaf.Target, Rule: rule.Name, Member: rule.Spec.Use, Origin: last(rule.Origins), Findings: findings}
+			return &Rejection{Path: leaf.Target, Rule: rule.Name, Member: rule.Spec.Use, Origin: last(rule.Origins), Findings: violations}
 		}
-		for _, finding := range findings {
+		for _, finding := range violations {
 			e.warn(rule, leaf.Target, findingText(finding, rule, leaf.Target))
 		}
 	}
@@ -95,11 +115,7 @@ func (e *Engine) validateFile(ctx context.Context, fsys vfs.FileSystem, bundleRo
 	}
 	var diagnostics []validation.Diagnostic
 	for _, rule := range rules {
-		if rule.Member.Manifest().Scope == ScopeBundle {
-			if bundle == nil || len(bundle.Files) == 0 || target != bundle.Files[0].AbsolutePath || !bundleMatches(rule, bundle) {
-				continue
-			}
-		} else if !matchesAtScope(rule, target) {
+		if rule.Member.Manifest().Scope != ScopeFile || !matchesAtScope(rule, target) {
 			continue
 		}
 		findings, checkErr := rule.Check.Evaluate(ctx, Subject{Mode: ModeValidate, Path: target, Dir: path.Dir(target), Content: content, FS: fsys, BundleRoot: bundleRoot, Bundle: bundle})
@@ -108,7 +124,7 @@ func (e *Engine) validateFile(ctx context.Context, fsys vfs.FileSystem, bundleRo
 			severity = validation.SeverityError
 		}
 		if checkErr != nil {
-			diagnostics = append(diagnostics, validation.Diagnostic{Path: relative(bundleRoot, target), Line: 1, Column: 1, Severity: severity, Rule: rule.Name, Message: checkErr.Error()})
+			diagnostics = append(diagnostics, validation.Diagnostic{Path: relative(bundleRoot, target), Line: 1, Column: 1, Severity: severity, Rule: rule.Name, Member: rule.Spec.Use, Message: checkErr.Error()})
 			continue
 		}
 		for _, finding := range findings {
@@ -130,7 +146,7 @@ func (e *Engine) validateFile(ctx context.Context, fsys vfs.FileSystem, bundleRo
 			if column == 0 {
 				column = 1
 			}
-			diagnostics = append(diagnostics, validation.Diagnostic{Path: p, Line: line, Column: column, Severity: findingSeverity, Rule: finding.Code, Message: findingText(finding, rule, target)})
+			diagnostics = append(diagnostics, validation.Diagnostic{Path: p, Line: line, Column: column, Severity: findingSeverity, Rule: finding.Code, Member: rule.Spec.Use, Message: finding.Measured})
 		}
 	}
 	return diagnostics
@@ -139,9 +155,54 @@ func (e *Engine) validateFile(ctx context.Context, fsys vfs.FileSystem, bundleRo
 func (e *Engine) Validator() validation.Validator {
 	return func(bundle validation.Bundle) []validation.Diagnostic {
 		var out []validation.Diagnostic
+		bundleRules, err := e.Effective(context.Background(), bundle.Root)
+		if err != nil {
+			rule := "rules/config"
+			var rootErr *BundleRootError
+			if errors.As(err, &rootErr) {
+				rule = "rules/bundle-root"
+			}
+			return []validation.Diagnostic{{Path: bundle.Root, Line: 1, Column: 1, Severity: validation.SeverityError, Rule: rule, Message: err.Error()}}
+		}
 		for _, file := range bundle.Files {
 			out = append(out, e.validateFile(context.Background(), bundle.FS, bundle.Root, file.AbsolutePath, file.Content, &bundle)...)
 		}
+		for _, rule := range bundleRules {
+			if rule.Member.Manifest().Scope != ScopeBundle || !bundleMatches(rule, &bundle) {
+				continue
+			}
+			findings, checkErr := rule.Check.Evaluate(context.Background(), Subject{Mode: ModeValidate, Path: bundle.Root, Dir: bundle.Root, FS: bundle.FS, BundleRoot: bundle.Root, Bundle: &bundle})
+			severity := validation.SeverityWarning
+			if rule.Spec.IsEnforcing() {
+				severity = validation.SeverityError
+			}
+			if checkErr != nil {
+				out = append(out, validation.Diagnostic{Path: ".", Line: 1, Column: 1, Severity: severity, Rule: rule.Name, Member: rule.Spec.Use, Message: checkErr.Error()})
+				continue
+			}
+			for _, finding := range findings {
+				findingSeverity := severity
+				if finding.Warning {
+					findingSeverity = validation.SeverityWarning
+				}
+				p := finding.Path
+				if p == "" {
+					p = "."
+				}
+				if strings.HasPrefix(p, "/") {
+					p = relative(bundle.Root, p)
+				}
+				line, column := finding.Line, finding.Column
+				if line == 0 {
+					line = 1
+				}
+				if column == 0 {
+					column = 1
+				}
+				out = append(out, validation.Diagnostic{Path: p, Line: line, Column: column, Severity: findingSeverity, Rule: finding.Code, Member: rule.Spec.Use, Message: finding.Measured})
+			}
+		}
+		SortDiagnostics(out)
 		return out
 	}
 }
@@ -209,11 +270,8 @@ type Rejection struct {
 }
 
 func (r *Rejection) Error() string {
-	if r.Member == "okf" && r.Err != nil {
-		return fmt.Sprintf("okf: %s: %v", r.Path, r.Err)
-	}
 	if r.Member == "okf" && len(r.Findings) != 0 {
-		return fmt.Sprintf("okf: %s: %s", r.Path, r.Findings[0].Measured)
+		return fmt.Sprintf("okf: %s: %s\n  see: lore package doc okf", r.Path, r.Findings[0].Measured)
 	}
 	header := fmt.Sprintf("rules: %s: %s (%s @ %s)", r.Path, r.Member, r.Rule, r.Origin)
 	if r.Err != nil {
@@ -229,13 +287,12 @@ func (r *Rejection) Error() string {
 func (r *Rejection) Unwrap() error { return r.Err }
 
 func findingText(f Finding, rule CompiledRule, target string) string {
-	limit := f.Limit
-	if limit == "" {
-		limit = "this write cannot proceed under this rule"
+	lines := []string{f.Measured}
+	if f.Limit != "" {
+		lines = append(lines, f.Limit)
 	}
-	remedy := f.Remedy
-	if remedy == "" {
-		remedy = "change the file so it satisfies the rule"
+	if f.Remedy != "" {
+		lines = append(lines, "suggested: "+f.Remedy)
 	}
 	override := f.Override
 	if override == "" {
@@ -245,7 +302,11 @@ func findingText(f Finding, rule CompiledRule, target string) string {
 			override = fmt.Sprintf("edit %s in %s", rule.Name, last(rule.Origins))
 		}
 	}
-	return strings.Join([]string{f.Measured, limit, "suggested: " + remedy, "override: " + override, "see: lore package doc " + rule.Spec.Use}, "\n")
+	if override != "" {
+		lines = append(lines, "override: "+override)
+	}
+	lines = append(lines, "see: lore package doc "+rule.Spec.Use)
+	return strings.Join(lines, "\n")
 }
 
 func indent(s string) string { return "  " + strings.ReplaceAll(s, "\n", "\n  ") }

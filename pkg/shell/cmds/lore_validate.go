@@ -3,6 +3,7 @@ package cmds
 import (
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	"github.com/aakarim/go-openlore/pkg/openlore/validation"
@@ -44,13 +45,29 @@ func cmdLoreValidate(ctx CmdContext, args []string, w io.Writer, errW io.Writer,
 		return 1
 	}
 	errors, warnings := 0, 0
+	members := map[string]bool{}
 	for _, diagnostic := range diagnostics {
+		if diagnostic.Rule == "rules/bundle-root" {
+			fmt.Fprintf(errW, "lore validate: %s\n", diagnostic.Message)
+			return 1
+		}
 		fmt.Fprintln(w, validation.FormatDiagnostic(diagnostic))
+		if diagnostic.Member != "" {
+			members[diagnostic.Member] = true
+		}
 		if diagnostic.Severity == validation.SeverityError {
 			errors++
 		} else {
 			warnings++
 		}
+	}
+	memberNames := make([]string, 0, len(members))
+	for member := range members {
+		memberNames = append(memberNames, member)
+	}
+	sort.Strings(memberNames)
+	for _, member := range memberNames {
+		fmt.Fprintf(w, "see: lore package doc %s\n", member)
 	}
 	fmt.Fprintf(w, "%d %s, %d %s\n", errors, countLabel(errors, "error"), warnings, countLabel(warnings, "warning"))
 	if errors > 0 {

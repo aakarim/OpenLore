@@ -25,7 +25,10 @@ type Diagnostic struct {
 	Column   int
 	Severity Severity
 	Rule     string
-	Message  string
+	// Member is the package member that produced the finding. Empty for
+	// third-party validators that do not participate in rules discoverability.
+	Member  string
+	Message string
 }
 
 type File struct {

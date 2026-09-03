@@ -2,6 +2,7 @@ package rules
 
 import (
 	"fmt"
+	"path"
 	"reflect"
 	"sort"
 	"strings"
@@ -18,30 +19,31 @@ func (e *UnificationError) Error() string {
 	return fmt.Sprintf("rule %q conflicts between %s and %s (different: %s)", e.Rule, e.OuterOrigin, e.InnerOrigin, strings.Join(e.DifferingKeys, ", "))
 }
 
-func Unify(layers []Layer) (map[string]RuleSpec, map[string][]string, error) {
-	specs := map[string]RuleSpec{}
-	origins := map[string][]string{}
+func Unify(layers []Layer) (map[string]UnifiedRule, error) {
+	unified := map[string]UnifiedRule{}
 	for _, layer := range layers {
 		for name, incoming := range layer.Rules {
-			outer, exists := specs[name]
+			outer, exists := unified[name]
 			if !exists {
-				specs[name], origins[name] = incoming, []string{layer.Origin}
+				unified[name] = UnifiedRule{Spec: incoming, Origins: []string{layer.Origin}, Scope: layer.Scope}
 				continue
 			}
-			if outer.Default {
-				specs[name], origins[name] = incoming, append(origins[name], layer.Origin)
+			if outer.Spec.Default {
+				unified[name] = UnifiedRule{Spec: incoming, Origins: append(outer.Origins, layer.Origin), Scope: layer.Scope}
 				continue
 			}
-			if keys := differingKeys(outer, incoming); len(keys) != 0 {
-				return nil, nil, &UnificationError{Rule: name, OuterOrigin: origins[name][len(origins[name])-1], InnerOrigin: layer.Origin, DifferingKeys: keys}
+			if keys := DifferingKeys(outer.Spec, incoming); len(keys) != 0 {
+				return nil, &UnificationError{Rule: name, OuterOrigin: outer.Origins[len(outer.Origins)-1], InnerOrigin: layer.Origin, DifferingKeys: keys}
 			}
-			origins[name] = append(origins[name], layer.Origin)
+			outer.Origins = append(outer.Origins, layer.Origin)
+			unified[name] = outer
 		}
 	}
-	return specs, origins, nil
+	return unified, nil
 }
 
-func differingKeys(a, b RuleSpec) []string {
+// DifferingKeys returns normalized semantic fields that differ between specs.
+func DifferingKeys(a, b RuleSpec) []string {
 	var keys []string
 	if !reflect.DeepEqual(normalizeStrings(a.Match), normalizeStrings(b.Match)) {
 		keys = append(keys, "match")
@@ -71,18 +73,25 @@ func normalizeStrings(v []string) []string {
 	return v
 }
 
-func Compile(reg *Registry, env func(string) Env, specs map[string]RuleSpec, origins map[string][]string, scope string) ([]CompiledRule, error) {
+func Compile(reg *Registry, env func(string) Env, unified map[string]UnifiedRule) ([]CompiledRule, error) {
 	if reg == nil {
 		return nil, fmt.Errorf("rules: nil registry")
 	}
-	names := make([]string, 0, len(specs))
-	for name := range specs {
+	names := make([]string, 0, len(unified))
+	for name := range unified {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 	out := make([]CompiledRule, 0, len(names))
 	for _, name := range names {
-		spec := specs[name]
+		rule := unified[name]
+		spec := rule.Spec
+		if err := validateGlobs(name, "match", spec.Match); err != nil {
+			return nil, err
+		}
+		if err := validateGlobs(name, "exclude", spec.Exclude); err != nil {
+			return nil, err
+		}
 		member, ok := reg.Lookup(spec.Use)
 		if !ok {
 			suffix := ""
@@ -107,9 +116,23 @@ func Compile(reg *Registry, env func(string) Env, specs map[string]RuleSpec, ori
 		if err != nil {
 			return nil, fmt.Errorf("rules.%s.with: %w", name, err)
 		}
-		out = append(out, CompiledRule{Name: name, Spec: spec, Origins: origins[name], Scope: scope, Member: member, Check: check})
+		out = append(out, CompiledRule{Name: name, Spec: spec, Origins: rule.Origins, Scope: rule.Scope, Member: member, Check: check})
 	}
 	return out, nil
+}
+
+func validateGlobs(rule, field string, patterns []string) error {
+	for i, pattern := range patterns {
+		for _, segment := range split(pattern) {
+			if segment == "**" {
+				continue
+			}
+			if _, err := path.Match(segment, ""); err != nil {
+				return fmt.Errorf("rules.%s.%s[%d]: invalid glob %q: %w", rule, field, i, pattern, err)
+			}
+		}
+	}
+	return nil
 }
 
 func validateParams(rule string, with map[string]any, manifest Manifest) error {

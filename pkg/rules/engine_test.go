@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aakarim/go-openlore/pkg/openlore/validation"
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
 
@@ -15,18 +16,25 @@ func (s testSource) LayersFor(context.Context, string) ([]Layer, error) { return
 type testMember struct {
 	manifest Manifest
 	calls    *int
+	subjects *[]Subject
 }
 
 func (m testMember) Manifest() Manifest { return m.manifest }
 func (m testMember) Compile(map[string]any, Env) (Check, error) {
-	return testCheck{calls: m.calls}, nil
+	return testCheck{calls: m.calls, subjects: m.subjects}, nil
 }
 
-type testCheck struct{ calls *int }
+type testCheck struct {
+	calls    *int
+	subjects *[]Subject
+}
 
-func (c testCheck) Evaluate(context.Context, Subject) ([]Finding, error) {
+func (c testCheck) Evaluate(_ context.Context, subject Subject) ([]Finding, error) {
 	if c.calls != nil {
 		(*c.calls)++
+	}
+	if c.subjects != nil {
+		*c.subjects = append(*c.subjects, subject)
 	}
 	return nil, nil
 }
@@ -44,11 +52,24 @@ func TestAdmitLeafNeverCallsBundleRule(t *testing.T) {
 	}
 }
 
+func TestValidatorCallsBundleRuleOnceAtBundleRoot(t *testing.T) {
+	calls := 0
+	var subjects []Subject
+	registry := NewRegistry()
+	registry.Register(testMember{manifest: Manifest{Path: "test/bundle", Kind: KindRule, Scope: ScopeBundle}, calls: &calls, subjects: &subjects})
+	engine := New(Options{Registry: registry, Config: testSource{{Origin: "test", Scope: "/docs", Rules: map[string]RuleSpec{"bundle": {Match: []string{"**"}, Use: "test/bundle"}}}}})
+	bundle := validation.Bundle{Root: "/docs", Files: []validation.File{{AbsolutePath: "/docs/a.md"}, {AbsolutePath: "/docs/b.md"}}}
+	engine.Validator()(bundle)
+	if calls != 1 || len(subjects) != 1 || subjects[0].Path != bundle.Root {
+		t.Fatalf("calls=%d subjects=%#v", calls, subjects)
+	}
+}
+
 func TestCompileReportsSuggestionsAndTypes(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(testMember{manifest: Manifest{Path: "size/lines", Kind: KindRule, Scope: ScopeFile, Params: []Param{{Name: "max", Type: ParamInteger, Required: true}}}})
 	compile := func(spec RuleSpec) error {
-		_, err := Compile(registry, func(string) Env { return Env{} }, map[string]RuleSpec{"limit": spec}, map[string][]string{"limit": {"test"}}, "/")
+		_, err := Compile(registry, func(string) Env { return Env{} }, map[string]UnifiedRule{"limit": {Spec: spec, Origins: []string{"test"}, Scope: "/"}})
 		return err
 	}
 	if err := compile(RuleSpec{Use: "size/line", With: map[string]any{"max": 3}}); err == nil || !strings.Contains(err.Error(), `did you mean "size/lines"`) {
@@ -62,5 +83,22 @@ func TestCompileReportsSuggestionsAndTypes(t *testing.T) {
 	}
 	if err := compile(RuleSpec{Use: "size/lines"}); err == nil || !strings.Contains(err.Error(), "required parameter") {
 		t.Fatalf("missing error=%v", err)
+	}
+}
+
+func TestCompileRejectsInvalidGlobs(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(testMember{manifest: Manifest{Path: "test/rule", Kind: KindRule, Scope: ScopeFile}})
+	for _, test := range []struct {
+		field string
+		spec  RuleSpec
+	}{
+		{field: "match", spec: RuleSpec{Use: "test/rule", Match: []string{"docs/["}}},
+		{field: "exclude", spec: RuleSpec{Use: "test/rule", Match: []string{"**"}, Exclude: []string{"docs/["}}},
+	} {
+		_, err := Compile(registry, func(string) Env { return Env{} }, map[string]UnifiedRule{"broken": {Spec: test.spec, Origins: []string{"test"}, Scope: "/"}})
+		if err == nil || !strings.Contains(err.Error(), "rules.broken."+test.field+"[0]: invalid glob") {
+			t.Errorf("%s error=%v", test.field, err)
+		}
 	}
 }

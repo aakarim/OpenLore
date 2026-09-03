@@ -1414,7 +1414,7 @@ func desugarOKFRules(auth *AuthConfig) error {
 			docset.Rules = map[string]rules.RuleSpec{}
 		}
 		if explicit, ok := docset.Rules["okf"]; ok {
-			if !sameLegacyOKFRule(explicit, expected) {
+			if !explicit.Equal(expected) {
 				return fmt.Errorf("docset %q has conflicting okf and rules.okf configuration", name)
 			}
 		} else {
@@ -1433,26 +1433,4 @@ func desugarOKFRules(auth *AuthConfig) error {
 		auth.Docsets[name] = docset
 	}
 	return nil
-}
-
-func sameLegacyOKFRule(a, b rules.RuleSpec) bool {
-	if a.Use != b.Use || a.Default != b.Default || a.IsEnforcing() != b.IsEnforcing() || len(a.Match) != len(b.Match) || len(a.Exclude) != len(b.Exclude) || len(a.With) != len(b.With) {
-		return false
-	}
-	for i := range a.Match {
-		if a.Match[i] != b.Match[i] {
-			return false
-		}
-	}
-	for i := range a.Exclude {
-		if a.Exclude[i] != b.Exclude[i] {
-			return false
-		}
-	}
-	for key, value := range a.With {
-		if fmt.Sprint(value) != fmt.Sprint(b.With[key]) {
-			return false
-		}
-	}
-	return true
 }

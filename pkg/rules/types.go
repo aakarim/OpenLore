@@ -63,6 +63,10 @@ type RuleSpec struct {
 
 func (s RuleSpec) IsEnforcing() bool { return s.Enforce == nil || *s.Enforce }
 
+// Equal compares normalized rule semantics. In particular, an omitted enforce
+// value is equal to enforce: true and nil/empty collections are equivalent.
+func (s RuleSpec) Equal(other RuleSpec) bool { return len(DifferingKeys(s, other)) == 0 }
+
 type Defaults struct {
 	Growth float64
 }
@@ -70,6 +74,8 @@ type Defaults struct {
 type Env struct {
 	Defaults Defaults
 	Logger   *slog.Logger
+	// AliasRoots contains configured docset aliases, longest first.
+	AliasRoots []string
 }
 
 type Subject struct {
@@ -93,10 +99,12 @@ const (
 )
 
 type Finding struct {
-	Code     string
-	Path     string
-	Line     int
-	Column   int
+	Code   string
+	Path   string
+	Line   int
+	Column int
+	// Warning never rejects a write and remains a warning during validation,
+	// even when its enclosing rule is enforcing.
 	Warning  bool
 	Measured string
 	Limit    string
@@ -119,6 +127,15 @@ type Layer struct {
 	Origin string
 	Scope  string
 	Rules  map[string]RuleSpec
+}
+
+// UnifiedRule retains the declaring scope while layers are unified. Child
+// declarations may refine a rule, but identical declarations do not move the
+// outer declaration's relative glob root.
+type UnifiedRule struct {
+	Spec    RuleSpec
+	Origins []string
+	Scope   string
 }
 
 type LayerSource interface {
