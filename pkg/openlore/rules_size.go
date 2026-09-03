@@ -105,8 +105,17 @@ type sessionSizeBackend struct {
 }
 
 func (b sessionSizeBackend) Baseline(target string) (string, error) {
-	if _, err := b.server.buildSessionFS(b.identity).ReadFile(target); err != nil {
-		return "", err
+	if b.server.authEnforced {
+		allowed := false
+		for _, root := range b.server.readableRoots(b.server.resolveSessionIdentity(b.identity)) {
+			if pathWithinRoot(root, target) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return "", errors.New("permission denied")
+		}
 	}
 	return b.server.rules.baselineText(context.Background(), target)
 }
