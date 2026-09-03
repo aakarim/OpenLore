@@ -23,9 +23,9 @@ func init() {
 
 func (m Member) Manifest() rules.Manifest {
 	if m.Alias {
-		return rules.Manifest{Path: "link/alias", Kind: rules.KindRule, Scope: rules.ScopeBundle, Summary: "Warn on links involving aliased docset paths"}
+		return rules.Manifest{Path: "link/alias", Kind: rules.KindRule, Scope: rules.ScopeBundle, Summary: "Warn on links from or to aliased docset paths", Doc: "Warn when a link originates from or targets an aliased docset path."}
 	}
-	return rules.Manifest{Path: "link/resolves", Kind: rules.KindRule, Scope: rules.ScopeBundle, Summary: "Require local links to resolve inside the bundle"}
+	return rules.Manifest{Path: "link/resolves", Kind: rules.KindRule, Scope: rules.ScopeBundle, Summary: "Local links must resolve inside the bundle", Doc: "Require every local link to resolve to a target inside the validated bundle."}
 }
 func (m Member) Compile(_ map[string]any, env rules.Env) (rules.Check, error) {
 	roots := append([]string(nil), env.AliasRoots...)

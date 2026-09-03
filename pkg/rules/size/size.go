@@ -30,16 +30,22 @@ func Register(reg *rules.Registry) {
 func init() { Register(rules.DefaultRegistry()) }
 
 func (r Rule) Manifest() rules.Manifest {
-	path, summary := "size/kilobytes", "Reject writes larger than max kibibytes"
+	memberPath, summary := "size/kilobytes", "Reject writes larger than max kibibytes"
+	doc := "Reject writes whose size exceeds max KiB."
 	if r.Metric == Lines {
-		path, summary = "size/lines", "Reject writes with more than max lines"
+		memberPath, summary = "size/lines", "Reject writes with more than max lines"
+		doc = "Reject writes whose line count exceeds max."
 	}
 	if r.Metric == Tokens {
-		path, summary = "size/tokens", "Reject writes with more than max estimated tokens"
+		memberPath, summary = "size/tokens", "Reject writes with more than max tokens"
+		doc = "Reject writes whose estimated token count exceeds max. Tokens use estimate/v1: ceil(bytes / 4)."
 	}
-	return rules.Manifest{Path: path, Kind: rules.KindRule, Scope: rules.ScopeFile, Summary: summary,
-		Params:  []rules.Param{{Name: "max", Type: rules.ParamIntegerOrInitial, Required: true}, {Name: "growth", Type: rules.ParamNumber}},
-		Example: "use: " + path + "\nwith: { max: 60 }"}
+	return rules.Manifest{Path: memberPath, Kind: rules.KindRule, Scope: rules.ScopeFile, Summary: summary, Doc: doc,
+		Params: []rules.Param{
+			{Name: "max", Type: rules.ParamIntegerOrInitial, Required: true, Doc: "Fixed cap; max: initial ships in folder rules phase 4."},
+			{Name: "growth", Type: rules.ParamNumber, Doc: "Multiplier for max: initial; defaults to openlore.yml rules.growth (1.25)."},
+		},
+		Example: "use: " + memberPath + "\nwith: { max: 60 }"}
 }
 
 func (r Rule) Compile(with map[string]any, _ rules.Env) (rules.Check, error) {

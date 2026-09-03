@@ -17,9 +17,9 @@ func init() {
 
 func (m Member) Manifest() rules.Manifest {
 	if m.Bundle {
-		return rules.Manifest{Path: "okf/bundle", Kind: rules.KindRule, Scope: rules.ScopeBundle, Summary: "Validate OKF bundle structure and families"}
+		return rules.Manifest{Path: "okf/bundle", Kind: rules.KindRule, Scope: rules.ScopeBundle, Summary: "Root index.md/log.md structure, okf_version, family checks", Doc: "Validate root index.md and log.md structure, okf_version, and OKF family fields."}
 	}
-	return rules.Manifest{Path: "okf", Kind: rules.KindRule, Scope: rules.ScopeFile, Summary: "Validate OKF concept conformance"}
+	return rules.Manifest{Path: "okf", Kind: rules.KindRule, Scope: rules.ScopeFile, Summary: "OKF concept conformance of one file", Doc: "Validate one file for OKF concept conformance."}
 }
 
 func (m Member) Compile(_ map[string]any, _ rules.Env) (rules.Check, error) {
