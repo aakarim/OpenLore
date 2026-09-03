@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -113,8 +114,10 @@ func conflictDetails(conflict *UnificationError, layers []Layer) string {
 		}
 		sort.Strings(names)
 		for _, name := range names {
-			if fmt.Sprint(outer.With[name]) != fmt.Sprint(inner.With[name]) {
-				details = append(details, fmt.Sprintf("%s: %v vs %v", name, outer.With[name], inner.With[name]))
+			outerValue, outerOK := outer.With[name]
+			innerValue, innerOK := inner.With[name]
+			if outerOK != innerOK || !reflect.DeepEqual(outerValue, innerValue) {
+				details = append(details, fmt.Sprintf("%s: %#v vs %#v", name, outerValue, innerValue))
 			}
 		}
 	}

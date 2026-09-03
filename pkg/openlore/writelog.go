@@ -31,6 +31,7 @@ type applyResult struct {
 type logEntry struct {
 	cs          vfs.ChangeSet
 	attribution Attribution
+	identity    *Identity
 	reply       chan applyResult
 }
 
@@ -93,7 +94,7 @@ type writeLog struct {
 
 	mu         sync.RWMutex      // guards closed + postCommit + serializes sends against Close
 	postCommit PostCommitHandler // optional; runs at the applier after a durable commit
-	preApply   func(Attribution, vfs.ChangeSet) error
+	preApply   func(*Identity, Attribution, vfs.ChangeSet) error
 	recorder   CommitRecorder
 	closed     bool
 	ch         chan logEntry
@@ -148,7 +149,7 @@ func (l *writeLog) run() {
 		pre := l.preApply
 		l.mu.RUnlock()
 		if err == nil && pre != nil {
-			err = pre(e.attribution, e.cs)
+			err = pre(e.identity, e.attribution, e.cs)
 		}
 		if err == nil {
 			committed, err = vfs.CommitChangeSet(l.substrate, e.cs)
@@ -184,7 +185,7 @@ func (l *writeLog) run() {
 	}
 }
 
-func (l *writeLog) SetPreApply(h func(Attribution, vfs.ChangeSet) error) {
+func (l *writeLog) SetPreApply(h func(*Identity, Attribution, vfs.ChangeSet) error) {
 	l.mu.Lock()
 	l.preApply = h
 	l.mu.Unlock()
@@ -211,6 +212,14 @@ func (l *writeLog) SetPostCommit(h PostCommitHandler) {
 // post-commit chain. It returns ErrLogClosed if the log is shutting down, or
 // ctx.Err() if ctx is cancelled first.
 func (l *writeLog) Submit(ctx context.Context, attribution Attribution, cs vfs.ChangeSet) (string, error) {
+	return l.submit(ctx, nil, attribution, cs)
+}
+
+func (l *writeLog) SubmitIdentity(ctx context.Context, identity Identity, cs vfs.ChangeSet) (string, error) {
+	return l.submit(ctx, &identity, identity.attribution(), cs)
+}
+
+func (l *writeLog) submit(ctx context.Context, identity *Identity, attribution Attribution, cs vfs.ChangeSet) (string, error) {
 	reply := make(chan applyResult, 1)
 
 	// Hold the read lock across the send so Close (which takes the write lock)
@@ -221,7 +230,7 @@ func (l *writeLog) Submit(ctx context.Context, attribution Attribution, cs vfs.C
 		return "", ErrLogClosed
 	}
 	select {
-	case l.ch <- logEntry{cs: cs, attribution: attribution, reply: reply}:
+	case l.ch <- logEntry{cs: cs, attribution: attribution, identity: identity, reply: reply}:
 		l.mu.RUnlock()
 	case <-ctx.Done():
 		l.mu.RUnlock()

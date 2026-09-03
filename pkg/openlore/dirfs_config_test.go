@@ -50,6 +50,19 @@ func TestDirFSExposesOnlyFolderConfig(t *testing.T) {
 	if _, err := d.WriteFileAtomic("/docs/backend/.lore/xattrs/.lore/config.yaml", nil, vfs.WriteOpts{}); err == nil {
 		t.Fatal("nested .lore config path escaped reservation")
 	}
+	nestedLore := filepath.Join(dir, ".lore", "xattrs", ".lore")
+	if err := os.MkdirAll(nestedLore, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nestedLore, "config.yaml"), []byte("hidden"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Stat("/docs/backend/.lore/xattrs/.lore"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("nested .lore stat exposed package state: %v", err)
+	}
+	if _, err := d.ReadDir("/docs/backend/.lore/xattrs/.lore"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("nested .lore listing exposed package state: %v", err)
+	}
 	if err := d.Mkdir("/docs/backend/.lore"); err == nil {
 		t.Fatal("mkdir .lore succeeded")
 	}

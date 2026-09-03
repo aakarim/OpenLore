@@ -645,7 +645,7 @@ func atomicWrite(full string, content []byte) error {
 
 func (d *DirFS) Stat(p string) (*vfs.FileInfo, error) {
 	clean := vfs.CleanPath(p)
-	if path.Base(clean) == ".lore" && !hasTraversal(p) {
+	if path.Base(clean) == ".lore" && !hasTraversal(p) && isDirConfigPath(path.Join(clean, "config.yaml")) {
 		if info, err := os.Stat(filepath.Join(d.resolve(clean), "config.yaml")); err != nil || info.IsDir() {
 			return nil, os.ErrNotExist
 		}
@@ -684,7 +684,7 @@ func (d *DirFS) Stat(p string) (*vfs.FileInfo, error) {
 
 func (d *DirFS) ReadDir(p string) ([]vfs.FileInfo, error) {
 	clean := vfs.CleanPath(p)
-	if path.Base(clean) == ".lore" {
+	if path.Base(clean) == ".lore" && isDirConfigPath(path.Join(clean, "config.yaml")) {
 		if hasTraversal(p) {
 			return nil, os.ErrNotExist
 		}

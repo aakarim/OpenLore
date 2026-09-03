@@ -13,6 +13,12 @@ type testSource []Layer
 
 func (s testSource) LayersFor(context.Context, string) ([]Layer, error) { return s, nil }
 
+type testFolderSource []Layer
+
+func (s testFolderSource) LayersForDir(context.Context, string) ([]Layer, error) { return s, nil }
+func (s testFolderSource) LayersAbove(context.Context, string) ([]Layer, error)  { return s, nil }
+func (testFolderSource) Invalidate(string)                                       {}
+
 type testMember struct {
 	manifest Manifest
 	calls    *int
@@ -62,6 +68,18 @@ func TestValidatorCallsBundleRuleOnceAtBundleRoot(t *testing.T) {
 	engine.Validator()(bundle)
 	if calls != 1 || len(subjects) != 1 || subjects[0].Path != bundle.Root {
 		t.Fatalf("calls=%d subjects=%#v", calls, subjects)
+	}
+}
+
+func TestValidatorRunsBundleRuleWhenFolderIsNamedBundleRoot(t *testing.T) {
+	calls := 0
+	registry := NewRegistry()
+	registry.Register(testMember{manifest: Manifest{Path: "test/bundle", Kind: KindRule, Scope: ScopeBundle}, calls: &calls})
+	engine := New(Options{Registry: registry, Folders: testFolderSource{{Origin: "/docs/sub/.lore/config.yaml", Scope: "/docs/sub", Rules: map[string]RuleSpec{"bundle": {Match: []string{"**"}, Use: "test/bundle"}}}}})
+	bundle := validation.Bundle{Root: "/docs/sub", Files: []validation.File{{AbsolutePath: "/docs/sub/a.md"}}}
+	engine.Validator()(bundle)
+	if calls != 1 {
+		t.Fatalf("bundle rule calls=%d, want 1", calls)
 	}
 }
 

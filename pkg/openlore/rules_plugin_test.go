@@ -201,6 +201,13 @@ func TestFolderRulesPermissionInheritanceInvalidationAndExemption(t *testing.T) 
 	if _, err := server.buildSessionFS(identity("alice")).(vfs.WritableFS).WriteFileAtomic("/docs/sub/deep/y.md", []byte("1\n2\n3\n4\n"), vfs.WriteOpts{}); err != nil {
 		t.Fatalf("rule remained after config removal: %v", err)
 	}
+	mixed := vfs.ChangeSet{Changes: []vfs.Change{
+		{Target: configPath, Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: []byte("version: 1\nrules: {}\n")}},
+		{Target: "/docs/mixed.md", Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: []byte("content\n")}},
+	}}
+	if _, err := server.AdmitChangeSet(context.Background(), identity("alice"), mixed); err == nil || !strings.Contains(err.Error(), "folder config mutations must be submitted separately") {
+		t.Fatalf("mixed config batch error = %v", err)
+	}
 
 	for _, name := range []string{"configured", "plain"} {
 		if err := os.Mkdir(filepath.Join(root, "docs", name), 0o755); err != nil {
@@ -211,6 +218,9 @@ func TestFolderRulesPermissionInheritanceInvalidationAndExemption(t *testing.T) 
 	if _, err := server.buildSessionFS(identity("alice")).(vfs.WritableFS).WriteFileAtomic(configuredPath, []byte("version: 1\nrules: {}\n"), vfs.WriteOpts{}); err != nil {
 		t.Fatalf("nested config write: %v", err)
 	}
+	if _, err := server.writeLog.SubmitIdentity(context.Background(), identity("bob"), vfs.ChangeSet{Target: "/docs/configured", Action: vfs.ChangeActionRemoveAll, RemoveAll: &vfs.RemoveAllChange{}}); !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("serialized RemoveAll recheck without config.edit = %v", err)
+	}
 	if err := server.buildSessionFS(identity("bob")).(vfs.WritableFS).RemoveAll("/docs/configured", vfs.RemoveOpts{}); !errors.Is(err, os.ErrPermission) {
 		t.Fatalf("RemoveAll config tree without config.edit = %v", err)
 	}
@@ -219,6 +229,35 @@ func TestFolderRulesPermissionInheritanceInvalidationAndExemption(t *testing.T) 
 	}
 	if err := server.buildSessionFS(identity("alice")).(vfs.WritableFS).RemoveAll("/docs/configured", vfs.RemoveOpts{}); err != nil {
 		t.Fatalf("RemoveAll config tree with config.edit = %v", err)
+	}
+}
+
+func TestFolderRulesValidateThroughAlias(t *testing.T) {
+	docs := docset("/docs", nil)
+	docs.Aliases = []string{"/alias"}
+	docs.Config = &config.DirConfigPermission{Edit: []string{"writer"}}
+	auth := serverAuth(map[string]config.DocsetSpec{"docs": docs}, nil)
+	server, root := bootRulesServer(t, auth, nil)
+	id := Identity{IdentityName: "alice", Principal: AuthenticatedPrincipal{IdentityName: "alice"}, Attribution: Attribution{Principal: "alice"}, Scopes: []string{ScopeFull}}
+
+	var out, errOut bytes.Buffer
+	if code := server.buildSessionShell(id).ExecPipeline("lore validate /alias", &out, &errOut, nil); code != 0 {
+		t.Fatalf("initial alias validate exit=%d stdout=%s stderr=%s", code, out.String(), errOut.String())
+	}
+	configContent := "version: 1\nrules:\n  short:\n    match: ['**/*.md']\n    use: size/lines\n    with: {max: 3}\n"
+	if _, err := server.buildSessionFS(id).(vfs.WritableFS).WriteFileAtomic("/alias/.lore/config.yaml", []byte(configContent), vfs.WriteOpts{}); err != nil {
+		t.Fatalf("alias config write: %v", err)
+	}
+	if _, err := server.writeLog.SubmitIdentity(context.Background(), id, writeCSBytes("/docs/preapply.md", "1\n2\n3\n4\n")); err == nil || !strings.Contains(err.Error(), "size/lines") {
+		t.Fatalf("serialized rule recheck error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "docs", "too-long.md"), []byte("1\n2\n3\n4\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := server.buildSessionShell(id).ExecPipeline("lore validate /alias", &out, &errOut, nil); code != 1 || !strings.Contains(out.String(), "too-long.md:1:1: error [size/lines]") {
+		t.Fatalf("alias validate exit=%d stdout=%s stderr=%s", code, out.String(), errOut.String())
 	}
 }
 

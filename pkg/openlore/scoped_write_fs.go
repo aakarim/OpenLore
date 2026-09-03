@@ -94,19 +94,21 @@ func mutationDeniedError(fsys vfs.FileSystem, action vfs.ChangeAction, target st
 	if isDirConfigPath(target) {
 		return os.ErrPermission
 	}
-	if action == vfs.ChangeActionRemoveAll {
-		containsConfig := false
-		_ = vfs.WalkDir(fsys, target, func(candidate string, _ *vfs.FileInfo, err error) error {
-			if err == nil && isDirConfigPath(candidate) {
-				containsConfig = true
-			}
-			return nil
-		})
-		if containsConfig {
-			return os.ErrPermission
-		}
+	if action == vfs.ChangeActionRemoveAll && treeContainsDirConfig(fsys, target) {
+		return os.ErrPermission
 	}
 	return vfs.ErrReadOnly
+}
+
+func treeContainsDirConfig(fsys vfs.FileSystem, target string) bool {
+	containsConfig := false
+	_ = vfs.WalkDir(fsys, target, func(candidate string, _ *vfs.FileInfo, err error) error {
+		if err == nil && isDirConfigPath(candidate) {
+			containsConfig = true
+		}
+		return nil
+	})
+	return containsConfig
 }
 func (s *scopedWriteFS) GetXattr(p, name string) ([]byte, error) {
 	x, ok := s.FileSystem.(vfs.XattrReader)

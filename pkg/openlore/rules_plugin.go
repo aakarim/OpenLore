@@ -26,7 +26,7 @@ type configRuleLayers struct {
 }
 
 type folderRuleCacheEntry struct {
-	layer rules.Layer
+	rules map[string]rules.RuleSpec
 	err   error
 	found bool
 }
@@ -63,10 +63,10 @@ func (s *folderRuleLayers) layersThrough(_ context.Context, dir string, includeD
 	for _, candidate := range dirs {
 		entry := s.load(candidate)
 		if entry.err != nil {
-			return nil, entry.err
+			return nil, fmt.Errorf("%s: %w", path.Join(candidate, ".lore/config.yaml"), entry.err)
 		}
 		if entry.found {
-			layers = append(layers, entry.layer)
+			layers = append(layers, rules.Layer{Origin: path.Join(candidate, ".lore/config.yaml"), Scope: candidate, Rules: entry.rules})
 		}
 	}
 	return layers, nil
@@ -96,34 +96,56 @@ func directoriesFrom(root, dir string) []string {
 }
 
 func (s *folderRuleLayers) load(dir string) folderRuleCacheEntry {
+	canonicalDir := s.canonicalDir(dir)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	entry, ok := s.cache[dir]
+	entry, ok := s.cache[canonicalDir]
 	if ok {
 		return entry
 	}
-	configPath := path.Join(dir, ".lore/config.yaml")
+	configPath := path.Join(canonicalDir, ".lore/config.yaml")
 	content, err := s.fs.ReadFile(configPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			entry = folderRuleCacheEntry{}
 		} else {
-			entry.err = fmt.Errorf("%s: %w", configPath, err)
+			entry.err = err
 		}
 	} else {
 		fileConfig, decodeErr := rules.DecodeFile(content)
 		if decodeErr != nil {
-			entry.err = fmt.Errorf("%s: %w", configPath, decodeErr)
+			entry.err = decodeErr
 		} else {
-			entry = folderRuleCacheEntry{found: true, layer: rules.Layer{Origin: configPath, Scope: dir, Rules: fileConfig.Rules}}
+			entry = folderRuleCacheEntry{found: true, rules: fileConfig.Rules}
 		}
 	}
-	s.cache[dir] = entry
+	s.cache[canonicalDir] = entry
 	return entry
 }
 
-func (s *folderRuleLayers) Invalidate(dir string) {
+func (s *folderRuleLayers) canonicalDir(dir string) string {
 	dir = vfs.CleanPath(dir)
+	bestAlias, target := "", ""
+	for _, docset := range s.docsets {
+		if len(docset.Paths) == 0 {
+			continue
+		}
+		for _, rawAlias := range docset.Aliases {
+			alias := vfs.CleanPath(rawAlias)
+			if pathWithinRoot(alias, dir) && len(alias) > len(bestAlias) {
+				bestAlias = alias
+				target = primaryDisplayPath(docset)
+			}
+		}
+	}
+	if bestAlias == "" {
+		return dir
+	}
+	return replacePathRoot(dir, bestAlias, target)
+}
+
+func (s *folderRuleLayers) Invalidate(dir string) {
+	dir = s.canonicalDir(dir)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for cached := range s.cache {
@@ -240,6 +262,36 @@ func (p *rulesPlugin) WriteMiddleware() []WriteMiddleware {
 			return next(ctx, op)
 		}
 	}}
+}
+
+// PreApply re-evaluates rules against the serialized filesystem state. This
+// closes the gap between concurrent admission and commit, and deliberately
+// rejects batches whose folder-config mutation would require a projected view.
+func (p *rulesPlugin) PreApply(attribution Attribution, changes vfs.ChangeSet) error {
+	leaves := changes.Leaves()
+	configChanges := 0
+	for _, leaf := range leaves {
+		if rules.IsDirConfigPath(leaf.Target) {
+			configChanges++
+		}
+	}
+	if configChanges != 0 && len(leaves) != 1 {
+		return fmt.Errorf("rules: folder config mutations must be submitted separately")
+	}
+	for _, leaf := range leaves {
+		if rules.IsDirConfigPath(leaf.Target) {
+			if leaf.Action == vfs.ChangeActionWrite && leaf.Write != nil {
+				if err := p.engine.CheckConfigFile(context.Background(), path.Dir(path.Dir(leaf.Target)), leaf.Write.Bytes); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		if err := p.engine.AdmitLeaf(context.Background(), leaf, attribution.String(), nil); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (p *rulesPlugin) invalidateChanges(changes []vfs.Change) {

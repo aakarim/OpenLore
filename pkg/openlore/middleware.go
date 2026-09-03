@@ -45,12 +45,19 @@ func (a Attribution) String() string {
 type WriteOp struct {
 	changeSet   vfs.ChangeSet
 	Attribution Attribution
+	identity    *Identity
 }
 
 // NewWriteOp constructs an immutable admission operation. The changeset is
 // intentionally not exposed: policy middleware must inspect every leaf.
 func NewWriteOp(attribution Attribution, cs vfs.ChangeSet) WriteOp {
 	return WriteOp{changeSet: cloneWriteChangeSet(cs), Attribution: attribution}
+}
+
+func newIdentityWriteOp(identity Identity, cs vfs.ChangeSet) WriteOp {
+	op := NewWriteOp(identity.attribution(), cs)
+	op.identity = &identity
+	return op
 }
 
 // Leaves returns every proposed mutation in execution order.
