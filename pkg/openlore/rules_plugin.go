@@ -13,10 +13,12 @@ import (
 
 	"github.com/aakarim/go-openlore/internal/config"
 	"github.com/aakarim/go-openlore/pkg/openlore/validation"
+	"github.com/aakarim/go-openlore/pkg/packagestate"
 	"github.com/aakarim/go-openlore/pkg/rules"
 	_ "github.com/aakarim/go-openlore/pkg/rules/link"
 	_ "github.com/aakarim/go-openlore/pkg/rules/okfrule"
 	_ "github.com/aakarim/go-openlore/pkg/rules/size"
+	"github.com/aakarim/go-openlore/pkg/rules/tokenizer"
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
 
@@ -213,6 +215,7 @@ func ruleRoots(docset config.DocsetSpec) []string {
 
 type rulesPlugin struct {
 	engine *rules.Engine
+	fs     vfs.FileSystem
 }
 
 func newRulesPlugin(auth *config.AuthConfig, defaults rules.Defaults, fsys vfs.FileSystem, logger *slog.Logger) (*rulesPlugin, error) {
@@ -222,7 +225,11 @@ func newRulesPlugin(auth *config.AuthConfig, defaults rules.Defaults, fsys vfs.F
 	}
 	sort.Slice(aliases, func(i, j int) bool { return len(aliases[i]) > len(aliases[j]) })
 	configLayers := configRuleLayers{global: auth.Rules, docsets: auth.Docsets}
-	env := func(string) rules.Env { return rules.Env{Defaults: defaults, Logger: logger, AliasRoots: aliases} }
+	mapper, _ := fsys.(packagestate.HostMapper)
+	env := func(member string) rules.Env {
+		pkg := strings.SplitN(member, "/", 2)[0]
+		return rules.Env{Defaults: defaults, State: packagestate.Open(mapper, pkg), Tokenizer: tokenizer.Estimator{}, Logger: logger, AliasRoots: aliases}
+	}
 	bootEngine := rules.New(rules.Options{Registry: rules.DefaultRegistry(), Config: configLayers, Env: env, Logger: logger})
 	// Compile every configured docset at boot so invalid members, parameters,
 	// and unification conflicts fail before the server begins accepting writes.
@@ -239,7 +246,7 @@ func newRulesPlugin(auth *config.AuthConfig, defaults rules.Defaults, fsys vfs.F
 		options.Folders = newFolderRuleLayers(fsys, auth.Docsets)
 	}
 	engine := rules.New(options)
-	return &rulesPlugin{engine: engine}, nil
+	return &rulesPlugin{engine: engine, fs: fsys}, nil
 }
 
 func (p *rulesPlugin) WriteMiddleware() []WriteMiddleware {
@@ -255,7 +262,7 @@ func (p *rulesPlugin) WriteMiddleware() []WriteMiddleware {
 					}
 					continue
 				}
-				if err := p.engine.AdmitLeaf(ctx, leaf, op.Attribution.String(), nil); err != nil {
+				if err := p.engine.AdmitLeaf(ctx, leaf, op.Attribution.String(), p.existing(leaf.Target)); err != nil {
 					return WriteResult{}, err
 				}
 			}
@@ -287,11 +294,24 @@ func (p *rulesPlugin) PreApply(attribution Attribution, changes vfs.ChangeSet) e
 			}
 			continue
 		}
-		if err := p.engine.AdmitLeaf(context.Background(), leaf, attribution.String(), nil); err != nil {
+		if err := p.engine.AdmitLeaf(context.Background(), leaf, attribution.String(), p.existing(leaf.Target)); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (p *rulesPlugin) existing(target string) func() ([]byte, bool, error) {
+	return func() ([]byte, bool, error) {
+		if p.fs == nil {
+			return nil, false, nil
+		}
+		content, err := p.fs.ReadFile(target)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, false, nil
+		}
+		return content, err == nil, err
+	}
 }
 
 func (p *rulesPlugin) invalidateChanges(changes []vfs.Change) {
@@ -307,7 +327,37 @@ func (p *rulesPlugin) invalidateChanges(changes []vfs.Change) {
 func (p *rulesPlugin) PostCommitMiddleware() []PostCommitMiddleware {
 	return []PostCommitMiddleware{func(next PostCommitHandler) PostCommitHandler {
 		return func(ctx context.Context, info CommitInfo) error {
+			ctx = rules.WithActor(ctx, info.Attribution.String())
 			p.invalidateChanges(info.ChangeSet.Leaves())
+			leaves := info.ChangeSet.Leaves()
+			moved := map[int]bool{}
+			for i, remove := range leaves {
+				if remove.Action != vfs.ChangeActionRemoveAll || remove.RemoveAll == nil || remove.RemoveAll.Opts.Expected == nil {
+					continue
+				}
+				var sourceHash string
+				for _, op := range remove.RemoveAll.Opts.Expected.Ops {
+					if op.RelPath == "." && op.Kind == "file" {
+						sourceHash = op.Hash
+					}
+				}
+				for j, write := range leaves {
+					if write.Action == vfs.ChangeActionWrite && write.Write != nil && hashBytes(write.Write.Bytes) == sourceHash {
+						if err := p.engine.OnMove(ctx, remove.Target, write.Target); err != nil {
+							return err
+						}
+						moved[i], moved[j] = true, true
+						break
+					}
+				}
+			}
+			for i, leaf := range leaves {
+				if !moved[i] && (leaf.Action == vfs.ChangeActionRemove || leaf.Action == vfs.ChangeActionRemoveAll) {
+					if err := p.engine.OnRemove(ctx, leaf.Target); err != nil {
+						return err
+					}
+				}
+			}
 			return next(ctx, info)
 		}
 	}}

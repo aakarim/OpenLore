@@ -47,11 +47,12 @@ evaluated: on every write (rejects) and by lore validate
 Reject writes whose size exceeds max KiB.
 
 PARAMETERS
-  max  integer  required  Fixed cap.
+  max     integer|initial  required  Fixed cap, or baseline × growth.
+  growth  number           optional  Multiplier when max is "initial".
 
 EXAMPLE
   use: size/kilobytes
-  with: { max: 60 }
+  with: { max: initial, growth: 1.1 }
 ```
 
 ## `size/lines`
@@ -63,11 +64,12 @@ evaluated: on every write (rejects) and by lore validate
 Reject writes whose line count exceeds max.
 
 PARAMETERS
-  max  integer  required  Fixed cap.
+  max     integer|initial  required  Fixed cap, or baseline × growth.
+  growth  number           optional  Multiplier when max is "initial".
 
 EXAMPLE
   use: size/lines
-  with: { max: 60 }
+  with: { max: initial, growth: 1.1 }
 ```
 
 ## `size/tokens`
@@ -79,9 +81,10 @@ evaluated: on every write (rejects) and by lore validate
 Reject writes whose estimated token count exceeds max. Tokens use estimate/v1: ceil(bytes / 4).
 
 PARAMETERS
-  max  integer  required  Fixed cap.
+  max     integer|initial  required  Fixed cap, or baseline × growth.
+  growth  number           optional  Multiplier when max is "initial".
 
 EXAMPLE
   use: size/tokens
-  with: { max: 60 }
+  with: { max: initial, growth: 1.1 }
 ```

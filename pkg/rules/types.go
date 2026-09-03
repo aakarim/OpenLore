@@ -6,6 +6,8 @@ import (
 	"log/slog"
 
 	"github.com/aakarim/go-openlore/pkg/openlore/validation"
+	"github.com/aakarim/go-openlore/pkg/packagestate"
+	"github.com/aakarim/go-openlore/pkg/rules/tokenizer"
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
 
@@ -72,8 +74,10 @@ type Defaults struct {
 }
 
 type Env struct {
-	Defaults Defaults
-	Logger   *slog.Logger
+	Defaults  Defaults
+	State     packagestate.Store
+	Tokenizer tokenizer.Tokenizer
+	Logger    *slog.Logger
 	// AliasRoots contains configured docset aliases, longest first.
 	AliasRoots []string
 }
@@ -97,6 +101,16 @@ const (
 	ModeAdmit Mode = iota
 	ModeValidate
 )
+
+type actorContextKey struct{}
+
+func WithActor(ctx context.Context, actor string) context.Context {
+	return context.WithValue(ctx, actorContextKey{}, actor)
+}
+func Actor(ctx context.Context) string {
+	actor, _ := ctx.Value(actorContextKey{}).(string)
+	return actor
+}
 
 type Finding struct {
 	Code   string

@@ -138,6 +138,34 @@ func admitServer(server *Server, target, content string) error {
 	return err
 }
 
+func TestInitialSizeBaselinePersistsAndRejectsGrowth(t *testing.T) {
+	auth := serverAuth(map[string]config.DocsetSpec{"docs": docset("/docs", nil)}, map[string]rules.RuleSpec{
+		"length": {Match: []string{"**/*.md"}, Use: "size/lines", With: map[string]any{"max": "initial", "growth": 1.5}},
+	})
+	server, root := bootRulesServer(t, auth, nil)
+	id := Identity{IdentityName: "alice", Principal: AuthenticatedPrincipal{IdentityName: "alice"}, Attribution: Attribution{Principal: "alice"}, Scopes: []string{ScopeFull}}
+	write := func(lines int) error {
+		_, err := server.writeLog.SubmitIdentity(context.Background(), id, writeCSBytes("/docs/a.md", strings.Repeat("x\n", lines)))
+		return err
+	}
+	if err := write(10); err != nil {
+		t.Fatal(err)
+	}
+	if err := write(15); err != nil {
+		t.Fatal(err)
+	}
+	if err := write(16); err == nil || !strings.Contains(err.Error(), "16 lines exceeds the limit of 15 (baseline 10 lines × growth 1.5") || !strings.Contains(err.Error(), "lore size baseline reset /docs/a.md") {
+		t.Fatalf("rejection=%v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(root, "docs", ".lore", "size", "a.md.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(raw), `"op":"baseline"`) != 1 || !strings.Contains(string(raw), `"reason":"create"`) || !strings.Contains(string(raw), `"lines":10`) || !strings.Contains(string(raw), `"actor":"alice"`) {
+		t.Fatalf("state=%s", raw)
+	}
+}
+
 func TestFolderRulesPermissionInheritanceInvalidationAndExemption(t *testing.T) {
 	docs := docset("/docs", nil)
 	docs.Access = config.DocsetAccess{Allow: map[string]string{"writer": "rw", "editor": "ro"}}

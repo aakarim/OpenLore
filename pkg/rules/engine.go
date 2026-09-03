@@ -211,6 +211,36 @@ func (e *Engine) AdmitLeaf(ctx context.Context, leaf vfs.Change, actor string, e
 	return nil
 }
 
+func (e *Engine) OnRemove(ctx context.Context, target string) error {
+	compiled, err := e.Effective(ctx, target)
+	if err != nil {
+		return err
+	}
+	for _, rule := range compiled {
+		if rule.Member.Manifest().Scope == ScopeFile && matchesAtScope(rule, target) {
+			if err := rule.Check.OnRemove(ctx, target); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (e *Engine) OnMove(ctx context.Context, from, to string) error {
+	compiled, err := e.Effective(ctx, from)
+	if err != nil {
+		return err
+	}
+	for _, rule := range compiled {
+		if rule.Member.Manifest().Scope == ScopeFile && matchesAtScope(rule, from) {
+			if err := rule.Check.OnMove(ctx, from, to); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func IsDirConfigPath(target string) bool {
 	clean := vfs.CleanPath(target)
 	if path.Base(clean) != "config.yaml" || path.Base(path.Dir(clean)) != ".lore" {
@@ -363,6 +393,8 @@ func matchesAtScope(rule CompiledRule, target string) bool {
 	rel, ok := relativeTo(rule.Scope, target)
 	return ok && Matches(rule.Spec, rel)
 }
+
+func Applies(rule CompiledRule, target string) bool { return matchesAtScope(rule, target) }
 
 func bundleMatches(rule CompiledRule, bundle *validation.Bundle) bool {
 	for _, file := range bundle.Files {

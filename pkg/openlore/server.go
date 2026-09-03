@@ -94,6 +94,7 @@ type Server struct {
 	readMW            []ReadMiddleware
 	contentTransforms []ContentTransform
 	agentSkills       *agentSkillsPlugin
+	rules             *rulesPlugin
 
 	// metaExtenders are the `lore meta` extenders contributed by plugins,
 	// installed per session in buildSessionShell.
@@ -264,6 +265,7 @@ func newServerWithRoot(rootDir string, rootFS, lowerFS vfs.FileSystem, opts ...c
 	if err := s.registerPlugin(rulesPlugin); err != nil {
 		return nil, err
 	}
+	s.rules = rulesPlugin
 	// OKF metadata remains owned by the existing adapter; admission and
 	// validation are provided exclusively by the rules engine above.
 	if anyDocsetHasOKF(s.auth.Docsets) {
@@ -1134,6 +1136,7 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 		sh.SetHistoryBackend(fileHistory{path: s.historyPath, roots: historyRoots(s.sessionDocsets(id))})
 	}
 	sh.SetJobBackend(s.jobs)
+	sh.SetSizeBackend(sessionSizeBackend{server: s, identity: id})
 
 	// Set identity info as environment variables
 	if id.IdentityName != "" {

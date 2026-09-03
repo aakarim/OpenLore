@@ -589,6 +589,9 @@ func (d *DirFS) resolve(p string) string {
 	return filepath.Join(d.root, filepath.FromSlash(p))
 }
 
+// HostDir maps a VFS directory to its writable on-disk backing for package state.
+func (d *DirFS) HostDir(p string) (string, bool) { return d.resolve(p), true }
+
 // currentHash returns the hex SHA-256 of the bytes currently at full, and
 // whether the file exists. A directory is treated as nonexistent for hashing.
 func currentHash(full string) (hash string, exists bool, err error) {
@@ -1098,6 +1101,19 @@ func (m *MergeFS) resolve(p string) (string, vfs.FileSystem, error) {
 	}
 
 	return "", nil, fmt.Errorf("not found: %s", p)
+}
+
+// HostDir follows the same mount routing as content operations.
+func (m *MergeFS) HostDir(p string) (string, bool) {
+	sub, backend, err := m.resolve(p)
+	if err != nil || backend == nil {
+		return "", false
+	}
+	mapper, ok := backend.(interface{ HostDir(string) (string, bool) })
+	if !ok {
+		return "", false
+	}
+	return mapper.HostDir(sub)
 }
 
 func (m *MergeFS) Stat(p string) (*vfs.FileInfo, error) {

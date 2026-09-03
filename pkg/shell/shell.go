@@ -51,6 +51,7 @@ type Shell struct {
 	configReload         cmds.ConfigReloadBackend
 	history              cmds.HistoryBackend
 	jobs                 cmds.JobBackend
+	size                 cmds.SizeBackend
 	exitRequested        bool
 }
 
@@ -162,6 +163,8 @@ func (s *Shell) SetHistoryBackend(b cmds.HistoryBackend)           { s.history =
 func (s *Shell) HistoryBackend() cmds.HistoryBackend               { return s.history }
 func (s *Shell) SetJobBackend(b cmds.JobBackend)                   { s.jobs = b }
 func (s *Shell) JobBackend() cmds.JobBackend                       { return s.jobs }
+func (s *Shell) SetSizeBackend(b cmds.SizeBackend)                 { s.size = b }
+func (s *Shell) SizeBackend() cmds.SizeBackend                     { return s.size }
 
 // --- CmdContext interface implementation ---
 

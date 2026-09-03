@@ -69,15 +69,6 @@ func CmdMv(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.
 		fmt.Fprintf(errW, "mv: cannot read %s: %s\n", source, err)
 		return 1
 	}
-	if _, err = WriteFile(ctx, destination, data, false); err != nil {
-		return writeResultMsg(errW, "mv", destination, err)
-	}
-
-	wfs, ok := ctx.FS().(vfs.WritableFS)
-	if !ok {
-		fmt.Fprintf(errW, "mv: %s: read-only filesystem\n", source)
-		return 1
-	}
 	hash := sha256.Sum256(data)
 	snapshot := &vfs.TreeSnapshot{
 		Root: resolvedSource,
@@ -87,6 +78,36 @@ func CmdMv(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.
 			Hash:    hex.EncodeToString(hash[:]),
 			Size:    int64(len(data)),
 		}},
+	}
+	if admitter, ok := ctx.FS().(vfs.ChangeSetAdmitter); ok {
+		err = admitter.AdmitChangeSet(vfs.ChangeSet{Changes: []vfs.Change{
+			{Target: resolvedDestination, Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: data, Opts: overwritePreconditions(ctx, resolvedDestination)}},
+			{Target: resolvedSource, Action: vfs.ChangeActionRemoveAll, RemoveAll: &vfs.RemoveAllChange{Opts: vfs.RemoveOpts{Expected: snapshot}}},
+		}})
+		if err == nil {
+			return 0
+		}
+		var pending *vfs.PendingChangeError
+		if errors.As(err, &pending) {
+			fmt.Fprintln(w, pendingChangeLine("mv", source, pending))
+			return 0
+		}
+		var stale *vfs.TreeStaleError
+		if errors.As(err, &stale) {
+			fmt.Fprintf(errW, "mv: %s: source changed concurrently; destination was not written\n", source)
+			return 1
+		}
+		return writeResultMsg(errW, "mv", destination, err)
+	}
+
+	if _, err = WriteFile(ctx, destination, data, false); err != nil {
+		return writeResultMsg(errW, "mv", destination, err)
+	}
+
+	wfs, ok := ctx.FS().(vfs.WritableFS)
+	if !ok {
+		fmt.Fprintf(errW, "mv: %s: read-only filesystem\n", source)
+		return 1
 	}
 	err = wfs.RemoveAll(resolvedSource, vfs.RemoveOpts{Expected: snapshot})
 	if err == nil {
