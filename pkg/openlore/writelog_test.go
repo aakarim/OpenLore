@@ -263,7 +263,7 @@ type wlGatedFS struct {
 
 type failingCommitRecorder struct{ err error }
 
-func (r failingCommitRecorder) RecordCommit(context.Context, CommitRecord) error { return r.err }
+func (r failingCommitRecorder) Record(context.Context, []HistoryRecord) error { return r.err }
 
 func (g *wlGatedFS) WriteFileAtomic(name string, data []byte, opts vfs.WriteOpts) (string, error) {
 	g.entered <- name
@@ -394,7 +394,7 @@ func TestWriteLog_PostCommitRunsWithActorAndDoesNotBlockSubmit(t *testing.T) {
 func TestWriteLog_RecorderFailureDoesNotTurnCommittedWriteIntoFailure(t *testing.T) {
 	fs := &wlRecordingFS{}
 	l := newWriteLog(fs, nil, nil, 1)
-	l.SetCommitRecorder(failingCommitRecorder{err: errors.New("history disk full")})
+	l.SetHistoryRecorder(failingCommitRecorder{err: errors.New("history disk full")})
 	defer l.Close(context.Background())
 
 	hash, err := l.Submit(context.Background(), Attribution{Principal: "alice"}, writeCS("/committed"))
@@ -403,6 +403,27 @@ func TestWriteLog_RecorderFailureDoesNotTurnCommittedWriteIntoFailure(t *testing
 	}
 	if got := fs.order(); len(got) != 1 || got[0] != "/committed" {
 		t.Fatalf("applied=%v", got)
+	}
+}
+
+func TestWriteLog_CommittedDeletePurgesHistoryShard(t *testing.T) {
+	fs := &wlRecordingFS{}
+	store := NewJSONLHistoryStore(t.TempDir())
+	l := newWriteLog(fs, nil, nil, 1)
+	l.SetHistoryRecorder(store)
+	defer l.Close(context.Background())
+
+	if _, err := l.Submit(context.Background(), Attribution{Principal: "alice"}, writeCS("/docs/note.md")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(store.filePath("/docs/note.md")); err != nil {
+		t.Fatalf("write did not create history shard: %v", err)
+	}
+	if _, err := l.Submit(context.Background(), Attribution{Principal: "alice"}, vfs.ChangeSet{Target: "/docs/note.md", Action: vfs.ChangeActionRemove}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(store.filePath("/docs/note.md")); !os.IsNotExist(err) {
+		t.Fatalf("committed delete left history shard: %v", err)
 	}
 }
 
