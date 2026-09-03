@@ -113,6 +113,9 @@ func (s *Server) validateLiveAuthCandidate(next *config.AuthConfig) error {
 	if !reflect.DeepEqual(current.Docsets, next.Docsets) {
 		return fmt.Errorf("docset configuration requires a server restart")
 	}
+	if !reflect.DeepEqual(current.Rules, next.Rules) {
+		return fmt.Errorf("top-level rule configuration requires a server restart")
+	}
 	return s.validateGrantsFor(next)
 }
 

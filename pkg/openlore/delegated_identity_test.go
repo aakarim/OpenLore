@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/aakarim/go-openlore/internal/config"
+	"github.com/aakarim/go-openlore/pkg/rules"
 	"github.com/aakarim/go-openlore/pkg/shell"
 	"github.com/aakarim/go-openlore/pkg/shell/cmds"
 	"github.com/aakarim/go-openlore/pkg/vfs"
@@ -269,6 +270,11 @@ func TestLiveAuthRejectsServerDerivedPolicyChanges(t *testing.T) {
 	next.AllowKeyless = &keyless
 	if err := s.validateLiveAuthCandidate(&next); err == nil || !strings.Contains(err.Error(), "restart") {
 		t.Fatalf("posture change accepted: %v", err)
+	}
+	next = *auth
+	next.Rules = map[string]rules.RuleSpec{"limit": {Use: "size/lines", Match: []string{"**"}, With: map[string]any{"max": 10}}}
+	if err := s.validateLiveAuthCandidate(&next); err == nil || !strings.Contains(err.Error(), "restart") {
+		t.Fatalf("top-level rule change accepted: %v", err)
 	}
 }
 

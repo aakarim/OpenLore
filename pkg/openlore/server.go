@@ -28,6 +28,7 @@ import (
 	"github.com/aakarim/go-openlore/internal/webstyle"
 	"github.com/aakarim/go-openlore/pkg/openlore/meta"
 	"github.com/aakarim/go-openlore/pkg/openlore/validation"
+	"github.com/aakarim/go-openlore/pkg/rules"
 	"github.com/aakarim/go-openlore/pkg/shell"
 	"github.com/aakarim/go-openlore/pkg/shell/cmds"
 	"github.com/aakarim/go-openlore/pkg/vfs"
@@ -256,9 +257,18 @@ func newServerWithRoot(rootDir string, rootFS, lowerFS vfs.FileSystem, opts ...c
 			return nil, err
 		}
 	}
-	if anyDocsetHasOKF(s.auth.Docsets) {
-		if err := s.registerPlugin(newOKF(s.auth.Docsets, logger)); err != nil {
+	if anyConfiguredRules(s.auth) {
+		rulesPlugin, err := newRulesPlugin(s.auth, rules.Defaults{Growth: cfg.Rules.Growth}, logger)
+		if err != nil {
 			return nil, err
+		}
+		if err := s.registerPlugin(rulesPlugin); err != nil {
+			return nil, err
+		}
+		// OKF metadata remains owned by the existing adapter; admission and
+		// validation are provided exclusively by the rules engine above.
+		if anyDocsetHasOKF(s.auth.Docsets) {
+			s.metaExtenders = append(s.metaExtenders, newOKF(s.auth.Docsets, logger).MetaExtenders()...)
 		}
 	}
 	if shellPlugin != nil {
