@@ -11,21 +11,24 @@ import (
 )
 
 func cmdLorePackage(_ CmdContext, args []string, w io.Writer, errW io.Writer, _ io.Reader) int {
+	registry := rules.DefaultRegistry()
 	if len(args) == 1 && args[0] == "list" {
-		rules.WriteList(w, rules.DefaultRegistry())
+		rules.WriteList(w, registry.All())
 		return 0
 	}
 	if len(args) == 2 && args[0] == "doc" {
 		name := args[1]
-		if member, ok := rules.DefaultRegistry().Lookup(name); ok {
+		members := rules.PackageMembers(registry, name)
+		if member, ok := registry.Lookup(name); ok {
 			rules.WriteDoc(w, member.Manifest())
+			if len(members) != 0 {
+				fmt.Fprintln(w, "\nMEMBERS")
+				rules.WriteList(w, members)
+			}
 			return 0
 		}
-		if members := rules.PackageMembers(rules.DefaultRegistry(), name); len(members) != 0 {
-			for _, member := range members {
-				manifest := member.Manifest()
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", manifest.Path, manifest.Kind, manifest.Scope, manifest.Summary)
-			}
+		if len(members) != 0 {
+			rules.WriteList(w, members)
 			return 0
 		}
 		fmt.Fprintf(errW, "lore package doc: unknown package member %q\n", name)

@@ -41,20 +41,11 @@ func (r Rule) Manifest() rules.Manifest {
 		doc = "Reject writes whose estimated token count exceeds max. Tokens use estimate/v1: ceil(bytes / 4)."
 	}
 	return rules.Manifest{Path: memberPath, Kind: rules.KindRule, Scope: rules.ScopeFile, Summary: summary, Doc: doc,
-		Params: []rules.Param{
-			{Name: "max", Type: rules.ParamIntegerOrInitial, Required: true, Doc: "Fixed cap; max: initial ships in folder rules phase 4."},
-			{Name: "growth", Type: rules.ParamNumber, Doc: "Multiplier for max: initial; defaults to openlore.yml rules.growth (1.25)."},
-		},
+		Params:  []rules.Param{{Name: "max", Type: rules.ParamInteger, Required: true, Doc: "Fixed cap."}},
 		Example: "use: " + memberPath + "\nwith: { max: 60 }"}
 }
 
 func (r Rule) Compile(with map[string]any, _ rules.Env) (rules.Check, error) {
-	if initial, ok := with["max"].(string); ok && initial == "initial" {
-		return nil, fmt.Errorf("max: initial is not supported until folder rules phase 4")
-	}
-	if growth, ok := asNumber(with["growth"]); ok && growth < 1 {
-		return nil, fmt.Errorf("growth must be at least 1")
-	}
 	max, ok := asInteger(with["max"])
 	if !ok || max < 1 {
 		return nil, fmt.Errorf("max must be an integer >= 1")
@@ -115,19 +106,6 @@ func asInteger(value any) (int64, bool) {
 		return n, true
 	case float64:
 		return int64(n), n == float64(int64(n))
-	default:
-		return 0, false
-	}
-}
-
-func asNumber(value any) (float64, bool) {
-	switch n := value.(type) {
-	case int:
-		return float64(n), true
-	case int64:
-		return float64(n), true
-	case float64:
-		return n, true
 	default:
 		return 0, false
 	}

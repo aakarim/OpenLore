@@ -47,8 +47,7 @@ evaluated: on every write (rejects) and by lore validate
 Reject writes whose size exceeds max KiB.
 
 PARAMETERS
-  max        integer | "initial" required     Fixed cap; max: initial ships in folder rules phase 4.
-  growth     number            optional     Multiplier for max: initial; defaults to openlore.yml rules.growth (1.25).
+  max  integer  required  Fixed cap.
 
 EXAMPLE
   use: size/kilobytes
@@ -64,8 +63,7 @@ evaluated: on every write (rejects) and by lore validate
 Reject writes whose line count exceeds max.
 
 PARAMETERS
-  max        integer | "initial" required     Fixed cap; max: initial ships in folder rules phase 4.
-  growth     number            optional     Multiplier for max: initial; defaults to openlore.yml rules.growth (1.25).
+  max  integer  required  Fixed cap.
 
 EXAMPLE
   use: size/lines
@@ -81,8 +79,7 @@ evaluated: on every write (rejects) and by lore validate
 Reject writes whose estimated token count exceeds max. Tokens use estimate/v1: ceil(bytes / 4).
 
 PARAMETERS
-  max        integer | "initial" required     Fixed cap; max: initial ships in folder rules phase 4.
-  growth     number            optional     Multiplier for max: initial; defaults to openlore.yml rules.growth (1.25).
+  max  integer  required  Fixed cap.
 
 EXAMPLE
   use: size/tokens

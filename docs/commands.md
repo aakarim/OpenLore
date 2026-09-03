@@ -114,6 +114,7 @@ them.
 | `lore docsets` | List accessible docsets, grants, paths, and attributes |
 | `lore meta [path]` | Emit document frontmatter as NDJSON, scoped to the current directory or path |
 | `lore meta --filter skills [path]` | Discover Agent Skills collections without scanning unrelated docs |
+| `lore package list` / `lore package doc <path>` | List compiled-in rule members or show a member's parameters and example |
 | `lore validate [bundle]` | Validate an OKF bundle, local links, and aliased-path portability |
 
 ## Skills management

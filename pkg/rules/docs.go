@@ -7,11 +7,12 @@ import (
 	"text/tabwriter"
 )
 
-// WriteList renders every registered member in lexical order.
-func WriteList(w io.Writer, registry *Registry) {
+// WriteList renders members in a consistently aligned table. Registry.All and
+// PackageMembers both provide members in lexical order.
+func WriteList(w io.Writer, members []Member) {
 	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(table, "NAME\tKIND\tSCOPE\tSUMMARY")
-	for _, member := range registry.All() {
+	for _, member := range members {
 		manifest := member.Manifest()
 		fmt.Fprintf(table, "%s\t%s\t%s\t%s\n", manifest.Path, manifest.Kind, manifest.Scope, manifest.Summary)
 	}
@@ -46,6 +47,7 @@ func WriteDoc(w io.Writer, manifest Manifest) {
 	}
 	if len(manifest.Params) != 0 {
 		fmt.Fprintln(w, "\nPARAMETERS")
+		table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 		for _, parameter := range manifest.Params {
 			setting := "optional"
 			if parameter.Required {
@@ -53,8 +55,9 @@ func WriteDoc(w io.Writer, manifest Manifest) {
 			} else if parameter.Default != nil {
 				setting = fmt.Sprintf("default: %v", parameter.Default)
 			}
-			fmt.Fprintf(w, "  %-10s %-17s %-12s %s\n", parameter.Name, displayParamType(parameter.Type), setting, parameter.Doc)
+			fmt.Fprintf(table, "  %s\t%s\t%s\t%s\n", parameter.Name, parameter.Type, setting, parameter.Doc)
 		}
+		table.Flush()
 	}
 	if manifest.Example != "" {
 		fmt.Fprintln(w, "\nEXAMPLE")
@@ -62,11 +65,4 @@ func WriteDoc(w io.Writer, manifest Manifest) {
 			fmt.Fprintln(w, "  "+line)
 		}
 	}
-}
-
-func displayParamType(parameterType ParamType) string {
-	if parameterType == ParamIntegerOrInitial {
-		return `integer | "initial"`
-	}
-	return string(parameterType)
 }
