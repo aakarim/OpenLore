@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aakarim/go-openlore/pkg/rules"
 	"github.com/aakarim/go-openlore/pkg/vfs"
 	"golang.org/x/crypto/ssh"
 	"gopkg.in/yaml.v3"
@@ -62,6 +63,7 @@ type Config struct {
 	// event-bus `hooks` path with middleware on the read/write chains.
 	Shellexec ShellexecConfig
 	Logger    *slog.Logger
+	Rules     RulesConfig
 
 	// Readonly is the global write lock. Default true: the substrate is a
 	// read-only filesystem and no write verbs are available. Set false to
@@ -99,6 +101,10 @@ type Config struct {
 	configFileLoaded   bool
 	embeddedConfigUsed bool
 	warnings           []string
+}
+
+type RulesConfig struct {
+	Growth float64
 }
 
 // Warnings returns non-fatal problems encountered while loading configuration.
@@ -257,11 +263,12 @@ type FilesConfig struct {
 
 // AuthConfig is loaded from lore.json.
 type AuthConfig struct {
-	AllowKeyless    *bool                 `json:"allow_keyless,omitempty"`
-	UnknownIdentity string                `json:"unknown_identity,omitempty"`
-	DefaultCwd      string                `json:"default_cwd,omitempty"`
-	Docsets         map[string]DocsetSpec `json:"docsets"`
-	Roles           map[string]RoleSpec   `json:"roles,omitempty"`
+	AllowKeyless    *bool                     `json:"allow_keyless,omitempty"`
+	UnknownIdentity string                    `json:"unknown_identity,omitempty"`
+	DefaultCwd      string                    `json:"default_cwd,omitempty"`
+	Rules           map[string]rules.RuleSpec `json:"rules,omitempty"`
+	Docsets         map[string]DocsetSpec     `json:"docsets"`
+	Roles           map[string]RoleSpec       `json:"roles,omitempty"`
 	// Default is a legacy authority field retained only for JSON parsing. It is ignored.
 	Default    map[string]string `json:"default,omitempty"`
 	Identities []AuthIdentity    `json:"identities"`
@@ -312,8 +319,9 @@ type JWKSSpec struct {
 
 // DocsetSpec defines a named set of path mappings.
 type DocsetSpec struct {
-	Paths  []PathMapping `json:"paths"`
-	Access DocsetAccess  `json:"access,omitempty"`
+	Paths  []PathMapping             `json:"paths"`
+	Access DocsetAccess              `json:"access,omitempty"`
+	Rules  map[string]rules.RuleSpec `json:"rules,omitempty"`
 	// AgentSkills is ignored. Collections are selected dynamically by xattr.
 	AgentSkills bool `json:"-"`
 	// Aliases are alternate display roots for the first path. They expose the
@@ -503,12 +511,18 @@ type fileConfig struct {
 	Readonly            *bool                  `yaml:"readonly"`
 	WriteConflictPolicy string                 `yaml:"write_conflict_policy"`
 	MaxJobs             int                    `yaml:"max_jobs"`
+	Rules               rulesYAML              `yaml:"rules"`
 	// Tokens + OIDCIssuers are server infrastructure (bearer-token issuance for
 	// the MCP + HTTP API), hence configured here rather than in lore.json.
 	Tokens      *AuthTokensConfig `yaml:"tokens"`
 	OIDCIssuers []OIDCIssuer      `yaml:"oidc_issuers"`
 	Inbox       *inboxYAML        `yaml:"inbox"`
 	Plugins     pluginsYAML       `yaml:"plugins"`
+}
+
+type rulesYAML struct {
+	Growth    *float64 `yaml:"growth"`
+	Tokenizer string   `yaml:"tokenizer"`
 }
 
 type authInfrastructureYAML struct {
@@ -600,6 +614,7 @@ func New(opts ...Option) (Config, error) {
 		Readonly:            true,                           // safe default: read-only substrate
 		WriteConflictPolicy: vfs.DefaultWriteConflictPolicy, // "hash": overwrites are compare-and-swap
 		MaxJobs:             8,                              // bound concurrent async spawn jobs
+		Rules:               RulesConfig{Growth: 1.25},
 		Plugins:             PluginsConfig{Skills: SkillsPluginConfig{RemoteCheckTTL: 60 * time.Second, RemoteTimeout: 3 * time.Second, RemoteMaxBytes: 10 * 1024 * 1024}},
 		Passkeys: PasskeysConfig{
 			Enabled:      true,
@@ -661,6 +676,15 @@ func WithConfigFile(path string) Option {
 		cfg.warnings = append(cfg.warnings, warnings...)
 
 		cfg.configFileLoaded = true
+		if fc.Rules.Tokenizer != "" {
+			return errors.New("rules.tokenizer is not supported yet")
+		}
+		if fc.Rules.Growth != nil {
+			if *fc.Rules.Growth < 1 {
+				return errors.New("rules.growth must be at least 1")
+			}
+			cfg.Rules.Growth = *fc.Rules.Growth
+		}
 
 		if fc.ConfigVersion != "" {
 			cfg.ConfigVersion = fc.ConfigVersion
@@ -1216,6 +1240,9 @@ func LoadAuthConfig(path string) (*AuthConfig, error) {
 // ValidateAuthConfig validates a parsed static authorization policy. Legacy
 // authority fields are deliberately ignored.
 func ValidateAuthConfig(auth *AuthConfig) error {
+	if err := desugarOKFRules(auth); err != nil {
+		return err
+	}
 	if _, ok := auth.Roles["guest"]; ok {
 		return fmt.Errorf("role %q is reserved", "guest")
 	}
@@ -1367,4 +1394,65 @@ func ValidateAuthConfig(auth *AuthConfig) error {
 	}
 
 	return nil
+}
+
+func desugarOKFRules(auth *AuthConfig) error {
+	for name, docset := range auth.Docsets {
+		if docset.OKF == nil {
+			continue
+		}
+		patterns := docset.OKF.Patterns
+		if len(patterns) == 0 {
+			patterns = []string{"*.md"}
+		}
+		matches := make([]string, 0, len(patterns))
+		for _, pattern := range patterns {
+			matches = append(matches, "**/"+pattern)
+		}
+		expected := rules.RuleSpec{Match: matches, Use: "okf", Enforce: docset.OKF.Enforce}
+		if docset.Rules == nil {
+			docset.Rules = map[string]rules.RuleSpec{}
+		}
+		if explicit, ok := docset.Rules["okf"]; ok {
+			if !sameLegacyOKFRule(explicit, expected) {
+				return fmt.Errorf("docset %q has conflicting okf and rules.okf configuration", name)
+			}
+		} else {
+			docset.Rules["okf"] = expected
+		}
+		if _, ok := docset.Rules["okf/bundle"]; !ok {
+			docset.Rules["okf/bundle"] = rules.RuleSpec{Match: []string{"**/*.md"}, Use: "okf/bundle", Enforce: docset.OKF.Enforce}
+		}
+		if _, ok := docset.Rules["link/resolves"]; !ok {
+			docset.Rules["link/resolves"] = rules.RuleSpec{Match: []string{"**/*.md"}, Use: "link/resolves", Enforce: docset.OKF.Enforce}
+		}
+		if _, ok := docset.Rules["link/alias"]; !ok {
+			warn := false
+			docset.Rules["link/alias"] = rules.RuleSpec{Match: []string{"**/*.md"}, Use: "link/alias", Enforce: &warn}
+		}
+		auth.Docsets[name] = docset
+	}
+	return nil
+}
+
+func sameLegacyOKFRule(a, b rules.RuleSpec) bool {
+	if a.Use != b.Use || a.Default != b.Default || a.IsEnforcing() != b.IsEnforcing() || len(a.Match) != len(b.Match) || len(a.Exclude) != len(b.Exclude) || len(a.With) != len(b.With) {
+		return false
+	}
+	for i := range a.Match {
+		if a.Match[i] != b.Match[i] {
+			return false
+		}
+	}
+	for i := range a.Exclude {
+		if a.Exclude[i] != b.Exclude[i] {
+			return false
+		}
+	}
+	for key, value := range a.With {
+		if fmt.Sprint(value) != fmt.Sprint(b.With[key]) {
+			return false
+		}
+	}
+	return true
 }
