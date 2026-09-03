@@ -3,6 +3,7 @@ package openlore
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -18,7 +19,7 @@ import (
 
 func newTestRulesPlugin(t *testing.T, auth *config.AuthConfig, logger *slog.Logger) *rulesPlugin {
 	t.Helper()
-	p, err := newRulesPlugin(auth, rules.Defaults{Growth: 1.25}, logger)
+	p, err := newRulesPlugin(auth, rules.Defaults{Growth: 1.25}, nil, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,6 +136,186 @@ func serverAuth(docsets map[string]config.DocsetSpec, global map[string]rules.Ru
 func admitServer(server *Server, target, content string) error {
 	_, err := server.writeChain()(context.Background(), NewWriteOp(Attribution{Principal: "alice"}, writeCSBytes(target, content)))
 	return err
+}
+
+func TestFolderRulesPermissionInheritanceInvalidationAndExemption(t *testing.T) {
+	docs := docset("/docs", nil)
+	docs.Access = config.DocsetAccess{Allow: map[string]string{"writer": "rw", "editor": "ro"}}
+	docs.Config = &config.DirConfigPermission{Edit: []string{"editor"}}
+	public := docset("/public", nil)
+	public.Access = config.DocsetAccess{Allow: map[string]string{"writer": "rw", "editor": "ro"}}
+	auth := &config.AuthConfig{
+		Roles:   map[string]config.RoleSpec{"writer": {}, "editor": {}},
+		Docsets: map[string]config.DocsetSpec{"docs": docs, "public": public},
+		Identities: []config.AuthIdentity{
+			{Name: "alice", Roles: []string{"writer", "editor"}},
+			{Name: "bob", Roles: []string{"writer"}},
+			{Name: "carol", Roles: []string{"editor"}},
+		},
+	}
+	server, root := bootRulesServer(t, auth, nil)
+	if err := os.MkdirAll(filepath.Join(root, "docs", "sub", "deep"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	identity := func(name string) Identity {
+		return Identity{IdentityName: name, Principal: AuthenticatedPrincipal{IdentityName: name}, Attribution: Attribution{Principal: name}, Scopes: []string{ScopeFull}}
+	}
+	configPath := "/docs/.lore/config.yaml"
+	content := "version: 1\nrules:\n  short:\n    match: ['**/*.md']\n    use: size/lines\n    with: {max: 3}\n" + strings.Repeat("# config is exempt from its own rule\n", 500)
+	if _, err := server.buildSessionFS(identity("bob")).(vfs.WritableFS).WriteFileAtomic(configPath, []byte(content), vfs.WriteOpts{}); !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("writer without config.edit = %v", err)
+	}
+	if _, err := server.buildSessionFS(identity("carol")).(vfs.WritableFS).WriteFileAtomic(configPath, []byte(content), vfs.WriteOpts{}); err == nil {
+		t.Fatal("read-only config editor wrote config")
+	}
+	if _, err := server.buildSessionFS(identity("alice")).(vfs.WritableFS).WriteFileAtomic(configPath, []byte(content), vfs.WriteOpts{}); err != nil {
+		t.Fatalf("config editor write: %v", err)
+	}
+	if err := server.buildSessionFS(identity("bob")).(vfs.WritableFS).Remove(configPath); !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("config remove without config.edit = %v", err)
+	}
+	if _, err := server.AdmitChangeSet(context.Background(), identity("bob"), vfs.ChangeSet{Target: configPath, Action: vfs.ChangeActionRemove}); !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("AdmitChangeSet config remove without config.edit = %v", err)
+	}
+	var readOut, readErr bytes.Buffer
+	readerShell := server.buildSessionShell(identity("carol"))
+	if code := readerShell.ExecPipeline("cat "+configPath+"; tree /docs", &readOut, &readErr, nil); code != 0 || !strings.Contains(readOut.String(), "use: size/lines") || !strings.Contains(readOut.String(), ".lore") || !strings.Contains(readOut.String(), "config.yaml") {
+		t.Fatalf("reader config view exit=%d stdout=%s stderr=%s", code, readOut.String(), readErr.String())
+	}
+	readOut.Reset()
+	readErr.Reset()
+	if code := readerShell.ExecPipeline("lore validate /docs", &readOut, &readErr, nil); code != 0 || !strings.Contains(readOut.String(), "0 errors, 0 warnings") {
+		t.Fatalf("config exemption validate exit=%d stdout=%s stderr=%s", code, readOut.String(), readErr.String())
+	}
+
+	deep := server.buildSessionFS(identity("alice")).(vfs.WritableFS)
+	if _, err := deep.WriteFileAtomic("/docs/sub/deep/x.md", []byte("1\n2\n3\n4\n"), vfs.WriteOpts{}); err == nil || !strings.Contains(err.Error(), "short @ /docs/.lore/config.yaml") {
+		t.Fatalf("inherited rule error = %v", err)
+	}
+	if _, err := deep.WriteFileAtomic("/public/x.md", []byte("1\n2\n3\n4\n"), vfs.WriteOpts{}); err != nil {
+		t.Fatalf("folder rule escaped docset: %v", err)
+	}
+	if err := server.buildSessionFS(identity("alice")).(vfs.WritableFS).Remove(configPath); err != nil {
+		t.Fatalf("remove config: %v", err)
+	}
+	if _, err := server.buildSessionFS(identity("alice")).(vfs.WritableFS).WriteFileAtomic("/docs/sub/deep/y.md", []byte("1\n2\n3\n4\n"), vfs.WriteOpts{}); err != nil {
+		t.Fatalf("rule remained after config removal: %v", err)
+	}
+	mixed := vfs.ChangeSet{Changes: []vfs.Change{
+		{Target: configPath, Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: []byte("version: 1\nrules: {}\n")}},
+		{Target: "/docs/mixed.md", Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: []byte("content\n")}},
+	}}
+	if _, err := server.AdmitChangeSet(context.Background(), identity("alice"), mixed); err == nil || !strings.Contains(err.Error(), "folder config mutations must be submitted separately") {
+		t.Fatalf("mixed config batch error = %v", err)
+	}
+
+	for _, name := range []string{"configured", "plain"} {
+		if err := os.Mkdir(filepath.Join(root, "docs", name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	configuredPath := "/docs/configured/.lore/config.yaml"
+	if _, err := server.buildSessionFS(identity("alice")).(vfs.WritableFS).WriteFileAtomic(configuredPath, []byte("version: 1\nrules: {}\n"), vfs.WriteOpts{}); err != nil {
+		t.Fatalf("nested config write: %v", err)
+	}
+	if _, err := server.writeLog.SubmitIdentity(context.Background(), identity("bob"), vfs.ChangeSet{Target: "/docs/configured", Action: vfs.ChangeActionRemoveAll, RemoveAll: &vfs.RemoveAllChange{}}); !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("serialized RemoveAll recheck without config.edit = %v", err)
+	}
+	if err := server.buildSessionFS(identity("bob")).(vfs.WritableFS).RemoveAll("/docs/configured", vfs.RemoveOpts{}); !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("RemoveAll config tree without config.edit = %v", err)
+	}
+	if err := server.buildSessionFS(identity("bob")).(vfs.WritableFS).RemoveAll("/docs/plain", vfs.RemoveOpts{}); err != nil {
+		t.Fatalf("RemoveAll plain tree with rw = %v", err)
+	}
+	if err := server.buildSessionFS(identity("alice")).(vfs.WritableFS).RemoveAll("/docs/configured", vfs.RemoveOpts{}); err != nil {
+		t.Fatalf("RemoveAll config tree with config.edit = %v", err)
+	}
+}
+
+func TestFolderRulesValidateThroughAlias(t *testing.T) {
+	docs := docset("/docs", nil)
+	docs.Aliases = []string{"/alias"}
+	docs.Config = &config.DirConfigPermission{Edit: []string{"writer"}}
+	auth := serverAuth(map[string]config.DocsetSpec{"docs": docs}, nil)
+	server, root := bootRulesServer(t, auth, nil)
+	id := Identity{IdentityName: "alice", Principal: AuthenticatedPrincipal{IdentityName: "alice"}, Attribution: Attribution{Principal: "alice"}, Scopes: []string{ScopeFull}}
+
+	var out, errOut bytes.Buffer
+	if code := server.buildSessionShell(id).ExecPipeline("lore validate /alias", &out, &errOut, nil); code != 0 {
+		t.Fatalf("initial alias validate exit=%d stdout=%s stderr=%s", code, out.String(), errOut.String())
+	}
+	configContent := "version: 1\nrules:\n  short:\n    match: ['**/*.md']\n    use: size/lines\n    with: {max: 3}\n"
+	if _, err := server.buildSessionFS(id).(vfs.WritableFS).WriteFileAtomic("/alias/.lore/config.yaml", []byte(configContent), vfs.WriteOpts{}); err != nil {
+		t.Fatalf("alias config write: %v", err)
+	}
+	if _, err := server.writeLog.SubmitIdentity(context.Background(), id, writeCSBytes("/docs/preapply.md", "1\n2\n3\n4\n")); err == nil || !strings.Contains(err.Error(), "size/lines") {
+		t.Fatalf("serialized rule recheck error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "docs", "too-long.md"), []byte("1\n2\n3\n4\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := server.buildSessionShell(id).ExecPipeline("lore validate /alias", &out, &errOut, nil); code != 1 || !strings.Contains(out.String(), "too-long.md:1:1: error [size/lines]") {
+		t.Fatalf("alias validate exit=%d stdout=%s stderr=%s", code, out.String(), errOut.String())
+	}
+}
+
+func TestFolderRulesUnificationAndDefaultOverride(t *testing.T) {
+	newAuth := func(isDefault bool) *config.AuthConfig {
+		docs := docset("/docs", nil)
+		docs.Config = &config.DirConfigPermission{Edit: []string{"writer"}}
+		return serverAuth(map[string]config.DocsetSpec{"docs": docs}, map[string]rules.RuleSpec{
+			"limit": {Match: []string{"**/*.md"}, Use: "size/lines", With: map[string]any{"max": 10}, Default: isDefault},
+		})
+	}
+	content := "version: 1\nrules:\n  limit:\n    match: ['**/*.md']\n    use: size/lines\n    with: {max: 3}\n"
+	identity := Identity{IdentityName: "alice", Principal: AuthenticatedPrincipal{IdentityName: "alice"}, Attribution: Attribution{Principal: "alice"}, Scopes: []string{ScopeFull}}
+
+	server, _ := bootRulesServer(t, newAuth(false), nil)
+	_, err := server.buildSessionFS(identity).(vfs.WritableFS).WriteFileAtomic("/docs/.lore/config.yaml", []byte(content), vfs.WriteOpts{})
+	if err == nil || !strings.Contains(err.Error(), "rules.limit: conflicts with limit @ lore.json (max: 10 vs 3); use a new rule name to tighten") {
+		t.Fatalf("conflict error = %v", err)
+	}
+
+	server, _ = bootRulesServer(t, newAuth(true), nil)
+	fsys := server.buildSessionFS(identity).(vfs.WritableFS)
+	if _, err := fsys.WriteFileAtomic("/docs/.lore/config.yaml", []byte(content), vfs.WriteOpts{}); err != nil {
+		t.Fatalf("default override config: %v", err)
+	}
+	if _, err := server.buildSessionFS(identity).(vfs.WritableFS).WriteFileAtomic("/docs/too-long.md", []byte("1\n2\n3\n4\n"), vfs.WriteOpts{}); err == nil || !strings.Contains(err.Error(), "limit @ /docs/.lore/config.yaml") {
+		t.Fatalf("default override did not govern: %v", err)
+	}
+}
+
+func TestFolderRulesRejectInvalidConfigAndValidateHostConfig(t *testing.T) {
+	docs := docset("/docs", nil)
+	docs.Config = &config.DirConfigPermission{Edit: []string{"writer"}}
+	auth := serverAuth(map[string]config.DocsetSpec{"docs": docs}, nil)
+	server, root := bootRulesServer(t, auth, nil)
+	id := Identity{IdentityName: "alice", Principal: AuthenticatedPrincipal{IdentityName: "alice"}, Attribution: Attribution{Principal: "alice"}, Scopes: []string{ScopeFull}}
+	fsys := server.buildSessionFS(id).(vfs.WritableFS)
+	for _, tc := range []struct {
+		content string
+		want    string
+	}{
+		{"version: 1\nhooks: {x: {}}\n", "hooks: not supported yet"},
+		{"version: 1\nunknown: true\n", "field unknown not found"},
+	} {
+		if _, err := fsys.WriteFileAtomic("/docs/.lore/config.yaml", []byte(tc.content), vfs.WriteOpts{}); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("invalid config error = %v, want %q", err, tc.want)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(root, "docs", ".lore"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "docs", ".lore", "config.yaml"), []byte("version: 1\nunknown: true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := server.buildSessionShell(id).ExecPipeline("lore validate /docs", &out, &errOut, nil); code != 1 || !strings.Contains(out.String(), ".lore/config.yaml:1:1: error [rules/config]") || !strings.Contains(out.String(), "field unknown not found") {
+		t.Fatalf("validate exit=%d stdout=%s stderr=%s", code, out.String(), errOut.String())
+	}
 }
 
 func TestRulesServerBootAdmissionAndValidateOutput(t *testing.T) {

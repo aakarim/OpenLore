@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -16,7 +17,7 @@ import (
 type Options struct {
 	Registry *Registry
 	Config   LayerSource
-	Folders  LayerSource
+	Folders  FolderLayerSource
 	Env      func(string) Env
 	Logger   *slog.Logger
 }
@@ -37,13 +38,119 @@ func (e *BundleRootError) Error() string {
 
 func New(options Options) *Engine { return &Engine{options: options} }
 
-func (e *Engine) Effective(ctx context.Context, target string) ([]CompiledRule, error) {
+// CheckConfigFile validates a proposed .lore/config.yaml against every layer
+// above its containing directory.
+func (e *Engine) CheckConfigFile(ctx context.Context, dir string, content []byte) error {
+	configPath := path.Join(vfs.CleanPath(dir), ".lore/config.yaml")
+	config, err := DecodeFile(content)
+	if err != nil {
+		return fmt.Errorf("%s: %w", configPath, err)
+	}
+	target := path.Join(vfs.CleanPath(dir), "__rules_config_check__.md")
 	var layers []Layer
-	for _, source := range []LayerSource{e.options.Config, e.options.Folders} {
-		if source == nil {
+	if e.options.Config != nil {
+		got, err := e.options.Config.LayersFor(ctx, target)
+		if err != nil {
+			return fmt.Errorf("%s: %w", configPath, err)
+		}
+		layers = append(layers, got...)
+	}
+	if e.options.Folders != nil {
+		got, err := e.options.Folders.LayersAbove(ctx, dir)
+		if err != nil {
+			return fmt.Errorf("%s: %w", configPath, err)
+		}
+		layers = append(layers, got...)
+	}
+	layers = append(layers, Layer{Origin: configPath, Scope: vfs.CleanPath(dir), Rules: config.Rules})
+	unified, err := Unify(layers)
+	if err != nil {
+		var conflict *UnificationError
+		if errors.As(err, &conflict) {
+			return fmt.Errorf("%s: rules.%s: conflicts with %s @ %s (%s); use a new rule name to tighten", configPath, conflict.Rule, conflict.Rule, conflict.OuterOrigin, conflictDetails(conflict, layers))
+		}
+		return fmt.Errorf("%s: %w", configPath, err)
+	}
+	env := e.options.Env
+	if env == nil {
+		env = func(string) Env { return Env{} }
+	}
+	if _, err := Compile(e.options.Registry, env, unified); err != nil {
+		return fmt.Errorf("%s: %w", configPath, err)
+	}
+	return nil
+}
+
+func conflictDetails(conflict *UnificationError, layers []Layer) string {
+	var outer, inner RuleSpec
+	for _, layer := range layers {
+		spec, ok := layer.Rules[conflict.Rule]
+		if !ok {
 			continue
 		}
-		got, err := source.LayersFor(ctx, target)
+		if layer.Origin == conflict.OuterOrigin {
+			outer = spec
+		}
+		if layer.Origin == conflict.InnerOrigin {
+			inner = spec
+		}
+	}
+	var details []string
+	for _, key := range conflict.DifferingKeys {
+		if key != "with" {
+			details = append(details, key+" differs")
+			continue
+		}
+		keys := make(map[string]bool, len(outer.With)+len(inner.With))
+		for name := range outer.With {
+			keys[name] = true
+		}
+		for name := range inner.With {
+			keys[name] = true
+		}
+		names := make([]string, 0, len(keys))
+		for name := range keys {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			outerValue, outerOK := outer.With[name]
+			innerValue, innerOK := inner.With[name]
+			if outerOK != innerOK || !reflect.DeepEqual(outerValue, innerValue) {
+				details = append(details, fmt.Sprintf("%s: %#v vs %#v", name, outerValue, innerValue))
+			}
+		}
+	}
+	return strings.Join(details, ", ")
+}
+
+// Invalidate drops cached folder layers at and below dir.
+func (e *Engine) Invalidate(dir string) {
+	if e.options.Folders != nil {
+		e.options.Folders.Invalidate(dir)
+	}
+}
+
+func (e *Engine) Effective(ctx context.Context, target string) ([]CompiledRule, error) {
+	return e.effective(ctx, target, path.Dir(vfs.CleanPath(target)))
+}
+
+func (e *Engine) effectiveDir(ctx context.Context, dir string) ([]CompiledRule, error) {
+	dir = vfs.CleanPath(dir)
+	return e.effective(ctx, dir, dir)
+}
+
+func (e *Engine) effective(ctx context.Context, target, dir string) ([]CompiledRule, error) {
+	var layers []Layer
+	if e.options.Config != nil {
+		got, err := e.options.Config.LayersFor(ctx, target)
+		if err != nil {
+			return nil, err
+		}
+		layers = append(layers, got...)
+	}
+	if e.options.Folders != nil {
+		got, err := e.options.Folders.LayersForDir(ctx, dir)
 		if err != nil {
 			return nil, err
 		}
@@ -104,6 +211,19 @@ func (e *Engine) AdmitLeaf(ctx context.Context, leaf vfs.Change, actor string, e
 	return nil
 }
 
+func IsDirConfigPath(target string) bool {
+	clean := vfs.CleanPath(target)
+	if path.Base(clean) != "config.yaml" || path.Base(path.Dir(clean)) != ".lore" {
+		return false
+	}
+	for _, segment := range strings.Split(strings.Trim(path.Dir(path.Dir(clean)), "/"), "/") {
+		if segment == ".lore" {
+			return false
+		}
+	}
+	return true
+}
+
 func (e *Engine) ValidateFile(ctx context.Context, fsys vfs.FileSystem, bundleRoot, target string, content []byte) []validation.Diagnostic {
 	return e.validateFile(ctx, fsys, bundleRoot, target, content, nil)
 }
@@ -155,16 +275,34 @@ func (e *Engine) validateFile(ctx context.Context, fsys vfs.FileSystem, bundleRo
 func (e *Engine) Validator() validation.Validator {
 	return func(bundle validation.Bundle) []validation.Diagnostic {
 		var out []validation.Diagnostic
-		bundleRules, err := e.Effective(context.Background(), bundle.Root)
-		if err != nil {
-			rule := "rules/config"
-			var rootErr *BundleRootError
-			if errors.As(err, &rootErr) {
-				rule = "rules/bundle-root"
+		invalidDirs := map[string]bool{}
+		for _, file := range bundle.Files {
+			if !IsDirConfigPath(file.AbsolutePath) || beneathInvalidConfig(file.AbsolutePath, invalidDirs) {
+				continue
 			}
-			return []validation.Diagnostic{{Path: bundle.Root, Line: 1, Column: 1, Severity: validation.SeverityError, Rule: rule, Message: err.Error()}}
+			dir := path.Dir(path.Dir(file.AbsolutePath))
+			if err := e.CheckConfigFile(context.Background(), dir, file.Content); err != nil {
+				invalidDirs[dir] = true
+				out = append(out, validation.Diagnostic{Path: relative(bundle.Root, file.AbsolutePath), Line: 1, Column: 1, Severity: validation.SeverityError, Rule: "rules/config", Message: err.Error()})
+			}
+		}
+		var bundleRules []CompiledRule
+		if !invalidDirs[vfs.CleanPath(bundle.Root)] {
+			var err error
+			bundleRules, err = e.effectiveDir(context.Background(), bundle.Root)
+			if err != nil {
+				rule := "rules/config"
+				var rootErr *BundleRootError
+				if errors.As(err, &rootErr) {
+					rule = "rules/bundle-root"
+				}
+				return []validation.Diagnostic{{Path: bundle.Root, Line: 1, Column: 1, Severity: validation.SeverityError, Rule: rule, Message: err.Error()}}
+			}
 		}
 		for _, file := range bundle.Files {
+			if IsDirConfigPath(file.AbsolutePath) || beneathInvalidConfig(file.AbsolutePath, invalidDirs) {
+				continue
+			}
 			out = append(out, e.validateFile(context.Background(), bundle.FS, bundle.Root, file.AbsolutePath, file.Content, &bundle)...)
 		}
 		for _, rule := range bundleRules {
@@ -205,6 +343,15 @@ func (e *Engine) Validator() validation.Validator {
 		SortDiagnostics(out)
 		return out
 	}
+}
+
+func beneathInvalidConfig(target string, invalid map[string]bool) bool {
+	for dir := range invalid {
+		if target == dir || strings.HasPrefix(target, strings.TrimSuffix(dir, "/")+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *Engine) ValidateBundle(ctx context.Context, fsys vfs.FileSystem, root string) ([]validation.Diagnostic, error) {

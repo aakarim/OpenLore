@@ -291,6 +291,10 @@ type DocsetAccess struct {
 	Deny  []string          `json:"deny,omitempty"`
 }
 
+type DirConfigPermission struct {
+	Edit []string `json:"edit,omitempty"`
+}
+
 // AuthTokensConfig controls the bearer-token issuer for the MCP + HTTP API.
 // It is server infrastructure and loaded from openlore.yml (hence yaml tags).
 type AuthTokensConfig struct {
@@ -322,6 +326,7 @@ type DocsetSpec struct {
 	Paths  []PathMapping             `json:"paths"`
 	Access DocsetAccess              `json:"access,omitempty"`
 	Rules  map[string]rules.RuleSpec `json:"rules,omitempty"`
+	Config *DirConfigPermission      `json:"config,omitempty"`
 	// AgentSkills is ignored. Collections are selected dynamically by xattr.
 	AgentSkills bool `json:"-"`
 	// Aliases are alternate display roots for the first path. They expose the
@@ -1359,6 +1364,16 @@ func ValidateAuthConfig(auth *AuthConfig) error {
 		}
 	}
 	for docset, ds := range auth.Docsets {
+		if ds.Config != nil {
+			if err := validateNames(fmt.Sprintf("docset %q config.edit roles", docset), ds.Config.Edit); err != nil {
+				return err
+			}
+			for _, role := range ds.Config.Edit {
+				if _, ok := auth.Roles[role]; !ok {
+					return fmt.Errorf("docset %q config.edit references unknown role %q", docset, role)
+				}
+			}
+		}
 		for role, grant := range ds.Access.Allow {
 			if grant == "" || strings.TrimSpace(grant) != grant {
 				return fmt.Errorf("docset %q has invalid grant for role %q", docset, role)
