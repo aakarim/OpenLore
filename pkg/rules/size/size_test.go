@@ -17,3 +17,10 @@ func TestLinesFixedMax(t *testing.T) {
 		t.Fatalf("findings=%#v err=%v", findings, err)
 	}
 }
+
+func TestManifestOnlyAdvertisesFixedMax(t *testing.T) {
+	params := (Rule{Metric: Lines}).Manifest().Params
+	if len(params) != 1 || params[0].Name != "max" || params[0].Type != rules.ParamInteger || !params[0].Required {
+		t.Fatalf("params=%#v, want one required integer max", params)
+	}
+}

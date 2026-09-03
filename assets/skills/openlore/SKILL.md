@@ -43,6 +43,23 @@ Published files land in an inbox for human review. Writes are atomic and
 conflict-aware; a rejected write returns a non-zero exit status with an
 explanation on stderr.
 
+## Folder rules
+
+OpenLore can enforce declarative rules configured by the server for a docset.
+Before writing, discover the compiled-in rule members and their parameters:
+
+```bash
+ssh -p <port> <host> "lore package list"
+ssh -p <port> <host> "lore package doc size/lines"
+ssh -p <port> <host> "lore package doc link/resolves"
+```
+
+File-scoped rules run on every write and under `lore validate`. Bundle-scoped
+rules run only under `lore validate`, because they need to inspect related
+files. A rejected write ends with `see: lore package doc <member>`; run that
+command for the rule's purpose, parameters, and example. Validate a bundle
+before publishing with `lore validate /path/to/bundle`.
+
 ## Notes
 
 - The remote shell is OpenLore's sandboxed in-memory interpreter, not a real
