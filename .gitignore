@@ -4,3 +4,7 @@
 # Built binaries
 /openlore
 /lix
+
+# Local recursive-search benchmark data
+/.benchdata/
+/bench-results/
