@@ -1,0 +1,4 @@
+# OpenLore
+> A minimal, extensible, agent-native knowledge base that keeps shared context current and inspectable
+
+- Repo: https://github.com/aakarim/OpenLore
