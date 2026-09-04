@@ -198,23 +198,24 @@ func TestConfigAdminWithoutWritableDocsetCanUseConfigWriteVerbs(t *testing.T) {
 }
 
 func TestWriteLogPersistsStructuredAttribution(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "commits.jsonl")
+	dir := t.TempDir()
+	store := NewJSONLHistoryStore(dir)
 	log := newWriteLog(&wlRecordingFS{}, nil, nil, 1)
-	log.SetCommitRecorder(NewJSONLCommitRecorder(path))
+	log.SetHistoryRecorder(store)
 	t.Cleanup(func() { _ = log.Close(context.Background()) })
 	_, err := log.Submit(context.Background(), Attribution{Principal: "adil", Actor: "claude@claude.ai"}, writeCS("/plan.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(filepath.Join(dir, "events.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var record CommitRecord
+	var record HistoryRecord
 	if err := json.Unmarshal(b, &record); err != nil {
 		t.Fatal(err)
 	}
-	if record.Attribution.Principal != "adil" || record.Attribution.Actor != "claude@claude.ai" || record.ChangeSet.Target != "/plan.md" {
+	if record.Attribution.Principal != "adil" || record.Attribution.Actor != "claude@claude.ai" || record.FileKey != "/plan.md" {
 		t.Fatalf("record=%+v", record)
 	}
 }

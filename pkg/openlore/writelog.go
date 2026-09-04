@@ -2,12 +2,10 @@ package openlore
 
 import (
 	"context"
-	"encoding/json"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
-	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -36,45 +34,6 @@ type logEntry struct {
 	reply       chan applyResult
 }
 
-// CommitRecord is the durable, queryable provenance record for one committed
-// ChangeSet. Fact-level provenance is derived from these records.
-type CommitRecord struct {
-	Time        time.Time     `json:"time"`
-	Attribution Attribution   `json:"attribution"`
-	ChangeSet   vfs.ChangeSet `json:"change_set"`
-	Hash        string        `json:"hash,omitempty"`
-}
-
-type CommitRecorder interface {
-	RecordCommit(context.Context, CommitRecord) error
-}
-
-type JSONLCommitRecorder struct {
-	mu   sync.Mutex
-	path string
-}
-
-func NewJSONLCommitRecorder(path string) *JSONLCommitRecorder {
-	return &JSONLCommitRecorder{path: path}
-}
-
-func (r *JSONLCommitRecorder) RecordCommit(_ context.Context, record CommitRecord) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if err := os.MkdirAll(filepath.Dir(r.path), 0o700); err != nil {
-		return err
-	}
-	f, err := os.OpenFile(r.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	if err := json.NewEncoder(f).Encode(record); err != nil {
-		return err
-	}
-	return f.Sync()
-}
-
 // writeLog is the ordered write log and its single serialized applier — the sole
 // writer to the substrate. Both fresh admitted writes and approved held
 // ChangeSets are submitted here; one applier goroutine drains them in order and
@@ -97,7 +56,7 @@ type writeLog struct {
 	postCommit  PostCommitHandler // optional; runs at the applier after a durable commit
 	commitState func(context.Context, CommitInfo) error
 	preApply    func(*Identity, Attribution, vfs.ChangeSet) error
-	recorder    CommitRecorder
+	history     HistoryRecorder
 	closed      bool
 	ch          chan logEntry
 
@@ -170,13 +129,10 @@ func (l *writeLog) run() {
 		}
 		if committed.HasCommitted() {
 			l.mu.RLock()
-			recorder := l.recorder
+			history := l.history
 			l.mu.RUnlock()
-			if recorder != nil {
-				if recordErr := recorder.RecordCommit(context.Background(), CommitRecord{
-					Time: time.Now().UTC(), Attribution: e.attribution,
-					ChangeSet: committed.Committed, Hash: committed.Hash,
-				}); recordErr != nil {
+			if history != nil {
+				if recordErr := history.Record(context.Background(), historyRecords(time.Now().UTC(), e.attribution, committed)); recordErr != nil {
 					l.logger.Error("commit provenance recording failed after durable write",
 						"target", e.cs.Target, "action", e.cs.Action, "hash", committed.Hash, "err", recordErr)
 				}
@@ -211,9 +167,9 @@ func (l *writeLog) SetCommitState(h func(context.Context, CommitInfo) error) {
 	l.mu.Unlock()
 }
 
-func (l *writeLog) SetCommitRecorder(recorder CommitRecorder) {
+func (l *writeLog) SetHistoryRecorder(history HistoryRecorder) {
 	l.mu.Lock()
-	l.recorder = recorder
+	l.history = history
 	l.mu.Unlock()
 }
 
@@ -288,13 +244,25 @@ func (l *writeLog) submit(ctx context.Context, identity *Identity, attribution A
 	}
 }
 
-func (r CommitRecord) DisplayAttribution() string { return r.Attribution.String() }
-
-func (r CommitRecord) Validate() error {
-	if r.Attribution.Principal == "" {
-		return fmt.Errorf("commit attribution principal is required")
+func historyRecords(at time.Time, attribution Attribution, committed vfs.CommitResult) []HistoryRecord {
+	leaves := committed.Committed.Leaves()
+	records := make([]HistoryRecord, 0, len(leaves))
+	for _, leaf := range leaves {
+		hash := ""
+		if leaf.Write != nil {
+			if len(leaves) == 1 && committed.Hash != "" {
+				hash = committed.Hash
+			} else {
+				sum := sha256.Sum256(leaf.Write.Bytes)
+				hash = hex.EncodeToString(sum[:])
+			}
+		}
+		records = append(records, HistoryRecord{
+			Time: at, Attribution: attribution, FileKey: vfs.CleanPath(leaf.Target),
+			Action: string(leaf.Action), ContentHash: hash,
+		})
 	}
-	return nil
+	return records
 }
 
 // Close stops accepting new submits, lets the applier drain all queued entries

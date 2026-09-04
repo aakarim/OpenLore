@@ -74,8 +74,8 @@ type Server struct {
 	sessionFSFn  SessionFSFn
 
 	// jobs runs async external work (Part D), surfaced read-only at /jobs.
-	jobs        *JobManager
-	historyPath string
+	jobs    *JobManager
+	history HistoryStore
 
 	// writeLog is the single ordered write log + serialized applier: the sole
 	// writer to the substrate. Non-nil only when the substrate is writable
@@ -313,8 +313,8 @@ func newServerWithRoot(rootDir string, rootFS, lowerFS vfs.FileSystem, opts ...c
 		// so it is the sole writer and gives globally ordered writes/removes. The
 		// applier runs the post-commit chain after each durable commit.
 		s.writeLog = newWriteLog(s.merge, s.postCommitChain(), logger, 0)
-		s.historyPath = filepath.Join(dataDir, "history", "commits.jsonl")
-		s.writeLog.SetCommitRecorder(NewJSONLCommitRecorder(s.historyPath))
+		s.history = NewJSONLHistoryStore(filepath.Join(dataDir, "history"))
+		s.writeLog.SetHistoryRecorder(s.history)
 		s.writeLog.SetCommitState(rulesPlugin.CommitState)
 		s.writeLog.SetPreApply(func(identity *Identity, attribution Attribution, changes vfs.ChangeSet) error {
 			for _, change := range changes.Leaves() {
@@ -1133,8 +1133,8 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 	if canAdmin {
 		sh.SetConfigReloadBackend(s)
 	}
-	if s.historyPath != "" {
-		sh.SetHistoryBackend(fileHistory{path: s.historyPath, roots: historyRoots(s.sessionDocsets(id))})
+	if s.history != nil {
+		sh.SetHistoryBackend(scopedHistory{store: s.history, roots: historyRoots(s.sessionDocsets(id))})
 	}
 	sh.SetJobBackend(s.jobs)
 	sh.SetSizeBackend(sessionSizeBackend{server: s, identity: id})
@@ -1651,21 +1651,21 @@ func (s *Server) ListenAndServe() error {
 					}
 					return s.buildCanonicalSessionFS(id)
 				}, func(name, filePath string) ([]passkeys.FileHistoryEntry, error) {
-					if s.historyPath == "" {
+					if s.history == nil {
 						return nil, nil
 					}
 					id, ok := s.identityForName(name)
 					if !ok {
 						id = s.anonymousIdentity()
 					}
-					entries, err := (fileHistory{path: s.historyPath, roots: historyRoots(s.sessionDocsets(id))}).QueryFile(filePath)
+					page, err := s.history.Query(context.Background(), HistoryQuery{FileKey: filePath, Roots: historyRoots(s.sessionDocsets(id))})
 					if err != nil {
 						return nil, err
 					}
-					history := make([]passkeys.FileHistoryEntry, len(entries))
-					for i, entry := range entries {
+					history := make([]passkeys.FileHistoryEntry, len(page.Records))
+					for i, entry := range page.Records {
 						history[i] = passkeys.FileHistoryEntry{
-							Time: entry.Time, Attribution: entry.Attribution, Action: entry.Action, Hash: entry.Hash,
+							Time: entry.Time, Attribution: entry.Attribution.String(), Action: entry.Action, Hash: entry.ContentHash,
 						}
 					}
 					return history, nil
