@@ -62,6 +62,12 @@ allows findings.
 The owning docset's configuration governs each target. Use nested docsets to
 scope validation more narrowly or to exempt a subtree from its parent's policy.
 
+The `okf` block is shorthand for four [folder rules](folder-rules.md): `okf`
+(checked on write), plus `okf/bundle`, `link/resolves` and `link/alias`
+(checked by `lore validate` only). Declare them under `docsets.<name>.rules`
+instead when you want to combine them with other members such as `size/lines`,
+or scope them with `match`/`exclude` globs.
+
 Downstream Go code can apply the same rules directly:
 
 ```go
