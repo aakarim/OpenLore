@@ -352,6 +352,9 @@ In `openlore.yml` (global) and per docset in `lore.json`:
 | `readonly` | global / per-docset | Global is a hard physical lock (default `true`). A per-docset `readonly: false` cannot loosen a global lock; a per-docset `readonly: true` excludes that docset from writes. |
 | `write_conflict_policy` | global / per-docset | `hash` (CAS, default) or `last_write_wins`. Per-docset overrides global. |
 | `requires_approval` | per-docset | List of `{ path, capability }` rules that gate matching writes and deletes behind `approve` (as changesets). |
+| `rules` | global (`lore.json` top level) / per-docset | Folder rules evaluated as a write middleware and by `lore validate`; unified with `.lore/config.yaml` files in the content tree. See [Folder rules](folder-rules.md). |
+| `config` | per-docset | `config.edit`: roles that may write or delete `.lore/config.yaml` under the docset and run `lore size baseline reset`. |
+| `rules.growth` | global (`openlore.yml`) | Default multiplier for `max: initial` size rules (default `1.25`). |
 | `max_jobs` | global | Max concurrent async `spawn` jobs (default `8`). |
 | `hooks` | global | External commands subscribed to `on_startup`/`pre_read`/`post_write`/`post_delete`/`approval_pending`. |
 

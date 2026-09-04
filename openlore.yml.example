@@ -267,6 +267,16 @@ files:
 # it for that docset's subtree; scope narrower subtrees with nested docsets.
 # See lore.json.example for the schema.
 
+# ── Folder Rules ──────────────────────────────────────
+#
+# Rules (size caps, OKF, link checks) are declared per docset in lore.json and
+# per folder in .lore/config.yaml files inside the content tree. See
+# docs/folder-rules.md. The only server-wide setting is the default growth
+# multiplier for `max: initial` size rules (must be >= 1). `rules.tokenizer`
+# is reserved and rejected until a real tokenizer ships.
+# rules:
+#   growth: 1.25
+
 # ── Display ───────────────────────────────────────────
 
 # Message of the day shown when a client connects.
