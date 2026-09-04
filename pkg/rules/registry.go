@@ -2,6 +2,7 @@ package rules
 
 import (
 	"fmt"
+	"path"
 	"sort"
 	"strings"
 	"sync"
@@ -66,6 +67,15 @@ func (r *Registry) Suggest(name string) string {
 func IsStdlib(name string) bool {
 	first := strings.SplitN(name, "/", 2)[0]
 	return first != "" && !strings.Contains(first, ".")
+}
+
+// PackageOf returns the package path that owns a member path.
+func PackageOf(member string) string {
+	pkg := path.Dir(member)
+	if pkg == "." {
+		return member
+	}
+	return pkg
 }
 
 func distance(a, b string) int {

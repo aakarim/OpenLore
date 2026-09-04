@@ -22,9 +22,9 @@ type Baseline struct {
 	Actor     string    `json:"actor,omitempty"`
 	Note      string    `json:"note,omitempty"`
 	Commit    string    `json:"commit,omitempty"`
-	Kilobytes int       `json:"kilobytes,omitempty"`
-	Lines     int       `json:"lines,omitempty"`
-	Tokens    int       `json:"tokens,omitempty"`
+	Kilobytes int       `json:"kilobytes"`
+	Lines     int       `json:"lines"`
+	Tokens    int       `json:"tokens"`
 	Tokenizer string    `json:"tokenizer,omitempty"`
 }
 
@@ -104,7 +104,29 @@ func (s *baselineStore) Move(ctx context.Context, from, to string) error {
 	if err != nil {
 		return err
 	}
-	return src.Move(stateKey(from), dst, stateKey(to))
+	var records [][]byte
+	for raw, recordErr := range src.Records(stateKey(from)) {
+		if recordErr != nil {
+			return recordErr
+		}
+		var record Baseline
+		if err := json.Unmarshal(raw, &record); err != nil {
+			return err
+		}
+		record.Path = to
+		rewritten, err := json.Marshal(record)
+		if err != nil {
+			return err
+		}
+		records = append(records, rewritten)
+	}
+	if len(records) == 0 {
+		return nil
+	}
+	if err := dst.Replace(stateKey(to), records); err != nil {
+		return err
+	}
+	return src.Remove(stateKey(from))
 }
 
 func Measure(content []byte, tok tokenizer.Tokenizer) (Baseline, error) {
@@ -134,6 +156,7 @@ func Reset(ctx context.Context, store BaselineStore, p string, content []byte, t
 		return Baseline{}, Baseline{}, err
 	}
 	next.Path, next.Op, next.Reason, next.Actor, next.Note = p, "baseline", "reset", actor, note
+	next.At = time.Now().UTC()
 	if err := store.Record(ctx, next); err != nil {
 		return Baseline{}, Baseline{}, err
 	}
@@ -212,12 +235,12 @@ type check struct {
 }
 
 // Inspect exposes the stateful configuration to the size administration command.
-func Inspect(value rules.Check) (BaselineStore, Metric, float64, bool) {
+func Inspect(value rules.Check) (BaselineStore, Metric, float64, tokenizer.Tokenizer, bool) {
 	c, ok := value.(*check)
 	if !ok || !c.initial {
-		return nil, 0, 0, false
+		return nil, 0, 0, nil, false
 	}
-	return c.store, c.metric, c.growth, true
+	return c.store, c.metric, c.growth, c.tokenizer(), true
 }
 
 func (c *check) Evaluate(ctx context.Context, subject rules.Subject) ([]rules.Finding, error) {
@@ -228,27 +251,32 @@ func (c *check) Evaluate(ctx context.Context, subject rules.Subject) ([]rules.Fi
 	value, unit := c.value(measured)
 	limit, provenance := c.max, fmt.Sprintf("max: %d", c.max)
 	if c.initial {
-		baseline, ok, err := c.store.Get(ctx, subject.Path)
+		baseline, ok, err := c.baseline(ctx, subject.Path)
 		if err != nil {
 			return nil, err
 		}
-		if c.metric == Tokens && ok && baseline.Tokenizer != c.tokenizer().Name() {
+		tokenizerChanged := c.metric == Tokens && ok && baseline.Tokenizer != c.tokenizer().Name()
+		if tokenizerChanged {
 			ok = false
 		}
-		if !ok {
-			baseContent, existed := subject.Content, false
-			if subject.Existing != nil {
-				existingContent, exists, existingErr := subject.Existing()
-				existed, err = exists, existingErr
-				if err != nil {
-					return nil, err
-				}
-				if existed {
-					baseContent = existingContent
-				}
+		var existingContent []byte
+		existed := false
+		if subject.Mode == rules.ModeAdmit && subject.Existing != nil {
+			existingContent, existed, err = subject.Existing()
+			if err != nil {
+				return nil, err
 			}
+			if !existed {
+				ok = false
+			}
+		}
+		if !ok {
+			baseContent := subject.Content
 			if subject.Mode == rules.ModeValidate {
 				return nil, nil
+			}
+			if len(existingContent) != 0 || existed {
+				baseContent = existingContent
 			}
 			baseline, err = Measure(baseContent, c.tokenizer())
 			if err != nil {
@@ -258,6 +286,10 @@ func (c *check) Evaluate(ctx context.Context, subject rules.Subject) ([]rules.Fi
 			if existed {
 				baseline.Reason = "rule-added"
 			}
+			if tokenizerChanged && existed {
+				baseline.Reason = "tokenizer-changed"
+			}
+			baseline.At = time.Now().UTC()
 			if err = c.store.Record(ctx, baseline); err != nil {
 				return nil, err
 			}
@@ -281,11 +313,34 @@ func (c *check) Evaluate(ctx context.Context, subject rules.Subject) ([]rules.Fi
 	}
 	return []rules.Finding{{Code: c.member, Measured: fmt.Sprintf("%d %s exceeds the limit of %d (%s)", value, unit, limit, provenance), Limit: fmt.Sprintf("this file cannot grow past %d %s under this rule", limit, unit), Remedy: fmt.Sprintf("keep %s under %d %s; move the new material into a sibling file such as %s and add a link to it from %s so readers can drill in", base, limit, unit, sibling, base), Override: override}}, nil
 }
-func (c *check) OnRemove(ctx context.Context, p string) error {
+
+func (c *check) baseline(ctx context.Context, p string) (Baseline, bool, error) {
+	history, err := c.store.History(ctx, p)
+	if err != nil {
+		return Baseline{}, false, err
+	}
+	var current Baseline
+	found := false
+	for _, record := range history {
+		if record.Op == "remove" {
+			found = false
+			continue
+		}
+		if record.Op != "baseline" {
+			continue
+		}
+		if c.metric != Tokens && record.Reason == "tokenizer-changed" {
+			continue
+		}
+		current, found = record, true
+	}
+	return current, found, nil
+}
+func (c *check) OnRemove(ctx context.Context, p, actor string) error {
 	if !c.initial {
 		return nil
 	}
-	return c.store.Clear(ctx, p, rules.Actor(ctx))
+	return c.store.Clear(ctx, p, actor)
 }
 func (c *check) OnMove(ctx context.Context, from, to string) error {
 	if !c.initial {

@@ -44,8 +44,8 @@ func (c testCheck) Evaluate(_ context.Context, subject Subject) ([]Finding, erro
 	}
 	return nil, nil
 }
-func (testCheck) OnRemove(context.Context, string) error       { return nil }
-func (testCheck) OnMove(context.Context, string, string) error { return nil }
+func (testCheck) OnRemove(context.Context, string, string) error { return nil }
+func (testCheck) OnMove(context.Context, string, string) error   { return nil }
 
 func TestAdmitLeafNeverCallsBundleRule(t *testing.T) {
 	calls := 0

@@ -102,16 +102,6 @@ const (
 	ModeValidate
 )
 
-type actorContextKey struct{}
-
-func WithActor(ctx context.Context, actor string) context.Context {
-	return context.WithValue(ctx, actorContextKey{}, actor)
-}
-func Actor(ctx context.Context) string {
-	actor, _ := ctx.Value(actorContextKey{}).(string)
-	return actor
-}
-
 type Finding struct {
 	Code   string
 	Path   string
@@ -128,7 +118,7 @@ type Finding struct {
 
 type Check interface {
 	Evaluate(context.Context, Subject) ([]Finding, error)
-	OnRemove(context.Context, string) error
+	OnRemove(context.Context, string, string) error
 	OnMove(context.Context, string, string) error
 }
 

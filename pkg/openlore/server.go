@@ -258,7 +258,7 @@ func newServerWithRoot(rootDir string, rootFS, lowerFS vfs.FileSystem, opts ...c
 			return nil, err
 		}
 	}
-	rulesPlugin, err := newRulesPlugin(s.auth, rules.Defaults{Growth: cfg.Rules.Growth}, s.merge, logger)
+	rulesPlugin, err := newRulesPluginWithTokenizer(s.auth, rules.Defaults{Growth: cfg.Rules.Growth}, s.merge, logger, cfg.Rules.Tokenizer)
 	if err != nil {
 		return nil, err
 	}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"path"
 	"strings"
 
 	"github.com/aakarim/go-openlore/pkg/packagestate"
@@ -16,10 +17,11 @@ import (
 )
 
 type sizeRuleState struct {
-	store  size.BaselineStore
-	metric size.Metric
-	growth float64
-	rule   rules.CompiledRule
+	store     size.BaselineStore
+	metric    size.Metric
+	growth    float64
+	tokenizer tokenizer.Tokenizer
+	rule      rules.CompiledRule
 }
 
 func (p *rulesPlugin) sizeRules(ctx context.Context, target string) ([]sizeRuleState, error) {
@@ -29,9 +31,9 @@ func (p *rulesPlugin) sizeRules(ctx context.Context, target string) ([]sizeRuleS
 	}
 	var out []sizeRuleState
 	for _, rule := range compiled {
-		store, metric, growth, ok := size.Inspect(rule.Check)
+		store, metric, growth, counter, ok := size.Inspect(rule.Check)
 		if ok && rules.Applies(rule, target) {
-			out = append(out, sizeRuleState{store, metric, growth, rule})
+			out = append(out, sizeRuleState{store: store, metric: metric, growth: growth, tokenizer: counter, rule: rule})
 		}
 	}
 	return out, nil
@@ -57,7 +59,12 @@ func (p *rulesPlugin) baselineText(ctx context.Context, target string) (string, 
 		return "no baseline recorded\n", nil
 	}
 	var b strings.Builder
-	fmt.Fprintln(&b, target)
+	if len(states) == 0 {
+		fmt.Fprintln(&b, target)
+	} else {
+		firstState := states[0]
+		fmt.Fprintf(&b, "%s  (%s via %s @ %s, growth %g)\n", target, firstState.rule.Spec.Use, firstState.rule.Name, firstState.rule.Origins[len(firstState.rule.Origins)-1], firstState.growth)
+	}
 	for _, record := range history {
 		fmt.Fprintf(&b, "  %s  %-10s  %-20s  %d lines  %d KiB  %d tokens", record.At.Format("2006-01-02T15:04:05Z"), first(record.Reason, record.Op), record.Actor, record.Lines, record.Kilobytes, record.Tokens)
 		if record.Tokenizer != "" {
@@ -121,7 +128,8 @@ func (b sessionSizeBackend) Baseline(target string) (string, error) {
 }
 func (b sessionSizeBackend) Reset(target, note string, a cmds.JobAttribution) (string, error) {
 	id := b.server.resolveSessionIdentity(b.identity)
-	if !scopeGrantsWrite(id.Scopes) || !b.server.identityHasDirConfigRole(id, target) || !b.server.identityCanWrite(id, vfs.ChangeActionWrite, target) {
+	configPath := path.Join(path.Dir(target), ".lore", "config.yaml")
+	if !b.server.identityHasDirConfigRole(id, configPath) || !b.server.identityCanWrite(id, vfs.ChangeActionWrite, target) {
 		return "", errors.New("permission denied")
 	}
 	content, err := b.server.merge.ReadFile(target)
@@ -136,15 +144,20 @@ func (b sessionSizeBackend) Reset(target, note string, a cmds.JobAttribution) (s
 		return "", fmt.Errorf("no max: initial size rule applies to %s", target)
 	}
 	actor := Attribution{Principal: a.Principal, Actor: a.Actor}.String()
-	previous, next, err := size.Reset(context.Background(), states[0].store, target, content, tokenizer.Estimator{}, actor, note)
+	previous, next, err := size.Reset(context.Background(), states[0].store, target, content, states[0].tokenizer, actor, note)
 	if err != nil {
 		return "", err
 	}
 	if err = b.server.audit.Record(context.Background(), AuditEvent{Type: "rules.baseline.reset", Attribution: Attribution{Principal: a.Principal, Actor: a.Actor}, Details: map[string]any{"path": target, "previous": previous, "next": next, "note": note}}); err != nil {
 		return "", err
 	}
-	value, unit := baselineMetric(next, states[0].metric)
-	cap := int(math.Floor(float64(value) * states[0].growth))
-	return fmt.Sprintf("baseline reset: previous %d %s, new %d %s, new cap %d %s\n", baselineValue(previous, states[0].metric), unit, value, unit, cap, unit), nil
+	var output strings.Builder
+	fmt.Fprintf(&output, "baseline reset: previous %d, new %d", baselineValue(previous, states[0].metric), baselineValue(next, states[0].metric))
+	for _, state := range states {
+		value, unit := baselineMetric(next, state.metric)
+		fmt.Fprintf(&output, ", new cap %d %s", int(math.Floor(float64(value)*state.growth)), unit)
+	}
+	fmt.Fprintln(&output)
+	return output.String(), nil
 }
 func baselineValue(b size.Baseline, m size.Metric) int { v, _ := baselineMetric(b, m); return v }

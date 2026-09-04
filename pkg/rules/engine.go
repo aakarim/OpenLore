@@ -179,7 +179,7 @@ func (e *Engine) AdmitLeaf(ctx context.Context, leaf vfs.Change, actor string, e
 		return err
 	}
 	for _, rule := range rules {
-		if rule.Member.Manifest().Scope != ScopeFile || !matchesAtScope(rule, leaf.Target) {
+		if rule.Member.Manifest().Scope != ScopeFile || !Applies(rule, leaf.Target) {
 			continue
 		}
 		findings, checkErr := rule.Check.Evaluate(ctx, Subject{Mode: ModeAdmit, Path: leaf.Target, Dir: path.Dir(leaf.Target), Content: leaf.Write.Bytes, Existing: existing, Actor: actor})
@@ -211,14 +211,14 @@ func (e *Engine) AdmitLeaf(ctx context.Context, leaf vfs.Change, actor string, e
 	return nil
 }
 
-func (e *Engine) OnRemove(ctx context.Context, target string) error {
+func (e *Engine) OnRemove(ctx context.Context, target, actor string) error {
 	compiled, err := e.Effective(ctx, target)
 	if err != nil {
 		return err
 	}
 	for _, rule := range compiled {
-		if rule.Member.Manifest().Scope == ScopeFile && matchesAtScope(rule, target) {
-			if err := rule.Check.OnRemove(ctx, target); err != nil {
+		if rule.Member.Manifest().Scope == ScopeFile && Applies(rule, target) {
+			if err := rule.Check.OnRemove(ctx, target, actor); err != nil {
 				return err
 			}
 		}
@@ -232,7 +232,7 @@ func (e *Engine) OnMove(ctx context.Context, from, to string) error {
 		return err
 	}
 	for _, rule := range compiled {
-		if rule.Member.Manifest().Scope == ScopeFile && matchesAtScope(rule, from) {
+		if rule.Member.Manifest().Scope == ScopeFile && Applies(rule, from) {
 			if err := rule.Check.OnMove(ctx, from, to); err != nil {
 				return err
 			}
@@ -265,7 +265,7 @@ func (e *Engine) validateFile(ctx context.Context, fsys vfs.FileSystem, bundleRo
 	}
 	var diagnostics []validation.Diagnostic
 	for _, rule := range rules {
-		if rule.Member.Manifest().Scope != ScopeFile || !matchesAtScope(rule, target) {
+		if rule.Member.Manifest().Scope != ScopeFile || !Applies(rule, target) {
 			continue
 		}
 		findings, checkErr := rule.Check.Evaluate(ctx, Subject{Mode: ModeValidate, Path: target, Dir: path.Dir(target), Content: content, FS: fsys, BundleRoot: bundleRoot, Bundle: bundle})
@@ -389,16 +389,14 @@ func (e *Engine) ValidateBundle(ctx context.Context, fsys vfs.FileSystem, root s
 	return validation.Scan(fsys, root, e.Validator())
 }
 
-func matchesAtScope(rule CompiledRule, target string) bool {
+func Applies(rule CompiledRule, target string) bool {
 	rel, ok := relativeTo(rule.Scope, target)
 	return ok && Matches(rule.Spec, rel)
 }
 
-func Applies(rule CompiledRule, target string) bool { return matchesAtScope(rule, target) }
-
 func bundleMatches(rule CompiledRule, bundle *validation.Bundle) bool {
 	for _, file := range bundle.Files {
-		if matchesAtScope(rule, file.AbsolutePath) {
+		if Applies(rule, file.AbsolutePath) {
 			return true
 		}
 	}

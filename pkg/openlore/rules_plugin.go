@@ -214,11 +214,19 @@ func ruleRoots(docset config.DocsetSpec) []string {
 }
 
 type rulesPlugin struct {
-	engine *rules.Engine
-	fs     vfs.FileSystem
+	engine    *rules.Engine
+	fs        vfs.FileSystem
+	tokenizer tokenizer.Tokenizer
 }
 
 func newRulesPlugin(auth *config.AuthConfig, defaults rules.Defaults, fsys vfs.FileSystem, logger *slog.Logger) (*rulesPlugin, error) {
+	return newRulesPluginWithTokenizer(auth, defaults, fsys, logger, tokenizer.Estimator{})
+}
+
+func newRulesPluginWithTokenizer(auth *config.AuthConfig, defaults rules.Defaults, fsys vfs.FileSystem, logger *slog.Logger, counter tokenizer.Tokenizer) (*rulesPlugin, error) {
+	if counter == nil {
+		counter = tokenizer.Estimator{}
+	}
 	var aliases []string
 	for _, docset := range auth.Docsets {
 		aliases = append(aliases, docset.Aliases...)
@@ -227,8 +235,7 @@ func newRulesPlugin(auth *config.AuthConfig, defaults rules.Defaults, fsys vfs.F
 	configLayers := configRuleLayers{global: auth.Rules, docsets: auth.Docsets}
 	mapper, _ := fsys.(packagestate.HostMapper)
 	env := func(member string) rules.Env {
-		pkg := strings.SplitN(member, "/", 2)[0]
-		return rules.Env{Defaults: defaults, State: packagestate.Open(mapper, pkg), Tokenizer: tokenizer.Estimator{}, Logger: logger, AliasRoots: aliases}
+		return rules.Env{Defaults: defaults, State: packagestate.Open(mapper, rules.PackageOf(member)), Tokenizer: counter, Logger: logger, AliasRoots: aliases}
 	}
 	bootEngine := rules.New(rules.Options{Registry: rules.DefaultRegistry(), Config: configLayers, Env: env, Logger: logger})
 	// Compile every configured docset at boot so invalid members, parameters,
@@ -246,7 +253,7 @@ func newRulesPlugin(auth *config.AuthConfig, defaults rules.Defaults, fsys vfs.F
 		options.Folders = newFolderRuleLayers(fsys, auth.Docsets)
 	}
 	engine := rules.New(options)
-	return &rulesPlugin{engine: engine, fs: fsys}, nil
+	return &rulesPlugin{engine: engine, fs: fsys, tokenizer: counter}, nil
 }
 
 func (p *rulesPlugin) WriteMiddleware() []WriteMiddleware {
@@ -327,10 +334,9 @@ func (p *rulesPlugin) invalidateChanges(changes []vfs.Change) {
 func (p *rulesPlugin) PostCommitMiddleware() []PostCommitMiddleware {
 	return []PostCommitMiddleware{func(next PostCommitHandler) PostCommitHandler {
 		return func(ctx context.Context, info CommitInfo) error {
-			ctx = rules.WithActor(ctx, info.Attribution.String())
 			p.invalidateChanges(info.ChangeSet.Leaves())
 			leaves := info.ChangeSet.Leaves()
-			moved := map[int]bool{}
+			movedRemoves := map[int]bool{}
 			for i, remove := range leaves {
 				if remove.Action != vfs.ChangeActionRemoveAll || remove.RemoveAll == nil || remove.RemoveAll.Opts.Expected == nil {
 					continue
@@ -341,19 +347,21 @@ func (p *rulesPlugin) PostCommitMiddleware() []PostCommitMiddleware {
 						sourceHash = op.Hash
 					}
 				}
-				for j, write := range leaves {
+				for _, write := range leaves {
 					if write.Action == vfs.ChangeActionWrite && write.Write != nil && hashBytes(write.Write.Bytes) == sourceHash {
+						// Destination admission may have recorded a create baseline. Move
+						// deliberately replaces it wholesale with the source history.
 						if err := p.engine.OnMove(ctx, remove.Target, write.Target); err != nil {
 							return err
 						}
-						moved[i], moved[j] = true, true
+						movedRemoves[i] = true
 						break
 					}
 				}
 			}
 			for i, leaf := range leaves {
-				if !moved[i] && (leaf.Action == vfs.ChangeActionRemove || leaf.Action == vfs.ChangeActionRemoveAll) {
-					if err := p.engine.OnRemove(ctx, leaf.Target); err != nil {
+				if !movedRemoves[i] && (leaf.Action == vfs.ChangeActionRemove || leaf.Action == vfs.ChangeActionRemoveAll) {
+					if err := p.engine.OnRemove(ctx, leaf.Target, info.Attribution.String()); err != nil {
 						return err
 					}
 				}

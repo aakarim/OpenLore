@@ -35,7 +35,7 @@ func TestInitialBaselineUsesExistingContentAndResetAppends(t *testing.T) {
 	if err != nil || len(findings) != 1 || !strings.Contains(findings[0].Measured, "baseline 1 lines × growth 1.5") || !strings.Contains(findings[0].Measured, "on rule-added") {
 		t.Fatalf("findings=%v err=%v", findings, err)
 	}
-	store, _, _, _ := Inspect(compiled)
+	store, _, _, _, _ := Inspect(compiled)
 	prev, next, err := Reset(context.Background(), store, "/docs/a.md", []byte("1\n2\n"), nil, "bob", "reviewed")
 	if err != nil {
 		t.Fatal(err)
@@ -53,5 +53,46 @@ func TestManifestAdvertisesInitialMax(t *testing.T) {
 	params := (Rule{Metric: Lines}).Manifest().Params
 	if len(params) != 2 || params[0].Name != "max" || params[0].Type != rules.ParamIntegerOrInitial || !params[0].Required {
 		t.Fatalf("params=%#v", params)
+	}
+}
+
+type fakeTokenizer struct{}
+
+func (fakeTokenizer) Name() string                      { return "fake/v1" }
+func (fakeTokenizer) Count(content []byte) (int, error) { return len(content), nil }
+
+func TestTokenizerChangeRebaselinesTokensOnly(t *testing.T) {
+	state := packagestate.Open(mapper{"/docs": t.TempDir()}, "size")
+	existing := func() ([]byte, bool, error) { return []byte("one\ntwo\n"), true, nil }
+	old, err := (Rule{Metric: Tokens}).Compile(map[string]any{"max": "initial"}, rules.Env{State: state})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = old.Evaluate(context.Background(), rules.Subject{Mode: rules.ModeAdmit, Path: "/docs/a.md", Content: []byte("one\ntwo\n"), Existing: func() ([]byte, bool, error) { return nil, false, nil }}); err != nil {
+		t.Fatal(err)
+	}
+	line, _ := (Rule{Metric: Lines}).Compile(map[string]any{"max": "initial"}, rules.Env{State: state})
+	if _, err = line.Evaluate(context.Background(), rules.Subject{Mode: rules.ModeAdmit, Path: "/docs/a.md", Content: []byte("one\ntwo\n"), Existing: func() ([]byte, bool, error) { return nil, false, nil }}); err != nil {
+		t.Fatal(err)
+	}
+	next, err := (Rule{Metric: Tokens}).Compile(map[string]any{"max": "initial"}, rules.Env{State: state, Tokenizer: fakeTokenizer{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = next.Evaluate(context.Background(), rules.Subject{Mode: rules.ModeAdmit, Path: "/docs/a.md", Content: []byte("one\ntwo\n"), Existing: existing}); err != nil {
+		t.Fatal(err)
+	}
+	store, _, _, _, _ := Inspect(next)
+	history, err := store.History(context.Background(), "/docs/a.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if history[len(history)-1].Reason != "tokenizer-changed" || history[len(history)-1].Tokenizer != "fake/v1" {
+		t.Fatalf("history=%#v", history)
+	}
+	lineCheck := line.(*check)
+	baseline, ok, err := lineCheck.baseline(context.Background(), "/docs/a.md")
+	if err != nil || !ok || baseline.Reason != "create" {
+		t.Fatalf("line baseline=%#v ok=%v err=%v", baseline, ok, err)
 	}
 }

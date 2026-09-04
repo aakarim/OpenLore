@@ -57,5 +57,5 @@ func (c check) Evaluate(_ context.Context, subject rules.Subject) ([]rules.Findi
 	}
 	return findings, nil
 }
-func (check) OnRemove(context.Context, string) error       { return nil }
-func (check) OnMove(context.Context, string, string) error { return nil }
+func (check) OnRemove(context.Context, string, string) error { return nil }
+func (check) OnMove(context.Context, string, string) error   { return nil }
