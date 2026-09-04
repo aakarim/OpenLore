@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"iter"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 type HostMapper interface {
@@ -26,17 +28,37 @@ type DirStore interface {
 	Replace(key string, records [][]byte) error
 	Remove(key string) error
 	Move(key string, to DirStore, toKey string) error
+	RewriteMove(key string, to DirStore, toKey string, rewrite func([]byte) ([]byte, error)) error
 }
 
 type store struct {
 	mapper HostMapper
 	pkg    string
+	err    error
+	mu     *sync.Mutex
 }
+
+var packageLocks sync.Map
 
 // Open scopes a store to one package. Uppercase letters use Go module-cache
 // escaping (Github.com/X becomes !github.com/!x).
 func Open(mapper HostMapper, pkg string) Store {
-	return &store{mapper: mapper, pkg: escapePath(pkg)}
+	err := validPackage(pkg)
+	escaped := escapePath(pkg)
+	lock, _ := packageLocks.LoadOrStore(escaped, &sync.Mutex{})
+	return &store{mapper: mapper, pkg: escaped, err: err, mu: lock.(*sync.Mutex)}
+}
+
+func validPackage(pkg string) error {
+	if pkg == "" || strings.ContainsRune(pkg, 0) || strings.ContainsAny(pkg, `\:`) || strings.HasPrefix(pkg, "/") || strings.HasSuffix(pkg, "/") || path.Clean(pkg) != pkg {
+		return fmt.Errorf("invalid package-state package %q", pkg)
+	}
+	for _, segment := range strings.Split(pkg, "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return fmt.Errorf("invalid package-state package %q", pkg)
+		}
+	}
+	return nil
 }
 
 func escapePath(value string) string {
@@ -53,6 +75,9 @@ func escapePath(value string) string {
 }
 
 func (s *store) Dir(_ context.Context, vfsDir string) (DirStore, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
 	if s.mapper == nil {
 		return unavailable{}, nil
 	}
@@ -60,7 +85,7 @@ func (s *store) Dir(_ context.Context, vfsDir string) (DirStore, error) {
 	if !ok {
 		return unavailable{}, nil
 	}
-	return &dirStore{host: host, pkg: s.pkg}, nil
+	return &dirStore{host: host, pkg: s.pkg, mu: s.mu}, nil
 }
 
 type unavailable struct{}
@@ -70,10 +95,14 @@ func (unavailable) Records(string) iter.Seq2[[]byte, error] { return func(func([
 func (unavailable) Replace(string, [][]byte) error          { return os.ErrPermission }
 func (unavailable) Remove(string) error                     { return nil }
 func (unavailable) Move(string, DirStore, string) error     { return os.ErrPermission }
+func (unavailable) RewriteMove(string, DirStore, string, func([]byte) ([]byte, error)) error {
+	return os.ErrPermission
+}
 
 type dirStore struct {
 	host string
 	pkg  string
+	mu   *sync.Mutex
 }
 
 func validKey(key string) error {
@@ -109,6 +138,12 @@ func (d *dirStore) rel(key string) string {
 }
 
 func (d *dirStore) Append(key string, record []byte) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.append(key, record)
+}
+
+func (d *dirStore) append(key string, record []byte) error {
 	if err := validKey(key); err != nil {
 		return err
 	}
@@ -127,34 +162,46 @@ func (d *dirStore) Append(key string, record []byte) error {
 
 func (d *dirStore) Records(key string) iter.Seq2[[]byte, error] {
 	return func(yield func([]byte, error) bool) {
-		if err := validKey(key); err != nil {
-			yield(nil, err)
-			return
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		d.records(key, yield)
+	}
+}
+
+func (d *dirStore) records(key string, yield func([]byte, error) bool) {
+	if err := validKey(key); err != nil {
+		yield(nil, err)
+		return
+	}
+	err := d.withRoot(false, func(r *os.Root) error {
+		f, err := r.Open(d.rel(key))
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
 		}
-		err := d.withRoot(false, func(r *os.Root) error {
-			f, err := r.Open(d.rel(key))
-			if errors.Is(err, os.ErrNotExist) {
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		s := bufio.NewScanner(f)
+		for s.Scan() {
+			if !yield(append([]byte(nil), s.Bytes()...), nil) {
 				return nil
 			}
-			if err != nil {
-				return err
-			}
-			defer f.Close()
-			s := bufio.NewScanner(f)
-			for s.Scan() {
-				if !yield(append([]byte(nil), s.Bytes()...), nil) {
-					return nil
-				}
-			}
-			return s.Err()
-		})
-		if err != nil {
-			yield(nil, err)
 		}
+		return s.Err()
+	})
+	if err != nil {
+		yield(nil, err)
 	}
 }
 
 func (d *dirStore) Replace(key string, records [][]byte) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.replace(key, records)
+}
+
+func (d *dirStore) replace(key string, records [][]byte) error {
 	if err := validKey(key); err != nil {
 		return err
 	}
@@ -191,6 +238,12 @@ func (d *dirStore) Replace(key string, records [][]byte) error {
 }
 
 func (d *dirStore) Remove(key string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.remove(key)
+}
+
+func (d *dirStore) remove(key string) error {
 	if err := validKey(key); err != nil {
 		return err
 	}
@@ -204,6 +257,10 @@ func (d *dirStore) Remove(key string) error {
 }
 
 func (d *dirStore) Move(key string, target DirStore, toKey string) error {
+	return d.RewriteMove(key, target, toKey, func(record []byte) ([]byte, error) { return record, nil })
+}
+
+func (d *dirStore) RewriteMove(key string, target DirStore, toKey string, rewrite func([]byte) ([]byte, error)) error {
 	if err := validKey(key); err != nil {
 		return err
 	}
@@ -211,21 +268,34 @@ func (d *dirStore) Move(key string, target DirStore, toKey string) error {
 		return err
 	}
 	to, ok := target.(*dirStore)
-	if !ok {
+	if !ok || to.mu != d.mu {
 		return os.ErrPermission
 	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	var records [][]byte
-	for record, err := range d.Records(key) {
+	var readErr error
+	d.records(key, func(record []byte, err error) bool {
 		if err != nil {
-			return err
+			readErr = err
+			return false
 		}
-		records = append(records, record)
+		rewritten, err := rewrite(record)
+		if err != nil {
+			readErr = err
+			return false
+		}
+		records = append(records, rewritten)
+		return true
+	})
+	if readErr != nil {
+		return readErr
 	}
 	if len(records) == 0 {
 		return nil
 	}
-	if err := to.Replace(toKey, records); err != nil {
+	if err := to.replace(toKey, records); err != nil {
 		return err
 	}
-	return d.Remove(key)
+	return d.remove(key)
 }

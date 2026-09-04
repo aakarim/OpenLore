@@ -112,6 +112,7 @@ func cloneWriteChangeSet(cs vfs.ChangeSet) vfs.ChangeSet {
 		return out
 	}
 	out := cs
+	out.Moves = append([]vfs.Move(nil), cs.Moves...)
 	leaf := cloneLeaf(vfs.Change{Target: cs.Target, Action: cs.Action, Write: cs.Write, RemoveAll: cs.RemoveAll, Xattr: cs.Xattr, XattrRepair: cs.XattrRepair, XattrMigration: cs.XattrMigration})
 	out.Write, out.RemoveAll, out.Xattr, out.XattrRepair, out.XattrMigration = leaf.Write, leaf.RemoveAll, leaf.Xattr, leaf.XattrRepair, leaf.XattrMigration
 	if cs.Changes != nil {

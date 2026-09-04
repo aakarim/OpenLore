@@ -68,3 +68,11 @@ func TestStoreRefusesSymlinkEscape(t *testing.T) {
 		t.Fatal("symlink escape succeeded")
 	}
 }
+
+func TestStoreRejectsUnsafePackagePaths(t *testing.T) {
+	for _, pkg := range []string{"", ".", "..", "../other", "other/..", "/root", "a//b", `a\b`, "a:b"} {
+		if _, err := Open(testMapper{"/": t.TempDir()}, pkg).Dir(context.Background(), "/"); err == nil {
+			t.Errorf("package %q accepted", pkg)
+		}
+	}
+}

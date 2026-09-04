@@ -301,7 +301,7 @@ func (p *rulesPlugin) PreApply(attribution Attribution, changes vfs.ChangeSet) e
 			}
 			continue
 		}
-		if err := p.engine.AdmitLeaf(context.Background(), leaf, attribution.String(), p.existing(leaf.Target)); err != nil {
+		if err := p.engine.PreApplyLeaf(context.Background(), leaf, attribution.String(), p.existing(leaf.Target)); err != nil {
 			return err
 		}
 	}
@@ -335,40 +335,36 @@ func (p *rulesPlugin) PostCommitMiddleware() []PostCommitMiddleware {
 	return []PostCommitMiddleware{func(next PostCommitHandler) PostCommitHandler {
 		return func(ctx context.Context, info CommitInfo) error {
 			p.invalidateChanges(info.ChangeSet.Leaves())
-			leaves := info.ChangeSet.Leaves()
-			movedRemoves := map[int]bool{}
-			for i, remove := range leaves {
-				if remove.Action != vfs.ChangeActionRemoveAll || remove.RemoveAll == nil || remove.RemoveAll.Opts.Expected == nil {
-					continue
-				}
-				var sourceHash string
-				for _, op := range remove.RemoveAll.Opts.Expected.Ops {
-					if op.RelPath == "." && op.Kind == "file" {
-						sourceHash = op.Hash
-					}
-				}
-				for _, write := range leaves {
-					if write.Action == vfs.ChangeActionWrite && write.Write != nil && hashBytes(write.Write.Bytes) == sourceHash {
-						// Destination admission may have recorded a create baseline. Move
-						// deliberately replaces it wholesale with the source history.
-						if err := p.engine.OnMove(ctx, remove.Target, write.Target); err != nil {
-							return err
-						}
-						movedRemoves[i] = true
-						break
-					}
-				}
-			}
-			for i, leaf := range leaves {
-				if !movedRemoves[i] && (leaf.Action == vfs.ChangeActionRemove || leaf.Action == vfs.ChangeActionRemoveAll) {
-					if err := p.engine.OnRemove(ctx, leaf.Target, info.Attribution.String()); err != nil {
-						return err
-					}
-				}
-			}
 			return next(ctx, info)
 		}
 	}}
+}
+
+// CommitState updates package-local state synchronously after content commits
+// and before the submitter receives success.
+func (p *rulesPlugin) CommitState(ctx context.Context, info CommitInfo) error {
+	leaves := info.ChangeSet.Leaves()
+	movedRemoves := map[int]bool{}
+	for _, move := range info.ChangeSet.Moves {
+		remove, write := leaves[move.From], leaves[move.To]
+		if err := p.engine.OnMove(ctx, remove.Target, write.Target); err != nil {
+			return err
+		}
+		movedRemoves[move.From] = true
+	}
+	for i, leaf := range leaves {
+		switch {
+		case leaf.Action == vfs.ChangeActionWrite && leaf.Write != nil && !rules.IsDirConfigPath(leaf.Target):
+			if err := p.engine.OnWrite(ctx, leaf.Target, leaf.Write.Bytes, info.Attribution.String()); err != nil {
+				return err
+			}
+		case (leaf.Action == vfs.ChangeActionRemove || leaf.Action == vfs.ChangeActionRemoveAll) && !movedRemoves[i]:
+			if err := p.engine.OnRemove(ctx, leaf.Target, info.Attribution.String()); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 func (p *rulesPlugin) Validators() []validation.Validator {
 	return []validation.Validator{p.engine.Validator()}

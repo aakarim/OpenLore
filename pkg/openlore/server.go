@@ -315,6 +315,7 @@ func newServerWithRoot(rootDir string, rootFS, lowerFS vfs.FileSystem, opts ...c
 		s.writeLog = newWriteLog(s.merge, s.postCommitChain(), logger, 0)
 		s.historyPath = filepath.Join(dataDir, "history", "commits.jsonl")
 		s.writeLog.SetCommitRecorder(NewJSONLCommitRecorder(s.historyPath))
+		s.writeLog.SetCommitState(rulesPlugin.CommitState)
 		s.writeLog.SetPreApply(func(identity *Identity, attribution Attribution, changes vfs.ChangeSet) error {
 			for _, change := range changes.Leaves() {
 				if identity != nil {

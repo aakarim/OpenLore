@@ -75,17 +75,22 @@ func (p *rulesPlugin) baselineText(ctx context.Context, target string) (string, 
 		}
 		fmt.Fprintln(&b)
 	}
-	current, ok, err := store.Get(ctx, target)
-	if err != nil {
-		return "", err
-	}
-	if ok && len(states) != 0 {
-		fmt.Fprint(&b, "current cap:")
+	if len(states) != 0 {
+		var caps strings.Builder
 		for _, state := range states {
+			current, ok, err := size.Current(ctx, state.rule.Check, target)
+			if err != nil {
+				return "", err
+			}
+			if !ok {
+				continue
+			}
 			value, unit := baselineMetric(current, state.metric)
-			fmt.Fprintf(&b, " %d %s", int(math.Floor(float64(value)*state.growth)), unit)
+			fmt.Fprintf(&caps, " %d %s", int(math.Floor(float64(value)*state.growth)), unit)
 		}
-		fmt.Fprintln(&b)
+		if caps.Len() != 0 {
+			fmt.Fprintf(&b, "current cap:%s\n", caps.String())
+		}
 	}
 	return b.String(), nil
 }
@@ -132,27 +137,41 @@ func (b sessionSizeBackend) Reset(target, note string, a cmds.JobAttribution) (s
 	if !b.server.identityHasDirConfigRole(id, configPath) || !b.server.identityCanWrite(id, vfs.ChangeActionWrite, target) {
 		return "", errors.New("permission denied")
 	}
-	content, err := b.server.merge.ReadFile(target)
-	if err != nil {
-		return "", err
-	}
-	states, err := b.server.rules.sizeRules(context.Background(), target)
-	if err != nil {
-		return "", err
-	}
-	if len(states) == 0 {
-		return "", fmt.Errorf("no max: initial size rule applies to %s", target)
-	}
 	actor := Attribution{Principal: a.Principal, Actor: a.Actor}.String()
-	previous, next, err := size.Reset(context.Background(), states[0].store, target, content, states[0].tokenizer, actor, note)
+	var states []sizeRuleState
+	var previous, next size.Baseline
+	var previousByRule []size.Baseline
+	err := b.server.writeLog.Do(context.Background(), func() error {
+		content, err := b.server.merge.ReadFile(target)
+		if err != nil {
+			return err
+		}
+		states, err = b.server.rules.sizeRules(context.Background(), target)
+		if err != nil {
+			return err
+		}
+		if len(states) == 0 {
+			return fmt.Errorf("no max: initial size rule applies to %s", target)
+		}
+		previousByRule = make([]size.Baseline, len(states))
+		for i, state := range states {
+			current, _, currentErr := size.Current(context.Background(), state.rule.Check, target)
+			if currentErr != nil {
+				return currentErr
+			}
+			previousByRule[i] = current
+		}
+		previous, next, err = size.Reset(context.Background(), states[0].store, target, content, states[0].tokenizer, actor, note)
+		return err
+	})
 	if err != nil {
 		return "", err
 	}
 	if err = b.server.audit.Record(context.Background(), AuditEvent{Type: "rules.baseline.reset", Attribution: Attribution{Principal: a.Principal, Actor: a.Actor}, Details: map[string]any{"path": target, "previous": previous, "next": next, "note": note}}); err != nil {
-		return "", err
+		b.server.logger.Error("baseline reset audit failed", "path", target, "err", err)
 	}
 	var output strings.Builder
-	fmt.Fprintf(&output, "baseline reset: previous %d, new %d", baselineValue(previous, states[0].metric), baselineValue(next, states[0].metric))
+	fmt.Fprintf(&output, "baseline reset: previous %d, new %d", baselineValue(previousByRule[0], states[0].metric), baselineValue(next, states[0].metric))
 	for _, state := range states {
 		value, unit := baselineMetric(next, state.metric)
 		fmt.Fprintf(&output, ", new cap %d %s", int(math.Floor(float64(value)*state.growth)), unit)

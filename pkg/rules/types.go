@@ -99,6 +99,7 @@ type Mode int
 
 const (
 	ModeAdmit Mode = iota
+	ModePreApply
 	ModeValidate
 )
 
@@ -118,6 +119,7 @@ type Finding struct {
 
 type Check interface {
 	Evaluate(context.Context, Subject) ([]Finding, error)
+	OnWrite(context.Context, string, []byte, string) error
 	OnRemove(context.Context, string, string) error
 	OnMove(context.Context, string, string) error
 }

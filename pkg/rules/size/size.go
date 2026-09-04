@@ -104,29 +104,18 @@ func (s *baselineStore) Move(ctx context.Context, from, to string) error {
 	if err != nil {
 		return err
 	}
-	var records [][]byte
-	for raw, recordErr := range src.Records(stateKey(from)) {
-		if recordErr != nil {
-			return recordErr
-		}
+	return src.RewriteMove(stateKey(from), dst, stateKey(to), func(raw []byte) ([]byte, error) {
 		var record Baseline
 		if err := json.Unmarshal(raw, &record); err != nil {
-			return err
+			return nil, err
 		}
 		record.Path = to
 		rewritten, err := json.Marshal(record)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		records = append(records, rewritten)
-	}
-	if len(records) == 0 {
-		return nil
-	}
-	if err := dst.Replace(stateKey(to), records); err != nil {
-		return err
-	}
-	return src.Remove(stateKey(from))
+		return rewritten, nil
+	})
 }
 
 func Measure(content []byte, tok tokenizer.Tokenizer) (Baseline, error) {
@@ -206,7 +195,7 @@ func (r Rule) Compile(with map[string]any, env rules.Env) (rules.Check, error) {
 				return nil, fmt.Errorf("growth must be a number >= 1")
 			}
 		}
-		if growth < 1 {
+		if math.IsNaN(growth) || math.IsInf(growth, 0) || growth < 1 {
 			return nil, fmt.Errorf("growth must be a number >= 1")
 		}
 		if env.State == nil {
@@ -243,6 +232,19 @@ func Inspect(value rules.Check) (BaselineStore, Metric, float64, tokenizer.Token
 	return c.store, c.metric, c.growth, c.tokenizer(), true
 }
 
+// Current returns the metric-aware effective baseline used by enforcement.
+func Current(ctx context.Context, value rules.Check, p string) (Baseline, bool, error) {
+	c, ok := value.(*check)
+	if !ok || !c.initial {
+		return Baseline{}, false, nil
+	}
+	baseline, found, err := c.baseline(ctx, p)
+	if err == nil && found && c.metric == Tokens && baseline.Tokenizer != c.tokenizer().Name() {
+		found = false
+	}
+	return baseline, found, err
+}
+
 func (c *check) Evaluate(ctx context.Context, subject rules.Subject) ([]rules.Finding, error) {
 	measured, err := Measure(subject.Content, c.tokenizer())
 	if err != nil {
@@ -261,7 +263,7 @@ func (c *check) Evaluate(ctx context.Context, subject rules.Subject) ([]rules.Fi
 		}
 		var existingContent []byte
 		existed := false
-		if subject.Mode == rules.ModeAdmit && subject.Existing != nil {
+		if subject.Mode != rules.ModeValidate && subject.Existing != nil {
 			existingContent, existed, err = subject.Existing()
 			if err != nil {
 				return nil, err
@@ -290,8 +292,10 @@ func (c *check) Evaluate(ctx context.Context, subject rules.Subject) ([]rules.Fi
 				baseline.Reason = "tokenizer-changed"
 			}
 			baseline.At = time.Now().UTC()
-			if err = c.store.Record(ctx, baseline); err != nil {
-				return nil, err
+			if subject.Mode == rules.ModePreApply && existed {
+				if err = c.store.Record(ctx, baseline); err != nil {
+					return nil, err
+				}
 			}
 			if !existed {
 				return nil, nil
@@ -335,6 +339,21 @@ func (c *check) baseline(ctx context.Context, p string) (Baseline, bool, error) 
 		current, found = record, true
 	}
 	return current, found, nil
+}
+func (c *check) OnWrite(ctx context.Context, p string, content []byte, actor string) error {
+	if !c.initial {
+		return nil
+	}
+	if _, ok, err := c.baseline(ctx, p); err != nil || ok {
+		return err
+	}
+	baseline, err := Measure(content, c.tokenizer())
+	if err != nil {
+		return err
+	}
+	baseline.Path, baseline.Reason, baseline.Actor = p, "create", actor
+	baseline.At = time.Now().UTC()
+	return c.store.Record(ctx, baseline)
 }
 func (c *check) OnRemove(ctx context.Context, p, actor string) error {
 	if !c.initial {

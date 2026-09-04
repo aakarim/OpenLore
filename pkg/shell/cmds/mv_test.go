@@ -55,6 +55,9 @@ func TestMvSubmitsOneAtomicBatch(t *testing.T) {
 	if len(fs.admitted) != 1 || len(fs.admitted[0].Changes) != 2 {
 		t.Fatalf("admitted changesets = %#v, want one two-leaf batch", fs.admitted)
 	}
+	if moves := fs.admitted[0].Moves; len(moves) != 1 || moves[0] != (vfs.Move{From: 1, To: 0}) {
+		t.Fatalf("move metadata = %#v", moves)
+	}
 	changes := fs.admitted[0].Changes
 	if changes[0].Action != vfs.ChangeActionWrite || changes[0].Target != "/docs/moved.txt" || changes[0].Write == nil {
 		t.Fatalf("first change = %#v, want destination write", changes[0])

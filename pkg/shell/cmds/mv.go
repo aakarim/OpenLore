@@ -83,7 +83,7 @@ func CmdMv(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.
 		err = admitter.AdmitChangeSet(vfs.ChangeSet{Changes: []vfs.Change{
 			{Target: resolvedDestination, Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: data, Opts: overwritePreconditions(ctx, resolvedDestination)}},
 			{Target: resolvedSource, Action: vfs.ChangeActionRemoveAll, RemoveAll: &vfs.RemoveAllChange{Opts: vfs.RemoveOpts{Expected: snapshot}}},
-		}})
+		}, Moves: []vfs.Move{{From: 1, To: 0}}})
 		if err == nil {
 			return 0
 		}

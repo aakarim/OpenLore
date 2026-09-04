@@ -2,6 +2,7 @@ package size
 
 import (
 	"context"
+	"math"
 	"strings"
 	"testing"
 
@@ -31,7 +32,7 @@ func TestInitialBaselineUsesExistingContentAndResetAppends(t *testing.T) {
 		t.Fatal(err)
 	}
 	existing := func() ([]byte, bool, error) { return []byte("x\n"), true, nil }
-	findings, err := compiled.Evaluate(context.Background(), rules.Subject{Mode: rules.ModeAdmit, Path: "/docs/a.md", Content: []byte("1\n2\n"), Existing: existing, Actor: "alice"})
+	findings, err := compiled.Evaluate(context.Background(), rules.Subject{Mode: rules.ModePreApply, Path: "/docs/a.md", Content: []byte("1\n2\n"), Existing: existing, Actor: "alice"})
 	if err != nil || len(findings) != 1 || !strings.Contains(findings[0].Measured, "baseline 1 lines × growth 1.5") || !strings.Contains(findings[0].Measured, "on rule-added") {
 		t.Fatalf("findings=%v err=%v", findings, err)
 	}
@@ -68,18 +69,15 @@ func TestTokenizerChangeRebaselinesTokensOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = old.Evaluate(context.Background(), rules.Subject{Mode: rules.ModeAdmit, Path: "/docs/a.md", Content: []byte("one\ntwo\n"), Existing: func() ([]byte, bool, error) { return nil, false, nil }}); err != nil {
+	if err = old.OnWrite(context.Background(), "/docs/a.md", []byte("one\ntwo\n"), "alice"); err != nil {
 		t.Fatal(err)
 	}
 	line, _ := (Rule{Metric: Lines}).Compile(map[string]any{"max": "initial"}, rules.Env{State: state})
-	if _, err = line.Evaluate(context.Background(), rules.Subject{Mode: rules.ModeAdmit, Path: "/docs/a.md", Content: []byte("one\ntwo\n"), Existing: func() ([]byte, bool, error) { return nil, false, nil }}); err != nil {
-		t.Fatal(err)
-	}
 	next, err := (Rule{Metric: Tokens}).Compile(map[string]any{"max": "initial"}, rules.Env{State: state, Tokenizer: fakeTokenizer{}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = next.Evaluate(context.Background(), rules.Subject{Mode: rules.ModeAdmit, Path: "/docs/a.md", Content: []byte("one\ntwo\n"), Existing: existing}); err != nil {
+	if _, err = next.Evaluate(context.Background(), rules.Subject{Mode: rules.ModePreApply, Path: "/docs/a.md", Content: []byte("one\ntwo\n"), Existing: existing}); err != nil {
 		t.Fatal(err)
 	}
 	store, _, _, _, _ := Inspect(next)
@@ -94,5 +92,14 @@ func TestTokenizerChangeRebaselinesTokensOnly(t *testing.T) {
 	baseline, ok, err := lineCheck.baseline(context.Background(), "/docs/a.md")
 	if err != nil || !ok || baseline.Reason != "create" {
 		t.Fatalf("line baseline=%#v ok=%v err=%v", baseline, ok, err)
+	}
+}
+
+func TestInitialRejectsNonFiniteGrowth(t *testing.T) {
+	state := packagestate.Open(mapper{"/docs": t.TempDir()}, "size")
+	for _, growth := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		if _, err := (Rule{Metric: Lines}).Compile(map[string]any{"max": "initial", "growth": growth}, rules.Env{State: state}); err == nil {
+			t.Fatalf("growth %v accepted", growth)
+		}
 	}
 }
