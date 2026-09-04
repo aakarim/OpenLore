@@ -171,6 +171,14 @@ func (e *Engine) effective(ctx context.Context, target, dir string) ([]CompiledR
 }
 
 func (e *Engine) AdmitLeaf(ctx context.Context, leaf vfs.Change, actor string, existing func() ([]byte, bool, error)) error {
+	return e.evaluateLeaf(ctx, leaf, actor, existing, ModeAdmit)
+}
+
+func (e *Engine) PreApplyLeaf(ctx context.Context, leaf vfs.Change, actor string, existing func() ([]byte, bool, error)) error {
+	return e.evaluateLeaf(ctx, leaf, actor, existing, ModePreApply)
+}
+
+func (e *Engine) evaluateLeaf(ctx context.Context, leaf vfs.Change, actor string, existing func() ([]byte, bool, error), mode Mode) error {
 	if leaf.Action != vfs.ChangeActionWrite || leaf.Write == nil {
 		return nil
 	}
@@ -179,10 +187,10 @@ func (e *Engine) AdmitLeaf(ctx context.Context, leaf vfs.Change, actor string, e
 		return err
 	}
 	for _, rule := range rules {
-		if rule.Member.Manifest().Scope != ScopeFile || !matchesAtScope(rule, leaf.Target) {
+		if rule.Member.Manifest().Scope != ScopeFile || !Applies(rule, leaf.Target) {
 			continue
 		}
-		findings, checkErr := rule.Check.Evaluate(ctx, Subject{Mode: ModeAdmit, Path: leaf.Target, Dir: path.Dir(leaf.Target), Content: leaf.Write.Bytes, Existing: existing, Actor: actor})
+		findings, checkErr := rule.Check.Evaluate(ctx, Subject{Mode: mode, Path: leaf.Target, Dir: path.Dir(leaf.Target), Content: leaf.Write.Bytes, Existing: existing, Actor: actor})
 		if checkErr != nil {
 			if rule.Spec.IsEnforcing() {
 				return &Rejection{Path: leaf.Target, Rule: rule.Name, Member: rule.Spec.Use, Origin: last(rule.Origins), Err: checkErr}
@@ -206,6 +214,51 @@ func (e *Engine) AdmitLeaf(ctx context.Context, leaf vfs.Change, actor string, e
 		}
 		for _, finding := range violations {
 			e.warn(rule, leaf.Target, findingText(finding, rule, leaf.Target))
+		}
+	}
+	return nil
+}
+
+func (e *Engine) OnWrite(ctx context.Context, target string, content []byte, actor string) error {
+	compiled, err := e.Effective(ctx, target)
+	if err != nil {
+		return err
+	}
+	for _, rule := range compiled {
+		if rule.Member.Manifest().Scope == ScopeFile && Applies(rule, target) {
+			if err := rule.Check.OnWrite(ctx, target, content, actor); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (e *Engine) OnRemove(ctx context.Context, target, actor string) error {
+	compiled, err := e.Effective(ctx, target)
+	if err != nil {
+		return err
+	}
+	for _, rule := range compiled {
+		if rule.Member.Manifest().Scope == ScopeFile && Applies(rule, target) {
+			if err := rule.Check.OnRemove(ctx, target, actor); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (e *Engine) OnMove(ctx context.Context, from, to string) error {
+	compiled, err := e.Effective(ctx, from)
+	if err != nil {
+		return err
+	}
+	for _, rule := range compiled {
+		if rule.Member.Manifest().Scope == ScopeFile && Applies(rule, from) {
+			if err := rule.Check.OnMove(ctx, from, to); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -235,7 +288,7 @@ func (e *Engine) validateFile(ctx context.Context, fsys vfs.FileSystem, bundleRo
 	}
 	var diagnostics []validation.Diagnostic
 	for _, rule := range rules {
-		if rule.Member.Manifest().Scope != ScopeFile || !matchesAtScope(rule, target) {
+		if rule.Member.Manifest().Scope != ScopeFile || !Applies(rule, target) {
 			continue
 		}
 		findings, checkErr := rule.Check.Evaluate(ctx, Subject{Mode: ModeValidate, Path: target, Dir: path.Dir(target), Content: content, FS: fsys, BundleRoot: bundleRoot, Bundle: bundle})
@@ -359,14 +412,14 @@ func (e *Engine) ValidateBundle(ctx context.Context, fsys vfs.FileSystem, root s
 	return validation.Scan(fsys, root, e.Validator())
 }
 
-func matchesAtScope(rule CompiledRule, target string) bool {
+func Applies(rule CompiledRule, target string) bool {
 	rel, ok := relativeTo(rule.Scope, target)
 	return ok && Matches(rule.Spec, rel)
 }
 
 func bundleMatches(rule CompiledRule, bundle *validation.Bundle) bool {
 	for _, file := range bundle.Files {
-		if matchesAtScope(rule, file.AbsolutePath) {
+		if Applies(rule, file.AbsolutePath) {
 			return true
 		}
 	}

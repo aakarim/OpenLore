@@ -32,6 +32,7 @@ type logEntry struct {
 	cs          vfs.ChangeSet
 	attribution Attribution
 	identity    *Identity
+	task        func() error
 	reply       chan applyResult
 }
 
@@ -92,12 +93,13 @@ type writeLog struct {
 	substrate vfs.WritableFS
 	logger    *slog.Logger
 
-	mu         sync.RWMutex      // guards closed + postCommit + serializes sends against Close
-	postCommit PostCommitHandler // optional; runs at the applier after a durable commit
-	preApply   func(*Identity, Attribution, vfs.ChangeSet) error
-	recorder   CommitRecorder
-	closed     bool
-	ch         chan logEntry
+	mu          sync.RWMutex      // guards closed + postCommit + serializes sends against Close
+	postCommit  PostCommitHandler // optional; runs at the applier after a durable commit
+	commitState func(context.Context, CommitInfo) error
+	preApply    func(*Identity, Attribution, vfs.ChangeSet) error
+	recorder    CommitRecorder
+	closed      bool
+	ch          chan logEntry
 
 	done chan struct{} // closed when the applier goroutine has exited
 }
@@ -136,6 +138,10 @@ func newWriteLog(substrate vfs.WritableFS, postCommit PostCommitHandler, logger 
 func (l *writeLog) run() {
 	defer close(l.done)
 	for e := range l.ch {
+		if e.task != nil {
+			e.reply <- applyResult{err: e.task()}
+			continue
+		}
 		var committed vfs.CommitResult
 		var err error
 		if preflight, ok := l.substrate.(vfs.ChangePreflighter); ok {
@@ -155,6 +161,14 @@ func (l *writeLog) run() {
 			committed, err = vfs.CommitChangeSet(l.substrate, e.cs)
 		}
 		if err == nil && committed.HasCommitted() {
+			l.mu.RLock()
+			state := l.commitState
+			l.mu.RUnlock()
+			if state != nil {
+				err = state(context.Background(), CommitInfo{ChangeSet: committed.Committed, Hash: committed.Hash, Attribution: e.attribution})
+			}
+		}
+		if committed.HasCommitted() {
 			l.mu.RLock()
 			recorder := l.recorder
 			l.mu.RUnlock()
@@ -191,6 +205,12 @@ func (l *writeLog) SetPreApply(h func(*Identity, Attribution, vfs.ChangeSet) err
 	l.mu.Unlock()
 }
 
+func (l *writeLog) SetCommitState(h func(context.Context, CommitInfo) error) {
+	l.mu.Lock()
+	l.commitState = h
+	l.mu.Unlock()
+}
+
 func (l *writeLog) SetCommitRecorder(recorder CommitRecorder) {
 	l.mu.Lock()
 	l.recorder = recorder
@@ -217,6 +237,29 @@ func (l *writeLog) Submit(ctx context.Context, attribution Attribution, cs vfs.C
 
 func (l *writeLog) SubmitIdentity(ctx context.Context, identity Identity, cs vfs.ChangeSet) (string, error) {
 	return l.submit(ctx, &identity, identity.attribution(), cs)
+}
+
+// Do runs fn at the write applier, serialized with content commits.
+func (l *writeLog) Do(ctx context.Context, fn func() error) error {
+	reply := make(chan applyResult, 1)
+	l.mu.RLock()
+	if l.closed {
+		l.mu.RUnlock()
+		return ErrLogClosed
+	}
+	select {
+	case l.ch <- logEntry{task: fn, reply: reply}:
+		l.mu.RUnlock()
+	case <-ctx.Done():
+		l.mu.RUnlock()
+		return ctx.Err()
+	}
+	select {
+	case result := <-reply:
+		return result.err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (l *writeLog) submit(ctx context.Context, identity *Identity, attribution Attribution, cs vfs.ChangeSet) (string, error) {

@@ -1,6 +1,7 @@
 package vfs
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -59,6 +60,15 @@ type ChangeSet struct {
 	XattrRepair    *XattrRepairChange `json:"xattr_repair,omitempty"`
 	XattrMigration *XattrMigration    `json:"xattr_migration,omitempty"`
 	Changes        []Change           `json:"changes,omitempty"`
+	Moves          []Move             `json:"moves,omitempty"`
+}
+
+// Move explicitly pairs a write leaf with the remove leaf that supplies its
+// prior path. Indices refer to Changes and remove ambiguity when equal-content
+// files are moved in the same batch.
+type Move struct {
+	From int `json:"from"`
+	To   int `json:"to"`
 }
 
 // ChangeSetAdmitter is an optional session-filesystem capability for submitting
@@ -111,9 +121,43 @@ func ValidateChangeSet(cs ChangeSet) error {
 				return fmt.Errorf("changeset leaf %d: %w", i, err)
 			}
 		}
+		seenFrom, seenTo := map[int]bool{}, map[int]bool{}
+		for i, move := range cs.Moves {
+			if move.From < 0 || move.From >= len(cs.Changes) || move.To < 0 || move.To >= len(cs.Changes) || move.From == move.To {
+				return fmt.Errorf("changeset move %d: invalid leaf indices", i)
+			}
+			from, to := cs.Changes[move.From], cs.Changes[move.To]
+			if from.Action != ChangeActionRemoveAll || from.RemoveAll == nil || to.Action != ChangeActionWrite || to.Write == nil {
+				return fmt.Errorf("changeset move %d: from must be remove_all and to must be write", i)
+			}
+			if from.RemoveAll.Opts.Expected == nil || snapshotFileHash(from.RemoveAll.Opts.Expected) != hashBytes(to.Write.Bytes) {
+				return fmt.Errorf("changeset move %d: source snapshot must match destination content", i)
+			}
+			if seenFrom[move.From] || seenTo[move.To] {
+				return fmt.Errorf("changeset move %d: leaf is paired more than once", i)
+			}
+			seenFrom[move.From], seenTo[move.To] = true, true
+		}
 		return nil
 	}
+	if len(cs.Moves) != 0 {
+		return fmt.Errorf("changeset: singleton cannot contain moves")
+	}
 	return validateChange(Change{Target: cs.Target, Action: cs.Action, Write: cs.Write, RemoveAll: cs.RemoveAll, Xattr: cs.Xattr, XattrRepair: cs.XattrRepair, XattrMigration: cs.XattrMigration})
+}
+
+func snapshotFileHash(snapshot *TreeSnapshot) string {
+	for _, op := range snapshot.Ops {
+		if op.RelPath == "." && op.Kind == "file" {
+			return op.Hash
+		}
+	}
+	return ""
+}
+
+func hashBytes(content []byte) string {
+	hash := sha256.Sum256(content)
+	return fmt.Sprintf("%x", hash)
 }
 
 func validateChange(c Change) error {

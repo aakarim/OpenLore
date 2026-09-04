@@ -1,9 +1,94 @@
 package cmds_test
 
 import (
+	"bytes"
+	"errors"
 	"strings"
 	"testing"
+
+	"github.com/aakarim/go-openlore/pkg/shell"
+	"github.com/aakarim/go-openlore/pkg/vfs"
 )
+
+type mvBatchFS struct {
+	*mapFS
+	admitted []vfs.ChangeSet
+	reject   error
+}
+
+func (f *mvBatchFS) AdmitChangeSet(cs vfs.ChangeSet) error {
+	f.admitted = append(f.admitted, cs)
+	if f.reject != nil {
+		return f.reject
+	}
+	if err := vfs.ValidateChangeSet(cs); err != nil {
+		return err
+	}
+	for _, change := range cs.Changes {
+		switch change.Action {
+		case vfs.ChangeActionWrite:
+			if _, err := f.mapFS.WriteFileAtomic(change.Target, change.Write.Bytes, change.Write.Opts); err != nil {
+				return err
+			}
+		case vfs.ChangeActionRemoveAll:
+			if err := f.mapFS.RemoveAll(change.Target, change.RemoveAll.Opts); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func execMvBatch(fs *mvBatchFS, cmd string) (string, int) {
+	sh := shell.NewShell(fs)
+	var out, errOut bytes.Buffer
+	code := sh.ExecPipeline(cmd, &out, &errOut, nil)
+	return errOut.String(), code
+}
+
+func TestMvSubmitsOneAtomicBatch(t *testing.T) {
+	fs := &mvBatchFS{mapFS: testFS()}
+	errOut, code := execMvBatch(fs, "mv /docs/notes.txt /docs/moved.txt")
+	if code != 0 {
+		t.Fatalf("mv: code=%d err=%s", code, errOut)
+	}
+	if len(fs.admitted) != 1 || len(fs.admitted[0].Changes) != 2 {
+		t.Fatalf("admitted changesets = %#v, want one two-leaf batch", fs.admitted)
+	}
+	if moves := fs.admitted[0].Moves; len(moves) != 1 || moves[0] != (vfs.Move{From: 1, To: 0}) {
+		t.Fatalf("move metadata = %#v", moves)
+	}
+	changes := fs.admitted[0].Changes
+	if changes[0].Action != vfs.ChangeActionWrite || changes[0].Target != "/docs/moved.txt" || changes[0].Write == nil {
+		t.Fatalf("first change = %#v, want destination write", changes[0])
+	}
+	if changes[1].Action != vfs.ChangeActionRemoveAll || changes[1].Target != "/docs/notes.txt" || changes[1].RemoveAll == nil || changes[1].RemoveAll.Opts.Expected == nil {
+		t.Fatalf("second change = %#v, want snapshot-guarded source removal", changes[1])
+	}
+	if _, ok := fs.Files["/docs/notes.txt"]; ok {
+		t.Fatal("source should be removed")
+	}
+	if _, ok := fs.Files["/docs/moved.txt"]; !ok {
+		t.Fatal("destination should be written")
+	}
+}
+
+func TestMvRejectedBatchHasNoPartialOperation(t *testing.T) {
+	fs := &mvBatchFS{mapFS: testFS(), reject: errors.New("batch rejected")}
+	errOut, code := execMvBatch(fs, "mv /docs/notes.txt /docs/moved.txt")
+	if code != 1 || !strings.Contains(errOut, "batch rejected") {
+		t.Fatalf("mv: code=%d err=%q", code, errOut)
+	}
+	if len(fs.admitted) != 1 {
+		t.Fatalf("admitted %d changesets, want one", len(fs.admitted))
+	}
+	if _, ok := fs.Files["/docs/notes.txt"]; !ok {
+		t.Fatal("rejected batch removed source")
+	}
+	if _, ok := fs.Files["/docs/moved.txt"]; ok {
+		t.Fatal("rejected batch wrote destination")
+	}
+}
 
 func TestMvFile(t *testing.T) {
 	fs := testFS()

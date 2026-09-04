@@ -244,8 +244,18 @@ func (a *writableAliasFS) AdmitChangeSet(cs vfs.ChangeSet) error {
 	}
 	for i := range cs.Changes {
 		cs.Changes[i].Target, _ = a.canonical(cs.Changes[i].Target)
+		if cs.Changes[i].RemoveAll != nil {
+			remove := *cs.Changes[i].RemoveAll
+			remove.Opts = a.canonicalRemoveOpts(remove.Opts)
+			cs.Changes[i].RemoveAll = &remove
+		}
 	}
 	cs.Target, _ = a.canonical(cs.Target)
+	if cs.RemoveAll != nil {
+		remove := *cs.RemoveAll
+		remove.Opts = a.canonicalRemoveOpts(remove.Opts)
+		cs.RemoveAll = &remove
+	}
 	return admitter.AdmitChangeSet(cs)
 }
 

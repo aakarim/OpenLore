@@ -94,6 +94,7 @@ type Server struct {
 	readMW            []ReadMiddleware
 	contentTransforms []ContentTransform
 	agentSkills       *agentSkillsPlugin
+	rules             *rulesPlugin
 
 	// metaExtenders are the `lore meta` extenders contributed by plugins,
 	// installed per session in buildSessionShell.
@@ -257,13 +258,14 @@ func newServerWithRoot(rootDir string, rootFS, lowerFS vfs.FileSystem, opts ...c
 			return nil, err
 		}
 	}
-	rulesPlugin, err := newRulesPlugin(s.auth, rules.Defaults{Growth: cfg.Rules.Growth}, s.merge, logger)
+	rulesPlugin, err := newRulesPluginWithTokenizer(s.auth, rules.Defaults{Growth: cfg.Rules.Growth}, s.merge, logger, cfg.Rules.Tokenizer)
 	if err != nil {
 		return nil, err
 	}
 	if err := s.registerPlugin(rulesPlugin); err != nil {
 		return nil, err
 	}
+	s.rules = rulesPlugin
 	// OKF metadata remains owned by the existing adapter; admission and
 	// validation are provided exclusively by the rules engine above.
 	if anyDocsetHasOKF(s.auth.Docsets) {
@@ -313,6 +315,7 @@ func newServerWithRoot(rootDir string, rootFS, lowerFS vfs.FileSystem, opts ...c
 		s.writeLog = newWriteLog(s.merge, s.postCommitChain(), logger, 0)
 		s.historyPath = filepath.Join(dataDir, "history", "commits.jsonl")
 		s.writeLog.SetCommitRecorder(NewJSONLCommitRecorder(s.historyPath))
+		s.writeLog.SetCommitState(rulesPlugin.CommitState)
 		s.writeLog.SetPreApply(func(identity *Identity, attribution Attribution, changes vfs.ChangeSet) error {
 			for _, change := range changes.Leaves() {
 				if identity != nil {
@@ -1134,6 +1137,7 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 		sh.SetHistoryBackend(fileHistory{path: s.historyPath, roots: historyRoots(s.sessionDocsets(id))})
 	}
 	sh.SetJobBackend(s.jobs)
+	sh.SetSizeBackend(sessionSizeBackend{server: s, identity: id})
 
 	// Set identity info as environment variables
 	if id.IdentityName != "" {

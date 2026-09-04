@@ -75,8 +75,9 @@ func (c check) Evaluate(_ context.Context, subject rules.Subject) ([]rules.Findi
 	}
 	return findings, nil
 }
-func (check) OnRemove(context.Context, string) error       { return nil }
-func (check) OnMove(context.Context, string, string) error { return nil }
+func (check) OnRemove(context.Context, string, string) error        { return nil }
+func (check) OnMove(context.Context, string, string) error          { return nil }
+func (check) OnWrite(context.Context, string, []byte, string) error { return nil }
 
 func finding(file string, l okf.Link, code, message string) rules.Finding {
 	return rules.Finding{Code: code, Path: file, Line: l.Line, Column: l.Column, Measured: message}

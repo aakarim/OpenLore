@@ -13,10 +13,12 @@ import (
 
 	"github.com/aakarim/go-openlore/internal/config"
 	"github.com/aakarim/go-openlore/pkg/openlore/validation"
+	"github.com/aakarim/go-openlore/pkg/packagestate"
 	"github.com/aakarim/go-openlore/pkg/rules"
 	_ "github.com/aakarim/go-openlore/pkg/rules/link"
 	_ "github.com/aakarim/go-openlore/pkg/rules/okfrule"
 	_ "github.com/aakarim/go-openlore/pkg/rules/size"
+	"github.com/aakarim/go-openlore/pkg/rules/tokenizer"
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
 
@@ -212,17 +214,29 @@ func ruleRoots(docset config.DocsetSpec) []string {
 }
 
 type rulesPlugin struct {
-	engine *rules.Engine
+	engine    *rules.Engine
+	fs        vfs.FileSystem
+	tokenizer tokenizer.Tokenizer
 }
 
 func newRulesPlugin(auth *config.AuthConfig, defaults rules.Defaults, fsys vfs.FileSystem, logger *slog.Logger) (*rulesPlugin, error) {
+	return newRulesPluginWithTokenizer(auth, defaults, fsys, logger, tokenizer.Estimator{})
+}
+
+func newRulesPluginWithTokenizer(auth *config.AuthConfig, defaults rules.Defaults, fsys vfs.FileSystem, logger *slog.Logger, counter tokenizer.Tokenizer) (*rulesPlugin, error) {
+	if counter == nil {
+		counter = tokenizer.Estimator{}
+	}
 	var aliases []string
 	for _, docset := range auth.Docsets {
 		aliases = append(aliases, docset.Aliases...)
 	}
 	sort.Slice(aliases, func(i, j int) bool { return len(aliases[i]) > len(aliases[j]) })
 	configLayers := configRuleLayers{global: auth.Rules, docsets: auth.Docsets}
-	env := func(string) rules.Env { return rules.Env{Defaults: defaults, Logger: logger, AliasRoots: aliases} }
+	mapper, _ := fsys.(packagestate.HostMapper)
+	env := func(member string) rules.Env {
+		return rules.Env{Defaults: defaults, State: packagestate.Open(mapper, rules.PackageOf(member)), Tokenizer: counter, Logger: logger, AliasRoots: aliases}
+	}
 	bootEngine := rules.New(rules.Options{Registry: rules.DefaultRegistry(), Config: configLayers, Env: env, Logger: logger})
 	// Compile every configured docset at boot so invalid members, parameters,
 	// and unification conflicts fail before the server begins accepting writes.
@@ -239,7 +253,7 @@ func newRulesPlugin(auth *config.AuthConfig, defaults rules.Defaults, fsys vfs.F
 		options.Folders = newFolderRuleLayers(fsys, auth.Docsets)
 	}
 	engine := rules.New(options)
-	return &rulesPlugin{engine: engine}, nil
+	return &rulesPlugin{engine: engine, fs: fsys, tokenizer: counter}, nil
 }
 
 func (p *rulesPlugin) WriteMiddleware() []WriteMiddleware {
@@ -255,7 +269,7 @@ func (p *rulesPlugin) WriteMiddleware() []WriteMiddleware {
 					}
 					continue
 				}
-				if err := p.engine.AdmitLeaf(ctx, leaf, op.Attribution.String(), nil); err != nil {
+				if err := p.engine.AdmitLeaf(ctx, leaf, op.Attribution.String(), p.existing(leaf.Target)); err != nil {
 					return WriteResult{}, err
 				}
 			}
@@ -287,11 +301,24 @@ func (p *rulesPlugin) PreApply(attribution Attribution, changes vfs.ChangeSet) e
 			}
 			continue
 		}
-		if err := p.engine.AdmitLeaf(context.Background(), leaf, attribution.String(), nil); err != nil {
+		if err := p.engine.PreApplyLeaf(context.Background(), leaf, attribution.String(), p.existing(leaf.Target)); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (p *rulesPlugin) existing(target string) func() ([]byte, bool, error) {
+	return func() ([]byte, bool, error) {
+		if p.fs == nil {
+			return nil, false, nil
+		}
+		content, err := p.fs.ReadFile(target)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, false, nil
+		}
+		return content, err == nil, err
+	}
 }
 
 func (p *rulesPlugin) invalidateChanges(changes []vfs.Change) {
@@ -311,6 +338,33 @@ func (p *rulesPlugin) PostCommitMiddleware() []PostCommitMiddleware {
 			return next(ctx, info)
 		}
 	}}
+}
+
+// CommitState updates package-local state synchronously after content commits
+// and before the submitter receives success.
+func (p *rulesPlugin) CommitState(ctx context.Context, info CommitInfo) error {
+	leaves := info.ChangeSet.Leaves()
+	movedRemoves := map[int]bool{}
+	for _, move := range info.ChangeSet.Moves {
+		remove, write := leaves[move.From], leaves[move.To]
+		if err := p.engine.OnMove(ctx, remove.Target, write.Target); err != nil {
+			return err
+		}
+		movedRemoves[move.From] = true
+	}
+	for i, leaf := range leaves {
+		switch {
+		case leaf.Action == vfs.ChangeActionWrite && leaf.Write != nil && !rules.IsDirConfigPath(leaf.Target):
+			if err := p.engine.OnWrite(ctx, leaf.Target, leaf.Write.Bytes, info.Attribution.String()); err != nil {
+				return err
+			}
+		case (leaf.Action == vfs.ChangeActionRemove || leaf.Action == vfs.ChangeActionRemoveAll) && !movedRemoves[i]:
+			if err := p.engine.OnRemove(ctx, leaf.Target, info.Attribution.String()); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 func (p *rulesPlugin) Validators() []validation.Validator {
 	return []validation.Validator{p.engine.Validator()}

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/aakarim/go-openlore/internal/config"
 	"github.com/aakarim/go-openlore/pkg/openlore/validation"
@@ -136,6 +137,235 @@ func serverAuth(docsets map[string]config.DocsetSpec, global map[string]rules.Ru
 func admitServer(server *Server, target, content string) error {
 	_, err := server.writeChain()(context.Background(), NewWriteOp(Attribution{Principal: "alice"}, writeCSBytes(target, content)))
 	return err
+}
+
+func TestInitialSizeBaselinePersistsAndRejectsGrowth(t *testing.T) {
+	auth := serverAuth(map[string]config.DocsetSpec{"docs": docset("/docs", nil)}, map[string]rules.RuleSpec{
+		"length": {Match: []string{"**/*.md"}, Use: "size/lines", With: map[string]any{"max": "initial", "growth": 1.5}},
+	})
+	server, root := bootRulesServer(t, auth, nil)
+	id := Identity{IdentityName: "alice", Principal: AuthenticatedPrincipal{IdentityName: "alice"}, Attribution: Attribution{Principal: "alice"}, Scopes: []string{ScopeFull}}
+	write := func(lines int) error {
+		_, err := server.writeLog.SubmitIdentity(context.Background(), id, writeCSBytes("/docs/a.md", strings.Repeat("x\n", lines)))
+		return err
+	}
+	if err := write(10); err != nil {
+		t.Fatal(err)
+	}
+	if err := write(15); err != nil {
+		t.Fatal(err)
+	}
+	if err := write(16); err == nil || !strings.Contains(err.Error(), "16 lines exceeds the limit of 15 (baseline 10 lines × growth 1.5") || !strings.Contains(err.Error(), "lore size baseline reset /docs/a.md") {
+		t.Fatalf("rejection=%v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(root, "docs", ".lore", "size", "a.md.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(raw), `"op":"baseline"`) != 1 || !strings.Contains(string(raw), `"reason":"create"`) || !strings.Contains(string(raw), `"lines":10`) || !strings.Contains(string(raw), `"actor":"alice"`) {
+		t.Fatalf("state=%s", raw)
+	}
+}
+
+func initialRulesAuth() *config.AuthConfig {
+	docs := docset("/docs", nil)
+	docs.Config = &config.DirConfigPermission{Edit: []string{"writer"}}
+	return serverAuth(map[string]config.DocsetSpec{"docs": docs}, map[string]rules.RuleSpec{
+		"length": {Match: []string{"**/*.md"}, Use: "size/lines", With: map[string]any{"max": "initial", "growth": 1.5}},
+	})
+}
+
+func testIdentity(name string) Identity {
+	return Identity{IdentityName: name, Principal: AuthenticatedPrincipal{IdentityName: name}, Attribution: Attribution{Principal: name}, Scopes: []string{ScopeFull}}
+}
+
+func TestInitialBaselineRuleAddedAndRejectedCreate(t *testing.T) {
+	t.Run("rule-added", func(t *testing.T) {
+		server, root := bootRulesServer(t, initialRulesAuth(), nil)
+		if err := os.WriteFile(filepath.Join(root, "docs", "a.md"), []byte(strings.Repeat("x\n", 20)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := server.writeLog.SubmitIdentity(context.Background(), testIdentity("alice"), writeCSBytes("/docs/a.md", strings.Repeat("x\n", 40)))
+		if err == nil || !strings.Contains(err.Error(), "40 lines exceeds the limit of 30") || strings.Contains(err.Error(), "0001-01-01") {
+			t.Fatalf("rejection=%v", err)
+		}
+		if _, err := server.writeLog.SubmitIdentity(context.Background(), testIdentity("alice"), writeCSBytes("/docs/a.md", strings.Repeat("x\n", 30))); err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := os.ReadFile(filepath.Join(root, "docs", ".lore", "size", "a.md.jsonl"))
+		if !strings.Contains(string(raw), `"reason":"rule-added"`) || !strings.Contains(string(raw), `"lines":20`) {
+			t.Fatalf("state=%s", raw)
+		}
+	})
+
+	t.Run("rejected create cannot govern", func(t *testing.T) {
+		auth := initialRulesAuth()
+		auth.Rules["fixed"] = rules.RuleSpec{Match: []string{"**/*.md"}, Use: "size/kilobytes", With: map[string]any{"max": 1}}
+		server, _ := bootRulesServer(t, auth, nil)
+		id := testIdentity("alice")
+		if _, err := server.writeLog.SubmitIdentity(context.Background(), id, writeCSBytes("/docs/a.md", strings.Repeat("x\n", 1000))); err == nil {
+			t.Fatal("oversized create succeeded")
+		}
+		if _, err := server.writeLog.SubmitIdentity(context.Background(), id, writeCSBytes("/docs/a.md", strings.Repeat("x\n", 10))); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := server.writeLog.SubmitIdentity(context.Background(), id, writeCSBytes("/docs/a.md", strings.Repeat("x\n", 16))); err == nil || !strings.Contains(err.Error(), "baseline 10 lines") {
+			t.Fatalf("rejection=%v", err)
+		}
+	})
+}
+
+func TestInitialBaselineRemoveRecreateAndMove(t *testing.T) {
+	server, root := bootRulesServer(t, initialRulesAuth(), nil)
+	id := testIdentity("alice")
+	write := func(target string, lines int) error {
+		_, err := server.writeLog.SubmitIdentity(context.Background(), id, writeCSBytes(target, strings.Repeat("x\n", lines)))
+		return err
+	}
+	if err := write("/docs/a.md", 10); err != nil {
+		t.Fatal(err)
+	}
+	if err := write("/docs/a.md", 15); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "docs", "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := server.buildSessionShell(id).ExecPipeline("mv /docs/a.md /docs/sub/b.md", &out, &errOut, nil); code != 0 {
+		t.Fatalf("mv: %s", errOut.String())
+	}
+	if err := write("/docs/flush.md", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := write("/docs/sub/b.md", 16); err == nil || !strings.Contains(err.Error(), "baseline 10 lines") {
+		t.Fatalf("moved cap=%v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(root, "docs", "sub", ".lore", "size", "b.md.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), `"path":"/docs/a.md"`) || !strings.Contains(string(raw), `"path":"/docs/sub/b.md"`) {
+		t.Fatalf("moved state=%s", raw)
+	}
+	if _, err := server.writeLog.SubmitIdentity(context.Background(), id, vfs.ChangeSet{Target: "/docs/sub/b.md", Action: vfs.ChangeActionRemove}); err != nil {
+		t.Fatal(err)
+	}
+	if err := write("/docs/flush2.md", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := write("/docs/sub/b.md", 100); err != nil {
+		t.Fatal(err)
+	}
+	if err := write("/docs/sub/b.md", 151); err == nil || !strings.Contains(err.Error(), "baseline 100 lines") {
+		t.Fatalf("recreated cap=%v", err)
+	}
+	raw, _ = os.ReadFile(filepath.Join(root, "docs", "sub", ".lore", "size", "b.md.jsonl"))
+	if !strings.Contains(string(raw), `"op":"remove"`) || !strings.Contains(string(raw), `"actor":"alice"`) {
+		t.Fatalf("state=%s", raw)
+	}
+}
+
+func TestValidateDoesNotCreateBaselineState(t *testing.T) {
+	server, root := bootRulesServer(t, initialRulesAuth(), nil)
+	if err := os.WriteFile(filepath.Join(root, "docs", "a.md"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := server.buildSessionShell(testIdentity("alice")).ExecPipeline("lore validate /docs", &out, &errOut, nil); code != 0 {
+		t.Fatalf("validate=%d %s", code, errOut.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, "docs", ".lore", "size")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("state created: %v", err)
+	}
+}
+
+func TestInitialBaselineEmbeddedContentIsReadOnly(t *testing.T) {
+	fsys := NewFSAdapter(fstest.MapFS{"docs/a.md": {Data: []byte("x\n")}})
+	p, err := newRulesPlugin(initialRulesAuth(), rules.Defaults{Growth: 1.5}, fsys, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diagnostics := p.engine.ValidateFile(context.Background(), fsys, "/docs", "/docs/a.md", []byte("x\n")); len(diagnostics) != 0 {
+		t.Fatalf("diagnostics=%#v", diagnostics)
+	}
+}
+
+func TestSizeBaselineResetCommandAndAudit(t *testing.T) {
+	server, root := bootRulesServer(t, initialRulesAuth(), nil)
+	id := testIdentity("alice")
+	write := func(lines int) error {
+		_, err := server.writeLog.SubmitIdentity(context.Background(), id, writeCSBytes("/docs/a.md", strings.Repeat("x\n", lines)))
+		return err
+	}
+	if err := write(10); err != nil {
+		t.Fatal(err)
+	}
+	if err := write(15); err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(root, "docs", ".lore", "size", "a.md.jsonl")
+	before, _ := os.ReadFile(statePath)
+	audit := &captureAuditLog{}
+	server.audit = audit
+	var out, errOut bytes.Buffer
+	if code := server.buildSessionShell(id).ExecPipeline(`lore size baseline reset /docs/a.md --note "grew after review"`, &out, &errOut, nil); code != 0 {
+		t.Fatalf("reset=%d out=%s err=%s", code, out.String(), errOut.String())
+	}
+	if !strings.Contains(out.String(), "previous 10, new 15, new cap 22 lines") {
+		t.Fatalf("output=%s", out.String())
+	}
+	after, _ := os.ReadFile(statePath)
+	if !bytes.HasPrefix(after, before) || strings.Count(string(after), `"op":"baseline"`) != 2 || !strings.Contains(string(after), `"note":"grew after review"`) {
+		t.Fatalf("before=%s after=%s", before, after)
+	}
+	if len(audit.events) != 1 || audit.events[0].Type != "rules.baseline.reset" {
+		t.Fatalf("audit=%#v", audit.events)
+	}
+	if err := write(22); err != nil {
+		t.Fatal(err)
+	}
+	if err := write(23); err == nil {
+		t.Fatal("23 lines accepted")
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := server.buildSessionShell(id).ExecPipeline("lore size baseline /docs/a.md", &out, &errOut, nil); code != 0 || !strings.Contains(out.String(), "size/lines via length @ lore.json, growth 1.5") || !strings.Contains(out.String(), "current cap: 22 lines") {
+		t.Fatalf("history=%d out=%s err=%s", code, out.String(), errOut.String())
+	}
+	if err := os.WriteFile(filepath.Join(root, "docs", "plain.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := server.buildSessionShell(id).ExecPipeline("lore size baseline reset /docs/plain.txt", &out, &errOut, nil); code != 1 || !strings.Contains(errOut.String(), "no max: initial size rule applies") {
+		t.Fatalf("ungoverned=%d out=%s err=%s", code, out.String(), errOut.String())
+	}
+}
+
+func TestSizeBaselineResetDeniedDoesNotMutate(t *testing.T) {
+	docs := docset("/docs", nil)
+	docs.Access = config.DocsetAccess{Allow: map[string]string{"writer": "rw", "editor": "ro"}}
+	docs.Config = &config.DirConfigPermission{Edit: []string{"editor"}}
+	auth := &config.AuthConfig{Rules: initialRulesAuth().Rules, Roles: map[string]config.RoleSpec{"writer": {}, "editor": {}}, Docsets: map[string]config.DocsetSpec{"docs": docs}, Identities: []config.AuthIdentity{{Name: "alice", Roles: []string{"writer"}}, {Name: "carol", Roles: []string{"editor"}}}}
+	server, root := bootRulesServer(t, auth, nil)
+	if _, err := server.writeLog.SubmitIdentity(context.Background(), testIdentity("alice"), writeCSBytes("/docs/a.md", strings.Repeat("x\n", 10))); err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(root, "docs", ".lore", "size", "a.md.jsonl")
+	before, _ := os.ReadFile(statePath)
+	audit := &captureAuditLog{}
+	server.audit = audit
+	for _, name := range []string{"alice", "carol"} {
+		var out, errOut bytes.Buffer
+		if code := server.buildSessionShell(testIdentity(name)).ExecPipeline("lore size baseline reset /docs/a.md", &out, &errOut, nil); code != 1 || !strings.Contains(errOut.String(), "permission denied") {
+			t.Fatalf("%s code=%d out=%s err=%s", name, code, out.String(), errOut.String())
+		}
+	}
+	after, _ := os.ReadFile(statePath)
+	if !bytes.Equal(before, after) || len(audit.events) != 0 {
+		t.Fatalf("state changed=%v audit=%#v", !bytes.Equal(before, after), audit.events)
+	}
 }
 
 func TestFolderRulesPermissionInheritanceInvalidationAndExemption(t *testing.T) {

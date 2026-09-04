@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/aakarim/go-openlore/pkg/rules"
+	"github.com/aakarim/go-openlore/pkg/rules/tokenizer"
 	"github.com/aakarim/go-openlore/pkg/vfs"
 	"golang.org/x/crypto/ssh"
 	"gopkg.in/yaml.v3"
@@ -104,7 +105,14 @@ type Config struct {
 }
 
 type RulesConfig struct {
-	Growth float64
+	Growth    float64
+	Tokenizer tokenizer.Tokenizer
+}
+
+// WithRulesTokenizer injects a token counter. The YAML tokenizer setting stays
+// reserved; this option exists for embedders and compatibility tests.
+func WithRulesTokenizer(counter tokenizer.Tokenizer) Option {
+	return func(cfg *Config) error { cfg.Rules.Tokenizer = counter; return nil }
 }
 
 // Warnings returns non-fatal problems encountered while loading configuration.

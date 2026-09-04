@@ -33,3 +33,12 @@ func TestUnify(t *testing.T) {
 		t.Fatalf("default replacement: %v %#v", err, unified)
 	}
 }
+
+func TestPackageOf(t *testing.T) {
+	if got := PackageOf("size/lines"); got != "size" {
+		t.Fatalf("stdlib package=%q", got)
+	}
+	if got := PackageOf("github.com/acme/rules/check"); got != "github.com/acme/rules" {
+		t.Fatalf("VCS package=%q", got)
+	}
+}
