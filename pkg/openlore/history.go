@@ -4,14 +4,14 @@ import (
 	"bufio"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
-	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -66,8 +66,9 @@ type HistoryStore interface {
 }
 
 // JSONLHistoryStore keeps a compact global metadata journal and a per-file
-// journal selected by the SHA-256 of the canonical file key. File history
-// queries therefore never scan unrelated history.
+// journal in a path hierarchy whose segments are SHA-256 hashes. File history
+// queries therefore never scan unrelated history, and recursive deletes remove
+// only the affected index subtree.
 type JSONLHistoryStore struct {
 	dir string
 	mu  sync.Mutex
@@ -134,35 +135,7 @@ func removeHistoryShard(path string) error {
 }
 
 func (s *JSONLHistoryStore) removeHistoryTree(root string) error {
-	f, err := os.Open(filepath.Join(s.dir, "events.jsonl"))
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	fileKeys := make(map[string]struct{})
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		var record HistoryRecord
-		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
-			return err
-		}
-		if pathWithinRoot(root, record.FileKey) {
-			fileKeys[record.FileKey] = struct{}{}
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return err
-	}
-	for fileKey := range fileKeys {
-		if err := removeHistoryShard(s.filePath(fileKey)); err != nil {
-			return err
-		}
-	}
-	return nil
+	return os.RemoveAll(s.shardDir(root))
 }
 
 func appendHistoryRecords(path string, records []HistoryRecord) error {
@@ -222,33 +195,70 @@ func (s *JSONLHistoryStore) Query(_ context.Context, query HistoryQuery) (Histor
 		return HistoryPage{}, err
 	}
 
-	offset := 0
-	if query.Cursor != "" {
-		offset, err = strconv.Atoi(query.Cursor)
-		if err != nil || offset < 0 {
-			return HistoryPage{}, fmt.Errorf("invalid history cursor")
-		}
-	}
 	limit := query.Limit
 	if limit <= 0 {
 		limit = defaultHistoryPageSize
 	}
-	sort.SliceStable(matches, func(i, j int) bool { return matches[i].Time.After(matches[j].Time) })
-	if offset >= len(matches) {
+	cursor, err := parseHistoryCursor(query.Cursor, len(matches))
+	if err != nil {
+		return HistoryPage{}, err
+	}
+	start := cursor.Boundary - cursor.Offset
+	if start <= 0 {
 		return HistoryPage{}, nil
 	}
-	end := min(offset+limit, len(matches))
-	page := HistoryPage{Records: matches[offset:end]}
-	if end < len(matches) {
-		page.NextCursor = strconv.Itoa(end)
+	end := max(start-limit, 0)
+	page := HistoryPage{Records: make([]HistoryRecord, 0, start-end)}
+	for i := start - 1; i >= end; i-- {
+		page.Records = append(page.Records, matches[i])
+	}
+	if end > 0 {
+		cursor.Offset += len(page.Records)
+		page.NextCursor = formatHistoryCursor(cursor)
 	}
 	return page, nil
 }
 
+type historyCursor struct {
+	Boundary int `json:"boundary"`
+	Offset   int `json:"offset"`
+}
+
+func parseHistoryCursor(encoded string, total int) (historyCursor, error) {
+	if encoded == "" {
+		return historyCursor{Boundary: total}, nil
+	}
+	b, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		return historyCursor{}, fmt.Errorf("invalid history cursor")
+	}
+	var cursor historyCursor
+	if err := json.Unmarshal(b, &cursor); err != nil || cursor.Boundary < 0 || cursor.Boundary > total || cursor.Offset < 0 || cursor.Offset > cursor.Boundary {
+		return historyCursor{}, fmt.Errorf("invalid history cursor")
+	}
+	return cursor, nil
+}
+
+func formatHistoryCursor(cursor historyCursor) string {
+	b, _ := json.Marshal(cursor)
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
 func (s *JSONLHistoryStore) filePath(fileKey string) string {
-	sum := sha256.Sum256([]byte(vfs.CleanPath(fileKey)))
-	name := hex.EncodeToString(sum[:])
-	return filepath.Join(s.dir, "files", name[:2], name+".jsonl")
+	return filepath.Join(s.shardDir(fileKey), "events.jsonl")
+}
+
+func (s *JSONLHistoryStore) shardDir(fileKey string) string {
+	dir := filepath.Join(s.dir, "files")
+	clean := strings.TrimPrefix(vfs.CleanPath(fileKey), "/")
+	if clean == "" {
+		return dir
+	}
+	for _, segment := range strings.Split(clean, "/") {
+		sum := sha256.Sum256([]byte(segment))
+		dir = filepath.Join(dir, hex.EncodeToString(sum[:]))
+	}
+	return dir
 }
 
 func historyRoots(docsets []cmds.DocsetInfo) []string {
@@ -274,21 +284,27 @@ type scopedHistory struct {
 }
 
 func (h scopedHistory) Query(principal, actor string) ([]byte, error) {
-	page, err := h.store.Query(context.Background(), HistoryQuery{Roots: h.roots, Principal: principal, Actor: actor})
-	if err != nil {
-		return nil, err
-	}
 	var out []byte
-	for _, record := range page.Records {
-		line, _ := json.Marshal(struct {
-			Time        string `json:"time"`
-			Attribution string `json:"attribution"`
-			Target      string `json:"target"`
-			Action      string `json:"action"`
-			Hash        string `json:"hash,omitempty"`
-		}{record.Time.Format(time.RFC3339), record.Attribution.String(), record.FileKey, record.Action, record.ContentHash})
-		out = append(out, line...)
-		out = append(out, '\n')
+	query := HistoryQuery{Roots: h.roots, Principal: principal, Actor: actor}
+	for {
+		page, err := h.store.Query(context.Background(), query)
+		if err != nil {
+			return nil, err
+		}
+		for _, record := range page.Records {
+			line, _ := json.Marshal(struct {
+				Time        string `json:"time"`
+				Attribution string `json:"attribution"`
+				Target      string `json:"target"`
+				Action      string `json:"action"`
+				Hash        string `json:"hash,omitempty"`
+			}{record.Time.Format(time.RFC3339), record.Attribution.String(), record.FileKey, record.Action, record.ContentHash})
+			out = append(out, line...)
+			out = append(out, '\n')
+		}
+		if page.NextCursor == "" {
+			return out, nil
+		}
+		query.Cursor = page.NextCursor
 	}
-	return out, nil
 }

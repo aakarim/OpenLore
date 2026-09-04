@@ -59,6 +59,11 @@ func TestHistoryQueriesFileShardNewestFirstAndPaginates(t *testing.T) {
 	if len(page.Records) != 1 || page.Records[0].ContentHash != "new" || page.NextCursor == "" {
 		t.Fatalf("first page=%+v", page)
 	}
+	if err := store.Record(context.Background(), []HistoryRecord{{
+		Time: time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC), Attribution: Attribution{Principal: "alice"}, FileKey: "/allowed/note.md", Action: "write", ContentHash: "newest",
+	}}); err != nil {
+		t.Fatal(err)
+	}
 	next, err := store.Query(context.Background(), HistoryQuery{FileKey: "/allowed/note.md", Roots: []string{"/allowed"}, Limit: 1, Cursor: page.NextCursor})
 	if err != nil {
 		t.Fatal(err)
@@ -68,6 +73,21 @@ func TestHistoryQueriesFileShardNewestFirstAndPaginates(t *testing.T) {
 	}
 	if denied, err := store.Query(context.Background(), HistoryQuery{FileKey: "/allowed/note.md", Roots: []string{"/other"}}); err != nil || len(denied.Records) != 0 {
 		t.Fatalf("unreadable page=%+v err=%v", denied, err)
+	}
+}
+
+func TestHistoryUsesReverseCommitOrderForEqualTimestamps(t *testing.T) {
+	store := NewJSONLHistoryStore(t.TempDir())
+	at := time.Now().UTC()
+	if err := store.Record(context.Background(), []HistoryRecord{
+		{Time: at, FileKey: "/docs/note.md", Action: "write", ContentHash: "intermediate"},
+		{Time: at, FileKey: "/docs/note.md", Action: "write", ContentHash: "final"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	page, err := store.Query(context.Background(), HistoryQuery{FileKey: "/docs/note.md", Roots: []string{"/docs"}, Limit: 1})
+	if err != nil || len(page.Records) != 1 || page.Records[0].ContentHash != "final" {
+		t.Fatalf("latest equal-time record=%+v err=%v", page, err)
 	}
 }
 
@@ -107,6 +127,10 @@ func TestHistoryRemoveAllPurgesDescendantShardsOnly(t *testing.T) {
 	if err := store.Record(context.Background(), records); err != nil {
 		t.Fatal(err)
 	}
+	globalPath := filepath.Join(store.dir, "events.jsonl")
+	if err := os.WriteFile(globalPath, []byte("not-json\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.Record(context.Background(), []HistoryRecord{{FileKey: "/docs/tree", Action: string(vfs.ChangeActionRemoveAll)}}); err != nil {
 		t.Fatal(err)
 	}
@@ -117,6 +141,24 @@ func TestHistoryRemoveAllPurgesDescendantShardsOnly(t *testing.T) {
 	}
 	if _, err := os.Stat(store.filePath("/docs/tree-sibling.md")); err != nil {
 		t.Fatalf("sibling history shard removed: %v", err)
+	}
+}
+
+func TestScopedHistoryConsumesAllPages(t *testing.T) {
+	store := NewJSONLHistoryStore(t.TempDir())
+	records := make([]HistoryRecord, 0, defaultHistoryPageSize+1)
+	for i := 0; i <= defaultHistoryPageSize; i++ {
+		records = append(records, HistoryRecord{Time: time.Unix(int64(i), 0), FileKey: "/docs/note.md", Action: "write"})
+	}
+	if err := store.Record(context.Background(), records); err != nil {
+		t.Fatal(err)
+	}
+	b, err := (scopedHistory{store: store, roots: []string{"/docs"}}).Query("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lines := strings.Count(string(b), "\n"); lines != len(records) {
+		t.Fatalf("history lines=%d want=%d", lines, len(records))
 	}
 }
 
