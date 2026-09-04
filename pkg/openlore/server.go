@@ -28,6 +28,7 @@ import (
 	"github.com/aakarim/go-openlore/internal/webstyle"
 	"github.com/aakarim/go-openlore/pkg/openlore/meta"
 	"github.com/aakarim/go-openlore/pkg/openlore/validation"
+	"github.com/aakarim/go-openlore/pkg/rules"
 	"github.com/aakarim/go-openlore/pkg/shell"
 	"github.com/aakarim/go-openlore/pkg/shell/cmds"
 	"github.com/aakarim/go-openlore/pkg/vfs"
@@ -93,6 +94,7 @@ type Server struct {
 	readMW            []ReadMiddleware
 	contentTransforms []ContentTransform
 	agentSkills       *agentSkillsPlugin
+	rules             *rulesPlugin
 
 	// metaExtenders are the `lore meta` extenders contributed by plugins,
 	// installed per session in buildSessionShell.
@@ -256,10 +258,18 @@ func newServerWithRoot(rootDir string, rootFS, lowerFS vfs.FileSystem, opts ...c
 			return nil, err
 		}
 	}
+	rulesPlugin, err := newRulesPluginWithTokenizer(s.auth, rules.Defaults{Growth: cfg.Rules.Growth}, s.merge, logger, cfg.Rules.Tokenizer)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.registerPlugin(rulesPlugin); err != nil {
+		return nil, err
+	}
+	s.rules = rulesPlugin
+	// OKF metadata remains owned by the existing adapter; admission and
+	// validation are provided exclusively by the rules engine above.
 	if anyDocsetHasOKF(s.auth.Docsets) {
-		if err := s.registerPlugin(newOKF(s.auth.Docsets, logger)); err != nil {
-			return nil, err
-		}
+		s.metaExtenders = append(s.metaExtenders, newOKF(s.auth.Docsets, logger).MetaExtenders()...)
 	}
 	if shellPlugin != nil {
 		if err := s.registerPlugin(shellPlugin); err != nil {
@@ -305,12 +315,33 @@ func newServerWithRoot(rootDir string, rootFS, lowerFS vfs.FileSystem, opts ...c
 		s.writeLog = newWriteLog(s.merge, s.postCommitChain(), logger, 0)
 		s.history = NewJSONLHistoryStore(filepath.Join(dataDir, "history"))
 		s.writeLog.SetHistoryRecorder(s.history)
+		s.writeLog.SetCommitState(rulesPlugin.CommitState)
+		s.writeLog.SetPreApply(func(identity *Identity, attribution Attribution, changes vfs.ChangeSet) error {
+			for _, change := range changes.Leaves() {
+				if identity != nil {
+					if !s.identityCanWrite(*identity, change.Action, change.Target) {
+						return mutationDeniedError(s.merge, change.Action, change.Target)
+					}
+				} else if isDirConfigPath(change.Target) || (change.Action == vfs.ChangeActionRemoveAll && treeContainsDirConfig(s.merge, change.Target)) {
+					// Approved/deferred submissions preserve attribution but not the
+					// original authorization context. Fail closed if current state
+					// requires config.edit; the caller must resubmit normally.
+					return os.ErrPermission
+				}
+			}
+			if err := rulesPlugin.PreApply(attribution, changes); err != nil {
+				return err
+			}
+			if agentSkills != nil {
+				return agentSkills.validateMutation(attribution, changes)
+			}
+			return nil
+		})
 		if agentSkills != nil {
 			agentSkills.submit = func(ctx context.Context, cs vfs.ChangeSet) error {
 				_, err := s.CommitChangeSet(ctx, Attribution{Principal: "agent_skills_remote", internal: true}, cs)
 				return err
 			}
-			s.writeLog.SetPreApply(agentSkills.validateMutation)
 		}
 
 		// Async external work (Part D): the `spawn` command runs a command in a
@@ -749,10 +780,10 @@ func (s *Server) AdmitChangeSet(ctx context.Context, id Identity, cs vfs.ChangeS
 	}
 	for _, change := range cs.Leaves() {
 		if !s.identityCanWrite(id, change.Action, change.Target) {
-			return WriteResult{}, vfs.ErrReadOnly
+			return WriteResult{}, mutationDeniedError(s.merge, change.Action, change.Target)
 		}
 	}
-	return s.writeChain()(ctx, NewWriteOp(id.attribution(), cs))
+	return s.writeChain()(ctx, newIdentityWriteOp(id, cs))
 }
 
 type HTTPRouteProvider interface {
@@ -853,7 +884,13 @@ func (s *Server) registerPlugin(p any) error {
 // chain is just the terminal submit.
 func (s *Server) writeChain() WriteHandler {
 	terminal := func(ctx context.Context, op WriteOp) (WriteResult, error) {
-		h, err := s.writeLog.Submit(ctx, op.Attribution, op.persistenceChangeSet())
+		var h string
+		var err error
+		if op.identity != nil {
+			h, err = s.writeLog.SubmitIdentity(ctx, *op.identity, op.persistenceChangeSet())
+		} else {
+			h, err = s.writeLog.Submit(ctx, op.Attribution, op.persistenceChangeSet())
+		}
 		return WriteResult{Hash: h}, err
 	}
 	return chainWrite(terminal, s.writeMW...)
@@ -925,7 +962,7 @@ func (s *Server) buildCanonicalSessionFS(id Identity) vfs.FileSystem {
 	// Innermost writable wrapper, so the outer layers (scope) can deny or defer
 	// a mutation before it ever becomes a log entry.
 	if s.writeLog != nil {
-		sessionFS = newMiddlewareFS(sessionFS, id.attribution(), s.writeChain())
+		sessionFS = newIdentityMiddlewareFS(sessionFS, id, s.writeChain())
 	}
 	// A write-capable session must be a named non-guest identity with full token
 	// scope. The per-operation authorizer below resolves current roles and grants;
@@ -1100,6 +1137,7 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 		sh.SetHistoryBackend(scopedHistory{store: s.history, roots: historyRoots(s.sessionDocsets(id))})
 	}
 	sh.SetJobBackend(s.jobs)
+	sh.SetSizeBackend(sessionSizeBackend{server: s, identity: id})
 
 	// Set identity info as environment variables
 	if id.IdentityName != "" {

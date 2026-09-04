@@ -51,6 +51,13 @@ type CmdContext interface {
 	SkillsRemoteMaxBytes() int64
 }
 
+type SizeBackend interface {
+	Baseline(path string) (string, error)
+	Reset(path, note string, attribution JobAttribution) (string, error)
+}
+
+type sizeContext interface{ SizeBackend() SizeBackend }
+
 // DocsetInfo describes one docset a session can access. It is the per-session
 // view surfaced by `lore docsets` — the host resolves it from the session's
 // role-policy snapshot.

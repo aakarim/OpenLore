@@ -391,6 +391,29 @@ func TestWriteLog_PostCommitRunsWithActorAndDoesNotBlockSubmit(t *testing.T) {
 	}
 }
 
+func TestWriteLogCommitStateRunsBeforeSuccessAndSurfacesFailure(t *testing.T) {
+	fs := &wlRecordingFS{}
+	stateErr := errors.New("state disk full")
+	var stateSawContent bool
+	l := newWriteLog(fs, nil, nil, 1)
+	l.SetCommitState(func(_ context.Context, info CommitInfo) error {
+		content, err := fs.ReadFile(info.ChangeSet.Target)
+		stateSawContent = err == nil && string(content) == "x"
+		return stateErr
+	})
+	defer l.Close(context.Background())
+
+	if _, err := l.Submit(context.Background(), Attribution{}, writeCS("/committed")); !errors.Is(err, stateErr) {
+		t.Fatalf("state failure = %v", err)
+	}
+	if !stateSawContent {
+		t.Fatal("state hook ran before content commit")
+	}
+	if content, err := fs.ReadFile("/committed"); err != nil || string(content) != "x" {
+		t.Fatalf("content was not committed: content=%q err=%v", content, err)
+	}
+}
+
 func TestWriteLog_RecorderFailureDoesNotTurnCommittedWriteIntoFailure(t *testing.T) {
 	fs := &wlRecordingFS{}
 	l := newWriteLog(fs, nil, nil, 1)

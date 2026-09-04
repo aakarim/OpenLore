@@ -23,7 +23,12 @@ type middlewareFS struct {
 	vfs.FileSystem // read delegation (Stat / ReadDir / ReadFile)
 
 	attribution Attribution
+	identity    *Identity
 	admit       WriteHandler // composed admission chain; terminal handler submits to the log
+}
+
+func newIdentityMiddlewareFS(readView vfs.FileSystem, identity Identity, admit WriteHandler) *middlewareFS {
+	return &middlewareFS{FileSystem: readView, attribution: identity.attribution(), identity: &identity, admit: admit}
 }
 
 // newMiddlewareFS wraps a session read view so its mutations flow through admit.
@@ -37,7 +42,11 @@ func newMiddlewareFS(readView vfs.FileSystem, attribution Attribution, admit Wri
 // hash (empty for non-write actions) or the chain's error. A deferred write
 // surfaces as *vfs.PendingChangeError; a rejected one as the middleware's error.
 func (m *middlewareFS) run(cs vfs.ChangeSet) (string, error) {
-	res, err := m.admit(context.Background(), NewWriteOp(m.attribution, cs))
+	op := NewWriteOp(m.attribution, cs)
+	if m.identity != nil {
+		op = newIdentityWriteOp(*m.identity, cs)
+	}
+	res, err := m.admit(context.Background(), op)
 	return res.Hash, err
 }
 

@@ -108,8 +108,8 @@ func TestUnsupportedShellUsageIsLoggedOnlyInDebugMode(t *testing.T) {
 			sh.ExecPipeline("| echo hello", &bytes.Buffer{}, &bytes.Buffer{}, nil)
 
 			got := logs.String()
-			if (got != "") != tt.want {
-				t.Fatalf("logs = %q, want event: %t", got, tt.want)
+			if strings.Contains(got, `"msg":"unsupported shell usage"`) != tt.want {
+				t.Fatalf("logs = %q, want unsupported-usage event: %t", got, tt.want)
 			}
 			if !tt.want {
 				return

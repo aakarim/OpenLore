@@ -531,3 +531,16 @@ func TestValidateChangeSetBatchRejectsEmptyMixedMalformed(t *testing.T) {
 		t.Fatalf("valid batch: %v", err)
 	}
 }
+
+func TestValidateChangeSetMoveMetadata(t *testing.T) {
+	write := Change{Target: "/to", Action: ChangeActionWrite, Write: &WriteChange{Bytes: []byte("x")}}
+	remove := Change{Target: "/from", Action: ChangeActionRemoveAll, RemoveAll: &RemoveAllChange{Opts: RemoveOpts{Expected: &TreeSnapshot{Ops: []TreeOp{{RelPath: ".", Kind: "file", Hash: hashBytes([]byte("x"))}}}}}}
+	if err := ValidateChangeSet(ChangeSet{Changes: []Change{write, remove}, Moves: []Move{{From: 1, To: 0}}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, moves := range [][]Move{{{From: 0, To: 1}}, {{From: 2, To: 0}}, {{From: 1, To: 0}, {From: 1, To: 0}}} {
+		if err := ValidateChangeSet(ChangeSet{Changes: []Change{write, remove}, Moves: moves}); err == nil {
+			t.Fatalf("moves %#v accepted", moves)
+		}
+	}
+}

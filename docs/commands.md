@@ -114,7 +114,31 @@ them.
 | `lore docsets` | List accessible docsets, grants, paths, and attributes |
 | `lore meta [path]` | Emit document frontmatter as NDJSON, scoped to the current directory or path |
 | `lore meta --filter skills [path]` | Discover Agent Skills collections without scanning unrelated docs |
-| `lore validate [bundle]` | Validate an OKF bundle, local links, and aliased-path portability |
+| `lore package list` / `lore package doc <path>` | List compiled-in rule members or show a member's parameters and example |
+| `lore validate [dir]` | Run folder rules over a docset or folder: file rules per file, bundle rules (OKF bundle structure, local links, alias portability) once at the root |
+| `lore size baseline <path>` | Show a file's size-baseline history and current cap under `max: initial` rules |
+| `lore size baseline reset <path> [--note <text>]` | Append a new baseline from the file's current content; needs a write grant on the path and a `config.edit` role |
+
+See [Folder rules](folder-rules.md) for the rules model. `lore validate` refuses
+to run from a directory above docsets that declare bundle rules
+(`run lore validate per docset`); name the docset or folder instead.
+
+Example `lore size baseline` output:
+
+```text
+/docs/backend/decisions/adr-001.md  (size/lines via adr-length @ /docs/backend/.lore/config.yaml, growth 1.1)
+  2026-08-30T09:12:04Z  create      agent:claude@acme.com   412 lines  12 KiB  3900 tokens (estimate/v1)
+  2026-09-02T14:01:37Z  reset       adil                    812 lines  21 KiB  6400 tokens (estimate/v1)  "ADR grew after review"
+current cap: 893 lines
+```
+
+A file with no history prints `no baseline recorded`. A reset prints the
+previous and new baseline and the resulting cap, and is also recorded in the
+server audit log as `rules.baseline.reset`:
+
+```text
+baseline reset: previous 412, new 812, new cap 893 lines
+```
 
 ## Skills management
 

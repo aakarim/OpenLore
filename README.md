@@ -276,6 +276,8 @@ The container workflow publishes `latest` from `main`; releases also publish
 | [Workload identity federation](docs/workload-identity-federation.md) | Authenticate CI and agents with short-lived external identity tokens |
 | [Writing and publishing](docs/writing.md) | Write modes, inboxes, conflict handling, approvals, and jobs |
 | [Plugins and knowledge formats](docs/plugins.md) | Plugin installation, interfaces, OKF validation, `lore validate`, and `lore meta` |
+| [Folder rules](docs/folder-rules.md) | `.lore/config.yaml` and `lore.json` rules, layering, permissions, rejection messages, and growth limits |
+| [Rules standard library](docs/rules-stdlib.md) | Generated reference for compiled-in rule members and their parameters |
 | [Write system internals](docs/write-system.md) | Filesystem layering, write seam, changesets, hooks, and async jobs |
 | [Security evaluation](SECURITY.md) | Threat model and security properties |
 

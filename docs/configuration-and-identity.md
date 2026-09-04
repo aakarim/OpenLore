@@ -40,6 +40,13 @@ files:
     - "node_modules"
     - ".env"
 
+# Folder rules (see docs/folder-rules.md). `growth` is the default multiplier
+# for `max: initial` size rules and must be at least 1. `rules.tokenizer` is
+# reserved and rejected at boot until a real tokenizer ships; size/tokens uses
+# the built-in estimator.
+rules:
+  growth: 1.25
+
 # skills_dir: ./skills
 # auth_file: ./lore.json
 # tls_cert: ./cert.pem
@@ -84,6 +91,9 @@ mcp:
       "allow": { "capabilities": ["spawn"] }
     }
   },
+  "rules": {
+    "doc-size": { "match": ["**/*.md"], "use": "size/kilobytes", "with": { "max": 60 }, "default": true }
+  },
   "docsets": {
     "public": {
       "paths": ["/docs/public"],
@@ -92,7 +102,11 @@ mcp:
     "backend": {
       "paths": ["/docs/api", { "internal/specs": "/docs/specs" }],
       "aliases": ["/api"],
-      "access": { "allow": { "backend": "rw" } }
+      "access": { "allow": { "backend": "rw" } },
+      "rules": {
+        "format": { "match": ["**/*.md"], "use": "okf" }
+      },
+      "config": { "edit": ["backend"] }
     },
     "backend-home": {
       "paths": ["/home/backend"]
@@ -118,6 +132,22 @@ Docsets grant exact role names:
 
 Multiple roles contribute grants independently. Any matching docset deny wins.
 Capability allows form a union across roles, while any capability deny wins.
+
+Folder rules use three keys, all documented in [Folder rules](folder-rules.md):
+
+- Top-level `rules` declares rules that apply to every docset. Each rule has
+  `match`, optional `exclude`, `use` (a member such as `size/kilobytes` or
+  `okf`), `with` (the member's parameters), `enforce` (default `true`) and
+  `default` (`true` lets a folder's `.lore/config.yaml` replace the rule under
+  the same name).
+- `docsets.<name>.rules` declares rules for that docset's paths, with the same
+  shape. The older `docsets.<name>.okf` block is still accepted and is
+  equivalent to declaring the `okf`, `okf/bundle`, `link/resolves` and
+  `link/alias` rules.
+- `docsets.<name>.config.edit` lists the roles allowed to create, edit or
+  delete `.lore/config.yaml` files under the docset and to run
+  `lore size baseline reset`. The role also needs a write grant on the path. A
+  docset without `config.edit` has no one who can change its folder rules.
 
 ## HTTP inbox credentials
 

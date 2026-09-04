@@ -2,8 +2,10 @@ package openlore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
+	"path"
 	"sort"
 	"strings"
 	"syscall"
@@ -411,7 +413,13 @@ func (s *Server) identityCanWrite(id Identity, action vfs.ChangeAction, p string
 		return false // token scope ceiling: only full authority may write
 	}
 	p = s.canonicalPath(p)
+	if isDirConfigPath(p) && !s.identityHasDirConfigRole(id, p) {
+		return false
+	}
 	if action == vfs.ChangeActionRemoveAll {
+		if !s.canEditDirConfigsInTree(id, p) {
+			return false
+		}
 		for _, candidate := range s.currentAuth().Docsets {
 			for _, pm := range candidate.Paths {
 				root := displayPath(pm)
@@ -439,6 +447,42 @@ func (s *Server) identityCanWrite(id Identity, action vfs.ChangeAction, p string
 	for _, grant := range grants {
 		if grant.CanWrite(ds, action, p) {
 			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) canEditDirConfigsInTree(id Identity, target string) bool {
+	allowed := true
+	err := vfs.WalkDir(s.merge, target, func(candidate string, _ *vfs.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if isDirConfigPath(candidate) && !s.identityHasDirConfigRole(id, candidate) {
+			allowed = false
+		}
+		return nil
+	})
+	if errors.Is(err, fs.ErrNotExist) {
+		return true
+	}
+	return err == nil && allowed
+}
+
+func (s *Server) identityHasDirConfigRole(id Identity, target string) bool {
+	_, docset, ok := s.mostSpecificDocset(path.Dir(path.Dir(target)))
+	if !ok || docset.Config == nil {
+		return false
+	}
+	policy, err := s.currentPolicy(id)
+	if err != nil {
+		return false
+	}
+	for _, allowed := range docset.Config.Edit {
+		for _, role := range policy.Roles {
+			if role == allowed {
+				return true
+			}
 		}
 	}
 	return false

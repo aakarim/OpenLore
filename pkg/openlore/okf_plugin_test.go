@@ -15,21 +15,15 @@ import (
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
 
-// runOKF composes the plugin's single admission middleware around a terminal
-// handler that records whether it was reached, and drives one ChangeSet through
-// it. It returns the terminal-reached flag and the chain error.
+// runOKF drives the compatibility plugin's rules engine directly. The legacy
+// plugin no longer owns admission middleware; server admission uses rulesPlugin.
 func runOKF(p *okfPlugin, cs vfs.ChangeSet) (reachedTerminal bool, err error) {
-	mws := p.WriteMiddleware()
-	if len(mws) != 1 {
-		panic("expected exactly one OKF middleware")
+	for _, leaf := range cs.Leaves() {
+		if err := p.engine.AdmitLeaf(context.Background(), leaf, "test", nil); err != nil {
+			return false, err
+		}
 	}
-	terminal := func(ctx context.Context, op WriteOp) (WriteResult, error) {
-		reachedTerminal = true
-		return WriteResult{Hash: "ok"}, nil
-	}
-	h := mws[0](terminal)
-	_, err = h(context.Background(), NewWriteOp(Attribution{}, cs))
-	return reachedTerminal, err
+	return true, nil
 }
 
 const validDoc = "---\ntype: Note\n---\nbody\n"
@@ -229,7 +223,7 @@ func TestOKFPlugin_NestedDocsetExcludesSubtree(t *testing.T) {
 }
 
 func TestOKFPlugin_ImplementsProvider(t *testing.T) {
-	var _ WriteMiddlewareProvider = pluginWith(docsWithOKF())
+	var _ ValidatorProvider = pluginWith(docsWithOKF())
 }
 
 // Guard against an unexpected error type leaking (should be a plain wrapped
@@ -412,7 +406,7 @@ func TestOKFPlugin_ValidateCommandSucceedsForPortableBundle(t *testing.T) {
 	}
 	sh := shell.NewShell(NewDirFS(dir, config.FilesConfig{}))
 	sh.SetCwd("/")
-	sh.SetValidators(pluginWith(docsWithOKF()).Validators())
+	sh.SetValidators(pluginWith(map[string]config.DocsetSpec{"root": docset("/", &config.OKFDocsetConfig{})}).Validators())
 
 	var out, errOut bytes.Buffer
 	if code := sh.ExecPipeline("lore validate", &out, &errOut, nil); code != 0 {
@@ -425,7 +419,7 @@ func TestOKFPlugin_ValidateCommandSucceedsForPortableBundle(t *testing.T) {
 
 func TestRegisterPlugin_ValidateCommandIsCoreAndValidatorsAreSessionLocal(t *testing.T) {
 	withOKF := &Server{}
-	if err := withOKF.registerPlugin(pluginWith(docsWithOKF())); err != nil {
+	if err := withOKF.registerPlugin(pluginWith(map[string]config.DocsetSpec{"root": docset("/", &config.OKFDocsetConfig{})})); err != nil {
 		t.Fatal(err)
 	}
 

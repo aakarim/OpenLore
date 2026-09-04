@@ -53,6 +53,7 @@ var (
 	WithTLS             = config.WithTLS
 	WithCAKeysFile      = config.WithCAKeysFile
 	WithHostCertFile    = config.WithHostCertFile
+	WithRulesTokenizer  = config.WithRulesTokenizer
 	WithPasskeys        = config.WithPasskeys
 	WithReadonly        = config.WithReadonly
 	LoadAuthConfig      = config.LoadAuthConfig

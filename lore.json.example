@@ -23,7 +23,12 @@
       "access": {
         "allow": { "engineer": "rw", "reviewer": "publish" },
         "deny": []
-      }
+      },
+      "rules": {
+        "format": { "match": ["**/*.md"], "use": "okf" },
+        "doc-size": { "match": ["**/*.md"], "use": "size/kilobytes", "with": { "max": 60 }, "default": true }
+      },
+      "config": { "edit": ["engineer"] }
     },
     "engineer-home": {
       "paths": [{ "published/engineer": "/home/engineer" }]
