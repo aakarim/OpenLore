@@ -7,6 +7,11 @@ and docset policy (`lore.json`).
 
 Create `openlore.yml` in the project root or pass `--config`:
 
+An explicitly loaded config file takes precedence over an embedded
+`openlore.yml` and replaces it rather than merging with it. If no file is
+loaded, OpenLore uses the embedded config when present, then built-in defaults;
+command-line flags always win.
+
 ```yaml
 version: "1"
 

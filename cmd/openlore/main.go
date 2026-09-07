@@ -400,8 +400,9 @@ func main() {
 				files.Ignore = splitAndTrim(*mcpIgnore)
 			}
 
-			// Try loading config file for file filters
-			embeddedCfg, _ := assets.EmbeddedConfig()
+			// Try loading config file for file filters. A loaded file replaces the
+			// embedded config; the embedded config is used only when no file exists.
+			embeddedCfg, hasEmbeddedCfg := assets.EmbeddedConfig()
 			cfgOpts := []config.Option{
 				config.WithConfigFile(*mcpConfig),
 				config.WithEmbeddedConfig(embeddedCfg, ""),
@@ -409,6 +410,7 @@ func main() {
 			var resolvedCfg config.Config
 			if cfg, err := config.New(cfgOpts...); err == nil {
 				resolvedCfg = cfg
+				fmt.Fprintf(os.Stderr, "config: %s\n", configSource(*mcpConfig, hasEmbeddedCfg))
 				if len(files.Allowed) == 0 {
 					files.Allowed = cfg.Files.Allowed
 				}
@@ -666,12 +668,12 @@ func main() {
 		rootDir = absDir
 	}
 
-	// Build config options.
-	// 1. Config file (from disk)
-	// 2. Embedded config (from assets/config/openlore.yml, if present)
-	// 3. CLI flag overrides (always win)
-	// Using both a config file and embedded config is an error.
-	embeddedCfg, _ := assets.EmbeddedConfig()
+	// Build config options in precedence order.
+	// 1. Config file (from disk), replacing embedded config when loaded
+	// 2. Embedded config (from assets/config/openlore.yml, only without a file)
+	// 3. Built-in defaults
+	// CLI flag overrides are applied last and always win.
+	embeddedCfg, hasEmbeddedCfg := assets.EmbeddedConfig()
 	opts := []openlore.Option{
 		openlore.WithConfigFile(*configFile),
 		openlore.WithEmbeddedConfig(embeddedCfg, assets.DefaultMOTD()),
@@ -781,6 +783,7 @@ func main() {
 	} else if assets.Lore() != nil {
 		fmt.Printf("  Directory:  (embedded docs)\n")
 	}
+	fmt.Printf("  config: %s\n", configSource(*configFile, hasEmbeddedCfg))
 	fmt.Printf("  SSH:        ssh -p %d localhost\n", cfg.Port)
 	if cfg.MetricsPort > 0 {
 		fmt.Printf("  Metrics:    http://localhost:%d/metrics\n", cfg.MetricsPort)
@@ -803,6 +806,16 @@ func main() {
 		slog.Error("server exited with error", "error", err)
 		os.Exit(1)
 	}
+}
+
+func configSource(path string, hasEmbedded bool) string {
+	if _, err := os.ReadFile(path); err == nil {
+		return "loaded " + path
+	}
+	if hasEmbedded {
+		return "using embedded openlore.yml"
+	}
+	return "defaults"
 }
 
 func inboxTokenCommand(args []string, stdout, stderr io.Writer, now func() time.Time) error {
