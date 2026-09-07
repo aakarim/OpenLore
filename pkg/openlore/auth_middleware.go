@@ -10,7 +10,12 @@ import (
 // The caller supplies whether a token is required so transports may override
 // the SSH-derived default.
 //
-//   - No issuer configured → no-op; callers resolve to anonymous (Phase 0).
+//   - No issuer configured, optional posture → no-op; callers resolve to
+//     anonymous (Phase 0).
+//   - No issuer configured, required posture → fail closed: there is no way to
+//     present a token, so every request gets 401. Serving anonymously here
+//     would silently widen a deployment whose SSH posture rejects keyless
+//     callers (allow_keyless: false) but which has not configured tokens.
 //   - Optional-token posture → verify a token if present (reject if invalid);
 //     if absent, proceed anonymously.
 //   - Required-token posture → a valid token is required; missing or invalid
@@ -21,7 +26,12 @@ import (
 // exactly as an SSH session (docs/mcp-bearer-auth.md §4, §6).
 func (s *Server) authMiddleware(next http.Handler, required bool) http.Handler {
 	if s.issuer == nil {
-		return next
+		if !required {
+			return next
+		}
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "authentication required, but this instance has no token issuer configured (set tokens in openlore.yml, or allow anonymous access with mcp.require_auth: false)", http.StatusUnauthorized)
+		})
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

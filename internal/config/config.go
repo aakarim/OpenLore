@@ -45,8 +45,8 @@ type Config struct {
 	MCPEnabled bool
 	MCPPath    string
 	// MCPRequireAuth overrides the SSH-derived authentication posture for the
-	// MCP endpoint. Nil inherits !AllowKeyless; true forces OAuth so clients
-	// such as Claude open the browser login flow.
+	// MCP and JSON API HTTP endpoints. Nil inherits !AllowKeyless; true forces
+	// OAuth so HTTP clients must authenticate.
 	MCPRequireAuth *bool
 	// APIEnabled controls whether the plain JSON HTTP API (backed by the MCP
 	// server) runs. Default true. It is mounted at APIPath on the HTTP server.
@@ -85,8 +85,10 @@ type Config struct {
 	// Tokens configures bearer-token issuance/verification for the MCP + HTTP
 	// API. This is server infrastructure (issuer identity, audience, signing
 	// key, TTLs) — not per-lore access policy — so it lives in openlore.yml
-	// alongside passkeys, not in lore.json. When nil, token auth is disabled
-	// and the MCP/HTTP endpoints behave as anonymous callers (Phase 0).
+	// alongside passkeys, not in lore.json. When nil, token auth is disabled:
+	// under a public posture the MCP/HTTP endpoints serve anonymous callers
+	// (Phase 0); under a token-required posture (HTTPAuthRequired) they fail
+	// closed with 401, since no caller can present a token.
 	Tokens  *AuthTokensConfig
 	Inbox   InboxConfig
 	Plugins PluginsConfig
@@ -597,9 +599,11 @@ func applySkillsConfig(cfg *Config, in skillsPluginYAML) error {
 }
 
 type mcpYAML struct {
-	Enabled     *bool  `yaml:"enabled"`
-	Path        string `yaml:"path"`
-	RequireAuth *bool  `yaml:"require_auth"`
+	Enabled *bool  `yaml:"enabled"`
+	Path    string `yaml:"path"`
+	// RequireAuth governs bearer authentication for both MCP-over-HTTP and the
+	// JSON HTTP API. The setting remains under mcp for configuration compatibility.
+	RequireAuth *bool `yaml:"require_auth"`
 }
 
 type apiYAML struct {
@@ -674,7 +678,7 @@ func New(opts ...Option) (Config, error) {
 		}
 	}
 
-	if cfg.MCPEnabled && cfg.MCPRequireAuth != nil && *cfg.MCPRequireAuth && cfg.Tokens == nil {
+	if (cfg.MCPEnabled || cfg.APIEnabled) && cfg.MCPRequireAuth != nil && *cfg.MCPRequireAuth && cfg.Tokens == nil {
 		return Config{}, errors.New("mcp.require_auth requires tokens to be configured")
 	}
 
@@ -1158,13 +1162,19 @@ func applyMCPConfig(cfg *Config, m *mcpYAML) {
 	}
 }
 
-// MCPAuthRequired resolves the MCP-specific override. When it is omitted, MCP
-// retains the historical behavior of mirroring the SSH keyless posture.
-func (cfg Config) MCPAuthRequired() bool {
+// HTTPAuthRequired resolves the authentication posture shared by MCP-over-HTTP
+// and the JSON HTTP API. When omitted, both mirror the SSH keyless posture.
+func (cfg Config) HTTPAuthRequired() bool {
 	if cfg.MCPRequireAuth != nil {
 		return *cfg.MCPRequireAuth
 	}
 	return !cfg.AllowKeyless
+}
+
+// MCPAuthRequired is kept for compatibility. Use HTTPAuthRequired for the
+// shared MCP-over-HTTP and JSON API posture.
+func (cfg Config) MCPAuthRequired() bool {
+	return cfg.HTTPAuthRequired()
 }
 
 // WithMCPPath sets the path the MCP-over-HTTP endpoint is mounted at on the

@@ -56,8 +56,9 @@ passkeys:
 # instance mints/verifies tokens), so it lives here, not in lore.json. Enabling
 # it mounts the OAuth flow (/authorize, /oauth/token), Dynamic Client
 # Registration (/register), and discovery (/.well-known/oauth-*), so OAuth-native
-# MCP clients (Claude Desktop, Cowork) can log in. MCP's require_auth setting
-# overrides the default posture inherited from lore.json's allow_keyless.
+# MCP clients (Claude Desktop, Cowork) can log in. The mcp.require_auth setting
+# governs both MCP-over-HTTP and the JSON API, overriding the default posture
+# inherited from lore.json's allow_keyless.
 # The ES256 signing key is generated on first boot under <data_dir>/auth/.
 tokens:
   issuer: https://openlore.sh

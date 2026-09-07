@@ -26,8 +26,8 @@ tokens:
 	if !cfg.AllowKeyless {
 		t.Fatal("MCP override must not change the SSH keyless posture")
 	}
-	if !cfg.MCPAuthRequired() {
-		t.Fatal("MCPAuthRequired() = false, want true")
+	if !cfg.HTTPAuthRequired() {
+		t.Fatal("HTTPAuthRequired() = false, want true")
 	}
 }
 
@@ -36,16 +36,16 @@ func TestMCPRequireAuthDefaultsToKeylessPosture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.MCPAuthRequired() {
-		t.Fatal("MCPAuthRequired() = true for default keyless config, want false")
+	if cfg.HTTPAuthRequired() {
+		t.Fatal("HTTPAuthRequired() = true for default keyless config, want false")
 	}
 
 	cfg, err = New(WithAllowKeyless(false))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.MCPAuthRequired() {
-		t.Fatal("MCPAuthRequired() = false when keyless is disabled, want true")
+	if !cfg.HTTPAuthRequired() {
+		t.Fatal("HTTPAuthRequired() = false when keyless is disabled, want true")
 	}
 }
 
@@ -57,5 +57,17 @@ func TestMCPRequireAuthRequiresTokenIssuer(t *testing.T) {
 
 	if _, err := New(WithConfigFile(path)); err == nil {
 		t.Fatal("expected mcp.require_auth without tokens to be rejected")
+	}
+}
+
+func TestMCPRequireAuthRequiresTokenIssuerWhenOnlyAPIEnabled(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "openlore.yml")
+	contents := []byte("mcp:\n  enabled: false\n  require_auth: true\napi:\n  enabled: true\n")
+	if err := os.WriteFile(path, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := New(WithConfigFile(path)); err == nil {
+		t.Fatal("expected mcp.require_auth without tokens to be rejected when the JSON API is enabled")
 	}
 }
