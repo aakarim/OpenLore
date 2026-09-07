@@ -1555,6 +1555,17 @@ func (s *Server) ListenAndServe() error {
 				)
 			}
 
+			// Both bearer-token transports share one posture. If it requires a
+			// token but no issuer exists, authMiddleware fails closed (401 on
+			// every request); say so once at boot so the operator can either
+			// configure tokens or opt into anonymous access explicitly.
+			httpAuthRequired := s.config.HTTPAuthRequired()
+			if httpAuthRequired && s.issuer == nil && (s.config.MCPEnabled || s.config.APIEnabled) {
+				s.logger.Warn("HTTP auth posture requires a token but no token issuer is configured; /mcp and /api will reject every request with 401",
+					"allow_keyless", s.config.AllowKeyless,
+					"hint", "set tokens in openlore.yml, or set mcp.require_auth: false to allow anonymous access")
+			}
+
 			// Mount the MCP-over-HTTP (Streamable HTTP) endpoint on the HTTP
 			// server at the configured path, so it reuses the same port/TLS as
 			// the front page (and any load balancer rule fronting it).
@@ -1566,7 +1577,7 @@ func (s *Server) ListenAndServe() error {
 				// Posture-aware bearer auth (§4): identity from a verified token
 				// (or anonymous) is placed on the request context, which the
 				// Streamable transport carries into the tool handler.
-				h := s.authMiddleware(mcpHandler, s.config.MCPAuthRequired())
+				h := s.authMiddleware(mcpHandler, httpAuthRequired)
 				httpCfg.ExtraHandlers[mcpPath] = h
 				httpCfg.ExtraHandlers[mcpPath+"/"] = h
 				s.logger.Info("MCP endpoint mounted", "path", mcpPath, "http_port", s.config.HTTPPort)
@@ -1578,7 +1589,7 @@ func (s *Server) ListenAndServe() error {
 			if s.config.APIEnabled && s.config.APIPath != "" {
 				apiPath := "/" + strings.Trim(s.config.APIPath, "/")
 				api := NewMCPHTTPAPI(mcpServer, s.shellForContext)
-				httpCfg.ExtraHandlers[apiPath+"/"] = s.authMiddleware(api.Handler(apiPath), !s.config.AllowKeyless)
+				httpCfg.ExtraHandlers[apiPath+"/"] = s.authMiddleware(api.Handler(apiPath), httpAuthRequired)
 				s.logger.Info("HTTP API mounted", "path", apiPath, "http_port", s.config.HTTPPort)
 			}
 
