@@ -80,6 +80,11 @@ mcp:
   require_auth: true
 ```
 
+If the resolved posture requires a token (`allow_keyless: false` inherited, or
+`require_auth: true`) but no `tokens` block is configured, `/mcp` and `/api`
+fail closed with 401 and the server logs a warning at startup. Configure
+`tokens`, or set `require_auth: false` to serve anonymous HTTP callers.
+
 ## Roles, docsets, and identities
 
 ```json

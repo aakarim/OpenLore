@@ -147,10 +147,12 @@ host_key_path: .ssh/openlore_ed25519
 #
 # Enable bearer-token auth for the MCP + HTTP API. This is SERVER
 # infrastructure — how this instance mints and verifies tokens — so it
-# lives here, not in lore.json (which is access policy). When omitted,
-# the MCP/HTTP endpoints serve anonymous callers (Phase 0). Posture
+# lives here, not in lore.json (which is access policy). Posture
 # (public vs token-required) derives from lore.json's allow_keyless by default;
-# mcp.require_auth can override it for both HTTP transports.
+# mcp.require_auth can override it for both HTTP transports. When this block
+# is omitted and the posture is public, /mcp and /api serve anonymous callers
+# (Phase 0); when it is omitted but the posture requires a token (allow_keyless:
+# false, or mcp.require_auth: true), those endpoints fail closed with 401.
 #
 # The ES256 signing key is generated on first boot under <data_dir>/auth/.
 # Public keys are published at /.well-known/jwks.json. Passkey login mints

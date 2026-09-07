@@ -85,8 +85,10 @@ type Config struct {
 	// Tokens configures bearer-token issuance/verification for the MCP + HTTP
 	// API. This is server infrastructure (issuer identity, audience, signing
 	// key, TTLs) — not per-lore access policy — so it lives in openlore.yml
-	// alongside passkeys, not in lore.json. When nil, token auth is disabled
-	// and the MCP/HTTP endpoints behave as anonymous callers (Phase 0).
+	// alongside passkeys, not in lore.json. When nil, token auth is disabled:
+	// under a public posture the MCP/HTTP endpoints serve anonymous callers
+	// (Phase 0); under a token-required posture (HTTPAuthRequired) they fail
+	// closed with 401, since no caller can present a token.
 	Tokens  *AuthTokensConfig
 	Inbox   InboxConfig
 	Plugins PluginsConfig
