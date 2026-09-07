@@ -93,6 +93,9 @@ func CmdPublish(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdi
 	}
 
 	if _, err := WriteFile(ctx, dest, data, false); err != nil {
+		if writeRuleRejection(errW, err) {
+			return 1
+		}
 		var pchg *vfs.PendingChangeError
 		if errors.As(err, &pchg) {
 			// Not a failure: a middleware parked the publish as a pending change.

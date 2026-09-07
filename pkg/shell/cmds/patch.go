@@ -83,6 +83,9 @@ func CmdPatch(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin 
 	}
 
 	if _, err := wfs.WriteFileAtomic(resolved, newContent, opts); err != nil {
+		if writeRuleRejection(errW, err) {
+			return 1
+		}
 		var pchg *vfs.PendingChangeError
 		if errors.As(err, &pchg) {
 			// Not a failure: a middleware parked the patch as a pending change.
