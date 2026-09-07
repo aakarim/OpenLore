@@ -177,9 +177,17 @@ go build -o openlore ./cmd/openlore
 If the binary does not contain embedded docs, installation prompts for a docs
 directory. Pass `--docs-dir ./docs` to bundle one during packaging.
 
+## Browse and edit with VS Code
+
+An SFTP filesystem extension can open OpenLore's directory tree directly in VS
+Code without cloning, mounting, or synchronizing it into a local project
+folder. Saving an editor writes the individual file back through OpenLore's
+governed write path. See [Editing OpenLore Files](editors.md) for VS Code setup,
+other compatible editors, save behavior, and limitations.
+
 ## Mount with SSHFS
 
-SFTP support lets editors and local tools mount the virtual filesystem:
+SFTP also lets local tools mount a read-only view of the virtual filesystem:
 
 ```bash
 mkdir -p /mnt/docs

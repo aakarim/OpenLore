@@ -62,12 +62,15 @@ SSH transport is handled by [charmbracelet/ssh](https://github.com/charmbracelet
 
 ### 4. SFTP Subsystem
 
-The SFTP server provides read-only file access for `sshfs` mounting.
+The SFTP server provides filesystem access for direct editor integrations and
+read-only `sshfs` mounts.
 
-**Read-only enforcement:**
-- Write operations (`Create`, `Remove`, `Rename`, `Mkdir`, `Chmod`, etc.) return `os.ErrPermission`
-- Only `Open` (read), `ReadDir`, and `Stat` are functional
-- The SFTP handler wraps the same VFS used by the shell, so file filtering and path protection apply
+**Enforcement:**
+- `Open` (read), `ReadDir`, and `Stat` use the identity-scoped session VFS, so file filtering and path protection apply
+- A writable file handle stages offset writes privately and submits one atomic whole-file write when the handle closes
+- The commit passes through the same identity grants, admission middleware, validation, approvals, size limits, ordered write log, and compare-and-swap protection as shell writes
+- An interrupted transfer is discarded, and a concurrent change makes the close fail instead of overwriting newer content
+- Namespace and metadata operations (`Remove`, `Rename`, `Mkdir`, `Chmod`, etc.) remain unsupported and return permission denied
 
 ### 5. In-Memory Bash Interpreter
 

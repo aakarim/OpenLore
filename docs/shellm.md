@@ -121,7 +121,8 @@ growing `trajectory.jsonl` can instead append only new lines with `tee -a`,
 which is always a conflict-safe CAS append. Do **not** point
 `SHELLM_TRAJ_DIR` at an SSHFS mount of OpenLore: shellm's trajectory writer
 relies on `mkdir`-based locking and atomic renames that are not guaranteed
-over SFTP/FUSE (and OpenLore's SFTP interface is read-only).
+over SFTP/FUSE. OpenLore accepts governed whole-file SFTP saves but deliberately
+does not expose those namespace operations.
 
 ### Reading
 

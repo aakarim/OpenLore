@@ -74,7 +74,8 @@ See [Installation](#installation) for more ways to install and package OpenLore.
 - **Agent-native retrieval** — Agents use the shell tools and composition
   patterns they already understand instead of learning a bespoke retrieval API.
 - **One knowledge surface, multiple transports** — Serve the same virtual
-  filesystem over SSH, SFTP/SSHFS, MCP, and a human-friendly web view.
+  filesystem over SSH, SFTP/SSHFS (including direct VS Code browsing and
+  editing), MCP, and a human-friendly web view.
 - **Live, governed knowledge** — Keep content read-only, allow scoped publishing,
   or enable full writes per docset. Writes are atomic, conflict-aware, and can
   require human approval.
@@ -205,8 +206,8 @@ Produce cross-platform binaries with your docs embedded:
     config: ./openlore.yml
 ```
 
-See [Ways to use OpenLore](docs/usage.md) for MCP stdio, MCPB desktop
-packaging, SSHFS, and Go library usage.
+See [Ways to use OpenLore](docs/usage.md) for direct VS Code editing, MCP stdio,
+MCPB desktop packaging, SSHFS, and Go library usage.
 
 ### Create a customized deployment
 
@@ -270,6 +271,7 @@ The container workflow publishes `latest` from `main`; releases also publish
 | Guide | Contents |
 |---|---|
 | [Ways to use OpenLore](docs/usage.md) | SSH, MCP, web, SSHFS, embedded binaries, GitHub Action, MCPB, and library usage |
+| [Editing OpenLore files](docs/editors.md) | Direct VS Code and SFTP editor setup without a local project mirror |
 | [Command reference](docs/commands.md) | Complete shell, introspection, publishing, syntax, CLI command, and flag reference |
 | [Configuration and identity](docs/configuration-and-identity.md) | `openlore.yml`, authentication, roles, docsets, aliases, homes, and host verification |
 | [HTTP inbox uploads](docs/inbox.md) | Upload documents with bearer or HMAC credentials |
