@@ -99,7 +99,23 @@ type Config struct {
 	OIDCIssuers []OIDCIssuer
 
 	configFileLoaded bool
+	configFilePath   string
+	embeddedLoaded   bool
 	warnings         []string
+}
+
+// Source describes where the configuration came from, for startup banners:
+// "loaded <path>" when WithConfigFile read a file, "using embedded openlore.yml"
+// when WithEmbeddedConfig applied an embedded config, otherwise "defaults".
+func (c Config) Source() string {
+	switch {
+	case c.configFileLoaded:
+		return "loaded " + c.configFilePath
+	case c.embeddedLoaded:
+		return "using embedded openlore.yml"
+	default:
+		return "defaults"
+	}
 }
 
 type RulesConfig struct {
@@ -686,6 +702,7 @@ func WithConfigFile(path string) Option {
 		cfg.warnings = append(cfg.warnings, warnings...)
 
 		cfg.configFileLoaded = true
+		cfg.configFilePath = path
 		if fc.Rules.Tokenizer != "" {
 			return errors.New("rules.tokenizer is not supported yet")
 		}
@@ -819,6 +836,7 @@ func WithEmbeddedConfig(data []byte, motdFallback string) Option {
 				return fmt.Errorf("parsing embedded config: %w", err)
 			}
 			cfg.warnings = append(cfg.warnings, warnings...)
+			cfg.embeddedLoaded = true
 
 			if fc.ConfigVersion != "" {
 				cfg.ConfigVersion = fc.ConfigVersion
