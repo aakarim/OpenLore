@@ -1,10 +1,12 @@
 package openlore
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"testing/fstest"
 
+	"github.com/aakarim/go-openlore/pkg/shell"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -130,11 +132,68 @@ func TestMCPShellFailureIsError(t *testing.T) {
 	if !strings.HasSuffix(output, "exit code: 1") {
 		t.Fatalf("output %q does not end with %q", output, "exit code: 1")
 	}
-	structured, ok := result.StructuredContent.(map[string]any)
+	exitCode, ok := exitCodeFromStructured(result.StructuredContent)
 	if !ok {
-		t.Fatalf("StructuredContent = %T, want map[string]any", result.StructuredContent)
+		t.Fatalf("StructuredContent = %#v, want a map with an integer exit_code", result.StructuredContent)
 	}
-	if got := structured["exit_code"]; got != float64(1) {
-		t.Fatalf("exit_code = %#v, want 1", got)
+	if exitCode != 1 {
+		t.Fatalf("exit_code = %d, want 1", exitCode)
+	}
+}
+
+func TestExecShellTranscriptNeverStartsWithBlankLine(t *testing.T) {
+	sh := shell.NewShell(NewFSAdapter(fstest.MapFS{
+		"docs/a.md": &fstest.MapFile{Data: []byte("hello\n")},
+	}))
+
+	cases := []struct {
+		name       string
+		command    string
+		wantPrefix string
+		wantSuffix string
+		wantExit   int
+	}{
+		{name: "stdout only", command: "cat /docs/a.md", wantPrefix: "hello\n", wantSuffix: "hello\n"},
+		{name: "stderr only", command: "cat /does/not/exist", wantPrefix: "cat: ", wantSuffix: "\nexit code: 1", wantExit: 1},
+		{name: "exit code only", command: "false", wantPrefix: "exit code: 1", wantSuffix: "exit code: 1", wantExit: 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, exitCode := execShellTranscript(sh, tc.command)
+			if exitCode != tc.wantExit {
+				t.Fatalf("exit code = %d, want %d", exitCode, tc.wantExit)
+			}
+			if strings.HasPrefix(got, "\n") {
+				t.Fatalf("transcript starts with a blank line: %q", got)
+			}
+			if !strings.HasPrefix(got, tc.wantPrefix) || !strings.HasSuffix(got, tc.wantSuffix) {
+				t.Fatalf("transcript = %q, want prefix %q and suffix %q", got, tc.wantPrefix, tc.wantSuffix)
+			}
+		})
+	}
+}
+
+func TestExitCodeFromStructured(t *testing.T) {
+	cases := []struct {
+		name   string
+		in     any
+		want   int
+		wantOK bool
+	}{
+		{name: "float64", in: map[string]any{"exit_code": float64(2)}, want: 2, wantOK: true},
+		{name: "int", in: map[string]any{"exit_code": 3}, want: 3, wantOK: true},
+		{name: "int64", in: map[string]any{"exit_code": int64(4)}, want: 4, wantOK: true},
+		{name: "json.Number", in: map[string]any{"exit_code": json.Number("5")}, want: 5, wantOK: true},
+		{name: "missing", in: map[string]any{}, want: 0, wantOK: false},
+		{name: "not a map", in: "nope", want: 0, wantOK: false},
+		{name: "wrong type", in: map[string]any{"exit_code": "1"}, want: 0, wantOK: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := exitCodeFromStructured(tc.in)
+			if ok != tc.wantOK || got != tc.want {
+				t.Fatalf("exitCodeFromStructured(%#v) = (%d, %v), want (%d, %v)", tc.in, got, ok, tc.want, tc.wantOK)
+			}
+		})
 	}
 }

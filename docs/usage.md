@@ -141,7 +141,8 @@ The MCP server exposes:
 The `shell` tool returns the command's exit code as structured content. A
 non-zero exit is an MCP tool error (`isError: true`), while its text content
 continues to include stderr and a trailing `exit code: N` line. The plain JSON
-`POST /api/shell` endpoint follows the same convention: commands that run
+`POST /api/shell` endpoint and the persistent-session endpoint
+`POST /api/sessions/{id}/shell` follow the same convention: commands that run
 return HTTP 200 with `{"output":"...","is_error":false,"exit_code":0}`;
 non-zero exits set `is_error` to `true` and populate `exit_code`.
 

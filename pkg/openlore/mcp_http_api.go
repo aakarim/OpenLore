@@ -110,15 +110,8 @@ func (a *MCPHTTPAPI) callTool(w http.ResponseWriter, ctx context.Context, name s
 }
 
 func resultExitCode(result *mcp.CallToolResult) int {
-	structured, ok := result.StructuredContent.(map[string]any)
-	if !ok {
-		return 0
-	}
-	exitCode, ok := structured["exit_code"].(float64)
-	if !ok {
-		return 0
-	}
-	return int(exitCode)
+	exitCode, _ := exitCodeFromStructured(result.StructuredContent)
+	return exitCode
 }
 
 // connect establishes a fresh in-process client<->server MCP session bound to
