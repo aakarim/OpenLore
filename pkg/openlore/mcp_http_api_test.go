@@ -48,8 +48,41 @@ func TestMCPHTTPAPI_Shell(t *testing.T) {
 	if resp.IsError {
 		t.Fatalf("unexpected is_error=true: %q", resp.Output)
 	}
+	if resp.ExitCode != 0 {
+		t.Fatalf("exit_code = %d, want 0", resp.ExitCode)
+	}
 	if !strings.Contains(resp.Output, "world") {
 		t.Fatalf("output %q does not contain %q", resp.Output, "world")
+	}
+}
+
+func TestMCPHTTPAPI_ShellFailure(t *testing.T) {
+	h := newTestAPI(t)
+
+	body := strings.NewReader(`{"command":"cat /does/not/exist"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/shell", body)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+
+	var resp toolResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if !resp.IsError {
+		t.Fatalf("is_error = false, want true: %q", resp.Output)
+	}
+	if resp.ExitCode != 1 {
+		t.Fatalf("exit_code = %d, want 1", resp.ExitCode)
+	}
+	if strings.HasPrefix(resp.Output, "\n") {
+		t.Fatalf("output starts with a blank line: %q", resp.Output)
+	}
+	if !strings.HasSuffix(resp.Output, "exit code: 1") {
+		t.Fatalf("output %q does not end with %q", resp.Output, "exit code: 1")
 	}
 }
 

@@ -160,14 +160,19 @@ func newMCPShellHandler(fs vfs.FileSystem, envVars map[string]string, factory fu
 
 		result := stdout.String()
 		if stderr.Len() > 0 {
-			result += "\n" + stderr.String()
+			if len(result) > 0 {
+				result += "\n"
+			}
+			result += stderr.String()
 		}
 		if exitCode != 0 {
 			result += fmt.Sprintf("\nexit code: %d", exitCode)
 		}
 
 		return &mcp.CallToolResult{
-			Content: []mcp.Content{&mcp.TextContent{Text: result}},
+			Content:           []mcp.Content{&mcp.TextContent{Text: result}},
+			StructuredContent: map[string]any{"exit_code": exitCode},
+			IsError:           exitCode != 0,
 		}, nil, nil
 	}
 }

@@ -1,6 +1,7 @@
 package openlore
 
 import (
+	"strings"
 	"testing"
 	"testing/fstest"
 
@@ -92,5 +93,48 @@ func TestMCPToolAnnotations(t *testing.T) {
 				t.Errorf("list_commands openWorldHint = %v, want false", listAnnotations.OpenWorldHint)
 			}
 		})
+	}
+}
+
+func TestMCPShellFailureIsError(t *testing.T) {
+	fs := NewFSAdapter(fstest.MapFS{})
+	server := NewMCPServer(fs)
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	serverSession, err := server.Connect(t.Context(), serverTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer serverSession.Close()
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1.0.0"}, nil)
+	clientSession, err := client.Connect(t.Context(), clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clientSession.Close()
+
+	result, err := clientSession.CallTool(t.Context(), &mcp.CallToolParams{
+		Name:      "shell",
+		Arguments: map[string]any{"command": "cat /does/not/exist"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError {
+		t.Fatal("IsError = false, want true")
+	}
+	output := result.Content[0].(*mcp.TextContent).Text
+	if strings.HasPrefix(output, "\n") {
+		t.Fatalf("output starts with a blank line: %q", output)
+	}
+	if !strings.HasSuffix(output, "exit code: 1") {
+		t.Fatalf("output %q does not end with %q", output, "exit code: 1")
+	}
+	structured, ok := result.StructuredContent.(map[string]any)
+	if !ok {
+		t.Fatalf("StructuredContent = %T, want map[string]any", result.StructuredContent)
+	}
+	if got := structured["exit_code"]; got != float64(1) {
+		t.Fatalf("exit_code = %#v, want 1", got)
 	}
 }
