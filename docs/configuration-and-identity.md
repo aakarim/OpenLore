@@ -70,7 +70,8 @@ Unknown SSH keys are controlled in `lore.json`:
 Keyless and unknown allowed callers use `guest`, which can receive only
 read-only grants.
 
-MCP-over-HTTP can inherit this posture or independently require OAuth:
+MCP-over-HTTP and the JSON API can inherit this posture or jointly require
+OAuth. The existing `mcp.require_auth` setting governs both HTTP transports:
 
 ```yaml
 mcp:

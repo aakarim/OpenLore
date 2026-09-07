@@ -1566,7 +1566,7 @@ func (s *Server) ListenAndServe() error {
 				// Posture-aware bearer auth (§4): identity from a verified token
 				// (or anonymous) is placed on the request context, which the
 				// Streamable transport carries into the tool handler.
-				h := s.authMiddleware(mcpHandler, s.config.MCPAuthRequired())
+				h := s.authMiddleware(mcpHandler, s.config.HTTPAuthRequired())
 				httpCfg.ExtraHandlers[mcpPath] = h
 				httpCfg.ExtraHandlers[mcpPath+"/"] = h
 				s.logger.Info("MCP endpoint mounted", "path", mcpPath, "http_port", s.config.HTTPPort)
@@ -1578,7 +1578,7 @@ func (s *Server) ListenAndServe() error {
 			if s.config.APIEnabled && s.config.APIPath != "" {
 				apiPath := "/" + strings.Trim(s.config.APIPath, "/")
 				api := NewMCPHTTPAPI(mcpServer, s.shellForContext)
-				httpCfg.ExtraHandlers[apiPath+"/"] = s.authMiddleware(api.Handler(apiPath), !s.config.AllowKeyless)
+				httpCfg.ExtraHandlers[apiPath+"/"] = s.authMiddleware(api.Handler(apiPath), s.config.HTTPAuthRequired())
 				s.logger.Info("HTTP API mounted", "path", apiPath, "http_port", s.config.HTTPPort)
 			}
 

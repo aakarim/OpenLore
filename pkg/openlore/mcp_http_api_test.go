@@ -53,6 +53,40 @@ func TestMCPHTTPAPI_Shell(t *testing.T) {
 	}
 }
 
+func TestMCPHTTPAPI_RequireAuthPosture(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		requireAuth bool
+		wantStatus  int
+	}{
+		{name: "required", requireAuth: true, wantStatus: http.StatusUnauthorized},
+		{name: "optional", requireAuth: false, wantStatus: http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTokenTestServer(t, true, "allow")
+			s.config.MCPRequireAuth = &tc.requireAuth
+			mcpServer := NewMCPServer(s.merge, withMCPShellFactory(s.shellForContext))
+			api := NewMCPHTTPAPI(mcpServer, s.shellForContext)
+			h := s.authMiddleware(api.Handler("/api"), s.config.HTTPAuthRequired())
+
+			req := httptest.NewRequest(http.MethodPost, "/api/shell", strings.NewReader(`{"command":"cat /public/hello.txt"}`))
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d; body=%s", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+			if tc.requireAuth {
+				if challenge := rec.Header().Get("WWW-Authenticate"); !strings.Contains(challenge, "resource_metadata=") {
+					t.Fatalf("WWW-Authenticate = %q, want OAuth resource metadata challenge", challenge)
+				}
+			} else if !strings.Contains(rec.Body.String(), "public") {
+				t.Fatalf("anonymous response %q does not contain public docset output", rec.Body.String())
+			}
+		})
+	}
+}
+
 func TestMCPHTTPAPI_ShellMissingCommand(t *testing.T) {
 	h := newTestAPI(t)
 

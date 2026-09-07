@@ -126,10 +126,11 @@ mcp:
   require_auth: true
 ```
 
-`require_auth: true` forces OAuth login for MCP while retaining the separately
-configured SSH posture. `false` permits anonymous MCP. If omitted, MCP inherits
-the keyless posture. `--mcp-path /custom` changes the path; MCP over HTTP
-requires the HTTP server to remain enabled.
+`require_auth: true` forces OAuth login for both MCP-over-HTTP and the JSON API
+while retaining the separately configured SSH posture. `false` permits
+anonymous access to both HTTP transports. If omitted, both inherit the keyless
+posture. `--mcp-path /custom` changes the MCP path; MCP over HTTP requires the
+HTTP server to remain enabled.
 
 The MCP server exposes:
 

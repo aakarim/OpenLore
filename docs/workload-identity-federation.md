@@ -203,9 +203,10 @@ curl -X POST https://openlore.example/api/shell \
 ```
 
 Every call runs with the resolved identity's lore, capabilities, and home —
-identical to what that identity gets over SSH. A public/anonymous caller (no
-token) still works wherever anonymous SSH does, landing in the read-only
-`default` lore.
+identical to what that identity gets over SSH. When `mcp.require_auth` is false
+or omitted and anonymous SSH is allowed, a public/anonymous caller (no token)
+still works on both HTTP transports, landing in the read-only `default` lore.
+When `mcp.require_auth` is true, both `/mcp` and `/api` require a token.
 
 ## Relationship to the rest of auth
 
