@@ -100,10 +100,24 @@ type Config struct {
 	// hence openlore.yml.
 	OIDCIssuers []OIDCIssuer
 
-	// Track sources for conflict detection.
-	configFileLoaded   bool
-	embeddedConfigUsed bool
-	warnings           []string
+	configFileLoaded bool
+	configFilePath   string
+	embeddedLoaded   bool
+	warnings         []string
+}
+
+// Source describes where the configuration came from, for startup banners:
+// "loaded <path>" when WithConfigFile read a file, "using embedded openlore.yml"
+// when WithEmbeddedConfig applied an embedded config, otherwise "defaults".
+func (c Config) Source() string {
+	switch {
+	case c.configFileLoaded:
+		return "loaded " + c.configFilePath
+	case c.embeddedLoaded:
+		return "using embedded openlore.yml"
+	default:
+		return "defaults"
+	}
 }
 
 type RulesConfig struct {
@@ -613,8 +627,9 @@ type filesYAML struct {
 	Ignore  []string `yaml:"ignore"`
 }
 
-// New creates a Config by applying options to the defaults.
-// Returns an error if both a config file and embedded config are used.
+// New creates a Config by applying options to the defaults. When WithConfigFile
+// precedes WithEmbeddedConfig, a loaded file replaces the embedded config.
+// Later options (typically CLI flags) take precedence over both.
 func New(opts ...Option) (Config, error) {
 	cfg := Config{
 		Port:                2222,
@@ -663,9 +678,6 @@ func New(opts ...Option) (Config, error) {
 		}
 	}
 
-	if cfg.configFileLoaded && cfg.embeddedConfigUsed {
-		return Config{}, errors.New("conflict: cannot use both a config file and embedded config")
-	}
 	if (cfg.MCPEnabled || cfg.APIEnabled) && cfg.MCPRequireAuth != nil && *cfg.MCPRequireAuth && cfg.Tokens == nil {
 		return Config{}, errors.New("mcp.require_auth requires tokens to be configured")
 	}
@@ -673,9 +685,10 @@ func New(opts ...Option) (Config, error) {
 	return cfg, nil
 }
 
-// WithConfigFile loads configuration from a YAML file.
-// Fields in the file override defaults. If the file does not exist,
-// no error is returned and the config is unchanged.
+// WithConfigFile loads configuration from a YAML file. Fields in the file
+// override defaults. If the file does not exist, no error is returned and the
+// config is unchanged. Apply this option before WithEmbeddedConfig so a loaded
+// file replaces, rather than merges with, the embedded config.
 func WithConfigFile(path string) Option {
 	return func(cfg *Config) error {
 		data, err := os.ReadFile(path)
@@ -693,6 +706,7 @@ func WithConfigFile(path string) Option {
 		cfg.warnings = append(cfg.warnings, warnings...)
 
 		cfg.configFileLoaded = true
+		cfg.configFilePath = path
 		if fc.Rules.Tokenizer != "" {
 			return errors.New("rules.tokenizer is not supported yet")
 		}
@@ -811,18 +825,22 @@ func applyTokensConfig(cfg *Config, tokens *AuthTokensConfig, oidc []OIDCIssuer)
 	}
 }
 
-// WithEmbeddedConfig loads config from an embedded YAML byte slice.
-// The MOTD fallback is set separately from the config fields.
+// WithEmbeddedConfig loads config from an embedded YAML byte slice when no
+// config file has been loaded. WithConfigFile must be applied first when both
+// options are used. The MOTD fallback is set separately from the config fields.
 func WithEmbeddedConfig(data []byte, motdFallback string) Option {
 	return func(cfg *Config) error {
-		if len(data) > 0 {
-			cfg.embeddedConfigUsed = true
+		if cfg.configFileLoaded {
+			return nil
+		}
 
+		if len(data) > 0 {
 			fc, warnings, err := decodeFileConfig(data)
 			if err != nil {
 				return fmt.Errorf("parsing embedded config: %w", err)
 			}
 			cfg.warnings = append(cfg.warnings, warnings...)
+			cfg.embeddedLoaded = true
 
 			if fc.ConfigVersion != "" {
 				cfg.ConfigVersion = fc.ConfigVersion

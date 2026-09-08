@@ -20,6 +20,9 @@ ssh -p 2222 localhost "cat /docs/api-reference.md"
 
 Use `--allowed '*.md,*.txt'` and `--ignore '.git,node_modules'` to constrain the
 served tree from the command line, or configure these rules in `openlore.yml`.
+An explicitly loaded `--config` file replaces (rather than merges with) an
+embedded `openlore.yml`; otherwise the embedded config takes precedence over
+built-in defaults. Command-line flags always win.
 
 ## Connect an agent
 

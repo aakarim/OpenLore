@@ -400,7 +400,8 @@ func main() {
 				files.Ignore = splitAndTrim(*mcpIgnore)
 			}
 
-			// Try loading config file for file filters
+			// Try loading config file for file filters. A loaded file replaces the
+			// embedded config; the embedded config is used only when no file exists.
 			embeddedCfg, _ := assets.EmbeddedConfig()
 			cfgOpts := []config.Option{
 				config.WithConfigFile(*mcpConfig),
@@ -409,6 +410,7 @@ func main() {
 			var resolvedCfg config.Config
 			if cfg, err := config.New(cfgOpts...); err == nil {
 				resolvedCfg = cfg
+				fmt.Fprintf(os.Stderr, "config: %s\n", cfg.Source())
 				if len(files.Allowed) == 0 {
 					files.Allowed = cfg.Files.Allowed
 				}
@@ -666,11 +668,11 @@ func main() {
 		rootDir = absDir
 	}
 
-	// Build config options.
-	// 1. Config file (from disk)
-	// 2. Embedded config (from assets/config/openlore.yml, if present)
-	// 3. CLI flag overrides (always win)
-	// Using both a config file and embedded config is an error.
+	// Build config options in precedence order.
+	// 1. Config file (from disk), replacing embedded config when loaded
+	// 2. Embedded config (from assets/config/openlore.yml, only without a file)
+	// 3. Built-in defaults
+	// CLI flag overrides are applied last and always win.
 	embeddedCfg, _ := assets.EmbeddedConfig()
 	opts := []openlore.Option{
 		openlore.WithConfigFile(*configFile),
@@ -781,6 +783,7 @@ func main() {
 	} else if assets.Lore() != nil {
 		fmt.Printf("  Directory:  (embedded docs)\n")
 	}
+	fmt.Printf("  config: %s\n", cfg.Source())
 	fmt.Printf("  SSH:        ssh -p %d localhost\n", cfg.Port)
 	if cfg.MetricsPort > 0 {
 		fmt.Printf("  Metrics:    http://localhost:%d/metrics\n", cfg.MetricsPort)
