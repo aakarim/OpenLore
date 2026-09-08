@@ -158,22 +158,47 @@ func (s *JSONLHistoryStore) migrateLegacy() (bool, error) {
 	if err := os.Rename(filepath.Join(stagingDir, "files"), filesPath); err != nil {
 		return false, err
 	}
+	if err := syncHistoryDirectories(filesPath); err != nil {
+		return false, err
+	}
+	if err := syncDirectory(s.dir); err != nil {
+		return false, err
+	}
 	if err := os.Rename(stagedEvents, eventsPath); err != nil {
 		return false, err
 	}
-	if dir, err := os.Open(s.dir); err != nil {
+	if err := syncDirectory(s.dir); err != nil {
 		return false, err
-	} else {
-		err = dir.Sync()
-		_ = dir.Close()
-		if err != nil {
-			return false, err
-		}
 	}
 	if err := os.RemoveAll(stagingDir); err != nil {
 		return false, err
 	}
 	return true, nil
+}
+
+func syncHistoryDirectories(root string) error {
+	return filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() {
+			return nil
+		}
+		return syncDirectory(path)
+	})
+}
+
+func syncDirectory(path string) error {
+	dir, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	err = dir.Sync()
+	closeErr := dir.Close()
+	if err != nil {
+		return err
+	}
+	return closeErr
 }
 
 func (s *JSONLHistoryStore) Record(_ context.Context, records []HistoryRecord) error {
