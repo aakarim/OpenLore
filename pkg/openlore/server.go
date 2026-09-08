@@ -640,6 +640,7 @@ func (s *Server) sftpSubsystem(sess ssh.Session) {
 	// outside their grants over SFTP.
 	id := s.resolveIdentity(sess)
 	handler := NewSFTPHandler(s.buildSessionFS(id))
+	handler.writesDisabled = s.config.Readonly
 	server := sftp.NewRequestServer(sess, sftp.Handlers{
 		FileGet:  handler,
 		FilePut:  handler,
