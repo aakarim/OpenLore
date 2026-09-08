@@ -294,7 +294,7 @@ See [SECURITY.md](SECURITY.md) for the full security evaluation.
 
 ## License
 
-[MIT](LICENSE) — Adil Karim
+[Apache License 2.0](LICENSE) — Copyright © 2026 Adil Karim
 
 OpenLore bundles third-party open-source components. Their licenses and required
 notices are listed in
