@@ -109,9 +109,16 @@ data_dir: /var/lib/openlore/data
 writable_dir: /var/lib/openlore/published
 readonly: false
 
+tokens:
+  issuer: http://localhost:<selected HTTP port>
+  audience: http://localhost:<selected HTTP port>
+  access_ttl: 1h
+  refresh_ttl: 720h
+
 mcp:
   enabled: true
   path: /mcp
+  require_auth: true
 
 api:
   enabled: true
@@ -291,7 +298,11 @@ host-key checking or mutate global `~/.ssh/known_hosts`.
 Quietly run all checks; setup is not successful until they pass:
 
 1. HTTP readiness succeeds.
-2. `/mcp` completes an MCP initialization exchange.
+2. `/.well-known/oauth-authorization-server` and
+   `/.well-known/oauth-protected-resource` advertise the selected local HTTP
+   origin, JWKS publishes an ES256 key, unauthenticated `/mcp` returns 401, and
+   `/mcp` completes initialization with a bearer token minted for `onboarding`
+   from the active local config.
 3. `passkey` is available; the mounted config is active: keyless login fails,
    `ssh -F .local/ssh_config lore-local` authenticates `onboarding`, and
    `ssh -F .local/ssh_config lore-local-agent` authenticates the agent identity.
