@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -76,6 +77,128 @@ type JSONLHistoryStore struct {
 
 func NewJSONLHistoryStore(dir string) *JSONLHistoryStore {
 	return &JSONLHistoryStore{dir: dir}
+}
+
+// legacyCommitRecord is the on-disk schema written to commits.jsonl before
+// history was split into a metadata journal and per-file shards.
+type legacyCommitRecord struct {
+	Time        time.Time     `json:"time"`
+	Attribution Attribution   `json:"attribution"`
+	ChangeSet   vfs.ChangeSet `json:"change_set"`
+	Hash        string        `json:"hash,omitempty"`
+}
+
+// migrateLegacy builds a complete replacement index when only the legacy
+// commit journal exists. events.jsonl is installed last and acts as the
+// completion marker: an interrupted migration is safely rebuilt on restart.
+func (s *JSONLHistoryStore) migrateLegacy() (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	eventsPath := filepath.Join(s.dir, "events.jsonl")
+	if _, err := os.Stat(eventsPath); err == nil {
+		return false, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+
+	legacyPath := filepath.Join(s.dir, "commits.jsonl")
+	legacy, err := os.Open(legacyPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	defer legacy.Close()
+
+	stagingDir := filepath.Join(s.dir, ".migration")
+	if err := os.RemoveAll(stagingDir); err != nil {
+		return false, err
+	}
+	if err := os.MkdirAll(filepath.Join(stagingDir, "files"), 0o700); err != nil {
+		return false, err
+	}
+	staging := NewJSONLHistoryStore(stagingDir)
+	decoder := json.NewDecoder(legacy)
+	for i := 0; ; i++ {
+		var commit legacyCommitRecord
+		if err := decoder.Decode(&commit); errors.Is(err, io.EOF) {
+			break
+		} else if err != nil {
+			return false, fmt.Errorf("decoding legacy history record %d: %w", i+1, err)
+		}
+		leaves := commit.ChangeSet.Leaves()
+		records := make([]HistoryRecord, 0, len(leaves))
+		for _, leaf := range leaves {
+			records = append(records, HistoryRecord{
+				Time: commit.Time, Attribution: commit.Attribution,
+				FileKey: vfs.CleanPath(leaf.Target), Action: string(leaf.Action), ContentHash: commit.Hash,
+			})
+		}
+		if err := staging.Record(context.Background(), records); err != nil {
+			return false, fmt.Errorf("building migrated history record %d: %w", i+1, err)
+		}
+	}
+	stagedEvents := filepath.Join(stagingDir, "events.jsonl")
+	if _, err := os.Stat(stagedEvents); errors.Is(err, os.ErrNotExist) {
+		if err := os.WriteFile(stagedEvents, nil, 0o600); err != nil {
+			return false, err
+		}
+	} else if err != nil {
+		return false, err
+	}
+
+	// A files directory without events.jsonl can only be an interrupted index
+	// build. Replace it, then publish the global journal as the final step.
+	filesPath := filepath.Join(s.dir, "files")
+	if err := os.RemoveAll(filesPath); err != nil {
+		return false, err
+	}
+	if err := os.Rename(filepath.Join(stagingDir, "files"), filesPath); err != nil {
+		return false, err
+	}
+	if err := syncHistoryDirectories(filesPath); err != nil {
+		return false, err
+	}
+	if err := syncDirectory(s.dir); err != nil {
+		return false, err
+	}
+	if err := os.Rename(stagedEvents, eventsPath); err != nil {
+		return false, err
+	}
+	if err := syncDirectory(s.dir); err != nil {
+		return false, err
+	}
+	if err := os.RemoveAll(stagingDir); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func syncHistoryDirectories(root string) error {
+	return filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() {
+			return nil
+		}
+		return syncDirectory(path)
+	})
+}
+
+func syncDirectory(path string) error {
+	dir, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	err = dir.Sync()
+	closeErr := dir.Close()
+	if err != nil {
+		return err
+	}
+	return closeErr
 }
 
 func (s *JSONLHistoryStore) Record(_ context.Context, records []HistoryRecord) error {

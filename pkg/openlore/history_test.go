@@ -5,13 +5,109 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/aakarim/go-openlore/internal/config"
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
+
+func TestServerStartupMigratesLegacyShellAndBrowserHistory(t *testing.T) {
+	dataDir := t.TempDir()
+	historyDir := filepath.Join(dataDir, "history")
+	if err := os.MkdirAll(historyDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	oldTime := time.Date(2026, 8, 18, 10, 0, 0, 123, time.FixedZone("BST", 3600))
+	newTime := oldTime.Add(time.Hour)
+	attribution := Attribution{Principal: "alice", Actor: "agent", ClientAuth: AuthCIMD}
+	legacy := []legacyCommitRecord{
+		{
+			Time: oldTime, Attribution: attribution, Hash: "batch-hash",
+			ChangeSet: vfs.ChangeSet{Changes: []vfs.Change{
+				{Target: "/docs/note.md", Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: []byte("old body")}},
+				{Target: "/docs/archive", Action: vfs.ChangeActionMkdir},
+			}},
+		},
+		{
+			Time: newTime, Attribution: Attribution{Principal: "bob"}, Hash: "new-hash",
+			ChangeSet: vfs.ChangeSet{Target: "/docs/note.md", Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: []byte("new body")}},
+		},
+	}
+	f, err := os.OpenFile(filepath.Join(historyDir, "commits.jsonl"), os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoder := json.NewEncoder(f)
+	for _, record := range legacy {
+		if err := encoder.Encode(record); err != nil {
+			_ = f.Close()
+			t.Fatal(err)
+		}
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := NewServerWithRootFS(&wlRecordingFS{}, WithReadonly(false), config.WithDataDir(dataDir))
+	if err != nil {
+		t.Fatalf("NewServerWithRootFS: %v", err)
+	}
+	t.Cleanup(func() { _ = s.writeLog.Close(context.Background()) })
+
+	// The shell history backend reads the migrated global journal.
+	shellJSONL, err := (scopedHistory{store: s.history, roots: []string{"/docs"}}).Query("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var shellRecords []struct {
+		Attribution string `json:"attribution"`
+		Target      string `json:"target"`
+		Action      string `json:"action"`
+		Hash        string `json:"hash"`
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(shellJSONL)), "\n") {
+		var record struct {
+			Attribution string `json:"attribution"`
+			Target      string `json:"target"`
+			Action      string `json:"action"`
+			Hash        string `json:"hash"`
+		}
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatal(err)
+		}
+		shellRecords = append(shellRecords, record)
+	}
+	if len(shellRecords) != 3 {
+		t.Fatalf("shell history records=%d, want 3: %s", len(shellRecords), shellJSONL)
+	}
+	if got := []string{
+		shellRecords[0].Attribution + ":" + shellRecords[0].Target + ":" + shellRecords[0].Action + ":" + shellRecords[0].Hash,
+		shellRecords[1].Attribution + ":" + shellRecords[1].Target + ":" + shellRecords[1].Action + ":" + shellRecords[1].Hash,
+		shellRecords[2].Attribution + ":" + shellRecords[2].Target + ":" + shellRecords[2].Action + ":" + shellRecords[2].Hash,
+	}; !reflect.DeepEqual(got, []string{
+		"bob:/docs/note.md:write:new-hash",
+		"alice/agent:/docs/archive:mkdir:batch-hash",
+		"alice/agent:/docs/note.md:write:batch-hash",
+	}) {
+		t.Fatalf("shell history=%v", got)
+	}
+
+	// The browser callback uses a FileKey query, which must read its shard.
+	page, err := s.history.Query(context.Background(), HistoryQuery{FileKey: "/docs/note.md", Roots: []string{"/docs"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Records) != 2 || page.Records[0].ContentHash != "new-hash" || page.Records[1].ContentHash != "batch-hash" {
+		t.Fatalf("browser history=%+v", page.Records)
+	}
+	if !page.Records[1].Time.Equal(oldTime) || !reflect.DeepEqual(page.Records[1].Attribution, attribution) || page.Records[1].Action != string(vfs.ChangeActionWrite) {
+		t.Fatalf("migrated record did not preserve metadata: %+v", page.Records[1])
+	}
+}
 
 func TestHistoryRecordsExcludeWritePayloads(t *testing.T) {
 	content := []byte(strings.Repeat("private payload", 10_000))
