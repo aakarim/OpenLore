@@ -22,6 +22,8 @@ func TestEmbeddedDeploymentSkills(t *testing.T) {
 			"Who is this for?",
 			"/channel/general/INDEX.md",
 			"Do not bake",
+			"tokens:",
+			"oauth-authorization-server",
 			"Require local acceptance",
 		},
 		"onboarding": {
@@ -35,6 +37,8 @@ func TestEmbeddedDeploymentSkills(t *testing.T) {
 			"/var/lib/openlore/config/lore.json",
 			"Kubernetes ConfigMap",
 			"deploy-digitalocean",
+			"tokens.issuer",
+			"oauth-authorization-server",
 			"Required production acceptance",
 		},
 		"upgrade": {
