@@ -34,18 +34,29 @@ func CmdCut(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io
 		case "-s":
 			suppress = true
 		default:
-			if !strings.HasPrefix(args[i], "-") {
+			switch {
+			case strings.HasPrefix(args[i], "-d") && len(args[i]) > 2:
+				delimiter = args[i][2:]
+			case strings.HasPrefix(args[i], "-c") && len(args[i]) > 2:
+				charPositions = args[i][2:]
+			case strings.HasPrefix(args[i], "-f") && len(args[i]) > 2:
+				fieldPositions = args[i][2:]
+			case !strings.HasPrefix(args[i], "-"):
 				files = append(files, args[i])
 			}
 		}
+	}
+
+	positions := parsePositions(charPositions + fieldPositions)
+	if len(positions) == 0 {
+		fmt.Fprintln(errW, "cut: you must specify a list of bytes, characters, or fields")
+		return 1
 	}
 
 	lines, code := ReadInputLines(ctx, files, stdin, errW, "cut")
 	if code != 0 {
 		return code
 	}
-
-	positions := parsePositions(charPositions + fieldPositions)
 
 	for _, line := range lines {
 		if fieldPositions != "" {
