@@ -40,6 +40,13 @@ func TestCutAttachedOptionValues(t *testing.T) {
 	}
 }
 
+func TestCutDoesNotCombineCharacterAndFieldPositions(t *testing.T) {
+	out, errOut, code := execCmd(t, testFS(), "echo a,b,c | cut -c1 -d, -f2")
+	if code != 0 || errOut != "" || out != "b\n" {
+		t.Errorf("got stdout %q, stderr %q, exit %d; want stdout %q, empty stderr, exit 0", out, errOut, code, "b\n")
+	}
+}
+
 func TestCutRequiresPositions(t *testing.T) {
 	for _, command := range []string{"echo hello | cut", "echo hello | cut -c nope"} {
 		t.Run(command, func(t *testing.T) {

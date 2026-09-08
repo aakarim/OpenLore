@@ -47,7 +47,11 @@ func CmdCut(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io
 		}
 	}
 
-	positions := parsePositions(charPositions + fieldPositions)
+	positionsSpec := charPositions
+	if fieldPositions != "" {
+		positionsSpec = fieldPositions
+	}
+	positions := parsePositions(positionsSpec)
 	if len(positions) == 0 {
 		fmt.Fprintln(errW, "cut: you must specify a list of bytes, characters, or fields")
 		return 1
