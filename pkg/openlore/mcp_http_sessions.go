@@ -1,12 +1,10 @@
 package openlore
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -213,14 +211,10 @@ func randomHTTPSessionID() (string, error) {
 }
 
 func executeSessionShell(sh *shell.Shell, command string) toolResponse {
-	var stdout, stderr bytes.Buffer
-	exitCode := sh.ExecPipeline(command, &stdout, &stderr, nil)
-	output := stdout.String()
-	if stderr.Len() > 0 {
-		output += "\n" + stderr.String()
+	output, exitCode := execShellTranscript(sh, command)
+	return toolResponse{
+		Output:   output,
+		IsError:  exitCode != 0,
+		ExitCode: exitCode,
 	}
-	if exitCode != 0 {
-		output += fmt.Sprintf("\nexit code: %d", exitCode)
-	}
-	return toolResponse{Output: output}
 }

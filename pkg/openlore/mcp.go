@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -155,20 +156,62 @@ func newMCPShellHandler(fs vfs.FileSystem, envVars map[string]string, factory fu
 			}
 		}
 
-		var stdout, stderr bytes.Buffer
-		exitCode := sh.ExecPipeline(input.Command, &stdout, &stderr, nil)
-
-		result := stdout.String()
-		if stderr.Len() > 0 {
-			result += "\n" + stderr.String()
-		}
-		if exitCode != 0 {
-			result += fmt.Sprintf("\nexit code: %d", exitCode)
-		}
+		output, exitCode := execShellTranscript(sh, input.Command)
 
 		return &mcp.CallToolResult{
-			Content: []mcp.Content{&mcp.TextContent{Text: result}},
+			Content:           []mcp.Content{&mcp.TextContent{Text: output}},
+			StructuredContent: map[string]any{"exit_code": exitCode},
+			IsError:           exitCode != 0,
 		}, nil, nil
+	}
+}
+
+// execShellTranscript executes command in sh and returns the merged transcript plus the
+// exit code. stdout comes first, then stderr, then a trailing "exit code: N"
+// line on failure. Sections are separated by a single newline and the
+// transcript never starts with one, even when only stderr or only the exit
+// code is present.
+func execShellTranscript(sh *shell.Shell, command string) (string, int) {
+	var stdout, stderr bytes.Buffer
+	exitCode := sh.ExecPipeline(command, &stdout, &stderr, nil)
+
+	sections := make([]string, 0, 3)
+	if stdout.Len() > 0 {
+		sections = append(sections, stdout.String())
+	}
+	if stderr.Len() > 0 {
+		sections = append(sections, stderr.String())
+	}
+	if exitCode != 0 {
+		sections = append(sections, fmt.Sprintf("exit code: %d", exitCode))
+	}
+	return strings.Join(sections, "\n"), exitCode
+}
+
+// exitCodeFromStructured extracts the exit_code field the shell tool places in
+// StructuredContent. The value has been through JSON on the way back to the
+// client, so its concrete Go type depends on the decoder: float64 today,
+// json.Number or an integer type if the SDK changes how it decodes.
+func exitCodeFromStructured(structured any) (int, bool) {
+	m, ok := structured.(map[string]any)
+	if !ok {
+		return 0, false
+	}
+	switch v := m["exit_code"].(type) {
+	case float64:
+		return int(v), true
+	case int:
+		return v, true
+	case int64:
+		return int(v), true
+	case json.Number:
+		n, err := v.Int64()
+		if err != nil {
+			return 0, false
+		}
+		return int(n), true
+	default:
+		return 0, false
 	}
 }
 

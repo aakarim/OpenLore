@@ -104,6 +104,42 @@ func TestMCPHTTPSessionLifecyclePreservesShellState(t *testing.T) {
 	}
 }
 
+func TestMCPHTTPSessionShellReportsFailure(t *testing.T) {
+	_, handler := newSessionTestAPI(t)
+	identity := Identity{IdentityName: "adil", Principal: AuthenticatedPrincipal{Subject: "adil"}, Attribution: Attribution{Principal: "adil"}, Scopes: []string{ScopeFull}}
+	created := createSession(t, handler, identity)
+	path := "/api/sessions/" + created.ID + "/shell"
+
+	w := sessionRequest(t, handler, identity, http.MethodPost, path, `{"command":"cat /does/not/exist"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", w.Code, w.Body.String())
+	}
+	var resp toolResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if !resp.IsError {
+		t.Fatalf("is_error = false, want true; body = %+v", resp)
+	}
+	if resp.ExitCode != 1 {
+		t.Fatalf("exit_code = %d, want 1", resp.ExitCode)
+	}
+	if strings.HasPrefix(resp.Output, "\n") {
+		t.Fatalf("output starts with a blank line: %q", resp.Output)
+	}
+	if !strings.HasSuffix(resp.Output, "exit code: 1") {
+		t.Fatalf("output %q does not end with %q", resp.Output, "exit code: 1")
+	}
+
+	w = sessionRequest(t, handler, identity, http.MethodPost, path, `{"command":"pwd"}`)
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.IsError || resp.ExitCode != 0 {
+		t.Fatalf("success reported as failure: %+v", resp)
+	}
+}
+
 func TestMCPHTTPSessionIsBoundToIdentity(t *testing.T) {
 	_, handler := newSessionTestAPI(t)
 	owner := Identity{IdentityName: "owner", Principal: AuthenticatedPrincipal{Subject: "owner"}, Attribution: Attribution{Principal: "owner"}, Scopes: []string{ScopeFull}}
