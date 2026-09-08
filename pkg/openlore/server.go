@@ -312,8 +312,16 @@ func newServerWithRoot(rootDir string, rootFS, lowerFS vfs.FileSystem, opts ...c
 		// substrate. Every session routes its mutations here (via middlewareFS),
 		// so it is the sole writer and gives globally ordered writes/removes. The
 		// applier runs the post-commit chain after each durable commit.
+		history := NewJSONLHistoryStore(filepath.Join(dataDir, "history"))
+		migrated, err := history.migrateLegacy()
+		if err != nil {
+			return nil, fmt.Errorf("migrating legacy history: %w", err)
+		}
+		if migrated {
+			logger.Info("legacy history migrated")
+		}
 		s.writeLog = newWriteLog(s.merge, s.postCommitChain(), logger, 0)
-		s.history = NewJSONLHistoryStore(filepath.Join(dataDir, "history"))
+		s.history = history
 		s.writeLog.SetHistoryRecorder(s.history)
 		s.writeLog.SetCommitState(rulesPlugin.CommitState)
 		s.writeLog.SetPreApply(func(identity *Identity, attribution Attribution, changes vfs.ChangeSet) error {
