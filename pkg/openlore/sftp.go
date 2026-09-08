@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"sort"
@@ -14,6 +15,8 @@ import (
 	"github.com/aakarim/go-openlore/pkg/vfs"
 	"github.com/pkg/sftp"
 )
+
+const maxSFTPStagedFileBytes = int64(defaultMaxWriteBytes)
 
 // SFTPHandler implements the SFTP server interfaces using a vfs.FileSystem.
 type SFTPHandler struct {
@@ -44,6 +47,9 @@ func (h *SFTPHandler) Fileread(r *sftp.Request) (io.ReaderAt, error) {
 // commits the complete file through the same atomic, policy-controlled write
 // seam used by the shell.
 func (h *SFTPHandler) Filewrite(r *sftp.Request) (io.WriterAt, error) {
+	if r.Method != "Put" {
+		return nil, sftp.ErrSSHFxOpUnsupported
+	}
 	if h.writesDisabled {
 		return nil, os.ErrPermission
 	}
@@ -77,6 +83,9 @@ func (h *SFTPHandler) Filewrite(r *sftp.Request) (io.WriterAt, error) {
 		base, err = h.fs.ReadFile(r.Filepath)
 		if err != nil {
 			return nil, err
+		}
+		if int64(len(base)) > maxSFTPStagedFileBytes {
+			return nil, fmt.Errorf("write rejected: staged file exceeds limit of %d bytes", maxSFTPStagedFileBytes)
 		}
 	}
 	var data []byte
@@ -191,8 +200,8 @@ func (w *sftpAtomicWriter) WriteAt(p []byte, offset int64) (int, error) {
 	if w.append {
 		offset = int64(len(w.data))
 	}
-	if offset < 0 || offset > int64(^uint(0)>>1)-int64(len(p)) {
-		return 0, os.ErrInvalid
+	if offset < 0 || offset > maxSFTPStagedFileBytes || int64(len(p)) > maxSFTPStagedFileBytes-offset {
+		return 0, fmt.Errorf("write rejected: staged file exceeds limit of %d bytes", maxSFTPStagedFileBytes)
 	}
 	end := int(offset) + len(p)
 	if end > len(w.data) {

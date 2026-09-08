@@ -139,6 +139,33 @@ func TestSFTPWriteCanBeDisabledForReadonlyServer(t *testing.T) {
 	}
 }
 
+func TestSFTPWriteRejectsUnexpectedMethod(t *testing.T) {
+	fsys := NewDirFS(t.TempDir(), config.FilesConfig{})
+	req := sftp.NewRequest("Get", "/note.md")
+	if _, err := NewSFTPHandler(fsys).Filewrite(req); !errors.Is(err, sftp.ErrSSHFxOpUnsupported) {
+		t.Fatalf("Filewrite error = %v, want unsupported operation", err)
+	}
+}
+
+func TestSFTPWriteRejectsOffsetBeyondStagingLimit(t *testing.T) {
+	fsys := NewDirFS(t.TempDir(), config.FilesConfig{})
+	if err := fsys.SetWriteable(); err != nil {
+		t.Fatal(err)
+	}
+	req := sftp.NewRequest("Put", "/note.md")
+	req.Flags = sftpWrite | sftpCreat | sftpTrunc
+	writer, err := NewSFTPHandler(fsys).Filewrite(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.WriteAt([]byte("x"), 1<<62); err == nil {
+		t.Fatal("oversized offset was accepted")
+	}
+	if got := len(writer.(*sftpAtomicWriter).data); got != 0 {
+		t.Fatalf("oversized offset allocated %d bytes", got)
+	}
+}
+
 func mustReadFile(t *testing.T, fsys vfs.FileSystem, path string) []byte {
 	t.Helper()
 	data, err := fsys.ReadFile(path)
