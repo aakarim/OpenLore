@@ -116,27 +116,29 @@ func TestRefreshStore_StaleRetryDoesNotRevokeCurrentChain(t *testing.T) {
 	}
 }
 
-func TestRefreshStore_ReuseAfterGraceRevokesChain(t *testing.T) {
+func TestRefreshStore_DelayedRetryDoesNotRevokeCurrentChain(t *testing.T) {
 	rs := testRefreshStore(t)
-	rs.Save(RefreshToken{Token: "old", Subject: "alice", ChainID: "c1", ExpiresAt: time.Now().Add(time.Hour)})
-	if _, err := rs.Rotate("old", RefreshToken{Token: "new", Subject: "alice", ChainID: "c1", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+	expires := time.Now().Add(time.Hour)
+	rs.Save(RefreshToken{Token: "old", Subject: "alice", ChainID: "c1", ExpiresAt: expires})
+	if _, err := rs.Rotate("old", RefreshToken{Token: "current", Subject: "alice", ChainID: "c1", ExpiresAt: expires}); err != nil {
 		t.Fatal(err)
 	}
 	old := rs.tokens["old"]
 	old.RotatedAt = time.Now().Add(-refreshRetryGrace - time.Second)
 	rs.tokens["old"] = old
 
-	// Re-presenting the used token after the retry grace is theft → revoke.
-	_, err := rs.Rotate("old", RefreshToken{Token: "attacker", Subject: "alice", ChainID: "c1", ExpiresAt: time.Now().Add(time.Hour)})
-	if !errors.Is(err, ErrRefreshReuse) {
-		t.Fatalf("expected ErrRefreshReuse, got %v", err)
+	_, err := rs.Rotate("old", RefreshToken{Token: "discarded", Subject: "alice", ChainID: "c1", ExpiresAt: expires})
+	if !errors.Is(err, ErrRefreshStaleRetry) {
+		t.Fatalf("expected ErrRefreshStaleRetry, got %v", err)
 	}
-	// The entire chain is revoked: the previously-valid "new" is gone.
-	if _, ok, _ := rs.Lookup("new"); ok {
-		t.Fatalf("reuse must revoke the whole chain; 'new' still present")
+	if current, ok, _ := rs.Lookup("current"); !ok || current.Used {
+		t.Fatalf("delayed retry revoked current token: ok=%v token=%+v", ok, current)
 	}
-	if _, ok, _ := rs.Lookup("attacker"); ok {
-		t.Fatalf("attacker token must not be stored")
+	if _, err := rs.Rotate("current", RefreshToken{Token: "next", Subject: "alice", ChainID: "c1", ExpiresAt: expires}); err != nil {
+		t.Fatalf("current chain is unusable after delayed retry: %v", err)
+	}
+	if _, ok, _ := rs.Lookup("discarded"); ok {
+		t.Fatal("retry candidate must not be stored")
 	}
 }
 

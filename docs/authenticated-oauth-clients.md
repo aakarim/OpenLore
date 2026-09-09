@@ -57,6 +57,7 @@ posting their refresh token to `/oauth/revoke`; OpenLore revokes the full refres
 chain, while already-issued access tokens expire at their normal short TTL.
 
 Access tokens last one hour by default. Refresh tokens rotate on use. OpenLore
-returns the same successor refresh token when a client retries within 30 seconds,
+returns the same successor refresh token when a client retries within two minutes,
 so a lost response or concurrent reconnect does not revoke an otherwise valid
-session. Reuse after that grace period still revokes the full refresh chain.
+session. A later retry is rejected without revoking the current refresh token,
+which lets another client worker continue using the valid session.

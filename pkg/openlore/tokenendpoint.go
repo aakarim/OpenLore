@@ -350,7 +350,8 @@ func (t *tokenEndpoint) handleRefreshToken(w http.ResponseWriter, r *http.Reques
 	}
 	rotation, err := t.refresh.Rotate(presented, newRefresh)
 	if err != nil {
-		// Reuse or invalid → deny (chain already revoked on reuse).
+		// Stale or invalid credentials are denied without changing a valid
+		// successor token that another client worker may already hold.
 		t.recordRefresh(r.Context(), "rotation_rejected", old, err)
 		oauthError(w, http.StatusBadRequest, "invalid_grant", "refresh token rejected")
 		return

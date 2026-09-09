@@ -10,22 +10,18 @@ import (
 	"time"
 )
 
-// ErrRefreshReuse signals that an already-used refresh token was presented
-// outside the short retry window. The store revokes the whole chain when this
-// happens.
-var ErrRefreshReuse = errors.New("refresh token reuse detected")
-
 // ErrRefreshInvalid signals an unknown or expired refresh token.
 var ErrRefreshInvalid = errors.New("invalid refresh token")
 
-// ErrRefreshStaleRetry signals that an immediate retry's successor has already
-// been consumed or expired. The current chain remains valid and is not revoked.
+// ErrRefreshStaleRetry signals that an already-used refresh token can no longer
+// return its successor. The current chain remains valid and is not revoked.
 var ErrRefreshStaleRetry = errors.New("stale refresh retry")
 
 // refreshRetryGrace lets an OAuth client safely retry a refresh request whose
 // response was lost, or issue concurrent refreshes during reconnect. Both
-// requests receive the same successor refresh token. Reuse after this window
-// remains a theft signal and revokes the chain.
+// requests receive the same successor refresh token. Later retries are rejected
+// without revoking the current token, because distributed clients can retain an
+// older token after another worker has completed rotation.
 const refreshRetryGrace = 2 * time.Minute
 
 // RefreshToken is a stateful, revocable credential. Tokens in the same ChainID
@@ -50,7 +46,7 @@ type RefreshRotation struct {
 	Retried bool
 }
 
-// RefreshTokenStore persists refresh tokens with rotation and reuse detection.
+// RefreshTokenStore persists refresh tokens with rotation and stale-retry detection.
 // The flat-file default lives in DataDir; knowledge-backend supplies a SQLite
 // implementation (docs/mcp-bearer-auth.md §9).
 type RefreshTokenStore interface {
@@ -59,9 +55,9 @@ type RefreshTokenStore interface {
 	// Lookup returns the token if present.
 	Lookup(token string) (RefreshToken, bool, error)
 	// Rotate consumes oldToken and stores newToken (same chain) atomically.
-	// Immediate retries return the previously stored successor. Reuse outside
-	// the retry window revokes the chain and returns ErrRefreshReuse;
-	// unknown/expired tokens return ErrRefreshInvalid.
+	// Immediate retries return the previously stored successor. Later retries
+	// return ErrRefreshStaleRetry without revoking the current chain;
+	// unknown or expired tokens return ErrRefreshInvalid.
 	Rotate(oldToken string, newToken RefreshToken) (RefreshRotation, error)
 	// RevokeChain deletes every token descending from one login.
 	RevokeChain(chainID string) error
@@ -140,12 +136,7 @@ func (s *fileRefreshStore) Rotate(oldToken string, newToken RefreshToken) (Refre
 			}
 			return RefreshRotation{}, ErrRefreshStaleRetry
 		}
-		// Reuse of a rotated token → theft. Revoke the whole chain.
-		s.revokeChainLocked(old.ChainID)
-		if err := s.persist(); err != nil {
-			return RefreshRotation{}, err
-		}
-		return RefreshRotation{}, ErrRefreshReuse
+		return RefreshRotation{}, ErrRefreshStaleRetry
 	}
 	if !old.ExpiresAt.IsZero() && old.ExpiresAt.Before(time.Now()) {
 		delete(s.tokens, oldToken)
