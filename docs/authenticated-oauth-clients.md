@@ -59,5 +59,7 @@ chain, while already-issued access tokens expire at their normal short TTL.
 Access tokens last one hour by default. Refresh tokens rotate on use. OpenLore
 returns the same successor refresh token when a client retries within two minutes,
 so a lost response or concurrent reconnect does not revoke an otherwise valid
-session. A later retry is rejected without revoking the current refresh token,
-which lets another client worker continue using the valid session.
+session. For clients authenticated with `private_key_jwt`, a later stale retry is
+rejected without revoking the current refresh token, which lets another authenticated
+client worker continue using the valid session. Public-client reuse still revokes
+the full refresh chain as required for rotation-based replay detection.
