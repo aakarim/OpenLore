@@ -13,28 +13,23 @@ OpenLore is a minimal, extensible, agent-native knowledge base that keeps shared
 
 ## About
 
-AI coding agents already know how to explore files with `ls`, `cat`, `grep`,
-`find`, pipes, and shell loops. OpenLore gives them that same interface over
-SSH, backed by your documentation instead of a real machine.
+AI agents can already read Markdown. The problem starts when multiple agents, repositories or people need to rely on the same knowledge.
 
-```text
-Agent ──SSH or MCP──▶ OpenLore ──▶ docs, knowledge, and artifacts
-```
+Keeping docs inside each repo works until that knowledge gets copied, duplicated or goes stale. Different agents end up working from different versions of the truth, and there is no consistent way to control who can read, update or publish what.
 
-It starts as a single-binary, zero-config, read-only documentation server. When
-you need a live knowledge base, you can add identity-scoped access, controlled
-publishing, atomic writes, validation, and human approval without changing how
-agents read or navigate the content.
+OpenLore gives your agents one shared place for documentation, runbooks, skills and project knowledge. Connect every agent to the same source, update it once, and make the latest version immediately available wherever it is needed.
 
-### Store and retrieve Markdown
+Your knowledge stays as ordinary Markdown. OpenLore serves it as an agent-native virtual filesystem with identity-scoped access, controlled writes, validation and human approval when you need them. There is no ingestion pipeline, vector database or LLM required.
 
-Put documentation, runbooks, project context, or agent-authored notes in
-ordinary Markdown files. There is no ingestion pipeline: point OpenLore at a
-directory and it serves the existing hierarchy directly. Organize documents
-with folders, connect them with standard Markdown links, and group them into
-docsets when different people or agents need different access. OpenLore is
-read-only by default; enable writing when you want agents to create and update
-Markdown too.
+Agents can access the same knowledge through MCP or use familiar commands such as `ls`, `cat`, `grep` and `find` over SSH.
+
+SSH is simply one interface. The important part is that every agent is working from the same current, inspectable and governed knowledge.
+
+### Why not just keep Markdown in your repo?
+
+For one agent working in one repository, that's fine.
+
+OpenLore becomes useful when knowledge needs to be shared across agents, repositories or teams, or when you need permissions, publishing, review and a single source of truth without copying the same files everywhere.
 
 [![OpenLore Skills import demo](assets/demo/v0.4.0/openlore-skills-import.gif)](assets/demo/v0.4.0/openlore-skills-import.mp4)
 
