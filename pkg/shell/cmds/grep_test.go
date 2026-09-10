@@ -96,7 +96,7 @@ func TestGrepRegex(t *testing.T) {
 
 func TestGrepPatternModes(t *testing.T) {
 	fs := testFS()
-	fs.AddFile("/docs/patterns.txt", "a\nb\na|b\nFinal (v2)\nFinal v2\n[x](v)\n[x]v\nx*y\nxy\n")
+	fs.AddFile("/docs/patterns.txt", "a\nb\na|b\nFinal (v2)\nFinal v2\n[x](v)\n[x]v\n](v)\n)(v)\nx(v)\nx*y\nxy\n")
 
 	t.Run("basic regexp", func(t *testing.T) {
 		out, _, code := execCmd(t, fs, `grep '^a$\|^b$' /docs/patterns.txt`)
@@ -115,6 +115,16 @@ func TestGrepPatternModes(t *testing.T) {
 		out, _, code = execCmd(t, fs, `grep '^\[x](v)$' /docs/patterns.txt`)
 		if code != 0 || out != "[x](v)\n" {
 			t.Errorf("grep BRE escaped bracket: code=%d, got %q", code, out)
+		}
+
+		out, _, code = execCmd(t, fs, `grep '^[])](v)$' /docs/patterns.txt`)
+		if code != 0 || out != "](v)\n)(v)\n" {
+			t.Errorf("grep BRE class with literal closing bracket: code=%d, got %q", code, out)
+		}
+
+		out, _, code = execCmd(t, fs, `grep '^[^]](v)$' /docs/patterns.txt`)
+		if code != 0 || out != ")(v)\nx(v)\n" {
+			t.Errorf("grep BRE negated class with literal closing bracket: code=%d, got %q", code, out)
 		}
 	})
 

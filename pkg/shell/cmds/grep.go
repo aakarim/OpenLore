@@ -193,6 +193,8 @@ func CmdGrep(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 func basicRegexpToRE2(pattern string) string {
 	var translated strings.Builder
 	inBracket := false
+	bracketCanNegate := false
+	bracketHasChar := false
 
 	for i := 0; i < len(pattern); i++ {
 		ch := pattern[i]
@@ -205,19 +207,34 @@ func basicRegexpToRE2(pattern string) string {
 			translated.WriteByte(ch)
 			i++
 			translated.WriteByte(pattern[i])
+			if inBracket {
+				bracketCanNegate = false
+				bracketHasChar = true
+			}
 			continue
 		}
-		if ch == '[' {
+		if ch == '[' && !inBracket {
 			inBracket = true
+			bracketCanNegate = true
+			bracketHasChar = false
 			translated.WriteByte(ch)
 			continue
 		}
-		if ch == ']' && inBracket {
-			inBracket = false
+		if inBracket {
 			translated.WriteByte(ch)
+			if bracketCanNegate && ch == '^' {
+				bracketCanNegate = false
+				continue
+			}
+			bracketCanNegate = false
+			if ch == ']' && bracketHasChar {
+				inBracket = false
+			} else {
+				bracketHasChar = true
+			}
 			continue
 		}
-		if !inBracket && strings.ContainsRune("(){}|+?", rune(ch)) {
+		if strings.ContainsRune("(){}|+?", rune(ch)) {
 			translated.WriteByte('\\')
 		}
 		translated.WriteByte(ch)
