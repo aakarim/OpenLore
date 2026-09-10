@@ -94,6 +94,45 @@ func TestGrepRegex(t *testing.T) {
 	}
 }
 
+func TestGrepPatternModes(t *testing.T) {
+	fs := testFS()
+	fs.AddFile("/docs/patterns.txt", "a\nb\na|b\nFinal (v2)\nFinal v2\n[x](v)\n[x]v\nx*y\nxy\n")
+
+	t.Run("basic regexp", func(t *testing.T) {
+		out, _, code := execCmd(t, fs, `grep '^a$\|^b$' /docs/patterns.txt`)
+		if code != 0 {
+			t.Fatalf("grep BRE alternation failed: code=%d", code)
+		}
+		if out != "a\nb\n" {
+			t.Errorf("grep BRE alternation: got %q, want %q", out, "a\nb\n")
+		}
+
+		out, _, code = execCmd(t, fs, `grep '^Final (v2)$' /docs/patterns.txt`)
+		if code != 0 || out != "Final (v2)\n" {
+			t.Errorf("grep BRE literal parentheses: code=%d, got %q", code, out)
+		}
+
+		out, _, code = execCmd(t, fs, `grep '^\[x](v)$' /docs/patterns.txt`)
+		if code != 0 || out != "[x](v)\n" {
+			t.Errorf("grep BRE escaped bracket: code=%d, got %q", code, out)
+		}
+	})
+
+	t.Run("extended regexp", func(t *testing.T) {
+		out, _, code := execCmd(t, fs, `grep -E '^Final (v2)$' /docs/patterns.txt`)
+		if code != 0 || out != "Final v2\n" {
+			t.Errorf("grep -E: code=%d, got %q", code, out)
+		}
+	})
+
+	t.Run("fixed string", func(t *testing.T) {
+		out, _, code := execCmd(t, fs, `grep -F 'x*y' /docs/patterns.txt`)
+		if code != 0 || out != "x*y\n" {
+			t.Errorf("grep -F: code=%d, got %q", code, out)
+		}
+	})
+}
+
 func TestGrepOnlyMatchingPipe(t *testing.T) {
 	fs := testFS()
 	out, _, _ := execCmd(t, fs, "grep -roh 'apple' /docs | sort | uniq -c | sort -rn")

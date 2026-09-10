@@ -18,6 +18,8 @@ func CmdGrep(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 	countOnly := false
 	invertMatch := false
 	filesWithMatches := false
+	extendedRegexp := false
+	fixedStrings := false
 	var pattern string
 	var targets []string
 
@@ -42,6 +44,12 @@ func CmdGrep(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 					invertMatch = true
 				case 'l':
 					filesWithMatches = true
+				case 'E':
+					extendedRegexp = true
+					fixedStrings = false
+				case 'F':
+					fixedStrings = true
+					extendedRegexp = false
 				}
 			}
 		} else if pattern == "" {
@@ -57,6 +65,11 @@ func CmdGrep(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 	}
 
 	rePattern := pattern
+	if fixedStrings {
+		rePattern = regexp.QuoteMeta(pattern)
+	} else if !extendedRegexp {
+		rePattern = basicRegexpToRE2(pattern)
+	}
 	if caseInsensitive {
 		rePattern = "(?i)" + rePattern
 	}
@@ -175,4 +188,40 @@ func CmdGrep(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 		return 1
 	}
 	return 0
+}
+
+func basicRegexpToRE2(pattern string) string {
+	var translated strings.Builder
+	inBracket := false
+
+	for i := 0; i < len(pattern); i++ {
+		ch := pattern[i]
+		if ch == '\\' && i+1 < len(pattern) {
+			if !inBracket && strings.ContainsRune("(){}|+?", rune(pattern[i+1])) {
+				i++
+				translated.WriteByte(pattern[i])
+				continue
+			}
+			translated.WriteByte(ch)
+			i++
+			translated.WriteByte(pattern[i])
+			continue
+		}
+		if ch == '[' {
+			inBracket = true
+			translated.WriteByte(ch)
+			continue
+		}
+		if ch == ']' && inBracket {
+			inBracket = false
+			translated.WriteByte(ch)
+			continue
+		}
+		if !inBracket && strings.ContainsRune("(){}|+?", rune(ch)) {
+			translated.WriteByte('\\')
+		}
+		translated.WriteByte(ch)
+	}
+
+	return translated.String()
 }
