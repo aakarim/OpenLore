@@ -117,7 +117,7 @@ func TestMCPShellFailureIsError(t *testing.T) {
 
 	result, err := clientSession.CallTool(t.Context(), &mcp.CallToolParams{
 		Name:      "shell",
-		Arguments: map[string]any{"command": "cat /does/not/exist"},
+		Arguments: map[string]any{"command": "echo structured-output; cat /does/not/exist"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -129,6 +129,9 @@ func TestMCPShellFailureIsError(t *testing.T) {
 	if strings.HasPrefix(output, "\n") {
 		t.Fatalf("output starts with a blank line: %q", output)
 	}
+	if !strings.Contains(output, "structured-output") {
+		t.Fatalf("output %q does not contain stdout", output)
+	}
 	if !strings.HasSuffix(output, "exit code: 1") {
 		t.Fatalf("output %q does not end with %q", output, "exit code: 1")
 	}
@@ -138,6 +141,10 @@ func TestMCPShellFailureIsError(t *testing.T) {
 	}
 	if exitCode != 1 {
 		t.Fatalf("exit_code = %d, want 1", exitCode)
+	}
+	structured := result.StructuredContent.(map[string]any)
+	if structured["output"] != output {
+		t.Fatalf("structured output = %#v, want %q", structured["output"], output)
 	}
 }
 
