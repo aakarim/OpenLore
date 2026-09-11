@@ -160,7 +160,7 @@ func newMCPShellHandler(fs vfs.FileSystem, envVars map[string]string, factory fu
 
 		return &mcp.CallToolResult{
 			Content:           []mcp.Content{&mcp.TextContent{Text: output}},
-			StructuredContent: map[string]any{"exit_code": exitCode},
+			StructuredContent: map[string]any{"output": output, "exit_code": exitCode},
 			IsError:           exitCode != 0,
 		}, nil, nil
 	}
