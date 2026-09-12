@@ -214,7 +214,7 @@ func parseSedCommands(expressions []string) []sedCmd {
 				break
 			}
 
-			separator := strings.IndexByte(expr, ';')
+			separator := indexSedCommandSeparator(expr)
 			if separator < 0 {
 				cmds = append(cmds, parseSedExpr(expr))
 				break
@@ -237,6 +237,62 @@ func parseSedCommands(expressions []string) []sedCmd {
 		}
 	}
 	return cmds
+}
+
+// indexSedCommandSeparator returns the first semicolon separating sed
+// commands. Semicolons within an address, substitution pattern, or
+// substitution replacement belong to that delimited value.
+func indexSedCommandSeparator(expr string) int {
+	skipDelimited := func(start int, delim byte) int {
+		escaped := false
+		for i := start; i < len(expr); i++ {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if expr[i] == '\\' {
+				escaped = true
+				continue
+			}
+			if expr[i] == delim {
+				return i + 1
+			}
+		}
+		return len(expr)
+	}
+
+	i := 0
+	if i < len(expr) && expr[i] == '/' {
+		i = skipDelimited(i+1, '/')
+	} else if i < len(expr) && expr[i] == '$' {
+		i++
+	} else {
+		for i < len(expr) && expr[i] >= '0' && expr[i] <= '9' {
+			i++
+		}
+	}
+	if i < len(expr) && expr[i] == ',' {
+		i++
+		if i < len(expr) && expr[i] == '/' {
+			i = skipDelimited(i+1, '/')
+		} else if i < len(expr) && expr[i] == '$' {
+			i++
+		} else {
+			for i < len(expr) && expr[i] >= '0' && expr[i] <= '9' {
+				i++
+			}
+		}
+	}
+
+	if i < len(expr) && expr[i] == 's' && i+1 < len(expr) {
+		delim := expr[i+1]
+		i = skipDelimited(i+2, delim)
+		i = skipDelimited(i, delim)
+	}
+	if separator := strings.IndexByte(expr[i:], ';'); separator >= 0 {
+		return i + separator
+	}
+	return -1
 }
 
 func parseSedExpr(expr string) sedCmd {
