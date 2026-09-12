@@ -72,6 +72,29 @@ func TestSedSubstitutionCommandSeparator(t *testing.T) {
 	}
 }
 
+func TestSedPreservesSemicolonsInDelimitedValues(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+		want    string
+	}{
+		{"address", "echo 'left;right' | sed -n '/left;right/p'", "left;right\n"},
+		{"pattern", "echo 'foo;bar' | sed 's/foo;bar/matched/'", "matched\n"},
+		{"escaped address delimiter", "echo 'path/with;semi' | sed -n '/path\\/with;semi/p'", "path/with;semi\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, errOut, code := execCmd(t, testFS(), tt.command)
+			if code != 0 {
+				t.Fatalf("sed command failed: code=%d stderr=%s", code, errOut)
+			}
+			if out != tt.want {
+				t.Fatalf("output = %q, want %q", out, tt.want)
+			}
+		})
+	}
+}
+
 func TestSedAppendMultilineInPlace(t *testing.T) {
 	fs := testFS()
 	command := "sed -i '/This is/a\\\n* idea, with context (important); keep it\n* another idea' /docs/readme.md"
