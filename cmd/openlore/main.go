@@ -10,9 +10,11 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/aakarim/go-openlore/assets"
@@ -802,9 +804,22 @@ func main() {
 		"allow_keyless", cfg.AllowKeyless,
 	)
 
-	if err := srv.ListenAndServe(); err != nil {
-		slog.Error("server exited with error", "error", err)
-		os.Exit(1)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.ListenAndServe() }()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			slog.Error("server exited with error", "error", err)
+			os.Exit(1)
+		}
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			slog.Warn("shutdown incomplete", "error", err)
+		}
 	}
 }
 

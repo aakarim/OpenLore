@@ -32,6 +32,31 @@ port: 2222
 # Prometheus metrics port. Set to 0 to disable.
 metrics_port: 3000
 
+# Experimental features. Analytics remains behind this gate until its storage
+# and quality-analysis phases are complete.
+# experimental: [analytics]
+# analytics:
+#   enabled: true
+#   dir: analytics
+#   log:
+#     rotate: 24h
+#     compress: zstd
+#     retention: 90d
+#   ship:
+#     interval: 30s
+#     remote: none
+#   pipeline:
+#     enabled: true
+#     buffer: 1024
+#   shutdown_timeout: 10s
+#   aggregations:
+#     refresh_interval: 5m
+#     store: file
+#   history:
+#     blobs: true
+#   export:
+#     prometheus: true
+
 # ── MCP (Model Context Protocol) ──────────────────────
 #
 # The MCP-over-HTTP endpoint lets MCP-aware clients (Claude Desktop,

@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/aakarim/go-openlore/internal/analytics"
 	"github.com/aakarim/go-openlore/pkg/openlore/meta"
 	"github.com/aakarim/go-openlore/pkg/openlore/validation"
 	"github.com/aakarim/go-openlore/pkg/shell/cmds"
@@ -38,6 +39,9 @@ type Shell struct {
 	docsets                 []cmds.DocsetInfo
 	publishTargets          []cmds.PublishTarget
 	unsupportedUsageHandler func(UnsupportedUsage)
+	commandObserver         func(CommandExecution)
+	invocationID            string
+	pipelinePosition        int
 	// metaExtenders are the plugin-contributed extenders applied by `lore meta`,
 	// installed by the host per session. nil for a standalone shell.
 	metaExtenders []meta.Extender
@@ -52,6 +56,7 @@ type Shell struct {
 	history              cmds.HistoryBackend
 	jobs                 cmds.JobBackend
 	size                 cmds.SizeBackend
+	analytics            *analytics.Service
 	exitRequested        bool
 }
 
@@ -63,6 +68,17 @@ type UnsupportedUsage struct {
 	Command string
 	Syntax  string
 	Error   string
+}
+
+type CommandExecution struct {
+	Command          string
+	Argc             int
+	ExitCode         int
+	Duration         time.Duration
+	BytesOut         int64
+	PipelinePosition int
+	InvocationID     string
+	EventID          string
 }
 
 // NewShell creates a new Shell backed by the given vfs.FileSystem.
@@ -78,6 +94,8 @@ func NewShell(fs vfs.FileSystem) *Shell {
 func (s *Shell) SetUnsupportedUsageHandler(handler func(UnsupportedUsage)) {
 	s.unsupportedUsageHandler = handler
 }
+
+func (s *Shell) SetCommandObserver(observer func(CommandExecution)) { s.commandObserver = observer }
 
 // SetAllowedActions restricts the shell to the given capability classes
 // (Part B). Passing nil (or not calling this) leaves the shell unrestricted.
@@ -165,6 +183,8 @@ func (s *Shell) SetJobBackend(b cmds.JobBackend)                   { s.jobs = b 
 func (s *Shell) JobBackend() cmds.JobBackend                       { return s.jobs }
 func (s *Shell) SetSizeBackend(b cmds.SizeBackend)                 { s.size = b }
 func (s *Shell) SizeBackend() cmds.SizeBackend                     { return s.size }
+func (s *Shell) SetAnalytics(service *analytics.Service)           { s.analytics = service }
+func (s *Shell) Analytics() *analytics.Service                     { return s.analytics }
 
 // --- CmdContext interface implementation ---
 
@@ -218,6 +238,8 @@ func (s *Shell) ExecPipeline(line string, w io.Writer, errW io.Writer, stdin io.
 
 func (s *Shell) execLine(line string, w io.Writer, errW io.Writer, stdin io.Reader) int {
 	s.exitRequested = false
+	s.invocationID = analytics.NewID()
+	s.pipelinePosition = 0
 	line = strings.TrimSpace(line)
 	if line == "" {
 		return 0
@@ -328,6 +350,32 @@ func (s *Shell) execCmd(cmd parser.Command, w io.Writer, errW io.Writer, stdin i
 }
 
 func (s *Shell) execCall(call *parser.CallExpr, w io.Writer, errW io.Writer, stdin io.Reader) int {
+	if s.commandObserver == nil || len(call.Args) == 0 {
+		return s.execCallObserved(call, w, errW, stdin)
+	}
+	command := s.expandWord(call.Args[0])
+	eventID := analytics.NewID()
+	position := s.pipelinePosition
+	s.pipelinePosition++
+	counter := &countingWriter{Writer: w}
+	started := time.Now()
+	code := s.execCallObserved(call, counter, errW, stdin)
+	s.commandObserver(CommandExecution{Command: command, Argc: len(call.Args) - 1, ExitCode: code, Duration: time.Since(started), BytesOut: counter.n, PipelinePosition: position, InvocationID: s.invocationID, EventID: eventID})
+	return code
+}
+
+type countingWriter struct {
+	io.Writer
+	n int64
+}
+
+func (w *countingWriter) Write(p []byte) (int, error) {
+	n, err := w.Writer.Write(p)
+	w.n += int64(n)
+	return n, err
+}
+
+func (s *Shell) execCallObserved(call *parser.CallExpr, w io.Writer, errW io.Writer, stdin io.Reader) int {
 	// A `> file` / `>> file` redirection buffers the command's stdout and
 	// commits it as a single atomic whole-object write. Nothing is committed
 	// unless the command succeeds (commit-on-success only — no half-files).

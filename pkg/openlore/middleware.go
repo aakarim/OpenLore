@@ -163,8 +163,10 @@ func chainWrite(terminal WriteHandler, mws ...WriteMiddleware) WriteHandler {
 
 // CommitInfo describes a committed change.
 type CommitInfo struct {
+	ID          string
 	ChangeSet   vfs.ChangeSet
 	Hash        string
+	Leaves      []LeafRecord
 	Attribution Attribution
 }
 

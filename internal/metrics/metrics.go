@@ -41,13 +41,17 @@ func (m *Metrics) Handler() http.Handler {
 
 // StartServer starts the metrics HTTP server. Returns nil if port is 0.
 func StartServer(port int, m *Metrics, logger *slog.Logger) *http.Server {
+	return StartHandlerServer(port, m.Handler(), logger)
+}
+
+func StartHandlerServer(port int, handler http.Handler, logger *slog.Logger) *http.Server {
 	if port == 0 {
 		return nil
 	}
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", port),
-		Handler: m.Handler(),
+		Handler: handler,
 	}
 
 	go func() {

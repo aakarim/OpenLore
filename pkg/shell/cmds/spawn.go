@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aakarim/go-openlore/internal/analytics"
 	"github.com/aakarim/go-openlore/pkg/openlore/meta"
 	"github.com/aakarim/go-openlore/pkg/openlore/validation"
 	"github.com/aakarim/go-openlore/pkg/vfs"
@@ -183,5 +184,6 @@ func (c *frozenContext) PublishTargets() []PublishTarget    { return nil }
 func (c *frozenContext) MetaExtenders() []meta.Extender     { return nil }
 func (c *frozenContext) MetaFilters() []meta.Filter         { return nil }
 func (c *frozenContext) Validators() []validation.Validator { return nil }
+func (c *frozenContext) Analytics() *analytics.Service      { return nil }
 
 var _ CmdContext = (*frozenContext)(nil)

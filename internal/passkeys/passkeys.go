@@ -1,6 +1,7 @@
 package passkeys
 
 import (
+	"context"
 	"crypto/rand"
 	"embed"
 	"encoding/hex"
@@ -61,8 +62,9 @@ type Passkeys struct {
 	pending  *PendingStore
 	logger   *slog.Logger
 
-	auth   *config.AuthConfig
-	tokens TokenIssuer
+	auth    *config.AuthConfig
+	tokens  TokenIssuer
+	onLogin func(context.Context, string)
 
 	// loginSessions holds in-flight discoverable-login ceremonies keyed by the
 	// short-lived openlore_login cookie token.
@@ -120,6 +122,10 @@ func (p *Passkeys) SetAuthConfig(auth *config.AuthConfig) {
 // the browser session cookie.
 func (p *Passkeys) SetTokenIssuer(ti TokenIssuer) {
 	p.tokens = ti
+}
+
+func (p *Passkeys) SetLoginObserver(observer func(context.Context, string)) {
+	p.onLogin = observer
 }
 
 // Shutdown stops background goroutines.
@@ -335,6 +341,9 @@ func (p *Passkeys) handleLoginFinish(w http.ResponseWriter, r *http.Request) {
 	if err := p.sessions.SetCookie(w, matched.Identity); err != nil {
 		http.Error(w, "failed to create session", http.StatusInternalServerError)
 		return
+	}
+	if p.onLogin != nil {
+		p.onLogin(r.Context(), matched.Identity)
 	}
 
 	// OAuth authorization-code flow: if this login was reached via /authorize
