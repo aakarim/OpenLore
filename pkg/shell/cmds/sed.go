@@ -114,24 +114,26 @@ func applySedCommands(cmds []sedCmd, lines []string, quiet bool, w io.Writer) {
 				printed = true
 			case 's':
 				var re *regexp.Regexp
+				pattern := basicRegexpToRE2(cmd.pattern)
+				replacement := sedReplacementToRE2(cmd.replacement)
 				if cmd.sFlags.caseInsensitive {
-					re, _ = regexp.Compile("(?i)" + cmd.pattern)
+					re, _ = regexp.Compile("(?i)" + pattern)
 				} else {
-					re, _ = regexp.Compile(cmd.pattern)
+					re, _ = regexp.Compile(pattern)
 				}
 				if re != nil {
 					if cmd.sFlags.global {
-						line = re.ReplaceAllString(line, cmd.replacement)
+						line = re.ReplaceAllString(line, replacement)
 					} else {
 						line = re.ReplaceAllStringFunc(line, func(match string) string {
-							result := re.ReplaceAllString(match, cmd.replacement)
+							result := re.ReplaceAllString(match, replacement)
 							return result
 						})
 						count := 0
 						line2 := re.ReplaceAllStringFunc(lines[lineNum], func(match string) string {
 							count++
 							if count == 1 {
-								return re.ReplaceAllString(match, cmd.replacement)
+								return re.ReplaceAllString(match, replacement)
 							}
 							return match
 						})
@@ -420,4 +422,35 @@ func splitSedSubst(s string, delim byte) []string {
 		parts = append(parts, cur.String())
 	}
 	return parts
+}
+
+func sedReplacementToRE2(replacement string) string {
+	var translated strings.Builder
+	for i := 0; i < len(replacement); i++ {
+		switch replacement[i] {
+		case '\\':
+			if i+1 >= len(replacement) {
+				translated.WriteByte('\\')
+				continue
+			}
+			next := replacement[i+1]
+			switch {
+			case next >= '1' && next <= '9':
+				fmt.Fprintf(&translated, "${%c}", next)
+				i++
+			case next == '&' || next == '\\':
+				translated.WriteByte(next)
+				i++
+			default:
+				translated.WriteByte('\\')
+			}
+		case '&':
+			translated.WriteString("${0}")
+		case '$':
+			translated.WriteString("$$")
+		default:
+			translated.WriteByte(replacement[i])
+		}
+	}
+	return translated.String()
 }

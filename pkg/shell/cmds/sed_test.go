@@ -44,6 +44,48 @@ func TestSedSubstitutionGlobal(t *testing.T) {
 	}
 }
 
+func TestSedSubstitutionUsesBasicRegexp(t *testing.T) {
+	fs := testFS()
+	original := "Pre-req: descriptions shipped (see Dependencies). [BLOCKED: web form]\n"
+	fs.AddFile("/docs/listing.md", original)
+
+	_, errOut, code := execCmd(t, fs, `sed -i 's|(see Dependencies). \[BLOCKED: web form\]|(see Dependencies). [DONE 2026-09-08 — submitted]|' /docs/listing.md`)
+	if code != 0 {
+		t.Fatalf("sed BRE substitution failed: code=%d stderr=%s", code, errOut)
+	}
+
+	content, err := fs.ReadFile("/docs/listing.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "Pre-req: descriptions shipped (see Dependencies). [DONE 2026-09-08 — submitted]\n"
+	if string(content) != want {
+		t.Fatalf("content = %q, want %q", content, want)
+	}
+}
+
+func TestSedBasicRegexpAnchorsAndReplacementReferences(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+		want    string
+	}{
+		{"literal caret", `echo 'a^b' | sed 's/a^b/X/'`, "X\n"},
+		{"literal dollar", `echo 'c$d' | sed 's/c$d/Y/'`, "Y\n"},
+		{"start anchor", `echo abc | sed 's/^a/A/'`, "Abc\n"},
+		{"end anchor", `echo abc | sed 's/c$/C/'`, "abC\n"},
+		{"replacement references", `echo foo | sed 's/\(foo\)/[\1]& $ \&/'`, "[foo]foo $ &\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, errOut, code := execCmd(t, testFS(), tt.command)
+			if code != 0 || out != tt.want {
+				t.Fatalf("code=%d stdout=%q stderr=%s, want %q", code, out, errOut, tt.want)
+			}
+		})
+	}
+}
+
 func TestSedSubstitutionPreservesSemicolonsInReplacement(t *testing.T) {
 	fs := testFS()
 	command := "sed -i '3s/.*/- **Status:** artifacts drafted; Glama submitted; remaining publishes blocked/' /docs/readme.md"
