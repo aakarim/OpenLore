@@ -44,6 +44,31 @@ func TestSedSubstitutionGlobal(t *testing.T) {
 	}
 }
 
+func TestSedSubstitutionUsesBasicRegexp(t *testing.T) {
+	fs := testFS()
+	original := "Pre-req: descriptions shipped (see Dependencies). [BLOCKED: web form]\n"
+	fs.AddFile("/docs/listing.md", original)
+
+	out, errOut, code := execCmd(t, fs, `sed -n '/(see Dependencies)/p' /docs/listing.md`)
+	if code != 0 || out != original {
+		t.Fatalf("sed BRE address failed: code=%d stdout=%q stderr=%s", code, out, errOut)
+	}
+
+	_, errOut, code = execCmd(t, fs, `sed -i 's|(see Dependencies). \[BLOCKED: web form\]|(see Dependencies). [DONE 2026-09-08 — submitted]|' /docs/listing.md`)
+	if code != 0 {
+		t.Fatalf("sed BRE substitution failed: code=%d stderr=%s", code, errOut)
+	}
+
+	content, err := fs.ReadFile("/docs/listing.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "Pre-req: descriptions shipped (see Dependencies). [DONE 2026-09-08 — submitted]\n"
+	if string(content) != want {
+		t.Fatalf("content = %q, want %q", content, want)
+	}
+}
+
 func TestSedAppendMultilineInPlace(t *testing.T) {
 	fs := testFS()
 	command := "sed -i '/This is/a\\\n* idea, with context (important); keep it\n* another idea' /docs/readme.md"

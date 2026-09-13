@@ -114,10 +114,11 @@ func applySedCommands(cmds []sedCmd, lines []string, quiet bool, w io.Writer) {
 				printed = true
 			case 's':
 				var re *regexp.Regexp
+				pattern := basicRegexpToRE2(cmd.pattern)
 				if cmd.sFlags.caseInsensitive {
-					re, _ = regexp.Compile("(?i)" + cmd.pattern)
+					re, _ = regexp.Compile("(?i)" + pattern)
 				} else {
-					re, _ = regexp.Compile(cmd.pattern)
+					re, _ = regexp.Compile(pattern)
 				}
 				if re != nil {
 					if cmd.sFlags.global {
@@ -186,7 +187,7 @@ func sedAddressMatch(cmd sedCmd, lineNum, totalLines int, line string) bool {
 	}
 
 	if cmd.addrRegex != "" {
-		re, err := regexp.Compile(cmd.addrRegex)
+		re, err := regexp.Compile(basicRegexpToRE2(cmd.addrRegex))
 		if err != nil {
 			return false
 		}
