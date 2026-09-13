@@ -44,6 +44,57 @@ func TestSedSubstitutionGlobal(t *testing.T) {
 	}
 }
 
+func TestSedSubstitutionPreservesSemicolonsInReplacement(t *testing.T) {
+	fs := testFS()
+	command := "sed -i '3s/.*/- **Status:** artifacts drafted; Glama submitted; remaining publishes blocked/' /docs/readme.md"
+	_, errOut, code := execCmd(t, fs, command)
+	if code != 0 {
+		t.Fatalf("sed substitution failed: code=%d stderr=%s", code, errOut)
+	}
+
+	content, err := fs.ReadFile("/docs/readme.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "# Hello World\nThis is a test file.\n- **Status:** artifacts drafted; Glama submitted; remaining publishes blocked\nLine 4\nLine 5\n"
+	if string(content) != want {
+		t.Fatalf("content = %q, want %q", content, want)
+	}
+}
+
+func TestSedSubstitutionCommandSeparator(t *testing.T) {
+	out, errOut, code := execCmd(t, testFS(), "sed -n 's/apple/orange/g;p' /docs/notes.txt")
+	if code != 0 {
+		t.Fatalf("sed commands failed: code=%d stderr=%s", code, errOut)
+	}
+	if strings.Contains(out, "apple") || strings.Count(out, "orange") != 2 {
+		t.Fatalf("output = %q, want substitution followed by print", out)
+	}
+}
+
+func TestSedPreservesSemicolonsInDelimitedValues(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+		want    string
+	}{
+		{"address", "echo 'left;right' | sed -n '/left;right/p'", "left;right\n"},
+		{"pattern", "echo 'foo;bar' | sed 's/foo;bar/matched/'", "matched\n"},
+		{"escaped address delimiter", "echo 'path/with;semi' | sed -n '/path\\/with;semi/p'", "path/with;semi\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, errOut, code := execCmd(t, testFS(), tt.command)
+			if code != 0 {
+				t.Fatalf("sed command failed: code=%d stderr=%s", code, errOut)
+			}
+			if out != tt.want {
+				t.Fatalf("output = %q, want %q", out, tt.want)
+			}
+		})
+	}
+}
+
 func TestSedAppendMultilineInPlace(t *testing.T) {
 	fs := testFS()
 	command := "sed -i '/This is/a\\\n* idea, with context (important); keep it\n* another idea' /docs/readme.md"

@@ -214,7 +214,7 @@ func parseSedCommands(expressions []string) []sedCmd {
 				break
 			}
 
-			separator := strings.IndexByte(expr, ';')
+			separator := indexSedCommandSeparator(expr)
 			if separator < 0 {
 				cmds = append(cmds, parseSedExpr(expr))
 				break
@@ -239,16 +239,87 @@ func parseSedCommands(expressions []string) []sedCmd {
 	return cmds
 }
 
+// indexSedCommandSeparator returns the first semicolon separating sed
+// commands. Semicolons within an address, substitution pattern, or
+// substitution replacement belong to that delimited value.
+func indexSedCommandSeparator(expr string) int {
+	i := 0
+	if i < len(expr) && expr[i] == '/' {
+		end := indexUnescapedSedDelimiter(expr, i+1, '/')
+		if end < 0 {
+			return -1
+		}
+		i = end + 1
+	} else if i < len(expr) && expr[i] == '$' {
+		i++
+	} else {
+		for i < len(expr) && expr[i] >= '0' && expr[i] <= '9' {
+			i++
+		}
+	}
+	if i < len(expr) && expr[i] == ',' {
+		i++
+		if i < len(expr) && expr[i] == '/' {
+			end := indexUnescapedSedDelimiter(expr, i+1, '/')
+			if end < 0 {
+				return -1
+			}
+			i = end + 1
+		} else if i < len(expr) && expr[i] == '$' {
+			i++
+		} else {
+			for i < len(expr) && expr[i] >= '0' && expr[i] <= '9' {
+				i++
+			}
+		}
+	}
+
+	if i < len(expr) && expr[i] == 's' && i+1 < len(expr) {
+		delim := expr[i+1]
+		end := indexUnescapedSedDelimiter(expr, i+2, delim)
+		if end < 0 {
+			return -1
+		}
+		end = indexUnescapedSedDelimiter(expr, end+1, delim)
+		if end < 0 {
+			return -1
+		}
+		i = end + 1
+	}
+	if separator := strings.IndexByte(expr[i:], ';'); separator >= 0 {
+		return i + separator
+	}
+	return -1
+}
+
+func indexUnescapedSedDelimiter(expr string, start int, delim byte) int {
+	escaped := false
+	for i := start; i < len(expr); i++ {
+		if escaped {
+			escaped = false
+			continue
+		}
+		if expr[i] == '\\' {
+			escaped = true
+			continue
+		}
+		if expr[i] == delim {
+			return i
+		}
+	}
+	return -1
+}
+
 func parseSedExpr(expr string) sedCmd {
 	var cmd sedCmd
 	i := 0
 
 	// Parse address
 	if i < len(expr) && expr[i] == '/' {
-		end := strings.Index(expr[i+1:], "/")
+		end := indexUnescapedSedDelimiter(expr, i+1, '/')
 		if end >= 0 {
-			cmd.addrRegex = expr[i+1 : i+1+end]
-			i = i + 1 + end + 1
+			cmd.addrRegex = strings.ReplaceAll(expr[i+1:end], `\/`, "/")
+			i = end + 1
 		}
 	} else if i < len(expr) && expr[i] == '$' {
 		cmd.addrStart = -1
@@ -269,10 +340,10 @@ func parseSedExpr(expr string) sedCmd {
 			cmd.addrEnd = -1
 			i++
 		} else if i < len(expr) && expr[i] == '/' {
-			end := strings.Index(expr[i+1:], "/")
+			end := indexUnescapedSedDelimiter(expr, i+1, '/')
 			if end >= 0 {
-				cmd.addrEndRegex = expr[i+1 : i+1+end]
-				i = i + 1 + end + 1
+				cmd.addrEndRegex = strings.ReplaceAll(expr[i+1:end], `\/`, "/")
+				i = end + 1
 			}
 		} else {
 			j := i
