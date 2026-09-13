@@ -234,6 +234,11 @@ func basicRegexpToRE2(pattern string) string {
 			}
 			continue
 		}
+		caretIsAnchor := ch == '^' && (i == 0 || i >= 2 && pattern[i-2] == '\\' && strings.ContainsRune("(|", rune(pattern[i-1])))
+		dollarIsAnchor := ch == '$' && (i == len(pattern)-1 || i+2 < len(pattern) && pattern[i+1] == '\\' && strings.ContainsRune(")|", rune(pattern[i+2])))
+		if ch == '^' && !caretIsAnchor || ch == '$' && !dollarIsAnchor {
+			translated.WriteByte('\\')
+		}
 		if strings.ContainsRune("(){}|+?", rune(ch)) {
 			translated.WriteByte('\\')
 		}

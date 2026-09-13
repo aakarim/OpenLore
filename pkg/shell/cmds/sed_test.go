@@ -49,12 +49,7 @@ func TestSedSubstitutionUsesBasicRegexp(t *testing.T) {
 	original := "Pre-req: descriptions shipped (see Dependencies). [BLOCKED: web form]\n"
 	fs.AddFile("/docs/listing.md", original)
 
-	out, errOut, code := execCmd(t, fs, `sed -n '/(see Dependencies)/p' /docs/listing.md`)
-	if code != 0 || out != original {
-		t.Fatalf("sed BRE address failed: code=%d stdout=%q stderr=%s", code, out, errOut)
-	}
-
-	_, errOut, code = execCmd(t, fs, `sed -i 's|(see Dependencies). \[BLOCKED: web form\]|(see Dependencies). [DONE 2026-09-08 — submitted]|' /docs/listing.md`)
+	_, errOut, code := execCmd(t, fs, `sed -i 's|(see Dependencies). \[BLOCKED: web form\]|(see Dependencies). [DONE 2026-09-08 — submitted]|' /docs/listing.md`)
 	if code != 0 {
 		t.Fatalf("sed BRE substitution failed: code=%d stderr=%s", code, errOut)
 	}
@@ -66,6 +61,79 @@ func TestSedSubstitutionUsesBasicRegexp(t *testing.T) {
 	want := "Pre-req: descriptions shipped (see Dependencies). [DONE 2026-09-08 — submitted]\n"
 	if string(content) != want {
 		t.Fatalf("content = %q, want %q", content, want)
+	}
+}
+
+func TestSedBasicRegexpAnchorsAndReplacementReferences(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+		want    string
+	}{
+		{"literal caret", `echo 'a^b' | sed 's/a^b/X/'`, "X\n"},
+		{"literal dollar", `echo 'c$d' | sed 's/c$d/Y/'`, "Y\n"},
+		{"start anchor", `echo abc | sed 's/^a/A/'`, "Abc\n"},
+		{"end anchor", `echo abc | sed 's/c$/C/'`, "abC\n"},
+		{"replacement references", `echo foo | sed 's/\(foo\)/[\1]& $ \&/'`, "[foo]foo $ &\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, errOut, code := execCmd(t, testFS(), tt.command)
+			if code != 0 || out != tt.want {
+				t.Fatalf("code=%d stdout=%q stderr=%s, want %q", code, out, errOut, tt.want)
+			}
+		})
+	}
+}
+
+func TestSedSubstitutionPreservesSemicolonsInReplacement(t *testing.T) {
+	fs := testFS()
+	command := "sed -i '3s/.*/- **Status:** artifacts drafted; Glama submitted; remaining publishes blocked/' /docs/readme.md"
+	_, errOut, code := execCmd(t, fs, command)
+	if code != 0 {
+		t.Fatalf("sed substitution failed: code=%d stderr=%s", code, errOut)
+	}
+
+	content, err := fs.ReadFile("/docs/readme.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "# Hello World\nThis is a test file.\n- **Status:** artifacts drafted; Glama submitted; remaining publishes blocked\nLine 4\nLine 5\n"
+	if string(content) != want {
+		t.Fatalf("content = %q, want %q", content, want)
+	}
+}
+
+func TestSedSubstitutionCommandSeparator(t *testing.T) {
+	out, errOut, code := execCmd(t, testFS(), "sed -n 's/apple/orange/g;p' /docs/notes.txt")
+	if code != 0 {
+		t.Fatalf("sed commands failed: code=%d stderr=%s", code, errOut)
+	}
+	if strings.Contains(out, "apple") || strings.Count(out, "orange") != 2 {
+		t.Fatalf("output = %q, want substitution followed by print", out)
+	}
+}
+
+func TestSedPreservesSemicolonsInDelimitedValues(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+		want    string
+	}{
+		{"address", "echo 'left;right' | sed -n '/left;right/p'", "left;right\n"},
+		{"pattern", "echo 'foo;bar' | sed 's/foo;bar/matched/'", "matched\n"},
+		{"escaped address delimiter", "echo 'path/with;semi' | sed -n '/path\\/with;semi/p'", "path/with;semi\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, errOut, code := execCmd(t, testFS(), tt.command)
+			if code != 0 {
+				t.Fatalf("sed command failed: code=%d stderr=%s", code, errOut)
+			}
+			if out != tt.want {
+				t.Fatalf("output = %q, want %q", out, tt.want)
+			}
+		})
 	}
 }
 
