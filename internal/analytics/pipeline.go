@@ -4,8 +4,8 @@ import (
 	"context"
 	"io"
 	"os"
+	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -22,7 +22,6 @@ type Pipeline struct {
 	opts       PipelineOptions
 	handoff    chan Event
 	seen       sync.Map
-	lag        atomic.Int64
 	cancel     context.CancelFunc
 	done       chan struct{}
 	once       sync.Once
@@ -53,14 +52,37 @@ func (p *Pipeline) handle(ctx context.Context, e Event) {
 	for _, consumer := range p.opts.Consumers {
 		consumer.Consume(ctx, e)
 	}
-	_ = os.WriteFile(p.checkpoint, []byte(e.ID+"\n"), 0o600)
+	p.writeCheckpoint(e.ID)
+}
+func (p *Pipeline) consumePersisted(ctx context.Context, e Event) {
+	p.seen.Store(e.ID, true)
+	for _, consumer := range p.opts.Consumers {
+		consumer.Consume(ctx, e)
+	}
+}
+func (p *Pipeline) writeCheckpoint(id string) {
+	tmp := p.checkpoint + ".tmp"
+	if err := os.WriteFile(tmp, []byte(id+"\n"), 0o600); err == nil {
+		_ = os.Rename(tmp, p.checkpoint)
+	}
 }
 func (p *Pipeline) Run(ctx context.Context) {
 	p.once.Do(func() {
 		ctx, p.cancel = context.WithCancel(ctx)
 		go func() {
 			defer close(p.done)
-			_ = p.log.Scan(ctx, EventFilter{}, func(e Event) error { p.handle(ctx, e); return nil })
+			checkpointBytes, _ := os.ReadFile(p.checkpoint)
+			checkpointID := strings.TrimSpace(string(checkpointBytes))
+			pastCheckpoint := checkpointID == ""
+			_ = p.log.Scan(ctx, EventFilter{}, func(e Event) error {
+				if !pastCheckpoint {
+					p.consumePersisted(ctx, e)
+					pastCheckpoint = e.ID == checkpointID
+					return nil
+				}
+				p.handle(ctx, e)
+				return nil
+			})
 			ticker := time.NewTicker(time.Second)
 			defer ticker.Stop()
 			for {
@@ -103,7 +125,7 @@ func (p *Pipeline) Replay(ctx context.Context, from time.Time) error {
 	p.seen = sync.Map{}
 	return p.log.Scan(ctx, EventFilter{From: from}, func(e Event) error { p.handle(ctx, e); return nil })
 }
-func (p *Pipeline) Lag() (int64, time.Time) { return p.lag.Load(), time.Time{} }
+func (p *Pipeline) Lag() (int64, time.Time) { return int64(len(p.handoff)), time.Time{} }
 
 type Refresher struct {
 	registry *Registry
