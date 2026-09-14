@@ -51,3 +51,44 @@ func TestParseUnifiedDiffRejectsHunkCountMismatch(t *testing.T) {
 		})
 	}
 }
+
+func TestParseUnifiedDiffKeepsBodyLinesThatLookLikeFileHeaders(t *testing.T) {
+	hunks, err := parseUnifiedDiff("--- a/doc.md\n+++ b/doc.md\n@@ -1 +1 @@\n--- old\n+++ new\n")
+	if err != nil {
+		t.Fatalf("parseUnifiedDiff: %v", err)
+	}
+	got, err := applyUnifiedDiff([]byte("-- old\n"), hunks)
+	if err != nil {
+		t.Fatalf("applyUnifiedDiff: %v", err)
+	}
+	if want := "++ new\n"; string(got) != want {
+		t.Fatalf("result = %q, want %q", got, want)
+	}
+}
+
+func TestApplyUnifiedDiffPositionsZeroLengthRangeAfterStart(t *testing.T) {
+	hunks, err := parseUnifiedDiff("@@ -1,0 +2 @@\n+between\n")
+	if err != nil {
+		t.Fatalf("parseUnifiedDiff: %v", err)
+	}
+	got, err := applyUnifiedDiff([]byte("first\nsecond\n"), hunks)
+	if err != nil {
+		t.Fatalf("applyUnifiedDiff: %v", err)
+	}
+	if want := "first\nbetween\nsecond\n"; string(got) != want {
+		t.Fatalf("result = %q, want %q", got, want)
+	}
+}
+
+func TestParseHunkHeaderRejectsNonemptyRangeAtZero(t *testing.T) {
+	for _, header := range []string{
+		"@@ -0 +1 @@",
+		"@@ -1 +0 @@",
+	} {
+		t.Run(header, func(t *testing.T) {
+			if _, _, _, err := parseHunkHeader(header); err == nil {
+				t.Fatalf("parseHunkHeader(%q) unexpectedly succeeded", header)
+			}
+		})
+	}
+}

@@ -141,7 +141,8 @@ func parseUnifiedDiff(diff string) ([]diffHunk, error) {
 	for sc.Scan() {
 		line := sc.Text()
 		switch {
-		case strings.HasPrefix(line, "--- "), strings.HasPrefix(line, "+++ "):
+		case (strings.HasPrefix(line, "--- ") || strings.HasPrefix(line, "+++ ")) &&
+			(cur == nil || oldSeen == cur.oldCount && newSeen == cur.newCount):
 			// file headers — ignore
 			continue
 		case strings.HasPrefix(line, "@@"):
@@ -235,6 +236,9 @@ func parseHunkRange(field string, prefix byte) (int, int, error) {
 			return 0, 0, errors.New("bad hunk range")
 		}
 	}
+	if start == 0 && count != 0 {
+		return 0, 0, errors.New("bad hunk range")
+	}
 	return start, count, nil
 }
 
@@ -258,8 +262,8 @@ func applyUnifiedDiff(orig []byte, hunks []diffHunk) ([]byte, error) {
 
 	for _, h := range hunks {
 		start := h.oldStart - 1
-		if start < 0 {
-			start = 0
+		if h.oldCount == 0 {
+			start = h.oldStart
 		}
 		// Copy unchanged lines preceding the hunk.
 		if start > len(origLines) {
