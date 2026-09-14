@@ -205,6 +205,7 @@ func (s *Shell) EmitMetric(ctx context.Context, eventType string, fields map[str
 		s.metricEmitter(analytics.ContextWithInvocation(ctx, s.invocationID, s.commandEventID), eventType, fields)
 	}
 }
+func (s *Shell) MetricsEnabled() bool                          { return s.metricEmitter != nil }
 func (s *Shell) SetInvocationObserver(fn func(string, string)) { s.invocationObserver = fn }
 
 // --- CmdContext interface implementation ---

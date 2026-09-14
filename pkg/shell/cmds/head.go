@@ -5,6 +5,8 @@ import (
 	"io"
 	"strconv"
 	"strings"
+
+	"github.com/aakarim/go-openlore/internal/analytics"
 )
 
 func CmdHead(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.Reader) int {
@@ -75,6 +77,7 @@ func CmdHead(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 				end = len(content)
 			}
 			_, _ = w.Write(content[:end])
+			emitDocMetric(ctx, "doc.read", p, content, byteLineRange(content, 0, end))
 			continue
 		}
 		lines := strings.SplitN(string(content), "\n", n+1)
@@ -82,6 +85,15 @@ func CmdHead(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 			lines = lines[:n]
 		}
 		fmt.Fprintln(w, strings.Join(lines, "\n"))
+		end := n
+		if total := contentLineCount(content); end > total {
+			end = total
+		}
+		var unit *analytics.LineRange
+		if end > 0 {
+			unit = &analytics.LineRange{Start: 1, End: end}
+		}
+		emitDocMetric(ctx, "doc.read", p, content, unit)
 	}
 	return 0
 }

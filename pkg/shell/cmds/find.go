@@ -13,6 +13,8 @@ func CmdFind(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 	root := ctx.Cwd()
 	var namePattern string
 	var typeFilter string
+	matchedResults := 0
+	matchedFiles := 0
 
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -50,11 +52,23 @@ func CmdFind(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 			}
 		}
 		fmt.Fprintln(w, p)
+		matchedResults++
+		if !info.Dir {
+			matchedFiles++
+			if metricsEnabled(ctx) {
+				if content, readErr := ctx.FS().ReadFile(p); readErr == nil {
+					emitDocMetric(ctx, "doc.hit", p, content, fullLineRange(content))
+				}
+			}
+		}
 		return nil
 	})
 	if err != nil {
 		fmt.Fprintf(errW, "find: %s\n", err)
 		return 1
+	}
+	if namePattern != "" {
+		emitSearchMetric(ctx, namePattern, []string{root}, matchedFiles, 0, matchedResults > 0)
 	}
 	return 0
 }

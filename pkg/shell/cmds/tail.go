@@ -5,6 +5,8 @@ import (
 	"io"
 	"strconv"
 	"strings"
+
+	"github.com/aakarim/go-openlore/internal/analytics"
 )
 
 func CmdTail(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.Reader) int {
@@ -76,13 +78,25 @@ func CmdTail(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 				start = 0
 			}
 			_, _ = w.Write(content[start:])
+			emitDocMetric(ctx, "doc.read", p, content, byteLineRange(content, start, len(content)))
 			continue
 		}
 		lines := strings.Split(string(content), "\n")
+		startLine := 1
 		if len(lines) > n {
+			startLine = len(lines) - n + 1
 			lines = lines[len(lines)-n:]
 		}
 		fmt.Fprintln(w, strings.Join(lines, "\n"))
+		endLine := contentLineCount(content)
+		if startLine > endLine {
+			startLine = endLine
+		}
+		var unit *analytics.LineRange
+		if endLine > 0 {
+			unit = &analytics.LineRange{Start: startLine, End: endLine}
+		}
+		emitDocMetric(ctx, "doc.read", p, content, unit)
 	}
 	return 0
 }

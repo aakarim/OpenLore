@@ -52,7 +52,10 @@ type ContentUnit struct {
 	Lines   *LineRange `json:"lines,omitempty"`
 	Section string     `json:"section,omitempty"`
 }
-type LineRange struct{ Start, End int }
+type LineRange struct {
+	Start int `json:"start"`
+	End   int `json:"end"`
+}
 
 type Sink interface{ Record(context.Context, Event) }
 type sinkFunc func(context.Context, Event)

@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/aakarim/go-openlore/internal/analytics"
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
 
@@ -83,9 +84,13 @@ func CmdGrep(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 	}
 
 	found := false
+	matchedFiles := 0
+	matchedLines := 0
 
-	grepLines := func(lines []string, filePath string, showFile bool) {
+	grepLines := func(lines []string, filePath string, showFile bool) []int {
 		matchCount := 0
+		listedFile := false
+		var lineHits []int
 		for i, line := range lines {
 			matched := re.MatchString(line)
 			if invertMatch {
@@ -96,12 +101,14 @@ func CmdGrep(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 			}
 			found = true
 			matchCount++
+			lineHits = append(lineHits, i+1)
 
 			if filesWithMatches {
-				if filePath != "" {
+				if filePath != "" && !listedFile {
 					fmt.Fprintln(w, filePath)
+					listedFile = true
 				}
-				return
+				continue
 			}
 			if countOnly {
 				continue
@@ -131,13 +138,15 @@ func CmdGrep(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 				fmt.Fprintf(w, "%d\n", matchCount)
 			}
 		}
+		return lineHits
 	}
 
 	// Read from stdin if no targets and stdin is available (pipe)
 	if len(targets) == 0 && stdin != nil {
 		data, _ := io.ReadAll(stdin)
 		lines := strings.Split(string(data), "\n")
-		grepLines(lines, "", false)
+		lineHits := grepLines(lines, "", false)
+		emitSearchMetric(ctx, pattern, []string{ctx.Cwd()}, 0, len(lineHits), len(lineHits) > 0)
 		if !found {
 			return 1
 		}
@@ -157,7 +166,13 @@ func CmdGrep(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 			return
 		}
 		lines := strings.Split(string(content), "\n")
-		grepLines(lines, filePath, multiFile)
+		lineHits := grepLines(lines, filePath, multiFile)
+		if len(lineHits) == 0 {
+			return
+		}
+		matchedFiles++
+		matchedLines += len(lineHits)
+		emitDocMetric(ctx, "doc.hit", filePath, content, &analytics.LineRange{Start: lineHits[0], End: lineHits[len(lineHits)-1]})
 	}
 
 	for _, target := range targets {
@@ -183,6 +198,7 @@ func CmdGrep(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 			grepFile(p)
 		}
 	}
+	emitSearchMetric(ctx, pattern, scopePaths(ctx, targets), matchedFiles, matchedLines, found)
 
 	if !found {
 		return 1
