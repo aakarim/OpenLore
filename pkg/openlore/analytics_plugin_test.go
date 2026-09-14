@@ -11,6 +11,7 @@ import (
 
 	"github.com/aakarim/go-openlore/internal/analytics"
 	"github.com/aakarim/go-openlore/internal/config"
+	servermetrics "github.com/aakarim/go-openlore/internal/metrics"
 )
 
 func TestAnalyticsDashboardShowsObservedValues(t *testing.T) {
@@ -47,6 +48,30 @@ func TestAnalyticsDashboardShowsObservedValues(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("dashboard missing %q", want)
 		}
+	}
+}
+
+func TestPrometheusExportPreservesJSONServerMetrics(t *testing.T) {
+	service, err := analytics.New(config.AnalyticsConfig{
+		Dir: filepath.Join(t.TempDir(), "analytics"),
+		Log: config.AnalyticsLogConfig{Compress: "none"},
+	}, analytics.Deps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{analytics: service, metrics: &servermetrics.Metrics{}}
+	s.metrics.TotalCommands.Store(7)
+
+	jsonResponse := httptest.NewRecorder()
+	s.metricsExportHandler().ServeHTTP(jsonResponse, httptest.NewRequest("GET", "/metrics", nil))
+	if jsonResponse.Code != 200 || !strings.Contains(jsonResponse.Body.String(), `"total_commands":7`) {
+		t.Fatalf("JSON metrics response = %d %q", jsonResponse.Code, jsonResponse.Body.String())
+	}
+
+	promResponse := httptest.NewRecorder()
+	s.metricsExportHandler().ServeHTTP(promResponse, httptest.NewRequest("GET", "/metrics/prometheus", nil))
+	if promResponse.Code != 200 || !strings.Contains(promResponse.Header().Get("Content-Type"), "text/plain") {
+		t.Fatalf("Prometheus response = %d content-type %q", promResponse.Code, promResponse.Header().Get("Content-Type"))
 	}
 }
 

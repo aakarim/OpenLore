@@ -30,11 +30,14 @@ func (p *analyticsPlugin) observeWrites(next PostCommitHandler) PostCommitHandle
 			writer = IdentityStoreClassifier(p.server.identityStore).Classify(ctx, info.Attribution)
 		}
 		for _, leaf := range info.ChangeSet.Leaves() {
+			if leaf.Action != vfs.ChangeActionWrite && leaf.Action != vfs.ChangeActionRemove && leaf.Action != vfs.ChangeActionRemoveAll {
+				continue
+			}
 			action := string(leaf.Action)
 			if leaf.Write != nil {
 				action = "create"
 				for _, record := range info.Leaves {
-					if vfs.CleanPath(record.Target) == vfs.CleanPath(leaf.Target) && record.BeforeHash != "" {
+					if vfs.CleanPath(record.Target) == vfs.CleanPath(leaf.Target) && (record.BeforeExists || record.BeforeHash != "") {
 						action = "update"
 						break
 					}
@@ -151,7 +154,7 @@ func analyticsQueryTime(value string, now time.Time) (time.Time, bool) {
 	return time.Time{}, false
 }
 func (p *analyticsPlugin) aggregation(w http.ResponseWriter, r *http.Request) {
-	m, err := p.service.Registry().Run(r.Context(), r.PathValue("name"), queryParams(r), analytics.RunOptions{Fresh: r.URL.Query().Get("fresh") == "true"})
+	m, err := p.runAggregation(r, r.PathValue("name"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -164,7 +167,7 @@ func (p *analyticsPlugin) facts(w http.ResponseWriter, r *http.Request) {
 	if path == "" {
 		path = "/"
 	}
-	facts, err := p.service.Facts().Stat(r.Context(), path)
+	facts, err := p.scopedFacts(r).Stat(r.Context(), path)
 	if err != nil {
 		http.NotFound(w, r)
 		return
@@ -172,6 +175,31 @@ func (p *analyticsPlugin) facts(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(facts)
 }
+
+func (p *analyticsPlugin) scopedFacts(r *http.Request) analytics.ContentFacts {
+	if p.server != nil {
+		if id, ok := r.Context().Value(identityCtxKey{}).(Identity); ok {
+			return analytics.NewContentFacts(p.server.buildSessionFS(id))
+		}
+	}
+	return p.service.Facts()
+}
+
+func (p *analyticsPlugin) runAggregation(r *http.Request, name string) (analytics.Materialized, error) {
+	for _, a := range p.service.Registry().List() {
+		if a.Name != name {
+			continue
+		}
+		for _, requirement := range a.Requires {
+			if requirement == "facts" {
+				return p.service.Registry().RunWithFacts(r.Context(), name, queryParams(r), p.scopedFacts(r))
+			}
+		}
+		break
+	}
+	return p.service.Registry().Run(r.Context(), name, queryParams(r), analytics.RunOptions{Fresh: r.URL.Query().Get("fresh") == "true"})
+}
+
 func (p *analyticsPlugin) dashboard(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -182,7 +210,7 @@ func (p *analyticsPlugin) dashboard(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, html.EscapeString(string(b)), "</pre><h2>Aggregations</h2>")
 		for _, a := range p.service.Registry().List() {
 			fmt.Fprintf(w, "<section><h3><a href=\"/analytics/%s\">%s</a></h3>", a.Name, html.EscapeString(a.Title))
-			m, err := p.service.Registry().Run(r.Context(), a.Name, queryParams(r), analytics.RunOptions{Fresh: true})
+			m, err := p.runAggregation(r, a.Name)
 			if err != nil {
 				fmt.Fprintf(w, "<p>%s</p>", html.EscapeString(err.Error()))
 			} else {
@@ -191,7 +219,7 @@ func (p *analyticsPlugin) dashboard(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintln(w, "</section>")
 		}
 	} else {
-		m, err := p.service.Registry().Run(r.Context(), name, queryParams(r), analytics.RunOptions{Fresh: true})
+		m, err := p.runAggregation(r, name)
 		if err != nil {
 			fmt.Fprintln(w, html.EscapeString(err.Error()))
 		} else {

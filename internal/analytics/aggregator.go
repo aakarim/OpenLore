@@ -11,19 +11,33 @@ import (
 )
 
 type AggregatorOptions struct{}
+type durationSummary struct {
+	sum   float64
+	count int64
+}
 type Aggregator struct {
-	mu        sync.RWMutex
-	commands  map[string]int64
-	durations map[string][]float64
-	writes    map[string]int64
-	scalars   map[string]float64
-	health    func() Health
+	mu         sync.RWMutex
+	commands   map[string]int64
+	durations  map[string]durationSummary
+	writes     map[string]int64
+	scalars    map[string]float64
+	scalarSeen map[string]struct{}
+	health     func() Health
 }
 
 func NewAggregator(AggregatorOptions) *Aggregator {
-	return &Aggregator{commands: map[string]int64{}, durations: map[string][]float64{}, writes: map[string]int64{}, scalars: map[string]float64{}}
+	return &Aggregator{commands: map[string]int64{}, durations: map[string]durationSummary{}, writes: map[string]int64{}, scalars: map[string]float64{}, scalarSeen: map[string]struct{}{}}
 }
 func (a *Aggregator) SetHealth(fn func() Health) { a.health = fn }
+func (a *Aggregator) Reset() {
+	a.mu.Lock()
+	a.commands = map[string]int64{}
+	a.durations = map[string]durationSummary{}
+	a.writes = map[string]int64{}
+	a.scalars = map[string]float64{}
+	a.scalarSeen = map[string]struct{}{}
+	a.mu.Unlock()
+}
 func (a *Aggregator) Consume(_ context.Context, e Event) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -36,11 +50,19 @@ func (a *Aggregator) Consume(_ context.Context, e Event) {
 		}
 		key := cmd + "\x00" + e.Transport + "\x00" + exitClass
 		a.commands[key]++
-		a.durations[cmd] = append(a.durations[cmd], fieldFloat(e, "duration_ms")/1000)
+		duration := a.durations[cmd]
+		duration.sum += fieldFloat(e, "duration_ms") / 1000
+		duration.count++
+		a.durations[cmd] = duration
 	case "doc.write":
 		key := fieldString(e, "docset") + "\x00" + fieldString(e, "writer")
 		a.writes[key]++
 	case "doc.scalars":
+		key := scalarEventKey(e)
+		if _, exists := a.scalarSeen[key]; exists {
+			return
+		}
+		a.scalarSeen[key] = struct{}{}
 		docset, writer := fieldString(e, "docset"), fieldString(e, "writer")
 		if delta, ok := e.Fields["delta"].(map[string]any); ok {
 			for scalar, v := range delta {
@@ -83,14 +105,13 @@ func (a *Aggregator) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 	}
 	sort.Strings(keys)
 	for _, command := range keys {
-		var sum float64
-		for _, value := range a.durations[command] {
-			sum += value
-		}
-		fmt.Fprintf(w, "openlore_command_duration_seconds_sum{command=%s} %g\n", promQuote(command), sum)
-		fmt.Fprintf(w, "openlore_command_duration_seconds_count{command=%s} %d\n", promQuote(command), len(a.durations[command]))
+		duration := a.durations[command]
+		fmt.Fprintf(w, "openlore_command_duration_seconds_sum{command=%s} %g\n", promQuote(command), duration.sum)
+		fmt.Fprintf(w, "openlore_command_duration_seconds_count{command=%s} %d\n", promQuote(command), duration.count)
 	}
-	fmt.Fprintln(w, "# TYPE openlore_doc_write_scalar_total counter")
+	// Content can shrink, so scalar deltas are gauges rather than monotonic
+	// counters.
+	fmt.Fprintln(w, "# TYPE openlore_doc_write_scalar_total gauge")
 	keys = keys[:0]
 	for k := range a.scalars {
 		keys = append(keys, k)

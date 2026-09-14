@@ -145,8 +145,12 @@ func CmdAnalytics(ctx CmdContext, args []string, w, errW io.Writer, _ io.Reader)
 		return 0
 	case "replay":
 		p, _, err := analyticsParams(args[1:])
-		if err != nil || service.Replay(context.Background(), p.Since) != nil {
-			fmt.Fprintln(errW, "analytics replay failed")
+		if err != nil {
+			fmt.Fprintln(errW, "analytics replay:", err)
+			return 1
+		}
+		if err := service.Replay(context.Background(), p.Since); err != nil {
+			fmt.Fprintln(errW, "analytics replay:", err)
 			return 1
 		}
 		fmt.Fprintln(w, "replayed")
@@ -194,4 +198,11 @@ func analyticsService(ctx CmdContext) *analytics.Service {
 		return nil
 	}
 	return provider.Analytics()
+}
+
+func analyticsFacts(ctx CmdContext) analytics.ContentFacts {
+	if analyticsService(ctx) == nil {
+		return nil
+	}
+	return analytics.NewContentFacts(ctx.FS())
 }

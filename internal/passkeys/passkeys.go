@@ -64,7 +64,7 @@ type Passkeys struct {
 
 	auth    *config.AuthConfig
 	tokens  TokenIssuer
-	onLogin func(context.Context, string)
+	onLogin func(context.Context, string, string)
 
 	// loginSessions holds in-flight discoverable-login ceremonies keyed by the
 	// short-lived openlore_login cookie token.
@@ -124,7 +124,7 @@ func (p *Passkeys) SetTokenIssuer(ti TokenIssuer) {
 	p.tokens = ti
 }
 
-func (p *Passkeys) SetLoginObserver(observer func(context.Context, string)) {
+func (p *Passkeys) SetLoginObserver(observer func(context.Context, string, string)) {
 	p.onLogin = observer
 }
 
@@ -338,12 +338,13 @@ func (p *Passkeys) handleLoginFinish(w http.ResponseWriter, r *http.Request) {
 	// Set the browser session cookie for the /lore docs browser. The cookie
 	// carries the identity name; the browser resolves its grants live from the
 	// identity table.
-	if err := p.sessions.SetCookie(w, matched.Identity); err != nil {
+	sessionID, err := p.sessions.SetCookie(w, matched.Identity)
+	if err != nil {
 		http.Error(w, "failed to create session", http.StatusInternalServerError)
 		return
 	}
 	if p.onLogin != nil {
-		p.onLogin(r.Context(), matched.Identity)
+		p.onLogin(r.Context(), matched.Identity, sessionID)
 	}
 
 	// OAuth authorization-code flow: if this login was reached via /authorize

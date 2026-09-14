@@ -134,6 +134,22 @@ func TestUnsupportedShellUsageIsLoggedOnlyInDebugMode(t *testing.T) {
 	}
 }
 
+func TestCommandMetricIncrementsWithoutAnalytics(t *testing.T) {
+	s, err := NewServer("")
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	if s.analytics != nil {
+		t.Fatal("test requires analytics to be disabled")
+	}
+
+	sh := s.buildSessionShell(Identity{IdentityName: "agent-1"})
+	sh.ExecPipeline("pwd", &bytes.Buffer{}, &bytes.Buffer{}, nil)
+	if got := s.metrics.TotalCommands.Load(); got != 1 {
+		t.Fatalf("total commands = %d, want 1", got)
+	}
+}
+
 func TestNewServerWarnsForInvalidConfigurationValue(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "openlore.yml")
 	if err := os.WriteFile(path, []byte("passkeys: true\n"), 0o600); err != nil {

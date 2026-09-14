@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -43,6 +44,12 @@ type fileEventLog struct {
 	closed bool
 }
 
+type logCursor map[string]int64
+type logSnapshot struct {
+	segment Segment
+	data    []byte
+}
+
 func OpenEventLog(dir string, opts LogOptions) (EventLog, error) {
 	if opts.Rotate == 0 {
 		opts.Rotate = 24 * time.Hour
@@ -59,7 +66,12 @@ func OpenEventLog(dir string, opts LogOptions) (EventLog, error) {
 	return &fileEventLog{dir: dir, opts: opts}, nil
 }
 func (l *fileEventLog) activePath(t time.Time) string {
-	return filepath.Join(l.dir, "events-"+t.UTC().Format("2006-01-02")+".jsonl")
+	start := t.UTC().Truncate(l.opts.Rotate)
+	name := strconv.FormatInt(start.UnixNano(), 10)
+	if l.opts.Rotate == 24*time.Hour {
+		name = start.Format("2006-01-02")
+	}
+	return filepath.Join(l.dir, "events-"+name+".jsonl")
 }
 func (l *fileEventLog) Append(ctx context.Context, e Event) error {
 	if err := ctx.Err(); err != nil {
@@ -76,7 +88,13 @@ func (l *fileEventLog) Append(ctx context.Context, e Event) error {
 	if l.closed {
 		return errors.New("analytics event log closed")
 	}
-	f, err := os.OpenFile(l.activePath(e.Time), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	active := l.activePath(e.Time)
+	if _, err := os.Stat(active + ".zst"); err == nil {
+		// A late event must never recreate a sealed segment: a subsequent seal
+		// would otherwise replace the existing compressed file.
+		active = strings.TrimSuffix(active, ".jsonl") + "-late-" + NewID() + ".jsonl"
+	}
+	f, err := os.OpenFile(active, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
@@ -98,8 +116,16 @@ func (l *fileEventLog) Segments() []Segment {
 		if !strings.HasPrefix(n, "events-") || !(strings.HasSuffix(n, ".jsonl") || strings.HasSuffix(n, ".jsonl.zst")) {
 			continue
 		}
-		dayText := strings.TrimSuffix(strings.TrimSuffix(strings.TrimPrefix(n, "events-"), ".zst"), ".jsonl")
-		day, _ := time.Parse("2006-01-02", dayText)
+		startText := strings.TrimSuffix(strings.TrimSuffix(strings.TrimPrefix(n, "events-"), ".zst"), ".jsonl")
+		startText = strings.SplitN(startText, "-late-", 2)[0]
+		nanos, err := strconv.ParseInt(startText, 10, 64)
+		var day time.Time
+		if err == nil {
+			day = time.Unix(0, nanos).UTC()
+		} else {
+			// Continue to recognize logs written by the original daily format.
+			day, _ = time.Parse("2006-01-02", startText)
+		}
 		info, _ := e.Info()
 		var size int64
 		if info != nil {
@@ -111,6 +137,22 @@ func (l *fileEventLog) Segments() []Segment {
 	return out
 }
 func (l *fileEventLog) Scan(ctx context.Context, f EventFilter, fn func(Event) error) error {
+	l.mu.Lock()
+	segments := l.Segments()
+	snapshots := make([]logSnapshot, 0, len(segments))
+	for _, seg := range segments {
+		data, err := os.ReadFile(seg.Path)
+		if err != nil {
+			l.mu.Unlock()
+			return err
+		}
+		snapshots = append(snapshots, logSnapshot{seg, data})
+	}
+	l.mu.Unlock()
+	return scanSnapshots(ctx, snapshots, f, fn)
+}
+
+func scanSnapshots(ctx context.Context, snapshots []logSnapshot, f EventFilter, fn func(Event) error) error {
 	types, principals := map[string]bool{}, map[string]bool{}
 	for _, v := range f.Types {
 		types[v] = true
@@ -118,20 +160,17 @@ func (l *fileEventLog) Scan(ctx context.Context, f EventFilter, fn func(Event) e
 	for _, v := range f.Principals {
 		principals[v] = true
 	}
-	for _, seg := range l.Segments() {
+	for _, snapshot := range snapshots {
+		seg := snapshot.segment
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		file, err := os.Open(seg.Path)
-		if err != nil {
-			return err
-		}
-		var reader io.Reader = file
+		var reader io.Reader = strings.NewReader(string(snapshot.data))
 		var decoder *zstd.Decoder
 		if seg.Compressed {
-			decoder, err = zstd.NewReader(file)
+			var err error
+			decoder, err = zstd.NewReader(reader)
 			if err != nil {
-				file.Close()
 				return err
 			}
 			reader = decoder
@@ -141,78 +180,118 @@ func (l *fileEventLog) Scan(ctx context.Context, f EventFilter, fn func(Event) e
 		for scan.Scan() {
 			var e Event
 			if err := json.Unmarshal(scan.Bytes(), &e); err != nil {
-				file.Close()
 				return err
 			}
 			if !f.From.IsZero() && e.Time.Before(f.From) || !f.To.IsZero() && e.Time.After(f.To) || len(types) > 0 && !types[e.Type] || len(principals) > 0 && !principals[e.Principal] {
 				continue
 			}
 			if err := fn(e); err != nil {
-				file.Close()
 				return err
 			}
 		}
-		err = scan.Err()
+		err := scan.Err()
 		if decoder != nil {
 			decoder.Close()
 		}
-		file.Close()
 		if err != nil {
 			return err
 		}
 	}
 	return nil
 }
-func (l *fileEventLog) Seal(ctx context.Context, before time.Time) error {
-	if l.opts.Compress == "none" {
-		return nil
-	}
+
+// scanIncremental snapshots only bytes not observed by this cursor. It is a
+// private optimization used by Pipeline; EventLog's stable interface remains
+// unchanged.
+func (l *fileEventLog) scanIncremental(ctx context.Context, cursor logCursor, fn func(Event) error) error {
 	l.mu.Lock()
-	defer l.mu.Unlock()
-	for _, seg := range l.Segments() {
-		if seg.Compressed || !seg.Day.Before(before.UTC()) {
+	segments := l.Segments()
+	snapshots := make([]logSnapshot, 0, len(segments))
+	for _, seg := range segments {
+		offset := cursor[seg.Path]
+		logical := strings.TrimSuffix(seg.Path, ".zst")
+		if seg.Compressed {
+			if _, sealedBefore := cursor[logical]; sealedBefore {
+				cursor[seg.Path] = seg.Size
+				continue
+			}
+			offset = 0
+		}
+		if offset >= seg.Size {
 			continue
 		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		src, err := os.Open(seg.Path)
+		file, err := os.Open(seg.Path)
 		if err != nil {
+			l.mu.Unlock()
 			return err
 		}
-		tmp := seg.Path + ".zst.tmp"
-		dst, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
-		if err != nil {
-			src.Close()
-			return err
+		if offset > 0 {
+			_, err = file.Seek(offset, io.SeekStart)
 		}
-		zw, err := zstd.NewWriter(dst)
-		if err == nil {
-			_, err = io.Copy(zw, src)
-			if closeErr := zw.Close(); err == nil {
-				err = closeErr
+		data, readErr := io.ReadAll(file)
+		file.Close()
+		if err != nil || readErr != nil {
+			l.mu.Unlock()
+			if err != nil {
+				return err
 			}
+			return readErr
 		}
-		src.Close()
-		if syncErr := dst.Sync(); err == nil {
-			err = syncErr
-		}
-		dst.Close()
-		if err != nil {
-			os.Remove(tmp)
-			return err
-		}
-		if err = os.Rename(tmp, seg.Path+".zst"); err != nil {
-			return err
-		}
-		if err = os.Remove(seg.Path); err != nil {
-			return err
+		cursor[seg.Path] = seg.Size
+		snapshots = append(snapshots, logSnapshot{seg, data})
+	}
+	l.mu.Unlock()
+	return scanSnapshots(ctx, snapshots, EventFilter{}, fn)
+}
+func (l *fileEventLog) Seal(ctx context.Context, before time.Time) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.opts.Compress == "zstd" {
+		for _, seg := range l.Segments() {
+			if seg.Compressed || seg.Day.Add(l.opts.Rotate).After(before.UTC()) {
+				continue
+			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			src, err := os.Open(seg.Path)
+			if err != nil {
+				return err
+			}
+			tmp := seg.Path + ".zst.tmp"
+			dst, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+			if err != nil {
+				src.Close()
+				return err
+			}
+			zw, err := zstd.NewWriter(dst)
+			if err == nil {
+				_, err = io.Copy(zw, src)
+				if closeErr := zw.Close(); err == nil {
+					err = closeErr
+				}
+			}
+			src.Close()
+			if syncErr := dst.Sync(); err == nil {
+				err = syncErr
+			}
+			dst.Close()
+			if err != nil {
+				os.Remove(tmp)
+				return err
+			}
+			if err = os.Rename(tmp, seg.Path+".zst"); err != nil {
+				return err
+			}
+			if err = os.Remove(seg.Path); err != nil {
+				return err
+			}
 		}
 	}
 	if l.opts.Retention > 0 {
 		cutoff := time.Now().UTC().Add(-l.opts.Retention)
 		for _, seg := range l.Segments() {
-			if seg.Compressed && seg.Day.Before(cutoff) {
+			if seg.Day.Before(cutoff) {
 				_ = os.Remove(seg.Path)
 			}
 		}

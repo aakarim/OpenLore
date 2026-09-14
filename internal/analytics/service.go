@@ -37,6 +37,7 @@ type Service struct {
 	facts      ContentFacts
 	registry   *Registry
 	aggregator *Aggregator
+	emitted    sync.Map
 	cancel     context.CancelFunc
 	close      sync.Once
 	closeErr   error
@@ -58,9 +59,21 @@ func New(cfg config.AnalyticsConfig, deps Deps) (*Service, error) {
 			return nil, err
 		}
 	}
-	facts := NewContentFacts(deps.FS)
+	providers := defaultProviders
+	if deps.Tokenizer != nil {
+		providers = []ContentScalarProvider{sizeProvider{}, tokenProvider{deps.Tokenizer}}
+	}
+	facts := NewContentFacts(deps.FS, providers...)
+	s := &Service{cfg: cfg, log: log, store: store, facts: facts}
+	for _, processor := range deps.Processors {
+		if processor != nil && processor.Name() == "doc-scalars" {
+			s.emitted.Store("doc.scalars", true)
+		}
+	}
 	reg := NewRegistry(store, func() []string {
-		return []string{"session.start", "session.end", "command.exec", "command.unknown", "syntax.unknown", "auth.login", "doc.write", "doc.scalars"}
+		events := []string{"session.start", "session.end", "command.exec", "command.unknown", "syntax.unknown", "auth.login", "doc.write"}
+		s.emitted.Range(func(event, _ any) bool { events = append(events, event.(string)); return true })
+		return events
 	})
 	reg.Bind(log, facts)
 	for _, a := range BuiltinAggregations() {
@@ -71,7 +84,11 @@ func New(cfg config.AnalyticsConfig, deps Deps) (*Service, error) {
 	agg := NewAggregator(AggregatorOptions{})
 	ref := NewRefresher(reg, log, store, cfg.Aggregations.RefreshInterval)
 	rec := NewRecorder(log, cfg.Pipeline.Buffer)
-	s := &Service{cfg: cfg, log: log, recorder: rec, shipper: NewShipper(log, deps.Remote, cfg.Ship.Interval), store: store, facts: facts, registry: reg, aggregator: agg, refresher: ref}
+	s.recorder = rec
+	s.shipper = NewShipper(log, deps.Remote, cfg.Ship.Interval)
+	s.registry = reg
+	s.aggregator = agg
+	s.refresher = ref
 	if cfg.PipelineEnabled() {
 		derivedSink := sinkFunc(func(ctx context.Context, event Event) { _ = log.Append(ctx, event) })
 		s.pipeline = NewPipeline(log, filepath.Join(dir, "pipeline.checkpoint"), PipelineOptions{Processors: deps.Processors, Consumers: []Consumer{agg}, Refresher: ref, Sink: derivedSink, Buffer: cfg.Pipeline.Buffer})
@@ -95,6 +112,9 @@ func (s *Service) Sink() Sink { return s.recorder }
 func (s *Service) AddProcessor(processor Processor) {
 	if s.pipeline != nil && processor != nil {
 		s.pipeline.opts.Processors = append(s.pipeline.opts.Processors, processor)
+		if processor.Name() == "doc-scalars" {
+			s.emitted.Store("doc.scalars", true)
+		}
 	}
 }
 func (s *Service) Record(ctx context.Context, e Event) { s.recorder.Record(ctx, e) }

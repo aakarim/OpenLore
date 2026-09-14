@@ -21,3 +21,17 @@ func TestAnalyticsConfigAndExperimentalEnv(t *testing.T) {
 		t.Fatalf("unexpected config: %#v", cfg.Analytics)
 	}
 }
+
+func TestAnalyticsRetentionAcceptsDays(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "openlore.yml")
+	if err := os.WriteFile(file, []byte("analytics:\n  log:\n    retention: 90d\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := New(WithConfigFile(file))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Analytics.Log.Retention != 90*24*time.Hour {
+		t.Fatalf("retention = %s", cfg.Analytics.Log.Retention)
+	}
+}

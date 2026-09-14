@@ -158,6 +158,11 @@ func TestMCPHTTPSessionIsBoundToIdentity(t *testing.T) {
 func TestMCPHTTPSessionExpiresAfterIdleTimeout(t *testing.T) {
 	api, handler := newSessionTestAPI(t)
 	identity := Identity{IdentityName: "adil", Principal: AuthenticatedPrincipal{Subject: "adil"}, Attribution: Attribution{Principal: "adil"}, Scopes: []string{ScopeFull}}
+	ended := make(chan Identity, 1)
+	api.sessions.onEnd = func(ctx context.Context, _ string, _ time.Duration) {
+		id, _ := ctx.Value(identityCtxKey{}).(Identity)
+		ended <- id
+	}
 	created := createSession(t, handler, identity)
 
 	api.sessions.mu.Lock()
@@ -168,6 +173,14 @@ func TestMCPHTTPSessionExpiresAfterIdleTimeout(t *testing.T) {
 	w := sessionRequest(t, handler, identity, http.MethodPost, path, `{"command":"pwd"}`)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("expired session status = %d, want 404; body = %s", w.Code, w.Body.String())
+	}
+	select {
+	case got := <-ended:
+		if got.IdentityName != identity.IdentityName || got.Attribution.String() != identity.Attribution.String() {
+			t.Fatalf("expiry identity = %+v, want original attribution %+v", got, identity)
+		}
+	default:
+		t.Fatal("expiry did not invoke end observer")
 	}
 }
 

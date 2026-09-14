@@ -455,13 +455,13 @@ func newServerWithRoot(rootDir string, rootFS, lowerFS vfs.FileSystem, opts ...c
 
 		pk.SetAuthConfig(s.auth)
 		if s.analytics != nil {
-			pk.SetLoginObserver(func(ctx context.Context, name string) {
+			pk.SetLoginObserver(func(ctx context.Context, name, sessionID string) {
 				id, ok := s.identityForName(name)
 				if !ok {
 					return
 				}
 				id.Transport = "web"
-				id.SessionID = generateSessionID()
+				id.SessionID = sessionID
 				s.analytics.Record(ctx, s.analyticsEvent(id, "auth.login", map[string]any{"method": "passkey"}))
 				s.analytics.Record(ctx, s.analyticsEvent(id, "session.start", nil))
 			})
@@ -1146,18 +1146,21 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 			}
 		})
 	}
-	if s.analytics != nil {
-		if s.authEnforced && id.IdentityName != "" && id.IdentityName != "guest" && id.policySnapshot != nil && s.hasCapabilityForPolicy(*id.policySnapshot, "lore:analytics:view") {
-			sh.SetAnalytics(s.analytics)
-		}
-		sh.SetCommandObserver(func(ce shell.CommandExecution) {
-			s.metrics.TotalCommands.Add(1)
-			e := s.analyticsEvent(id, "command.exec", map[string]any{"command": ce.Command, "argc": ce.Argc, "exit_code": ce.ExitCode, "duration_ms": ce.Duration.Milliseconds(), "bytes_out": ce.BytesOut, "pipeline_position": ce.PipelinePosition})
-			e.ID = ce.EventID
-			e.InvocationID = ce.InvocationID
-			s.analytics.Record(context.Background(), e)
-		})
+	if s.analytics != nil && s.authEnforced && id.IdentityName != "" && id.IdentityName != "guest" && id.policySnapshot != nil && s.hasCapabilityForPolicy(*id.policySnapshot, "lore:analytics:view") {
+		sh.SetAnalytics(s.analytics)
 	}
+	sh.SetCommandObserver(func(ce shell.CommandExecution) {
+		if s.metrics != nil {
+			s.metrics.TotalCommands.Add(1)
+		}
+		if s.analytics == nil {
+			return
+		}
+		e := s.analyticsEvent(id, "command.exec", map[string]any{"command": ce.Command, "argc": ce.Argc, "exit_code": ce.ExitCode, "duration_ms": ce.Duration.Milliseconds(), "bytes_out": ce.BytesOut, "pipeline_position": ce.PipelinePosition})
+		e.ID = ce.EventID
+		e.InvocationID = ce.InvocationID
+		s.analytics.Record(context.Background(), e)
+	})
 	if s.config.DefaultCwd != "" {
 		sh.SetCwd(s.config.DefaultCwd)
 	}
@@ -1597,7 +1600,7 @@ func (s *Server) ListenAndServe() error {
 
 	if s.config.MetricsPort > 0 {
 		if s.analytics != nil && s.config.Analytics.Export.Prometheus {
-			s.metricsSrv = metrics.StartHandlerServer(s.config.MetricsPort, s.analytics.Aggregator(), s.logger)
+			s.metricsSrv = metrics.StartHandlerServer(s.config.MetricsPort, s.metricsExportHandler(), s.logger)
 		} else {
 			s.metricsSrv = metrics.StartServer(s.config.MetricsPort, s.metrics, s.logger)
 		}
@@ -1812,6 +1815,16 @@ func (s *Server) ListenAndServe() error {
 	return s.srv.ListenAndServe()
 }
 
+func (s *Server) metricsExportHandler() http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", s.metrics.Handler())
+	mux.Handle("/metrics/prometheus", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.URL.Path = "/metrics"
+		s.analytics.Aggregator().ServeHTTP(w, r)
+	}))
+	return mux
+}
+
 // Shutdown gracefully shuts down the server.
 func (s *Server) Shutdown(ctx context.Context) error {
 	if s.passkeys != nil {
@@ -1842,9 +1855,15 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		}
 	}
 	if s.analytics != nil {
-		if err := s.analytics.Close(ctx); err != nil {
+		shutdownTimeout := s.config.Analytics.ShutdownTimeout
+		if shutdownTimeout <= 0 {
+			shutdownTimeout = 10 * time.Second
+		}
+		analyticsCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		if err := s.analytics.Close(analyticsCtx); err != nil {
 			s.logger.Warn("shutdown: analytics did not drain before deadline", "err", err)
 		}
+		cancel()
 		if s.analyticsCancel != nil {
 			s.analyticsCancel()
 		}

@@ -30,6 +30,7 @@ type CommitRecord struct {
 type LeafRecord struct {
 	Target        string           `json:"target"`
 	Action        vfs.ChangeAction `json:"action"`
+	BeforeExists  bool             `json:"before_exists,omitempty"`
 	BeforeHash    string           `json:"before_hash,omitempty"`
 	BeforeSize    int64            `json:"before_size,omitempty"`
 	AfterHash     string           `json:"after_hash,omitempty"`
@@ -156,6 +157,7 @@ func capturePreImages(ctx context.Context, fsys vfs.FileSystem, blobs BlobStore,
 		}
 		record := LeafRecord{Target: vfs.CleanPath(leaf.Target), Action: leaf.Action}
 		if err == nil && !info.Dir {
+			record.BeforeExists = true
 			b, e := fsys.ReadFile(leaf.Target)
 			if e != nil {
 				record.BeforeUnknown = true
@@ -222,6 +224,9 @@ type HistoryCursor interface {
 	Seek(context.Context, string) error
 	Position() HistoryPosition
 }
+type historyCursorRestorer interface {
+	RestorePosition(HistoryPosition) error
+}
 type fileHistoryCursor struct {
 	mu       sync.Mutex
 	file     *os.File
@@ -282,4 +287,14 @@ func (c *fileHistoryCursor) Position() HistoryPosition {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.position
+}
+func (c *fileHistoryCursor) RestorePosition(position HistoryPosition) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, err := c.file.Seek(position.Offset, io.SeekStart); err != nil {
+		return err
+	}
+	c.reader.Reset(c.file)
+	c.position = position
+	return nil
 }

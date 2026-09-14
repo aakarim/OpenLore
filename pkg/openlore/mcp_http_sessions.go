@@ -30,13 +30,14 @@ type httpShellSessions struct {
 }
 
 type httpShellSession struct {
-	mu         sync.Mutex
-	shell      *shell.Shell
-	owner      string
-	clientRef  string
-	createdAt  time.Time
-	lastUsedAt time.Time
-	expiry     *time.Timer
+	mu          sync.Mutex
+	shell       *shell.Shell
+	owner       string
+	clientRef   string
+	createdAt   time.Time
+	lastUsedAt  time.Time
+	expiry      *time.Timer
+	identityCtx context.Context
 }
 
 type createSessionRequest struct {
@@ -94,11 +95,12 @@ func (s *httpShellSessions) handleCreate(w http.ResponseWriter, r *http.Request)
 		shellCtx = contextWithIdentity(shellCtx, identity)
 	}
 	session := &httpShellSession{
-		shell:      s.factory(shellCtx),
-		owner:      owner,
-		clientRef:  strings.TrimSpace(req.ClientRef),
-		createdAt:  now,
-		lastUsedAt: now,
+		shell:       s.factory(shellCtx),
+		owner:       owner,
+		clientRef:   strings.TrimSpace(req.ClientRef),
+		createdAt:   now,
+		lastUsedAt:  now,
+		identityCtx: context.WithoutCancel(shellCtx),
 	}
 	s.sessions[id] = session
 	session.expiry = time.AfterFunc(s.ttl, func() { s.expire(id, session) })
@@ -185,7 +187,7 @@ func (s *httpShellSessions) pruneExpiredLocked(now time.Time) {
 			delete(s.sessions, id)
 			session.expiry.Stop()
 			if s.onEnd != nil {
-				s.onEnd(context.Background(), id, now.Sub(session.createdAt))
+				s.onEnd(session.identityCtx, id, now.Sub(session.createdAt))
 			}
 		}
 	}
@@ -205,7 +207,7 @@ func (s *httpShellSessions) expire(id string, expected *httpShellSession) {
 	}
 	delete(s.sessions, id)
 	if s.onEnd != nil {
-		s.onEnd(context.Background(), id, time.Since(session.createdAt))
+		s.onEnd(session.identityCtx, id, time.Since(session.createdAt))
 	}
 }
 

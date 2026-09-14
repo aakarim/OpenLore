@@ -35,14 +35,16 @@ type SessionInfo struct {
 	ExpiresAt time.Time
 }
 
-// SetCookie creates and sets a signed session cookie on the response.
-func (sm *SessionManager) SetCookie(w http.ResponseWriter, identity string) error {
+// SetCookie creates and sets a signed session cookie on the response and
+// returns the generated session ID.
+func (sm *SessionManager) SetCookie(w http.ResponseWriter, identity string) (string, error) {
 	nonce := make([]byte, 32)
 	if _, err := rand.Read(nonce); err != nil {
-		return err
+		return "", err
 	}
+	sessionID := hex.EncodeToString(nonce)
 	expiry := time.Now().Add(sm.ttl)
-	payload := fmt.Sprintf("%s:%s:%d", identity, hex.EncodeToString(nonce), expiry.Unix())
+	payload := fmt.Sprintf("%s:%s:%d", identity, sessionID, expiry.Unix())
 	sig := sm.sign(payload)
 	value := base64.RawURLEncoding.EncodeToString([]byte(payload)) + "." + base64.RawURLEncoding.EncodeToString(sig)
 
@@ -54,7 +56,7 @@ func (sm *SessionManager) SetCookie(w http.ResponseWriter, identity string) erro
 		SameSite: http.SameSiteLaxMode,
 		Expires:  expiry,
 	})
-	return nil
+	return sessionID, nil
 }
 
 // ValidateRequest checks the session cookie and returns session info if valid.

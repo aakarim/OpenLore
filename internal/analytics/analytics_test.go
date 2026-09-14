@@ -2,6 +2,7 @@ package analytics
 
 import (
 	"context"
+	"encoding/json"
 	"io/fs"
 	"net/http/httptest"
 	"os"
@@ -112,11 +113,50 @@ func TestFactsAndTopCommands(t *testing.T) {
 
 func TestPrometheusExposition(t *testing.T) {
 	a := NewAggregator(AggregatorOptions{})
-	a.Consume(context.Background(), Event{Type: "command.exec", Transport: "ssh", Fields: map[string]any{"command": "cat", "exit_code": 0}})
+	a.Consume(context.Background(), Event{Type: "command.exec", Transport: "ssh", Fields: map[string]any{"command": "cat", "exit_code": 0, "duration_ms": 1500}})
+	a.Consume(context.Background(), Event{Type: "command.exec", Transport: "ssh", Fields: map[string]any{"command": "cat", "exit_code": 0, "duration_ms": 500}})
 	rr := httptest.NewRecorder()
 	a.ServeHTTP(rr, httptest.NewRequest("GET", "/metrics", nil))
-	if !strings.Contains(rr.Body.String(), `openlore_commands_total{command="cat",transport="ssh",exit_class="success"} 1`) {
+	if !strings.Contains(rr.Body.String(), `openlore_commands_total{command="cat",transport="ssh",exit_class="success"} 2`) ||
+		!strings.Contains(rr.Body.String(), `openlore_command_duration_seconds_sum{command="cat"} 2`) ||
+		a.durations["cat"].count != 2 {
 		t.Fatal(rr.Body.String())
+	}
+}
+
+func TestAggregatorDeduplicatesReplayedScalars(t *testing.T) {
+	a := NewAggregator(AggregatorOptions{})
+	e := Event{ID: "first", Type: "doc.scalars", Fields: map[string]any{"commit_id": "commit", "path": "/a.md", "docset": "docs", "writer": "human", "delta": map[string]any{"lines": float64(-2)}}}
+	a.Consume(context.Background(), e)
+	e.ID = "replayed"
+	a.Consume(context.Background(), e)
+	if got := a.scalars["docs\x00human\x00lines"]; got != -2 {
+		t.Fatalf("scalar delta = %v, want -2", got)
+	}
+	rr := httptest.NewRecorder()
+	a.ServeHTTP(rr, httptest.NewRequest("GET", "/metrics", nil))
+	if !strings.Contains(rr.Body.String(), "# TYPE openlore_doc_write_scalar_total gauge") {
+		t.Fatal(rr.Body.String())
+	}
+}
+
+type depthCapturingFacts struct{ depth int }
+
+func (*depthCapturingFacts) Stat(context.Context, string) (DocScalars, error) {
+	return DocScalars{}, nil
+}
+func (f *depthCapturingFacts) Walk(_ context.Context, _ string, opts WalkOptions, _ func(DocScalars) error) error {
+	f.depth = opts.Depth
+	return nil
+}
+
+func TestTreeSizePassesDepthToContentWalk(t *testing.T) {
+	facts := &depthCapturingFacts{}
+	if _, err := treeSize(context.Background(), nil, facts, Params{Extra: map[string]string{"depth": "3"}}); err != nil {
+		t.Fatal(err)
+	}
+	if facts.depth != 3 {
+		t.Fatalf("walk depth = %d, want 3", facts.depth)
 	}
 }
 
@@ -158,8 +198,11 @@ func waitForCheckpoint(t *testing.T, checkpoint, want string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if got, err := os.ReadFile(checkpoint); err == nil && strings.TrimSpace(string(got)) == want {
-			return
+		if got, err := os.ReadFile(checkpoint); err == nil {
+			var state pipelineCheckpoint
+			if json.Unmarshal(got, &state) == nil && state.EventID == want || strings.TrimSpace(string(got)) == want {
+				return
+			}
 		}
 		time.Sleep(time.Millisecond)
 	}

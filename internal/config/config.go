@@ -625,6 +625,13 @@ func parseAnalyticsDuration(value, name string, target *time.Duration) error {
 	if value == "" {
 		return nil
 	}
+	if strings.HasSuffix(value, "d") {
+		days, err := strconv.ParseInt(strings.TrimSuffix(value, "d"), 10, 64)
+		if err == nil && days >= 0 {
+			*target = time.Duration(days) * 24 * time.Hour
+			return nil
+		}
+	}
 	d, err := time.ParseDuration(value)
 	if err != nil || d < 0 {
 		return fmt.Errorf("invalid analytics %s %q", name, value)

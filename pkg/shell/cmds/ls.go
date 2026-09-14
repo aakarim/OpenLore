@@ -9,7 +9,7 @@ import (
 )
 
 func CmdLs(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.Reader) int {
-	analytics := analyticsService(ctx)
+	factsProvider := analyticsFacts(ctx)
 	longFormat := false
 	allFlag := false
 	statsFlag := false
@@ -50,8 +50,8 @@ func CmdLs(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.
 				continue
 			}
 			if longFormat {
-				if statsFlag && analytics != nil {
-					facts, factErr := analytics.Facts().Stat(context.Background(), p)
+				if statsFlag && factsProvider != nil {
+					facts, factErr := factsProvider.Stat(context.Background(), p)
 					if factErr != nil {
 						fmt.Fprintf(errW, "ls: %s: %s\n", target, factErr)
 						exitCode = 1
@@ -61,8 +61,8 @@ func CmdLs(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.
 				} else {
 					PrintLong(w, f)
 				}
-			} else if jsonFlag && analytics != nil {
-				facts, factErr := analytics.Facts().Stat(context.Background(), p)
+			} else if jsonFlag && factsProvider != nil {
+				facts, factErr := factsProvider.Stat(context.Background(), p)
 				if factErr != nil {
 					fmt.Fprintf(errW, "ls: %s: %s\n", target, factErr)
 					exitCode = 1
@@ -81,8 +81,8 @@ func CmdLs(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.
 		for _, e := range entries {
 			ei := e
 			child := path.Join(p, e.FileName)
-			if jsonFlag && analytics != nil {
-				facts, factErr := analytics.Facts().Stat(context.Background(), child)
+			if jsonFlag && factsProvider != nil {
+				facts, factErr := factsProvider.Stat(context.Background(), child)
 				if factErr != nil {
 					fmt.Fprintf(errW, "ls: %s: %s\n", child, factErr)
 					exitCode = 1
@@ -90,8 +90,8 @@ func CmdLs(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.
 				}
 				_ = json.NewEncoder(w).Encode(facts)
 			} else if longFormat {
-				if statsFlag && analytics != nil {
-					facts, factErr := analytics.Facts().Stat(context.Background(), child)
+				if statsFlag && factsProvider != nil {
+					facts, factErr := factsProvider.Stat(context.Background(), child)
 					if factErr != nil {
 						fmt.Fprintf(errW, "ls: %s: %s\n", child, factErr)
 						exitCode = 1

@@ -33,6 +33,13 @@ func fieldFloat(e Event, key string) float64 {
 		return n
 	}
 }
+func scalarEventKey(e Event) string {
+	key := fieldString(e, "commit_id") + "\x00" + fieldString(e, "path")
+	if key == "\x00" {
+		return e.ID
+	}
+	return key
+}
 func limitRows(rows [][]any, p Params) [][]any {
 	if p.Limit > 0 && len(rows) > p.Limit {
 		return rows[:p.Limit]
@@ -212,8 +219,9 @@ func treeSize(ctx context.Context, _ EventSource, facts ContentFacts, p Params) 
 	if root == "" {
 		root = "/"
 	}
+	depth, _ := strconv.Atoi(p.Extra["depth"])
 	var rows [][]any
-	err := facts.Walk(ctx, root, WalkOptions{}, func(d DocScalars) error {
+	err := facts.Walk(ctx, root, WalkOptions{Depth: depth}, func(d DocScalars) error {
 		rows = append(rows, []any{d.Path, 1, d.Scalars["bytes"], d.Scalars["lines"], d.Scalars["tokens"], d.Tokenizer})
 		return nil
 	})
@@ -237,7 +245,13 @@ func largestDocs(ctx context.Context, src EventSource, facts ContentFacts, p Par
 }
 func sizeOverTime(ctx context.Context, src EventSource, _ ContentFacts, p Params) (Table, error) {
 	roll := map[string]map[string]float64{}
+	seen := map[string]struct{}{}
 	err := src.Scan(ctx, EventFilter{From: p.Since, To: p.Until, Types: []string{"doc.scalars"}}, func(e Event) error {
+		id := scalarEventKey(e)
+		if _, exists := seen[id]; exists {
+			return nil
+		}
+		seen[id] = struct{}{}
 		key := e.Time.UTC().Truncate(24*time.Hour).Format(time.RFC3339) + "\x00" + fieldString(e, "docset")
 		r := roll[key]
 		if r == nil {
@@ -273,7 +287,13 @@ func sizeOverTime(ctx context.Context, src EventSource, _ ContentFacts, p Params
 func writeRatio(ctx context.Context, src EventSource, _ ContentFacts, p Params) (Table, error) {
 	var human, agent int
 	var hb, ab float64
+	seen := map[string]struct{}{}
 	err := src.Scan(ctx, EventFilter{From: p.Since, To: p.Until, Types: []string{"doc.scalars"}}, func(e Event) error {
+		id := scalarEventKey(e)
+		if _, exists := seen[id]; exists {
+			return nil
+		}
+		seen[id] = struct{}{}
 		bytes := float64(0)
 		if d, ok := e.Fields["delta"].(map[string]any); ok {
 			bytes, _ = d["bytes"].(float64)

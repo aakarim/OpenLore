@@ -199,6 +199,16 @@ func (r *Registry) Status(name string) Status {
 	return StatusOK
 }
 func (r *Registry) Run(ctx context.Context, name string, p Params, opts RunOptions) (Materialized, error) {
+	return r.run(ctx, name, p, opts, r.facts, true)
+}
+
+// RunWithFacts computes an aggregation against caller-scoped current content.
+// Scoped facts are never read from or written to the shared materialized store.
+func (r *Registry) RunWithFacts(ctx context.Context, name string, p Params, facts ContentFacts) (Materialized, error) {
+	return r.run(ctx, name, p, RunOptions{Fresh: true}, facts, false)
+}
+
+func (r *Registry) run(ctx context.Context, name string, p Params, opts RunOptions, facts ContentFacts, materialize bool) (Materialized, error) {
 	r.mu.RLock()
 	a, ok := r.items[name]
 	r.mu.RUnlock()
@@ -212,20 +222,22 @@ func (r *Registry) Run(ctx context.Context, name string, p Params, opts RunOptio
 	if status == StatusPaused && !opts.Fresh {
 		return Materialized{Status: status, Window: p, Note: "analytics pipeline is paused"}, nil
 	}
-	if !opts.Fresh && r.store != nil {
+	if materialize && !opts.Fresh && r.store != nil {
 		if m, found, err := r.store.Get(ctx, name, p); err != nil {
 			return Materialized{}, err
 		} else if found {
 			return m, nil
 		}
 	}
-	t, err := a.Compute(ctx, r.source, r.facts, p)
+	t, err := a.Compute(ctx, r.source, facts, p)
 	if err != nil {
 		return Materialized{}, err
 	}
 	m := Materialized{Status: StatusOK, Table: t, ComputedAt: time.Now().UTC(), Window: p}
-	if r.store != nil {
-		_ = r.store.Put(ctx, name, p, m)
+	if materialize && r.store != nil {
+		if err := r.store.Put(ctx, name, p, m); err != nil {
+			return Materialized{}, err
+		}
 	}
 	return m, nil
 }
