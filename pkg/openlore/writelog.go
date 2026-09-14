@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aakarim/go-openlore/internal/analytics"
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
 
@@ -52,13 +53,16 @@ type writeLog struct {
 	substrate vfs.WritableFS
 	logger    *slog.Logger
 
-	mu          sync.RWMutex      // guards closed + postCommit + serializes sends against Close
-	postCommit  PostCommitHandler // optional; runs at the applier after a durable commit
-	commitState func(context.Context, CommitInfo) error
-	preApply    func(*Identity, Attribution, vfs.ChangeSet) error
-	history     HistoryRecorder
-	closed      bool
-	ch          chan logEntry
+	mu           sync.RWMutex      // guards closed + postCommit + serializes sends against Close
+	postCommit   PostCommitHandler // optional; runs at the applier after a durable commit
+	commitState  func(context.Context, CommitInfo) error
+	preApply     func(*Identity, Attribution, vfs.ChangeSet) error
+	history      HistoryRecorder
+	commitPath   string
+	blobs        BlobStore
+	blobsEnabled bool
+	closed       bool
+	ch           chan logEntry
 
 	done chan struct{} // closed when the applier goroutine has exited
 }
@@ -102,6 +106,8 @@ func (l *writeLog) run() {
 			continue
 		}
 		var committed vfs.CommitResult
+		commitID := analytics.NewID()
+		var leaves []LeafRecord
 		var err error
 		if preflight, ok := l.substrate.(vfs.ChangePreflighter); ok {
 			for _, change := range e.cs.Leaves() {
@@ -117,17 +123,30 @@ func (l *writeLog) run() {
 			err = pre(e.identity, e.attribution, e.cs)
 		}
 		if err == nil {
+			var captureErr error
+			leaves, captureErr = capturePreImages(context.Background(), l.substrate, l.blobs, e.cs, l.blobsEnabled)
+			if captureErr != nil {
+				l.logger.Warn("history pre-image capture incomplete", "err", captureErr)
+			}
 			committed, err = vfs.CommitChangeSet(l.substrate, e.cs)
+		}
+		if committed.HasCommitted() {
+			leaves = fillAfter(leaves, committed.Committed)
 		}
 		if err == nil && committed.HasCommitted() {
 			l.mu.RLock()
 			state := l.commitState
 			l.mu.RUnlock()
 			if state != nil {
-				err = state(context.Background(), CommitInfo{ChangeSet: committed.Committed, Hash: committed.Hash, Attribution: e.attribution})
+				err = state(context.Background(), CommitInfo{ID: commitID, ChangeSet: committed.Committed, Hash: committed.Hash, Leaves: leaves, Attribution: e.attribution})
 			}
 		}
 		if committed.HasCommitted() {
+			if l.commitPath != "" {
+				if recordErr := appendCommitRecord(l.commitPath, CommitRecord{ID: commitID, Time: time.Now().UTC(), Attribution: e.attribution, ChangeSet: committed.Committed, Hash: committed.Hash, Leaves: leaves}); recordErr != nil {
+					l.logger.Error("commit journal recording failed after durable write", "err", recordErr)
+				}
+			}
 			l.mu.RLock()
 			history := l.history
 			l.mu.RUnlock()
@@ -148,7 +167,7 @@ func (l *writeLog) run() {
 		if pc == nil {
 			continue
 		}
-		if perr := pc(context.Background(), CommitInfo{ChangeSet: committed.Committed, Hash: committed.Hash, Attribution: e.attribution}); perr != nil {
+		if perr := pc(context.Background(), CommitInfo{ID: commitID, ChangeSet: committed.Committed, Hash: committed.Hash, Leaves: leaves, Attribution: e.attribution}); perr != nil {
 			l.logger.Error("post-commit chain failed; log continues",
 				"target", e.cs.Target, "action", e.cs.Action, "err", perr)
 		}
@@ -170,6 +189,12 @@ func (l *writeLog) SetCommitState(h func(context.Context, CommitInfo) error) {
 func (l *writeLog) SetHistoryRecorder(history HistoryRecorder) {
 	l.mu.Lock()
 	l.history = history
+	l.mu.Unlock()
+}
+
+func (l *writeLog) SetCommitJournal(path string, blobs BlobStore, enabled bool) {
+	l.mu.Lock()
+	l.commitPath, l.blobs, l.blobsEnabled = path, blobs, enabled
 	l.mu.Unlock()
 }
 

@@ -29,7 +29,7 @@ func TestRenderFileIncludesBreadcrumbsIframeAndParentCloseLink(t *testing.T) {
 
 	pk.renderFile(rec, req, "/lore", "/guides/setup.md", "adil", []FileHistoryEntry{{
 		Time: time.Date(2026, time.August, 19, 12, 30, 0, 0, time.UTC), Attribution: "adil/claude", Action: "write", Hash: "abc123",
-	}}, true)
+	}}, true, &ContentFacts{Bytes: 42, Lines: 3, Tokens: 11, Tokenizer: "approx"})
 
 	body := rec.Body.String()
 	for _, want := range []string{
@@ -52,6 +52,7 @@ func TestRenderFileIncludesBreadcrumbsIframeAndParentCloseLink(t *testing.T) {
 		`id="identity-button"`,
 		`<span class="identity-name">adil</span>`,
 		`href="/settings/permissions">Permission settings`,
+		`42 bytes · 3 lines · ~11 tokens · approx`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("file view missing %q", want)
@@ -61,7 +62,7 @@ func TestRenderFileIncludesBreadcrumbsIframeAndParentCloseLink(t *testing.T) {
 
 func TestLoreBrowserServesPWAAssetsWithoutAuthentication(t *testing.T) {
 	pk := &Passkeys{cfg: Config{LorePath: "/knowledge"}}
-	handler := pk.LoreBrowserHandler(nil, nil)
+	handler := pk.LoreBrowserHandler(nil, nil, nil)
 
 	t.Run("manifest", func(t *testing.T) {
 		rec := httptest.NewRecorder()
@@ -98,7 +99,9 @@ func TestRenderDirUsesSingleTapActionsAndDoubleTapNavigation(t *testing.T) {
 	pk := &Passkeys{}
 	rec := httptest.NewRecorder()
 
-	pk.renderDir(rec, browserTestFS{}, "/lore", "/docs", "adil")
+	pk.renderDir(rec, browserTestFS{}, "/lore", "/docs", "adil", func(vfs.FileSystem, string) (ContentFacts, error) {
+		return ContentFacts{Bytes: 20, Lines: 2, Tokens: 5}, nil
+	})
 
 	body := rec.Body.String()
 	for _, want := range []string{
@@ -115,6 +118,7 @@ func TestRenderDirUsesSingleTapActionsAndDoubleTapNavigation(t *testing.T) {
 		`id="identity-button"`,
 		`<span class="identity-name">adil</span>`,
 		`href="/settings/permissions">Permission settings`,
+		`20 bytes · 2 lines · ~5 tokens`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("directory view missing %q", want)

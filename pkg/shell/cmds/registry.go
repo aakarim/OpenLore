@@ -101,6 +101,7 @@ func init() {
 	Register("whoami", CmdWhoami)
 	// introspection
 	Register("lore", CmdLore)
+	Register("analytics", CmdAnalytics)
 }
 
 // Register adds a command to the registry.

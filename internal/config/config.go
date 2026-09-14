@@ -23,6 +23,8 @@ import (
 type Config struct {
 	ConfigVersion   string
 	Debug           bool
+	Experimental    []string
+	Analytics       AnalyticsConfig
 	Port            int
 	MetricsPort     int
 	HostKeyPath     string
@@ -104,6 +106,55 @@ type Config struct {
 	configFilePath   string
 	embeddedLoaded   bool
 	warnings         []string
+}
+
+type AnalyticsConfig struct {
+	Enabled         *bool
+	Dir             string
+	Log             AnalyticsLogConfig
+	Ship            AnalyticsShipConfig
+	Pipeline        AnalyticsPipelineConfig
+	ShutdownTimeout time.Duration
+	Aggregations    AnalyticsAggregationConfig
+	History         AnalyticsHistoryConfig
+	Export          AnalyticsExportConfig
+}
+type AnalyticsLogConfig struct {
+	Rotate    time.Duration
+	Compress  string
+	Retention time.Duration
+}
+type AnalyticsShipConfig struct {
+	Interval time.Duration
+	Remote   string
+}
+type AnalyticsPipelineConfig struct {
+	Enabled *bool
+	Buffer  int
+}
+type AnalyticsAggregationConfig struct {
+	RefreshInterval time.Duration
+	Store           string
+}
+type AnalyticsHistoryConfig struct{ Blobs *bool }
+type AnalyticsExportConfig struct{ Prometheus bool }
+
+func boolDefault(v *bool, fallback bool) bool {
+	if v == nil {
+		return fallback
+	}
+	return *v
+}
+func (a AnalyticsConfig) IsEnabled() bool           { return boolDefault(a.Enabled, true) }
+func (a AnalyticsConfig) PipelineEnabled() bool     { return boolDefault(a.Pipeline.Enabled, true) }
+func (a AnalyticsConfig) HistoryBlobsEnabled() bool { return boolDefault(a.History.Blobs, true) }
+func (c Config) ExperimentalEnabled(feature string) bool {
+	for _, name := range c.Experimental {
+		if strings.EqualFold(strings.TrimSpace(name), feature) {
+			return true
+		}
+	}
+	return false
 }
 
 // Source describes where the configuration came from, for startup banners:
@@ -515,6 +566,8 @@ type Option func(*Config) error
 type fileConfig struct {
 	ConfigVersion       string                 `yaml:"version"`
 	Debug               bool                   `yaml:"debug"`
+	Experimental        []string               `yaml:"experimental"`
+	Analytics           analyticsYAML          `yaml:"analytics"`
 	Port                int                    `yaml:"port"`
 	MetricsPort         int                    `yaml:"metrics_port"`
 	HostKeyPath         string                 `yaml:"host_key_path"`
@@ -547,6 +600,76 @@ type fileConfig struct {
 	OIDCIssuers []OIDCIssuer      `yaml:"oidc_issuers"`
 	Inbox       *inboxYAML        `yaml:"inbox"`
 	Plugins     pluginsYAML       `yaml:"plugins"`
+}
+
+type analyticsYAML struct {
+	Enabled  *bool                                        `yaml:"enabled"`
+	Dir      string                                       `yaml:"dir"`
+	Log      struct{ Rotate, Compress, Retention string } `yaml:"log"`
+	Ship     struct{ Interval, Remote string }            `yaml:"ship"`
+	Pipeline struct {
+		Enabled *bool `yaml:"enabled"`
+		Buffer  int   `yaml:"buffer"`
+	} `yaml:"pipeline"`
+	ShutdownTimeout string                                  `yaml:"shutdown_timeout"`
+	Aggregations    struct{ RefreshInterval, Store string } `yaml:"aggregations"`
+	History         struct {
+		Blobs *bool `yaml:"blobs"`
+	} `yaml:"history"`
+	Export struct {
+		Prometheus *bool `yaml:"prometheus"`
+	} `yaml:"export"`
+}
+
+func parseAnalyticsDuration(value, name string, target *time.Duration) error {
+	if value == "" {
+		return nil
+	}
+	if strings.HasSuffix(value, "d") {
+		days, err := strconv.ParseInt(strings.TrimSuffix(value, "d"), 10, 64)
+		if err == nil && days >= 0 {
+			*target = time.Duration(days) * 24 * time.Hour
+			return nil
+		}
+	}
+	d, err := time.ParseDuration(value)
+	if err != nil || d < 0 {
+		return fmt.Errorf("invalid analytics %s %q", name, value)
+	}
+	*target = d
+	return nil
+}
+func applyAnalyticsConfig(cfg *Config, in analyticsYAML) error {
+	cfg.Analytics.Enabled = in.Enabled
+	if in.Dir != "" {
+		cfg.Analytics.Dir = in.Dir
+	}
+	cfg.Analytics.Pipeline.Enabled = in.Pipeline.Enabled
+	if in.Pipeline.Buffer > 0 {
+		cfg.Analytics.Pipeline.Buffer = in.Pipeline.Buffer
+	}
+	cfg.Analytics.History.Blobs = in.History.Blobs
+	if in.Log.Compress != "" {
+		cfg.Analytics.Log.Compress = in.Log.Compress
+	}
+	if in.Ship.Remote != "" {
+		cfg.Analytics.Ship.Remote = in.Ship.Remote
+	}
+	if in.Aggregations.Store != "" {
+		cfg.Analytics.Aggregations.Store = in.Aggregations.Store
+	}
+	if in.Export.Prometheus != nil {
+		cfg.Analytics.Export.Prometheus = *in.Export.Prometheus
+	}
+	for _, item := range []struct {
+		value, name string
+		target      *time.Duration
+	}{{in.Log.Rotate, "log.rotate", &cfg.Analytics.Log.Rotate}, {in.Log.Retention, "log.retention", &cfg.Analytics.Log.Retention}, {in.Ship.Interval, "ship.interval", &cfg.Analytics.Ship.Interval}, {in.ShutdownTimeout, "shutdown_timeout", &cfg.Analytics.ShutdownTimeout}, {in.Aggregations.RefreshInterval, "aggregations.refresh_interval", &cfg.Analytics.Aggregations.RefreshInterval}} {
+		if err := parseAnalyticsDuration(item.value, item.name, item.target); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type rulesYAML struct {
@@ -647,6 +770,7 @@ func New(opts ...Option) (Config, error) {
 		WriteConflictPolicy: vfs.DefaultWriteConflictPolicy, // "hash": overwrites are compare-and-swap
 		MaxJobs:             8,                              // bound concurrent async spawn jobs
 		Rules:               RulesConfig{Growth: 1.25},
+		Analytics:           AnalyticsConfig{Dir: "analytics", Log: AnalyticsLogConfig{Rotate: 24 * time.Hour, Compress: "zstd"}, Ship: AnalyticsShipConfig{Interval: 30 * time.Second, Remote: "none"}, Pipeline: AnalyticsPipelineConfig{Buffer: 1024}, ShutdownTimeout: 10 * time.Second, Aggregations: AnalyticsAggregationConfig{RefreshInterval: 5 * time.Minute, Store: "file"}, Export: AnalyticsExportConfig{Prometheus: true}},
 		Plugins:             PluginsConfig{Skills: SkillsPluginConfig{RemoteCheckTTL: 60 * time.Second, RemoteTimeout: 3 * time.Second, RemoteMaxBytes: 10 * 1024 * 1024}},
 		Passkeys: PasskeysConfig{
 			Enabled:      true,
@@ -676,6 +800,9 @@ func New(opts ...Option) (Config, error) {
 		if err := opt(&cfg); err != nil {
 			return Config{}, err
 		}
+	}
+	if value := os.Getenv("OPENLORE_EXPERIMENTAL"); value != "" {
+		cfg.Experimental = append(cfg.Experimental, strings.Split(value, ",")...)
 	}
 
 	if (cfg.MCPEnabled || cfg.APIEnabled) && cfg.MCPRequireAuth != nil && *cfg.MCPRequireAuth && cfg.Tokens == nil {
@@ -707,6 +834,10 @@ func WithConfigFile(path string) Option {
 
 		cfg.configFileLoaded = true
 		cfg.configFilePath = path
+		cfg.Experimental = append([]string(nil), fc.Experimental...)
+		if err := applyAnalyticsConfig(cfg, fc.Analytics); err != nil {
+			return err
+		}
 		if fc.Rules.Tokenizer != "" {
 			return errors.New("rules.tokenizer is not supported yet")
 		}
@@ -841,6 +972,10 @@ func WithEmbeddedConfig(data []byte, motdFallback string) Option {
 			}
 			cfg.warnings = append(cfg.warnings, warnings...)
 			cfg.embeddedLoaded = true
+			cfg.Experimental = append([]string(nil), fc.Experimental...)
+			if err := applyAnalyticsConfig(cfg, fc.Analytics); err != nil {
+				return err
+			}
 
 			if fc.ConfigVersion != "" {
 				cfg.ConfigVersion = fc.ConfigVersion
