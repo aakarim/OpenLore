@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"path"
-	"strings"
 
 	"github.com/aakarim/go-openlore/internal/analytics"
 	"github.com/aakarim/go-openlore/pkg/vfs"
@@ -25,17 +24,34 @@ func emitDocMetric(ctx CmdContext, eventType, filePath string, content []byte, l
 	if !metricsEnabled(ctx) {
 		return
 	}
-	sum := sha256.Sum256(content)
+	contentHash := ""
+	if tracker, ok := ctx.FS().(vfs.ReadTracker); ok {
+		contentHash, _ = tracker.LastReadHash(filePath)
+	}
+	if contentHash == "" {
+		sum := sha256.Sum256(content)
+		contentHash = hex.EncodeToString(sum[:])
+	}
 	unit := map[string]any{}
 	if lines != nil {
 		unit["lines"] = map[string]any{"start": lines.Start, "end": lines.End}
 	}
 	ctx.EmitMetric(context.Background(), eventType, map[string]any{
 		"path":         vfs.CleanPath(filePath),
-		"content_hash": hex.EncodeToString(sum[:]),
+		"content_hash": contentHash,
 		"unit":         unit,
-		"docset":       docsetForPath(filePath),
 	})
+}
+
+func emitDocLineMetrics(ctx CmdContext, eventType, filePath string, content []byte, lines []int) {
+	for start := 0; start < len(lines); {
+		end := start
+		for end+1 < len(lines) && lines[end+1] == lines[end]+1 {
+			end++
+		}
+		emitDocMetric(ctx, eventType, filePath, content, &analytics.LineRange{Start: lines[start], End: lines[end]})
+		start = end + 1
+	}
 }
 
 func emitSearchMetric(ctx CmdContext, pattern string, scope []string, matchedFiles, matchedLines int, filled bool) {
@@ -49,14 +65,6 @@ func emitSearchMetric(ctx CmdContext, pattern string, scope []string, matchedFil
 		"matched_lines": matchedLines,
 		"filled":        filled,
 	})
-}
-
-func docsetForPath(filePath string) string {
-	clean := strings.TrimPrefix(vfs.CleanPath(filePath), "/")
-	if clean == "" {
-		return ""
-	}
-	return strings.SplitN(clean, "/", 2)[0]
 }
 
 func contentLineCount(content []byte) int {

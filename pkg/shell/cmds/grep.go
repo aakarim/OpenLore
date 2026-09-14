@@ -6,7 +6,6 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/aakarim/go-openlore/internal/analytics"
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
 
@@ -172,7 +171,7 @@ func CmdGrep(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 		}
 		matchedFiles++
 		matchedLines += len(lineHits)
-		emitDocMetric(ctx, "doc.hit", filePath, content, &analytics.LineRange{Start: lineHits[0], End: lineHits[len(lineHits)-1]})
+		emitDocLineMetrics(ctx, "doc.hit", filePath, content, lineHits)
 	}
 
 	for _, target := range targets {

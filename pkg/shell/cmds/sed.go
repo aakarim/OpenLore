@@ -7,8 +7,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-
-	"github.com/aakarim/go-openlore/internal/analytics"
 )
 
 func CmdSed(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.Reader) int {
@@ -65,7 +63,6 @@ func CmdSed(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io
 			lines := splitLinesForSed(orig)
 			var buf bytes.Buffer
 			applySedCommands(cmds, lines, quiet, &buf)
-			emitDocMetric(ctx, "doc.read", resolved, orig, fullLineRange(orig))
 			if c := WriteFileCASMsg(ctx, errW, "sed", f, buf.Bytes(), orig); c != 0 {
 				code = c
 			}
@@ -125,22 +122,17 @@ func emitSedReads(ctx CmdContext, commands []sedCmd, lines []string, files []sed
 			emitDocMetric(ctx, "doc.read", file.path, file.content, fullLineRange(file.content))
 			continue
 		}
-		start, end := 0, 0
+		var selected []int
 		for i := 0; i < file.lineCount; i++ {
 			global := file.lineOffset + i
 			for _, command := range commands {
 				if command.command == 'p' && sedAddressMatch(command, global+1, len(lines), lines[global]) {
-					if start == 0 {
-						start = i + 1
-					}
-					end = i + 1
+					selected = append(selected, i+1)
 					break
 				}
 			}
 		}
-		if start > 0 {
-			emitDocMetric(ctx, "doc.read", file.path, file.content, &analytics.LineRange{Start: start, End: end})
-		}
+		emitDocLineMetrics(ctx, "doc.read", file.path, file.content, selected)
 	}
 }
 

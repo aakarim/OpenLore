@@ -80,6 +80,16 @@ func TopSearchQueries(ctx context.Context, src EventSource, f EventFilter, fille
 }
 
 func FileUsage(ctx context.Context, src EventSource, facts ContentFacts, prefix string, f EventFilter) ([]DocUsage, error) {
+	type observedUnit struct {
+		hash       string
+		start, end int
+		ranged     bool
+	}
+	type scalarState struct {
+		time  time.Time
+		hash  string
+		lines int
+	}
 	usage := map[string]*DocUsage{}
 	if err := facts.Walk(ctx, prefix, WalkOptions{StatOnly: true}, func(d DocScalars) error {
 		usage[d.Path] = &DocUsage{Path: d.Path, Scalars: map[string]float64{"bytes": d.Scalars["bytes"]}}
@@ -87,7 +97,8 @@ func FileUsage(ctx context.Context, src EventSource, facts ContentFacts, prefix 
 	}); err != nil {
 		return nil, err
 	}
-	tokenTimes := map[string]time.Time{}
+	scalars := map[string]scalarState{}
+	units := map[string][]observedUnit{}
 	f.Types = []string{"doc.read", "doc.hit", "doc.scalars"}
 	if err := src.Scan(ctx, f, func(e Event) error {
 		filePath := vfs.CleanPath(fieldString(e, "path"))
@@ -107,13 +118,16 @@ func FileUsage(ctx context.Context, src EventSource, facts ContentFacts, prefix 
 				u.LastReadAt = &last
 				u.ContentHash = fieldString(e, "content_hash")
 			}
+			start, end, ranged := eventLineRange(e)
+			units[filePath] = append(units[filePath], observedUnit{hash: fieldString(e, "content_hash"), start: start, end: end, ranged: ranged})
 		case "doc.scalars":
-			if !e.Time.Before(tokenTimes[filePath]) {
-				if after := scalarFields(e.Fields["after"]); after != nil {
-					if tokens, ok := after["tokens"]; ok {
-						u.Scalars["tokens"] = tokens
-						tokenTimes[filePath] = e.Time
-					}
+			if state := scalars[filePath]; !e.Time.Before(state.time) {
+				after := scalarFields(e.Fields["after"])
+				state = scalarState{time: e.Time, hash: fieldString(e, "content_hash"), lines: int(after["lines"])}
+				scalars[filePath] = state
+				delete(u.Scalars, "tokens")
+				if tokens, ok := after["tokens"]; ok {
+					u.Scalars["tokens"] = tokens
 				}
 			}
 		}
@@ -123,10 +137,50 @@ func FileUsage(ctx context.Context, src EventSource, facts ContentFacts, prefix 
 	}
 	result := make([]DocUsage, 0, len(usage))
 	for _, u := range usage {
+		if state := scalars[u.Path]; state.hash != "" && state.lines > 0 {
+			u.ContentHash = state.hash
+			covered := make([]bool, state.lines)
+			for _, unit := range units[u.Path] {
+				if unit.hash != state.hash {
+					continue
+				}
+				start, end := unit.start, unit.end
+				if !unit.ranged {
+					start, end = 1, state.lines
+				}
+				if start < 1 {
+					start = 1
+				}
+				if end > state.lines {
+					end = state.lines
+				}
+				for line := start; line <= end; line++ {
+					covered[line-1] = true
+				}
+			}
+			u.ColdUnits = coldLineUnits(covered)
+		}
 		result = append(result, *u)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Path < result[j].Path })
 	return result, nil
+}
+
+func coldLineUnits(covered []bool) []ContentUnit {
+	var units []ContentUnit
+	for start := 0; start < len(covered); {
+		if covered[start] {
+			start++
+			continue
+		}
+		end := start
+		for end+1 < len(covered) && !covered[end+1] {
+			end++
+		}
+		units = append(units, ContentUnit{Lines: &LineRange{Start: start + 1, End: end + 1}})
+		start = end + 1
+	}
+	return units
 }
 
 func topSearchQueriesTable(ctx context.Context, src EventSource, _ ContentFacts, p Params) (Table, error) {

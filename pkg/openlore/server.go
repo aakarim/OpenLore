@@ -1167,10 +1167,8 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 	if s.analytics != nil {
 		sh.SetFacts(analytics.NewContentFacts(sessionFS))
 		sh.SetMetricEmitter(func(ctx context.Context, eventType string, fields map[string]any) {
-			if eventType == "doc.read" || eventType == "doc.hit" {
-				if target, ok := fields["path"].(string); ok {
-					fields["docset"] = (&analyticsPlugin{server: s}).docsetForPath(target)
-				}
+			if target, ok := fields["path"].(string); ok {
+				fields["docset"] = (&analyticsPlugin{server: s}).docsetForPath(target)
 			}
 			e := s.analyticsEvent(id, eventType, fields)
 			if invocationID, parentID, ok := analytics.InvocationFromContext(ctx); ok {

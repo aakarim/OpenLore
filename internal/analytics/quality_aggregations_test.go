@@ -89,6 +89,7 @@ func TestLeastUsedLinesIgnoresStaleContentHashes(t *testing.T) {
 	appendEvents(t, log,
 		Event{Time: now, Type: "doc.read", Fields: map[string]any{"path": "/docs/a.md", "content_hash": current.ContentHash, "unit": map[string]any{"lines": map[string]any{"start": 2, "end": 3}}}},
 		Event{Time: now.Add(time.Minute), Type: "doc.read", Fields: map[string]any{"path": "/docs/a.md", "content_hash": "stale", "unit": map[string]any{}}},
+		Event{Time: now.Add(2 * time.Minute), Type: "doc.scalars", Fields: map[string]any{"path": "/docs/a.md", "content_hash": current.ContentHash, "after": map[string]any{"lines": float64(5), "tokens": float64(10)}}},
 	)
 	table, err := leastUsedLines(context.Background(), log, facts, Params{Extra: map[string]string{"path": "/docs/a.md"}})
 	if err != nil {
@@ -96,6 +97,13 @@ func TestLeastUsedLinesIgnoresStaleContentHashes(t *testing.T) {
 	}
 	if len(table.Rows) != 3 || table.Rows[0][1] != 1 || table.Rows[0][2] != 1 || table.Rows[0][4] != 0 || table.Rows[1][1] != 4 || table.Rows[1][2] != 5 || table.Rows[1][4] != 0 || table.Rows[2][1] != 2 || table.Rows[2][2] != 3 || table.Rows[2][4] != 1 {
 		t.Fatalf("line usage rows = %#v", table.Rows)
+	}
+	usage, err := FileUsage(context.Background(), log, facts, "/docs", EventFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(usage) != 1 || len(usage[0].ColdUnits) != 2 || *usage[0].ColdUnits[0].Lines != (LineRange{Start: 1, End: 1}) || *usage[0].ColdUnits[1].Lines != (LineRange{Start: 4, End: 5}) {
+		t.Fatalf("cold units = %#v", usage)
 	}
 }
 

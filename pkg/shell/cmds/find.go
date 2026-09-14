@@ -55,11 +55,6 @@ func CmdFind(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 		matchedResults++
 		if !info.Dir {
 			matchedFiles++
-			if metricsEnabled(ctx) {
-				if content, readErr := ctx.FS().ReadFile(p); readErr == nil {
-					emitDocMetric(ctx, "doc.hit", p, content, fullLineRange(content))
-				}
-			}
 		}
 		return nil
 	})
