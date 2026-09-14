@@ -1,9 +1,11 @@
 package cmds
 
 import (
+	"context"
 	"io"
 	"time"
 
+	"github.com/aakarim/go-openlore/internal/analytics"
 	"github.com/aakarim/go-openlore/pkg/openlore/meta"
 	"github.com/aakarim/go-openlore/pkg/openlore/validation"
 	"github.com/aakarim/go-openlore/pkg/vfs"
@@ -49,6 +51,12 @@ type CmdContext interface {
 	SkillsManagementEnabled() bool
 	SkillsRemoteTimeout() time.Duration
 	SkillsRemoteMaxBytes() int64
+	// Facts exposes current-content measurements through the caller's scoped
+	// filesystem. It is independent of permission to inspect usage analytics.
+	Facts() analytics.ContentFacts
+	// EmitMetric records a semantic event when analytics is enabled and is a
+	// no-op otherwise.
+	EmitMetric(context.Context, string, map[string]any)
 }
 
 type SizeBackend interface {

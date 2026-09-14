@@ -45,18 +45,36 @@ func (p *analyticsPlugin) observeWrites(next PostCommitHandler) PostCommitHandle
 			} else {
 				action = "delete"
 			}
-			fields := map[string]any{"path": vfs.CleanPath(leaf.Target), "docset": docsetFromPath(leaf.Target), "action": action, "writer": string(writer), "commit_id": info.ID, "commit_hash": info.Hash}
+			fields := map[string]any{"path": vfs.CleanPath(leaf.Target), "docset": p.docsetForPath(leaf.Target), "action": action, "writer": string(writer), "commit_id": info.ID, "commit_hash": info.Hash}
 			if leaf.Write != nil {
-				facts := analytics.ComputeScalars(leaf.Target, leaf.Write.Bytes)
-				fields["content_hash"] = facts.ContentHash
+				fields["content_hash"] = leafAfterHash(info.Leaves, leaf.Target)
+				if fields["content_hash"] == "" {
+					fields["content_hash"] = hashContent(leaf.Write.Bytes)
+				}
 			} else {
 				fields["content_hash"] = ""
 			}
-			event := analytics.Event{ID: analytics.NewID(), Time: time.Now().UTC(), Type: "doc.write", Principal: info.Attribution.Principal, Actor: info.Attribution.Actor, InvocationID: info.ID, Fields: fields}
+			event := analytics.Event{ID: analytics.NewID(), Time: time.Now().UTC(), Type: "doc.write", Principal: info.Attribution.Principal, Actor: info.Attribution.Actor, Transport: info.Attribution.Extra["transport"], SessionID: info.Attribution.Extra["session_id"], ClientSessionID: info.Attribution.Extra["client_session_id"], RemoteAddr: info.Attribution.Extra["remote_addr"], InvocationID: info.Attribution.Extra["invocation_id"], ParentID: info.Attribution.Extra["parent_id"], Fields: fields}
 			p.service.Record(ctx, event)
 		}
 		return next(ctx, info)
 	}
+}
+func leafAfterHash(leaves []LeafRecord, target string) string {
+	for _, leaf := range leaves {
+		if vfs.CleanPath(leaf.Target) == vfs.CleanPath(target) {
+			return leaf.AfterHash
+		}
+	}
+	return ""
+}
+func (p *analyticsPlugin) docsetForPath(target string) string {
+	if p.server != nil && p.server.auth != nil {
+		if _, name, _, ok := owningDocset(p.server.currentAuth().Docsets, target); ok {
+			return name
+		}
+	}
+	return docsetFromPath(target)
 }
 func docsetFromPath(p string) string {
 	p = strings.Trim(vfs.CleanPath(p), "/")
@@ -70,6 +88,9 @@ func docsetFromPath(p string) string {
 }
 
 func (p *analyticsPlugin) PrepareHTTPRoutes(s *Server) (HTTPRouteRegistrar, error) {
+	if !s.authEnforced {
+		return func(*http.ServeMux) {}, nil
+	}
 	return func(mux *http.ServeMux) {
 		auth := func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -90,7 +111,7 @@ func (p *analyticsPlugin) PrepareHTTPRoutes(s *Server) (HTTPRouteRegistrar, erro
 					id = s.identityFromContext(r.Context())
 					ok = id.IdentityName != "" && id.IdentityName != "guest"
 				}
-				if !ok || s.authEnforced && !s.hasCurrentCapability(id, "lore:analytics:view") {
+				if !ok || !s.hasCurrentCapability(id, "lore:analytics:view") {
 					http.NotFound(w, r)
 					return
 				}

@@ -2,12 +2,88 @@ package analytics
 
 import (
 	"context"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 )
+
+type retryRemote struct {
+	mu      sync.Mutex
+	fail    bool
+	objects map[string][]byte
+}
+
+func (r *retryRemote) Put(_ context.Context, key string, src io.Reader, _ int64) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.fail {
+		r.fail = false
+		return errors.New("temporary")
+	}
+	b, err := io.ReadAll(src)
+	if err == nil {
+		r.objects[key] = b
+	}
+	return err
+}
+func (*retryRemote) List(context.Context, string) ([]string, error)     { return nil, nil }
+func (*retryRemote) Get(context.Context, string) (io.ReadCloser, error) { return nil, os.ErrNotExist }
+
+func TestShipperRetriesActiveRangeWithoutAdvancingCheckpoint(t *testing.T) {
+	dir := t.TempDir()
+	log, _ := OpenEventLog(dir, LogOptions{Compress: "none"})
+	if err := log.Append(context.Background(), Event{ID: "one"}); err != nil {
+		t.Fatal(err)
+	}
+	remote := &retryRemote{fail: true, objects: map[string][]byte{}}
+	shipper := NewShipper(log, remote, time.Hour)
+	if err := shipper.ShipNow(context.Background()); err == nil {
+		t.Fatal("expected transient upload error")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "shipper.checkpoint")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("checkpoint advanced after failure: %v", err)
+	}
+	if err := shipper.ShipNow(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if lag, _ := shipper.Lag(); lag != 0 {
+		t.Fatalf("lag = %d, want 0", lag)
+	}
+	if len(remote.objects) != 1 {
+		t.Fatalf("uploaded objects = %d, want 1", len(remote.objects))
+	}
+	for key := range remote.objects {
+		if !strings.HasPrefix(key, "events/") || !strings.HasSuffix(key, ".jsonl") {
+			t.Fatalf("active object key = %q, want events/<day>/<start>-<end>.jsonl", key)
+		}
+	}
+}
+
+func TestAggregationStoreMovingWindowKeyIsStable(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenAggregationStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	a := Params{Since: now.Add(-time.Hour), Until: now, Limit: 10, Extra: map[string]string{"b": "2", "a": "1"}}
+	b := Params{Since: now.Add(time.Minute - time.Hour), Until: now.Add(time.Minute), Limit: 10, Extra: map[string]string{"a": "1", "b": "2"}}
+	if err := store.Put(context.Background(), "test", a, Materialized{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Put(context.Background(), "test", b, Materialized{}); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 {
+		t.Fatalf("materialization files = %d, want 1", len(entries))
+	}
+}
 
 func TestPipelineMissingCheckpointProcessesRetainedTail(t *testing.T) {
 	log, err := OpenEventLog(t.TempDir(), LogOptions{Compress: "none"})

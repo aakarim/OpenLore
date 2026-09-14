@@ -56,6 +56,23 @@ func TestAnalyticsFactsUseShellFileSystem(t *testing.T) {
 	}
 }
 
+func TestContentFactsDoNotGrantAnalyticsAccess(t *testing.T) {
+	fs := newMapFS()
+	fs.AddFile("/doc.md", "one\ntwo\n")
+	sh := shell.NewShell(fs)
+	sh.SetFacts(analytics.NewContentFacts(fs))
+
+	var out, errOut bytes.Buffer
+	if code := sh.Exec("stat --json /doc.md", &out, &errOut, nil); code != 0 || !strings.Contains(out.String(), `"lines":2`) {
+		t.Fatalf("facts command: code=%d out=%q err=%q", code, out.String(), errOut.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := sh.Exec("analytics list", &out, &errOut, nil); code == 0 || !strings.Contains(errOut.String(), "not enabled") {
+		t.Fatalf("analytics command: code=%d out=%q err=%q", code, out.String(), errOut.String())
+	}
+}
+
 func TestAnalyticsReplayReportsParseError(t *testing.T) {
 	fs := newMapFS()
 	sh := shell.NewShell(fs)

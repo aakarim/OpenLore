@@ -123,12 +123,15 @@ func (l *writeLog) run() {
 			err = pre(e.identity, e.attribution, e.cs)
 		}
 		if err == nil {
-			leaves, captureErr := capturePreImages(context.Background(), l.substrate, l.blobs, e.cs, l.blobsEnabled)
+			var captureErr error
+			leaves, captureErr = capturePreImages(context.Background(), l.substrate, l.blobs, e.cs, l.blobsEnabled)
 			if captureErr != nil {
 				l.logger.Warn("history pre-image capture incomplete", "err", captureErr)
 			}
-			_ = leaves
 			committed, err = vfs.CommitChangeSet(l.substrate, e.cs)
+		}
+		if committed.HasCommitted() {
+			leaves = fillAfter(leaves, committed.Committed)
 		}
 		if err == nil && committed.HasCommitted() {
 			l.mu.RLock()
@@ -139,7 +142,6 @@ func (l *writeLog) run() {
 			}
 		}
 		if committed.HasCommitted() {
-			leaves = fillAfter(leaves, committed.Committed)
 			if l.commitPath != "" {
 				if recordErr := appendCommitRecord(l.commitPath, CommitRecord{ID: commitID, Time: time.Now().UTC(), Attribution: e.attribution, ChangeSet: committed.Committed, Hash: committed.Hash, Leaves: leaves}); recordErr != nil {
 					l.logger.Error("commit journal recording failed after durable write", "err", recordErr)

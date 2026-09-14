@@ -173,10 +173,6 @@ func capturePreImages(ctx context.Context, fsys vfs.FileSystem, blobs BlobStore,
 		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 			record.BeforeUnknown = true
 		}
-		if !enabled && record.BeforeHash != "" {
-			record.BeforeUnknown = true
-			record.BeforeHash = ""
-		}
 		out = append(out, record)
 		return nil
 	}
@@ -256,6 +252,15 @@ func (c *fileHistoryCursor) Next(ctx context.Context) (CommitRecord, bool, error
 	}
 	line, err := c.reader.ReadBytes('\n')
 	if errors.Is(err, io.EOF) && len(line) == 0 {
+		return CommitRecord{}, false, nil
+	}
+	if errors.Is(err, io.EOF) {
+		// An append-only journal may be observed between the record write and
+		// its terminating newline. Do not consume that record until complete.
+		if _, seekErr := c.file.Seek(c.position.Offset, io.SeekStart); seekErr != nil {
+			return CommitRecord{}, false, seekErr
+		}
+		c.reader.Reset(c.file)
 		return CommitRecord{}, false, nil
 	}
 	if err != nil && !errors.Is(err, io.EOF) {

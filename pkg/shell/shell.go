@@ -2,6 +2,7 @@ package shell
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"path"
@@ -41,6 +42,7 @@ type Shell struct {
 	unsupportedUsageHandler func(UnsupportedUsage)
 	commandObserver         func(CommandExecution)
 	invocationID            string
+	commandEventID          string
 	pipelinePosition        int
 	// metaExtenders are the plugin-contributed extenders applied by `lore meta`,
 	// installed by the host per session. nil for a standalone shell.
@@ -57,6 +59,9 @@ type Shell struct {
 	jobs                 cmds.JobBackend
 	size                 cmds.SizeBackend
 	analytics            *analytics.Service
+	facts                analytics.ContentFacts
+	metricEmitter        func(context.Context, string, map[string]any)
+	invocationObserver   func(string, string)
 	exitRequested        bool
 }
 
@@ -183,8 +188,24 @@ func (s *Shell) SetJobBackend(b cmds.JobBackend)                   { s.jobs = b 
 func (s *Shell) JobBackend() cmds.JobBackend                       { return s.jobs }
 func (s *Shell) SetSizeBackend(b cmds.SizeBackend)                 { s.size = b }
 func (s *Shell) SizeBackend() cmds.SizeBackend                     { return s.size }
-func (s *Shell) SetAnalytics(service *analytics.Service)           { s.analytics = service }
-func (s *Shell) Analytics() *analytics.Service                     { return s.analytics }
+func (s *Shell) SetAnalytics(service *analytics.Service) {
+	s.analytics = service
+	if service != nil && s.facts == nil {
+		s.facts = analytics.NewContentFacts(s.fs)
+	}
+}
+func (s *Shell) Analytics() *analytics.Service         { return s.analytics }
+func (s *Shell) SetFacts(facts analytics.ContentFacts) { s.facts = facts }
+func (s *Shell) Facts() analytics.ContentFacts         { return s.facts }
+func (s *Shell) SetMetricEmitter(fn func(context.Context, string, map[string]any)) {
+	s.metricEmitter = fn
+}
+func (s *Shell) EmitMetric(ctx context.Context, eventType string, fields map[string]any) {
+	if s.metricEmitter != nil {
+		s.metricEmitter(analytics.ContextWithInvocation(ctx, s.invocationID, s.commandEventID), eventType, fields)
+	}
+}
+func (s *Shell) SetInvocationObserver(fn func(string, string)) { s.invocationObserver = fn }
 
 // --- CmdContext interface implementation ---
 
@@ -355,6 +376,12 @@ func (s *Shell) execCall(call *parser.CallExpr, w io.Writer, errW io.Writer, std
 	}
 	command := s.expandWord(call.Args[0])
 	eventID := analytics.NewID()
+	s.commandEventID = eventID
+	defer func() { s.commandEventID = "" }()
+	if s.invocationObserver != nil {
+		s.invocationObserver(s.invocationID, eventID)
+		defer s.invocationObserver("", "")
+	}
 	position := s.pipelinePosition
 	s.pipelinePosition++
 	counter := &countingWriter{Writer: w}

@@ -113,12 +113,14 @@ func TestFactsAndTopCommands(t *testing.T) {
 
 func TestPrometheusExposition(t *testing.T) {
 	a := NewAggregator(AggregatorOptions{})
-	a.Consume(context.Background(), Event{Type: "command.exec", Transport: "ssh", Fields: map[string]any{"command": "cat", "exit_code": 0, "duration_ms": 1500}})
+	a.Consume(context.Background(), Event{Type: "command.exec", Transport: "ssh", InvocationID: "invoke-1", Fields: map[string]any{"command": "cat", "exit_code": 0, "duration_ms": 1500}})
 	a.Consume(context.Background(), Event{Type: "command.exec", Transport: "ssh", Fields: map[string]any{"command": "cat", "exit_code": 0, "duration_ms": 500}})
 	rr := httptest.NewRecorder()
 	a.ServeHTTP(rr, httptest.NewRequest("GET", "/metrics", nil))
 	if !strings.Contains(rr.Body.String(), `openlore_commands_total{command="cat",transport="ssh",exit_class="success"} 2`) ||
 		!strings.Contains(rr.Body.String(), `openlore_command_duration_seconds_sum{command="cat"} 2`) ||
+		!strings.Contains(rr.Body.String(), `# {invocation_id="invoke-1"} 1.5`) ||
+		strings.Contains(rr.Body.String(), `command="cat",invocation_id=`) ||
 		a.durations["cat"].count != 2 {
 		t.Fatal(rr.Body.String())
 	}

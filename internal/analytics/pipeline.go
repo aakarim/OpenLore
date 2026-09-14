@@ -3,8 +3,11 @@ package analytics
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 )
@@ -37,6 +40,7 @@ type ConsumerResetter interface {
 type pipelineCheckpoint struct {
 	EventID    string                     `json:"event_id,omitempty"`
 	Processors map[string]json.RawMessage `json:"processors,omitempty"`
+	Segments   logCursor                  `json:"segments,omitempty"`
 }
 
 type PipelineOptions struct {
@@ -51,7 +55,10 @@ type Pipeline struct {
 	checkpoint  string
 	opts        PipelineOptions
 	handoff     chan Event
-	seen        sync.Map
+	seenMu      sync.Mutex
+	seen        map[string]struct{}
+	seenOrder   []string
+	cursor      logCursor
 	cancel      context.CancelFunc
 	done        chan struct{}
 	once        sync.Once
@@ -63,16 +70,33 @@ func NewPipeline(log EventLog, checkpoint string, opts PipelineOptions) *Pipelin
 	if opts.Buffer <= 0 {
 		opts.Buffer = 1024
 	}
-	return &Pipeline{log: log, checkpoint: checkpoint, opts: opts, handoff: make(chan Event, opts.Buffer), done: make(chan struct{})}
+	return &Pipeline{log: log, checkpoint: checkpoint, opts: opts, handoff: make(chan Event, opts.Buffer), done: make(chan struct{}), seen: map[string]struct{}{}, cursor: logCursor{}}
 }
 func (p *Pipeline) Handoff() chan<- Event { return p.handoff }
+func (p *Pipeline) markSeen(id string) bool {
+	if id == "" {
+		return false
+	}
+	p.seenMu.Lock()
+	defer p.seenMu.Unlock()
+	if _, ok := p.seen[id]; ok {
+		return true
+	}
+	p.seen[id] = struct{}{}
+	p.seenOrder = append(p.seenOrder, id)
+	if len(p.seenOrder) > 4096 {
+		delete(p.seen, p.seenOrder[0])
+		p.seenOrder = p.seenOrder[1:]
+	}
+	return false
+}
 func (p *Pipeline) handle(ctx context.Context, e Event) {
 	p.processMu.Lock()
 	defer p.processMu.Unlock()
 	p.handleLocked(ctx, e)
 }
 func (p *Pipeline) handleLocked(ctx context.Context, e Event) {
-	if _, loaded := p.seen.LoadOrStore(e.ID, true); loaded {
+	if p.markSeen(e.ID) {
 		return
 	}
 	for _, processor := range p.opts.Processors {
@@ -80,7 +104,7 @@ func (p *Pipeline) handleLocked(ctx context.Context, e Event) {
 			if p.opts.Sink != nil {
 				p.opts.Sink.Record(ctx, derived)
 			}
-			p.seen.Store(derived.ID, true)
+			p.markSeen(derived.ID)
 			for _, consumer := range p.opts.Consumers {
 				consumer.Consume(ctx, derived)
 			}
@@ -93,7 +117,7 @@ func (p *Pipeline) handleLocked(ctx context.Context, e Event) {
 	p.writeCheckpoint(e.ID)
 }
 func (p *Pipeline) consumePersisted(ctx context.Context, e Event) {
-	p.seen.Store(e.ID, true)
+	p.markSeen(e.ID)
 	for _, consumer := range p.opts.Consumers {
 		consumer.Consume(ctx, e)
 	}
@@ -103,7 +127,7 @@ func (p *Pipeline) emitDerived(ctx context.Context, events []Event) {
 		if p.opts.Sink != nil {
 			p.opts.Sink.Record(ctx, derived)
 		}
-		p.seen.Store(derived.ID, true)
+		p.markSeen(derived.ID)
 		for _, consumer := range p.opts.Consumers {
 			consumer.Consume(ctx, derived)
 		}
@@ -117,7 +141,10 @@ func (p *Pipeline) drainLocked(ctx context.Context) {
 	}
 }
 func (p *Pipeline) writeCheckpoint(id string) {
-	state := pipelineCheckpoint{EventID: id, Processors: map[string]json.RawMessage{}}
+	state := pipelineCheckpoint{EventID: id, Processors: map[string]json.RawMessage{}, Segments: logCursor{}}
+	for path, offset := range p.cursor {
+		state.Segments[path] = offset
+	}
 	for _, processor := range p.opts.Processors {
 		if checkpointer, ok := processor.(ProcessorCheckpointer); ok {
 			if raw, err := checkpointer.MarshalCheckpointState(); err == nil {
@@ -167,35 +194,54 @@ func bytesTrimSpace(b []byte) []byte {
 func (p *Pipeline) Run(ctx context.Context) {
 	p.once.Do(func() {
 		ctx, p.cancel = context.WithCancel(ctx)
-		checkpointID := p.readCheckpoint().EventID
+		state := p.readCheckpoint()
+		checkpointID := state.EventID
 		p.processMu.Lock()
 		p.lastEventID = checkpointID
+		if len(state.Segments) > 0 {
+			p.cursor = state.Segments
+		}
+		cursor := logCursor{}
+		for path, offset := range p.cursor {
+			cursor[path] = offset
+		}
 		p.processMu.Unlock()
 		go func() {
 			defer close(p.done)
-			var retained []Event
-			cursor := logCursor{}
 			scan := func(fn func(Event) error) error {
 				if log, ok := p.log.(*fileEventLog); ok {
 					return log.scanIncremental(ctx, cursor, fn)
 				}
 				return p.log.Scan(ctx, EventFilter{}, fn)
 			}
-			_ = scan(func(e Event) error { retained = append(retained, e); return nil })
-			checkpointAt := -1
-			for i := range retained {
-				if retained[i].ID == checkpointID {
-					checkpointAt = i
-				}
+			// New checkpoints resume directly at durable segment offsets. For a
+			// legacy ID-only checkpoint, stream (rather than retain) until the ID.
+			legacy := len(state.Segments) == 0 && checkpointID != ""
+			legacyFound := false
+			if legacy {
+				// Determine whether retention removed the old checkpoint without
+				// buffering the log. If it did, the retained log is all new work.
+				_ = p.log.Scan(ctx, EventFilter{}, func(e Event) error {
+					if e.ID == checkpointID {
+						legacyFound = true
+					}
+					return nil
+				})
 			}
-			for i, e := range retained {
-				if checkpointAt >= 0 && i <= checkpointAt {
+			pastLegacy := !legacy || !legacyFound
+			_ = scan(func(e Event) error {
+				if !pastLegacy {
 					p.consumePersisted(ctx, e)
-				} else {
-					p.handle(ctx, e)
+					if e.ID == checkpointID {
+						pastLegacy = true
+					}
+					return nil
 				}
-			}
+				p.handle(ctx, e)
+				return nil
+			})
 			p.processMu.Lock()
+			p.cursor = cloneCursor(cursor)
 			p.drainLocked(ctx)
 			p.writeCheckpoint(p.lastEventID)
 			p.processMu.Unlock()
@@ -208,6 +254,7 @@ func (p *Pipeline) Run(ctx context.Context) {
 				case <-ticker.C:
 					_ = scan(func(e Event) error { p.handle(ctx, e); return nil })
 					p.processMu.Lock()
+					p.cursor = cloneCursor(cursor)
 					p.drainLocked(ctx)
 					p.writeCheckpoint(p.lastEventID)
 					p.processMu.Unlock()
@@ -217,6 +264,13 @@ func (p *Pipeline) Run(ctx context.Context) {
 			}
 		}()
 	})
+}
+func cloneCursor(cursor logCursor) logCursor {
+	clone := logCursor{}
+	for path, offset := range cursor {
+		clone[path] = offset
+	}
+	return clone
 }
 func (p *Pipeline) Close(ctx context.Context) error {
 	for {
@@ -248,7 +302,11 @@ drained:
 func (p *Pipeline) Replay(ctx context.Context, from time.Time) error {
 	p.processMu.Lock()
 	defer p.processMu.Unlock()
-	p.seen = sync.Map{}
+	p.seenMu.Lock()
+	p.seen = map[string]struct{}{}
+	p.seenOrder = nil
+	p.seenMu.Unlock()
+	p.cursor = logCursor{}
 	p.lastEventID = ""
 	for _, processor := range p.opts.Processors {
 		if replayer, ok := processor.(ProcessorReplayer); ok {
@@ -318,7 +376,25 @@ func (r *Refresher) Refresh(ctx context.Context, names ...string) error {
 		if len(wanted) > 0 && !wanted[a.Name] || r.registry.Status(a.Name) != StatusOK {
 			continue
 		}
-		if _, err := r.registry.Run(ctx, a.Name, Params{Since: time.Now().Add(-30 * 24 * time.Hour), Until: time.Now(), Limit: 100}, RunOptions{Fresh: true}); err != nil {
+		requiresFacts := false
+		for _, requirement := range a.Requires {
+			requiresFacts = requiresFacts || requirement == "facts"
+		}
+		// Current-content facts do not change when event-log refresh ticks. Never
+		// schedule them, and for an explicit request compute without creating a
+		// shared moving-window materialization.
+		if requiresFacts && len(wanted) == 0 {
+			continue
+		}
+		now := time.Now()
+		params := Params{Since: now.Add(-30 * 24 * time.Hour), Until: now, Limit: 100}
+		var err error
+		if requiresFacts {
+			_, err = r.registry.RunWithFacts(ctx, a.Name, params, r.registry.facts)
+		} else {
+			_, err = r.registry.Run(ctx, a.Name, params, RunOptions{Fresh: true})
+		}
+		if err != nil {
 			return err
 		}
 	}
@@ -350,10 +426,13 @@ type Shipper struct {
 	cancel   context.CancelFunc
 	done     chan struct{}
 	once     sync.Once
+	shipMu   sync.Mutex
+	offsets  map[string]int64
+	loaded   bool
 }
 
 func NewShipper(log EventLog, remote RemoteEventStore, interval time.Duration) *Shipper {
-	return &Shipper{log: log, remote: remote, interval: interval, done: make(chan struct{})}
+	return &Shipper{log: log, remote: remote, interval: interval, done: make(chan struct{}), offsets: map[string]int64{}}
 }
 func (s *Shipper) Run(ctx context.Context) {
 	s.once.Do(func() {
@@ -397,8 +476,109 @@ func (s *Shipper) Close(ctx context.Context) error {
 	}
 }
 func (s *Shipper) ShipNow(ctx context.Context) error {
-	// Phase 1's remote is deliberately "none". Sealing still runs so daily
-	// segments are compressed and retention is enforced on every server.
-	return s.log.Seal(ctx, time.Now().UTC().Truncate(24*time.Hour))
+	s.shipMu.Lock()
+	defer s.shipMu.Unlock()
+	if err := s.log.Seal(ctx, time.Now().UTC().Truncate(24*time.Hour)); err != nil {
+		return err
+	}
+	// remote:none deliberately retains local sealing/retention behavior without
+	// creating a checkpoint or pretending that bytes were shipped.
+	if s.remote == nil {
+		return nil
+	}
+	s.loadCheckpoint()
+	segments := s.log.Segments()
+	for _, seg := range segments {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		base := filepath.Base(seg.Path)
+		day := seg.Day.UTC().Format("2006-01-02")
+		offset := s.offsets[base]
+		if offset > seg.Size {
+			offset = 0
+		}
+		if offset == seg.Size {
+			continue
+		}
+		f, err := os.Open(seg.Path)
+		if err != nil {
+			return err
+		}
+		key := "events/" + day + "/" + base
+		if !seg.Compressed {
+			// Each active upload is an immutable byte-range object. Retrying uses
+			// the same key and bytes; the checkpoint advances only after Put.
+			key = fmt.Sprintf("events/%s/%020d-%020d.jsonl", day, offset, seg.Size)
+		}
+		_, seekErr := f.Seek(offset, io.SeekStart)
+		if seekErr == nil {
+			err = s.remote.Put(ctx, key, io.LimitReader(f, seg.Size-offset), seg.Size-offset)
+		}
+		_ = f.Close()
+		if seekErr != nil {
+			return seekErr
+		}
+		if err != nil {
+			return err
+		}
+		s.offsets[base] = seg.Size
+		if err := s.saveCheckpoint(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
-func (s *Shipper) Lag() (int64, time.Time) { return 0, time.Time{} }
+func (s *Shipper) checkpointPath() string {
+	if l, ok := s.log.(*fileEventLog); ok {
+		return filepath.Join(l.dir, "shipper.checkpoint")
+	}
+	return ""
+}
+func (s *Shipper) loadCheckpoint() {
+	if s.loaded {
+		return
+	}
+	s.loaded = true
+	if b, err := os.ReadFile(s.checkpointPath()); err == nil {
+		_ = json.Unmarshal(b, &s.offsets)
+	}
+}
+func (s *Shipper) saveCheckpoint() error {
+	path := s.checkpointPath()
+	if path == "" {
+		return nil
+	}
+	b, err := json.Marshal(s.offsets)
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err = os.WriteFile(tmp, append(b, '\n'), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+func (s *Shipper) Lag() (int64, time.Time) {
+	if s.remote == nil {
+		return 0, time.Time{}
+	}
+	s.shipMu.Lock()
+	defer s.shipMu.Unlock()
+	s.loadCheckpoint()
+	var bytes int64
+	var since time.Time
+	segments := s.log.Segments()
+	sort.Slice(segments, func(i, j int) bool { return segments[i].Day.Before(segments[j].Day) })
+	for _, seg := range segments {
+		n := seg.Size - s.offsets[filepath.Base(seg.Path)]
+		if n <= 0 {
+			continue
+		}
+		bytes += n
+		if since.IsZero() || seg.Day.Before(since) {
+			since = seg.Day
+		}
+	}
+	return bytes, since
+}

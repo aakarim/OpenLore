@@ -201,8 +201,5 @@ func analyticsService(ctx CmdContext) *analytics.Service {
 }
 
 func analyticsFacts(ctx CmdContext) analytics.ContentFacts {
-	if analyticsService(ctx) == nil {
-		return nil
-	}
-	return analytics.NewContentFacts(ctx.FS())
+	return ctx.Facts()
 }

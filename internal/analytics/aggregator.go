@@ -12,8 +12,10 @@ import (
 
 type AggregatorOptions struct{}
 type durationSummary struct {
-	sum   float64
-	count int64
+	sum           float64
+	count         int64
+	exemplarID    string
+	exemplarValue float64
 }
 type Aggregator struct {
 	mu         sync.RWMutex
@@ -53,6 +55,10 @@ func (a *Aggregator) Consume(_ context.Context, e Event) {
 		duration := a.durations[cmd]
 		duration.sum += fieldFloat(e, "duration_ms") / 1000
 		duration.count++
+		if e.InvocationID != "" {
+			duration.exemplarID = e.InvocationID
+			duration.exemplarValue = fieldFloat(e, "duration_ms") / 1000
+		}
 		a.durations[cmd] = duration
 	case "doc.write":
 		key := fieldString(e, "docset") + "\x00" + fieldString(e, "writer")
@@ -107,7 +113,13 @@ func (a *Aggregator) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 	for _, command := range keys {
 		duration := a.durations[command]
 		fmt.Fprintf(w, "openlore_command_duration_seconds_sum{command=%s} %g\n", promQuote(command), duration.sum)
-		fmt.Fprintf(w, "openlore_command_duration_seconds_count{command=%s} %d\n", promQuote(command), duration.count)
+		fmt.Fprintf(w, "openlore_command_duration_seconds_count{command=%s} %d", promQuote(command), duration.count)
+		if duration.exemplarID != "" {
+			// invocation_id belongs on an exemplar, never on the metric's label
+			// set, so it cannot increase series cardinality.
+			fmt.Fprintf(w, " # {invocation_id=%s} %g", promQuote(duration.exemplarID), duration.exemplarValue)
+		}
+		fmt.Fprintln(w)
 	}
 	// Content can shrink, so scalar deltas are gauges rather than monotonic
 	// counters.

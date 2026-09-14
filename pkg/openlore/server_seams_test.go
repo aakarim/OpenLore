@@ -86,6 +86,43 @@ func TestNewServerWithRootFS_WriteLogLive(t *testing.T) {
 	}
 }
 
+func TestWritableServerRecordsChangeHistoryWhenAnalyticsDisabled(t *testing.T) {
+	dataDir := t.TempDir()
+	s, err := NewServerWithRootFS(&wlRecordingFS{}, WithReadonly(false), config.WithDataDir(dataDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Shutdown(context.Background()) })
+	if s.analytics != nil {
+		t.Fatal("analytics unexpectedly enabled")
+	}
+	for _, body := range []string{"A", "BB"} {
+		change := vfs.ChangeSet{Target: "/doc.md", Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: []byte(body)}}
+		if _, err := s.CommitChangeSet(context.Background(), Attribution{Principal: "alice"}, change); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cursor, err := OpenHistoryCursor(filepath.Join(dataDir, "history", "commits.jsonl"), HistoryPosition{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, ok, err := cursor.Next(context.Background())
+	if err != nil || !ok {
+		t.Fatalf("first history record: ok=%v err=%v", ok, err)
+	}
+	second, ok, err := cursor.Next(context.Background())
+	if err != nil || !ok || len(second.Leaves) != 1 || second.Leaves[0].BeforeHash != hashContent([]byte("A")) {
+		t.Fatalf("second history record = %#v, ok=%v err=%v", second, ok, err)
+	}
+	blobs, err := OpenBlobStore(filepath.Join(dataDir, "history", "objects"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exists, err := blobs.Has(context.Background(), second.Leaves[0].BeforeHash); err != nil || !exists {
+		t.Fatalf("pre-image blob exists=%v err=%v", exists, err)
+	}
+}
+
 func TestUnsupportedShellUsageIsLoggedOnlyInDebugMode(t *testing.T) {
 	for _, tt := range []struct {
 		name  string

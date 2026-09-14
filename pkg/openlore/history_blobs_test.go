@@ -67,8 +67,123 @@ func TestCapturePreImagesSeparatesExistenceFromUnknownContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(leaves) != 2 || leaves[0].BeforeExists || leaves[0].BeforeUnknown || !leaves[1].BeforeExists || !leaves[1].BeforeUnknown {
+	if len(leaves) != 2 || leaves[0].BeforeExists || leaves[0].BeforeUnknown || !leaves[1].BeforeExists || leaves[1].BeforeUnknown || leaves[1].BeforeHash != hashContent([]byte("old")) || leaves[1].BeforeSize != 3 {
 		t.Fatalf("existence/unknown metadata = %#v", leaves)
+	}
+}
+
+func TestHistoryCursorDoesNotConsumePartialEOFRecord(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "commits.jsonl")
+	partial := `{"id":"one"}`
+	if err := os.WriteFile(file, []byte(partial), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cursor, err := OpenHistoryCursor(file, HistoryPosition{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := cursor.Next(context.Background()); err != nil || ok {
+		t.Fatalf("partial Next = ok %v, err %v", ok, err)
+	}
+	if got := cursor.Position(); got != (HistoryPosition{}) {
+		t.Fatalf("partial record advanced position: %#v", got)
+	}
+	f, err := os.OpenFile(file, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.WriteString("\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	record, ok, err := cursor.Next(context.Background())
+	if err != nil || !ok || record.ID != "one" {
+		t.Fatalf("completed Next = %#v, ok %v, err %v", record, ok, err)
+	}
+}
+
+func TestScalarProcessorUsesRecordedSizesWithoutBeforeBlob(t *testing.T) {
+	record := CommitRecord{ID: "sizes", ChangeSet: vfs.ChangeSet{Target: "/a.md", Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: []byte("1234567")}}, Leaves: []LeafRecord{{Target: "/a.md", Action: vfs.ChangeActionWrite, BeforeExists: true, BeforeHash: hashContent([]byte("old")), BeforeSize: 3, AfterSize: 7}}}
+	events := scalarProcessorForRecords(t, []CommitRecord{record}).Drain(context.Background())
+	delta := events[0].Fields["delta"].(map[string]any)
+	if delta["bytes"] != float64(4) {
+		t.Fatalf("byte delta = %#v, want 4", delta["bytes"])
+	}
+}
+
+func TestWriteLogCapturesPreImagesForUpdateAndDelete(t *testing.T) {
+	ctx := context.Background()
+	fsys := NewDirFS(t.TempDir(), config.FilesConfig{Allowed: []string{"*.md"}})
+	if err := fsys.SetWriteable(); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	blobs, err := OpenBlobStore(filepath.Join(dir, "objects"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	historyPath := filepath.Join(dir, "commits.jsonl")
+	log := newWriteLog(fsys, nil, nil, 4)
+	log.SetCommitJournal(historyPath, blobs, true)
+	defer log.Close(ctx)
+
+	for _, cs := range []vfs.ChangeSet{
+		{Target: "/doc.md", Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: []byte("A")}},
+		{Target: "/doc.md", Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: []byte("BB")}},
+		{Target: "/doc.md", Action: vfs.ChangeActionRemove},
+	} {
+		if _, err := log.Submit(ctx, Attribution{Principal: "human"}, cs); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cursor, err := OpenHistoryCursor(historyPath, HistoryPosition{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var records []CommitRecord
+	for {
+		record, ok, err := cursor.Next(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !ok {
+			break
+		}
+		records = append(records, record)
+	}
+	if len(records) != 3 {
+		t.Fatalf("journal records = %d, want 3", len(records))
+	}
+	aHash, bHash := hashContent([]byte("A")), hashContent([]byte("BB"))
+	if got := records[0].Leaves[0]; got.BeforeExists || got.AfterHash != aHash || got.AfterSize != 1 {
+		t.Fatalf("create leaf = %#v", got)
+	}
+	if got := records[1].Leaves[0]; !got.BeforeExists || got.BeforeUnknown || got.BeforeHash != aHash || got.BeforeSize != 1 || got.AfterHash != bHash || got.AfterSize != 2 {
+		t.Fatalf("update leaf = %#v", got)
+	}
+	if got := records[2].Leaves[0]; !got.BeforeExists || got.BeforeUnknown || got.BeforeHash != bHash || got.BeforeSize != 2 || got.AfterHash != "" || got.AfterSize != 0 {
+		t.Fatalf("delete leaf = %#v", got)
+	}
+
+	replay, err := OpenHistoryCursor(historyPath, HistoryPosition{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	processor := NewScalarProcessor(replay, blobs, writerClassifierFunc(func(context.Context, Attribution) analytics.Writer { return analytics.WriterHuman }))
+	events := processor.(*ScalarProcessor).Drain(ctx)
+	if len(events) != 3 {
+		t.Fatalf("scalar events = %d, want 3", len(events))
+	}
+	for i, want := range map[int]float64{1: 1, 2: 2} {
+		before := events[i].Fields["before"].(map[string]float64)
+		if before["bytes"] != want {
+			t.Fatalf("event %d before bytes = %v, want %v", i, before["bytes"], want)
+		}
+	}
+	if events[1].Fields["delta"].(map[string]any)["bytes"] != float64(1) || events[2].Fields["delta"].(map[string]any)["bytes"] != float64(-2) {
+		t.Fatalf("update/delete deltas = %#v / %#v", events[1].Fields["delta"], events[2].Fields["delta"])
 	}
 }
 

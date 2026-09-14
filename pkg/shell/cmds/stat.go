@@ -44,12 +44,6 @@ func CmdStat(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 		if !f.FileModTime.IsZero() {
 			fmt.Fprintf(w, "Modify: %s\n", f.FileModTime.Format("2006-01-02 15:04:05"))
 		}
-		if factsProvider != nil {
-			facts, factErr := factsProvider.Stat(context.Background(), p)
-			if factErr == nil {
-				fmt.Fprintf(w, "  Lines: %.0f\tWords: %.0f\tTokens: %.0f\tTokenizer: %s\n", facts.Scalars["lines"], facts.Scalars["words"], facts.Scalars["tokens"], facts.Tokenizer)
-			}
-		}
 	}
 	return 0
 }

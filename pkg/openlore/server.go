@@ -340,18 +340,20 @@ func newServerWithRoot(rootDir string, rootFS, lowerFS vfs.FileSystem, opts ...c
 			logger.Info("legacy history migrated")
 		}
 		s.writeLog = newWriteLog(s.merge, s.postCommitChain(), logger, 0)
+		blobs, blobErr := OpenBlobStore(filepath.Join(dataDir, "history", "objects"))
+		if blobErr != nil {
+			return nil, fmt.Errorf("opening history blob store: %w", blobErr)
+		}
+		commitPath := filepath.Join(dataDir, "history", "commits.jsonl")
+		s.writeLog.SetCommitJournal(commitPath, blobs, cfg.Analytics.HistoryBlobsEnabled())
 		if s.analytics != nil {
-			blobs, blobErr := OpenBlobStore(filepath.Join(dataDir, "history", "objects"))
-			if blobErr != nil {
-				return nil, fmt.Errorf("opening history blob store: %w", blobErr)
-			}
-			commitPath := filepath.Join(dataDir, "history", "commits.jsonl")
 			cursor, cursorErr := OpenHistoryCursor(commitPath, HistoryPosition{})
 			if cursorErr != nil {
 				return nil, fmt.Errorf("opening analytics history cursor: %w", cursorErr)
 			}
-			s.analytics.AddProcessor(NewScalarProcessor(cursor, blobs, IdentityStoreClassifier(s.identityStore)))
-			s.writeLog.SetCommitJournal(commitPath, blobs, cfg.Analytics.HistoryBlobsEnabled())
+			processor := NewScalarProcessor(cursor, blobs, IdentityStoreClassifier(s.identityStore)).(*ScalarProcessor)
+			processor.docset = (&analyticsPlugin{server: s}).docsetForPath
+			s.analytics.AddProcessor(processor)
 		}
 		s.history = history
 		s.writeLog.SetHistoryRecorder(s.history)
@@ -1112,6 +1114,15 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 			id.HomeDocset, id.HomeDir = "", ""
 		}
 	}
+	attribution := cloneAttribution(id.attribution())
+	if attribution.Extra == nil {
+		attribution.Extra = map[string]string{}
+	}
+	attribution.Extra["transport"] = id.Transport
+	attribution.Extra["session_id"] = id.SessionID
+	attribution.Extra["client_session_id"] = id.ClientSessionID
+	attribution.Extra["remote_addr"] = id.RemoteAddr
+	id.Attribution = attribution
 	sessionFS := s.buildSessionFS(id)
 	// Command visibility is snapshotted, but privileged operations are narrowed
 	// again at invocation. Guest, read-scoped, and currently read-only sessions
@@ -1120,6 +1131,10 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 	canAdmin := s.authEnforced && id.policySnapshot != nil && scopeGrantsWrite(id.Scopes) && s.hasCapabilityForPolicy(*id.policySnapshot, "lore:config:edit")
 
 	sh := shell.NewShell(sessionFS)
+	sh.SetInvocationObserver(func(invocationID, parentID string) {
+		attribution.Extra["invocation_id"] = invocationID
+		attribution.Extra["parent_id"] = parentID
+	})
 	if s.config.Debug || s.analytics != nil {
 		sh.SetUnsupportedUsageHandler(func(usage shell.UnsupportedUsage) {
 			attrs := []any{"kind", usage.Kind}
@@ -1148,6 +1163,16 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 	}
 	if s.analytics != nil && s.authEnforced && id.IdentityName != "" && id.IdentityName != "guest" && id.policySnapshot != nil && s.hasCapabilityForPolicy(*id.policySnapshot, "lore:analytics:view") {
 		sh.SetAnalytics(s.analytics)
+	}
+	if s.analytics != nil {
+		sh.SetFacts(analytics.NewContentFacts(sessionFS))
+		sh.SetMetricEmitter(func(ctx context.Context, eventType string, fields map[string]any) {
+			e := s.analyticsEvent(id, eventType, fields)
+			if invocationID, parentID, ok := analytics.InvocationFromContext(ctx); ok {
+				e.InvocationID, e.ParentID = invocationID, parentID
+			}
+			s.analytics.Record(ctx, e)
+		})
 	}
 	sh.SetCommandObserver(func(ce shell.CommandExecution) {
 		if s.metrics != nil {
@@ -1817,11 +1842,12 @@ func (s *Server) ListenAndServe() error {
 
 func (s *Server) metricsExportHandler() http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("/metrics", s.metrics.Handler())
-	mux.Handle("/metrics/prometheus", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r.URL.Path = "/metrics"
-		s.analytics.Aggregator().ServeHTTP(w, r)
-	}))
+	mux.Handle("/metrics", s.analytics.Aggregator())
+	mux.HandleFunc("/metrics.json", func(w http.ResponseWriter, r *http.Request) {
+		request := r.Clone(r.Context())
+		request.URL.Path = "/metrics"
+		s.metrics.Handler().ServeHTTP(w, request)
+	})
 	return mux
 }
 
@@ -1859,7 +1885,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		if shutdownTimeout <= 0 {
 			shutdownTimeout = 10 * time.Second
 		}
-		analyticsCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		analyticsCtx, cancel := context.WithTimeout(ctx, shutdownTimeout)
 		if err := s.analytics.Close(analyticsCtx); err != nil {
 			s.logger.Warn("shutdown: analytics did not drain before deadline", "err", err)
 		}

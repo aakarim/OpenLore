@@ -38,10 +38,12 @@ type EventLog interface {
 	Close() error
 }
 type fileEventLog struct {
-	dir    string
-	opts   LogOptions
-	mu     sync.Mutex
-	closed bool
+	dir            string
+	opts           LogOptions
+	mu             sync.Mutex
+	closed         bool
+	activePathName string
+	active         *os.File
 }
 
 type logCursor map[string]int64
@@ -94,19 +96,26 @@ func (l *fileEventLog) Append(ctx context.Context, e Event) error {
 		// would otherwise replace the existing compressed file.
 		active = strings.TrimSuffix(active, ".jsonl") + "-late-" + NewID() + ".jsonl"
 	}
-	f, err := os.OpenFile(active, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
-	if err != nil {
-		return err
+	if l.active == nil || l.activePathName != active {
+		if l.active != nil {
+			if err := l.active.Sync(); err != nil {
+				return err
+			}
+			if err := l.active.Close(); err != nil {
+				return err
+			}
+		}
+		f, err := os.OpenFile(active, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+		if err != nil {
+			return err
+		}
+		l.active, l.activePathName = f, active
 	}
-	encErr := json.NewEncoder(f).Encode(e)
+	encErr := json.NewEncoder(l.active).Encode(e)
 	if encErr == nil {
-		encErr = f.Sync()
+		encErr = l.active.Sync()
 	}
-	closeErr := f.Close()
-	if encErr != nil {
-		return encErr
-	}
-	return closeErr
+	return encErr
 }
 func (l *fileEventLog) Segments() []Segment {
 	entries, _ := os.ReadDir(l.dir)
@@ -246,6 +255,21 @@ func (l *fileEventLog) scanIncremental(ctx context.Context, cursor logCursor, fn
 func (l *fileEventLog) Seal(ctx context.Context, before time.Time) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	// A file selected for sealing must not remain writable through the active
+	// descriptor. Closing it under the same lock also makes scans and sealing
+	// observe a complete, synced prefix.
+	if l.active != nil {
+		activeDay := segmentDay(l.activePathName)
+		if activeDay.Add(l.opts.Rotate).Before(before.UTC()) || activeDay.Add(l.opts.Rotate).Equal(before.UTC()) {
+			if err := l.active.Sync(); err != nil {
+				return err
+			}
+			if err := l.active.Close(); err != nil {
+				return err
+			}
+			l.active, l.activePathName = nil, ""
+		}
+	}
 	if l.opts.Compress == "zstd" {
 		for _, seg := range l.Segments() {
 			if seg.Compressed || seg.Day.Add(l.opts.Rotate).After(before.UTC()) {
@@ -298,7 +322,31 @@ func (l *fileEventLog) Seal(ctx context.Context, before time.Time) error {
 	}
 	return nil
 }
-func (l *fileEventLog) Close() error { l.mu.Lock(); l.closed = true; l.mu.Unlock(); return nil }
+func segmentDay(path string) time.Time {
+	name := filepath.Base(path)
+	text := strings.TrimSuffix(strings.TrimPrefix(name, "events-"), ".jsonl")
+	text = strings.SplitN(text, "-late-", 2)[0]
+	if n, err := strconv.ParseInt(text, 10, 64); err == nil {
+		return time.Unix(0, n).UTC()
+	}
+	t, _ := time.Parse("2006-01-02", text)
+	return t
+}
+
+func (l *fileEventLog) Close() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.closed = true
+	if l.active == nil {
+		return nil
+	}
+	err := l.active.Sync()
+	if closeErr := l.active.Close(); err == nil {
+		err = closeErr
+	}
+	l.active, l.activePathName = nil, ""
+	return err
+}
 
 type Recorder struct {
 	log                      EventLog
@@ -398,7 +446,16 @@ func OpenAggregationStore(dir string) (AggregationStore, error) {
 	return &fileAggregationStore{dir: dir}, nil
 }
 func paramsKey(name string, p Params) string {
-	b, _ := json.Marshal(p)
+	// Absolute endpoints make a periodic moving window unique forever. Key the
+	// cache by its stable shape instead: whole-second duration, limit and Extra
+	// (encoding/json sorts string map keys).
+	duration := p.Until.Sub(p.Since).Round(time.Second)
+	stable := struct {
+		Duration int64             `json:"duration_seconds"`
+		Limit    int               `json:"limit"`
+		Extra    map[string]string `json:"extra,omitempty"`
+	}{int64(duration / time.Second), p.Limit, p.Extra}
+	b, _ := json.Marshal(stable)
 	var sum uint64 = 1469598103934665603
 	for _, v := range b {
 		sum ^= uint64(v)

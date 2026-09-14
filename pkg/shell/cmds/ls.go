@@ -57,7 +57,7 @@ func CmdLs(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.
 						exitCode = 1
 						continue
 					}
-					fmt.Fprintf(w, "%s %8.0f %8.0f %s\n", f.Mode(), facts.Scalars["lines"], facts.Scalars["tokens"], f.Name())
+					fmt.Fprintf(w, "%s %8d %8.0f %8.0f %s\n", f.Mode(), f.Size(), facts.Scalars["lines"], facts.Scalars["tokens"], f.Name())
 				} else {
 					PrintLong(w, f)
 				}
