@@ -101,10 +101,12 @@ func TestAnalyticsRoutesAreAbsentWithoutEnforcedAuth(t *testing.T) {
 
 func TestAnalyticsDocsetUsesConfiguredPathMapping(t *testing.T) {
 	s := &Server{auth: &config.AuthConfig{Docsets: map[string]config.DocsetSpec{
-		"handbook": {Paths: []config.PathMapping{{Source: "/source", Display: "/company/docs"}}},
+		"handbook": {Paths: []config.PathMapping{{Source: "/source", Display: "/company/docs"}}, Aliases: []string{"/legacy"}},
 	}}}
-	if got := (&analyticsPlugin{server: s}).docsetForPath("/company/docs/intro.md"); got != "handbook" {
-		t.Fatalf("docset = %q, want handbook", got)
+	for _, target := range []string{"/company/docs/intro.md", "/legacy/intro.md"} {
+		if got := (&analyticsPlugin{server: s}).docsetForPath(target); got != "handbook" {
+			t.Errorf("docset for %q = %q, want handbook", target, got)
+		}
 	}
 }
 

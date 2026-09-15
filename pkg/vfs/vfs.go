@@ -280,6 +280,13 @@ type ReadTracker interface {
 	LastReadHash(path string) (hash string, seen bool)
 }
 
+// ReadContentHasher computes the identity of bytes returned by a filesystem.
+// Unlike ReadTracker's durable CAS identity, this may include presentation-only
+// transforms applied by an outer filesystem wrapper.
+type ReadContentHasher interface {
+	ReadContentHash(path string, content []byte) string
+}
+
 // ErrReadOnly is returned by mutating operations when the substrate is in
 // read-only mode.
 var ErrReadOnly = fmt.Errorf("read-only filesystem")

@@ -62,7 +62,7 @@ func CmdSed(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io
 			}
 			lines := splitLinesForSed(orig)
 			var buf bytes.Buffer
-			applySedCommands(cmds, lines, quiet, &buf)
+			applySedCommands(cmds, lines, quiet, &buf, nil)
 			if c := WriteFileCASMsg(ctx, errW, "sed", f, buf.Bytes(), orig); c != 0 {
 				code = c
 			}
@@ -75,8 +75,13 @@ func CmdSed(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io
 		return code
 	}
 
-	applySedCommands(cmds, lines, quiet, w)
-	emitSedReads(ctx, cmds, lines, metricFiles, quiet)
+	var printedLines []int
+	var recordPrint func(int)
+	if quiet && metricsEnabled(ctx) {
+		recordPrint = func(line int) { printedLines = append(printedLines, line) }
+	}
+	applySedCommands(cmds, lines, quiet, w, recordPrint)
+	emitSedReads(ctx, metricFiles, quiet, printedLines)
 	return 0
 }
 
@@ -116,20 +121,19 @@ func splitLinesForInput(content []byte) []string {
 	return strings.Split(text, "\n")
 }
 
-func emitSedReads(ctx CmdContext, commands []sedCmd, lines []string, files []sedMetricFile, quiet bool) {
+func emitSedReads(ctx CmdContext, files []sedMetricFile, quiet bool, printedLines []int) {
 	for _, file := range files {
 		if !quiet {
 			emitDocMetric(ctx, "doc.read", file.path, file.content, fullLineRange(file.content))
 			continue
 		}
 		var selected []int
-		for i := 0; i < file.lineCount; i++ {
-			global := file.lineOffset + i
-			for _, command := range commands {
-				if command.command == 'p' && sedAddressMatch(command, global+1, len(lines), lines[global]) {
-					selected = append(selected, i+1)
-					break
-				}
+		seen := make([]bool, file.lineCount)
+		for _, globalLine := range printedLines {
+			local := globalLine - file.lineOffset - 1
+			if local >= 0 && local < file.lineCount && !seen[local] {
+				selected = append(selected, local+1)
+				seen[local] = true
 			}
 		}
 		emitDocLineMetrics(ctx, "doc.read", file.path, file.content, selected)
@@ -152,7 +156,7 @@ func splitLinesForSed(content []byte) []string {
 
 // applySedCommands runs the parsed sed commands over lines, writing the result
 // to w. It is shared by streaming and in-place (`-i`) modes.
-func applySedCommands(cmds []sedCmd, lines []string, quiet bool, w io.Writer) {
+func applySedCommands(cmds []sedCmd, lines []string, quiet bool, w io.Writer, onPrint func(int)) {
 	totalLines := len(lines)
 	for lineNum, line := range lines {
 		deleted := false
@@ -170,6 +174,9 @@ func applySedCommands(cmds []sedCmd, lines []string, quiet bool, w io.Writer) {
 			case 'p':
 				fmt.Fprintln(w, line)
 				printed = true
+				if onPrint != nil {
+					onPrint(lineNum + 1)
+				}
 			case 's':
 				var re *regexp.Regexp
 				pattern := basicRegexpToRE2(cmd.pattern)

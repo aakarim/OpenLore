@@ -143,9 +143,9 @@ func CmdGrep(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 	// Read from stdin if no targets and stdin is available (pipe)
 	if len(targets) == 0 && stdin != nil {
 		data, _ := io.ReadAll(stdin)
-		lines := strings.Split(string(data), "\n")
+		lines := contentLines(data)
 		lineHits := grepLines(lines, "", false)
-		emitSearchMetric(ctx, pattern, []string{ctx.Cwd()}, 0, len(lineHits), len(lineHits) > 0)
+		emitSearchMetric(ctx, pattern, nil, 0, len(lineHits), len(lineHits) > 0)
 		if !found {
 			return 1
 		}
@@ -164,7 +164,7 @@ func CmdGrep(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 		if err != nil {
 			return
 		}
-		lines := strings.Split(string(content), "\n")
+		lines := contentLines(content)
 		lineHits := grepLines(lines, filePath, multiFile)
 		if len(lineHits) == 0 {
 			return

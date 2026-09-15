@@ -347,6 +347,9 @@ func leastUsedLines(ctx context.Context, src EventSource, facts ContentFacts, p 
 	if err != nil {
 		return Table{}, err
 	}
+	if current.ContentHash == "" {
+		return Table{}, fmt.Errorf("path must identify a file")
+	}
 	lineCount := int(current.Scalars["lines"])
 	type lineUsage struct {
 		reads int
@@ -369,8 +372,10 @@ func leastUsedLines(ctx context.Context, src EventSource, facts ContentFacts, p 
 		}
 		for i := start; i <= end; i++ {
 			lines[i-1].reads++
-			last := e.Time
-			lines[i-1].last = &last
+			if lines[i-1].last == nil || e.Time.After(*lines[i-1].last) {
+				last := e.Time
+				lines[i-1].last = &last
+			}
 		}
 		return nil
 	})

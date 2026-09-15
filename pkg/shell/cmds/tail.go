@@ -78,7 +78,9 @@ func CmdTail(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 				start = 0
 			}
 			_, _ = w.Write(content[start:])
-			emitDocMetric(ctx, "doc.read", p, content, byteLineRange(content, start, len(content)))
+			if start < len(content) {
+				emitDocMetric(ctx, "doc.read", p, content, byteLineRange(content, start, len(content)))
+			}
 			continue
 		}
 		lines := strings.Split(string(content), "\n")
@@ -93,10 +95,12 @@ func CmdTail(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 			startLine = endLine
 		}
 		var unit *analytics.LineRange
-		if endLine > 0 {
+		if n > 0 && endLine > 0 {
 			unit = &analytics.LineRange{Start: startLine, End: endLine}
 		}
-		emitDocMetric(ctx, "doc.read", p, content, unit)
+		if unit != nil {
+			emitDocMetric(ctx, "doc.read", p, content, unit)
+		}
 	}
 	return 0
 }

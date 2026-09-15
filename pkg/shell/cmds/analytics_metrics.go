@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"path"
+	"strings"
 
 	"github.com/aakarim/go-openlore/internal/analytics"
 	"github.com/aakarim/go-openlore/pkg/vfs"
@@ -24,34 +25,55 @@ func emitDocMetric(ctx CmdContext, eventType, filePath string, content []byte, l
 	if !metricsEnabled(ctx) {
 		return
 	}
-	contentHash := ""
-	if tracker, ok := ctx.FS().(vfs.ReadTracker); ok {
-		contentHash, _ = tracker.LastReadHash(filePath)
-	}
-	if contentHash == "" {
-		sum := sha256.Sum256(content)
-		contentHash = hex.EncodeToString(sum[:])
-	}
+	emitDocMetricWithHash(ctx, eventType, canonicalMetricPath(ctx, filePath), metricContentHash(ctx, filePath, content), lines)
+}
+
+func emitDocMetricWithHash(ctx CmdContext, eventType, filePath, contentHash string, lines *analytics.LineRange) {
 	unit := map[string]any{}
 	if lines != nil {
 		unit["lines"] = map[string]any{"start": lines.Start, "end": lines.End}
 	}
 	ctx.EmitMetric(context.Background(), eventType, map[string]any{
-		"path":         vfs.CleanPath(filePath),
+		"path":         filePath,
 		"content_hash": contentHash,
 		"unit":         unit,
 	})
 }
 
 func emitDocLineMetrics(ctx CmdContext, eventType, filePath string, content []byte, lines []int) {
+	if !metricsEnabled(ctx) || len(lines) == 0 {
+		return
+	}
+	metricPath := canonicalMetricPath(ctx, filePath)
+	contentHash := metricContentHash(ctx, filePath, content)
 	for start := 0; start < len(lines); {
 		end := start
 		for end+1 < len(lines) && lines[end+1] == lines[end]+1 {
 			end++
 		}
-		emitDocMetric(ctx, eventType, filePath, content, &analytics.LineRange{Start: lines[start], End: lines[end]})
+		emitDocMetricWithHash(ctx, eventType, metricPath, contentHash, &analytics.LineRange{Start: lines[start], End: lines[end]})
 		start = end + 1
 	}
+}
+
+func metricContentHash(ctx CmdContext, filePath string, content []byte) string {
+	if hasher, ok := ctx.FS().(vfs.ReadContentHasher); ok {
+		return hasher.ReadContentHash(filePath, content)
+	}
+	if tracker, ok := ctx.FS().(vfs.ReadTracker); ok {
+		if contentHash, seen := tracker.LastReadHash(filePath); seen && contentHash != "" {
+			return contentHash
+		}
+	}
+	sum := sha256.Sum256(content)
+	return hex.EncodeToString(sum[:])
+}
+
+func canonicalMetricPath(ctx CmdContext, filePath string) string {
+	if canonicalizer, ok := ctx.FS().(vfs.PathCanonicalizer); ok {
+		return canonicalizer.CanonicalPath(filePath)
+	}
+	return vfs.CleanPath(filePath)
 }
 
 func emitSearchMetric(ctx CmdContext, pattern string, scope []string, matchedFiles, matchedLines int, filled bool) {
@@ -74,6 +96,17 @@ func contentLineCount(content []byte) int {
 	lines := bytes.Count(content, []byte{'\n'})
 	if content[len(content)-1] != '\n' {
 		lines++
+	}
+	return lines
+}
+
+func contentLines(content []byte) []string {
+	if len(content) == 0 {
+		return nil
+	}
+	lines := strings.Split(string(content), "\n")
+	if content[len(content)-1] == '\n' {
+		lines = lines[:len(lines)-1]
 	}
 	return lines
 }
