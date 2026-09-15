@@ -289,9 +289,10 @@ drained:
 	p.drainLocked(ctx)
 	p.writeCheckpoint(p.lastEventID)
 	p.processMu.Unlock()
-	if p.cancel != nil {
-		p.cancel()
+	if p.cancel == nil {
+		return nil
 	}
+	p.cancel()
 	select {
 	case <-p.done:
 		return nil
@@ -337,6 +338,8 @@ type Refresher struct {
 	src      EventSource
 	store    AggregationStore
 	interval time.Duration
+	mu       sync.RWMutex
+	last     time.Time
 	cancel   context.CancelFunc
 	done     chan struct{}
 	once     sync.Once
@@ -398,7 +401,15 @@ func (r *Refresher) Refresh(ctx context.Context, names ...string) error {
 			return err
 		}
 	}
+	r.mu.Lock()
+	r.last = time.Now().UTC()
+	r.mu.Unlock()
 	return nil
+}
+func (r *Refresher) LastRefresh() time.Time {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.last
 }
 func (r *Refresher) Close(ctx context.Context) error {
 	if r.cancel == nil {

@@ -27,6 +27,7 @@ const defaultHistoryPageSize = 100
 // file contents belong in the filesystem or a separate content-addressed
 // store, not in the query index.
 type HistoryRecord struct {
+	CommitID    string      `json:"commit_id,omitempty"`
 	Time        time.Time   `json:"time"`
 	Attribution Attribution `json:"attribution"`
 	FileKey     string      `json:"file_key"`
@@ -52,8 +53,8 @@ type HistoryPage struct {
 }
 
 // HistoryRecorder updates the rebuildable history index after a filesystem
-// commit. Ordinary mutations append metadata; remove and remove_all mutations
-// purge the affected per-file shards instead of retaining deleted-file history.
+// commit. Phase 3 records carrying CommitID retain remove metadata for the
+// per-path commit index; legacy records preserve the former delete-purge rule.
 type HistoryRecorder interface {
 	Record(context.Context, []HistoryRecord) error
 }
@@ -229,6 +230,10 @@ func (s *JSONLHistoryStore) Record(_ context.Context, records []HistoryRecord) e
 	for _, record := range normalized {
 		switch vfs.ChangeAction(record.Action) {
 		case vfs.ChangeActionRemove:
+			if record.CommitID != "" {
+				pending[record.FileKey] = append(pending[record.FileKey], record)
+				continue
+			}
 			if err := flush(); err != nil {
 				return err
 			}
@@ -236,6 +241,10 @@ func (s *JSONLHistoryStore) Record(_ context.Context, records []HistoryRecord) e
 				return err
 			}
 		case vfs.ChangeActionRemoveAll:
+			if record.CommitID != "" {
+				pending[record.FileKey] = append(pending[record.FileKey], record)
+				continue
+			}
 			if err := flush(); err != nil {
 				return err
 			}
@@ -404,6 +413,18 @@ func historyReadable(roots []string, target string) bool {
 type scopedHistory struct {
 	store HistoryStore
 	roots []string
+	gc    func() (HistoryGCStats, error)
+}
+
+func (h scopedHistory) GC() ([]byte, error) {
+	if h.gc == nil {
+		return nil, errors.New("gc not available")
+	}
+	stats, err := h.gc()
+	if err != nil {
+		return nil, err
+	}
+	return []byte(fmt.Sprintf("removed %d objects (%d bytes)\n", stats.Objects, stats.Bytes)), nil
 }
 
 func (h scopedHistory) Query(principal, actor string) ([]byte, error) {
@@ -416,12 +437,13 @@ func (h scopedHistory) Query(principal, actor string) ([]byte, error) {
 		}
 		for _, record := range page.Records {
 			line, _ := json.Marshal(struct {
+				CommitID    string `json:"commit_id,omitempty"`
 				Time        string `json:"time"`
 				Attribution string `json:"attribution"`
 				Target      string `json:"target"`
 				Action      string `json:"action"`
 				Hash        string `json:"hash,omitempty"`
-			}{record.Time.Format(time.RFC3339), record.Attribution.String(), record.FileKey, record.Action, record.ContentHash})
+			}{record.CommitID, record.Time.Format(time.RFC3339), record.Attribution.String(), record.FileKey, record.Action, record.ContentHash})
 			out = append(out, line...)
 			out = append(out, '\n')
 		}

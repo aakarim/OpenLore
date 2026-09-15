@@ -213,6 +213,25 @@ func TestHistoryDeletePurgesFileShardUntilPathIsRecreated(t *testing.T) {
 	}
 }
 
+func TestHistoryCommitIndexRetainsDeleteHead(t *testing.T) {
+	store := NewJSONLHistoryStore(t.TempDir())
+	key := "/docs/deleted.md"
+	records := []HistoryRecord{
+		{CommitID: "commit-write", FileKey: key, Action: string(vfs.ChangeActionWrite)},
+		{CommitID: "commit-delete", FileKey: key, Action: string(vfs.ChangeActionRemove)},
+	}
+	if err := store.Record(context.Background(), records); err != nil {
+		t.Fatal(err)
+	}
+	page, err := store.Query(context.Background(), HistoryQuery{FileKey: key, Roots: []string{"/docs"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Records) != 2 || page.Records[0].CommitID != "commit-delete" || page.Records[1].CommitID != "commit-write" {
+		t.Fatalf("per-path commit index = %#v", page.Records)
+	}
+}
+
 func TestHistoryRemoveAllPurgesDescendantShardsOnly(t *testing.T) {
 	store := NewJSONLHistoryStore(t.TempDir())
 	records := []HistoryRecord{

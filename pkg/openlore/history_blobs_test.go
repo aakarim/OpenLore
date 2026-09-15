@@ -3,6 +3,7 @@ package openlore
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -101,6 +102,161 @@ func TestHistoryCursorDoesNotConsumePartialEOFRecord(t *testing.T) {
 	record, ok, err := cursor.Next(context.Background())
 	if err != nil || !ok || record.ID != "one" {
 		t.Fatalf("completed Next = %#v, ok %v, err %v", record, ok, err)
+	}
+}
+
+func TestCommitJournalRotationAndCompressedCursorRestart(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "commits.jsonl")
+	if err := appendCommitRecord(file, CommitRecord{ID: "old"}); err != nil {
+		t.Fatal(err)
+	}
+	yesterday := time.Now().UTC().Add(-24 * time.Hour)
+	if err := os.Chtimes(file, yesterday, yesterday); err != nil {
+		t.Fatal(err)
+	}
+	if err := RotateCommitJournal(context.Background(), file, time.Now().UTC(), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendCommitRecord(file, CommitRecord{ID: "new"}); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := OpenHistoryCursor(file, HistoryPosition{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, ok, err := c.Next(context.Background())
+	if err != nil || !ok || r.ID != "old" {
+		t.Fatalf("first = %#v, %v, %v", r, ok, err)
+	}
+	position := c.Position()
+	r, ok, err = c.Next(context.Background())
+	if err != nil || !ok || r.ID != "new" {
+		t.Fatalf("second = %#v, %v, %v", r, ok, err)
+	}
+	restarted, err := OpenHistoryCursor(file, position)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, ok, err = restarted.Next(context.Background())
+	if err != nil || !ok || r.ID != "new" {
+		t.Fatalf("restarted = %#v, %v, %v", r, ok, err)
+	}
+}
+
+func TestCommitJournalCursorOrdersRepeatedSameDayRotations(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "commits.jsonl")
+	yesterday := time.Now().UTC().Add(-24 * time.Hour)
+	for _, id := range []string{"first", "second"} {
+		if err := appendCommitRecord(file, CommitRecord{ID: id, Time: yesterday}); err != nil {
+			t.Fatal(err)
+		}
+		if err := RotateCommitJournal(context.Background(), file, time.Now().UTC(), 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := appendCommitRecord(file, CommitRecord{ID: "active", Time: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	cursor, err := OpenHistoryCursor(file, HistoryPosition{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"first", "second", "active"} {
+		record, ok, err := cursor.Next(context.Background())
+		if err != nil || !ok || record.ID != want {
+			t.Fatalf("Next = %#v, ok=%v, err=%v; want %q", record, ok, err, want)
+		}
+	}
+}
+
+func TestHistoryCursorRecoversWhenActiveJournalRotatesBehindIt(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "commits.jsonl")
+	yesterday := time.Now().UTC().Add(-24 * time.Hour)
+	if err := appendCommitRecord(file, CommitRecord{ID: "old", Time: yesterday}); err != nil {
+		t.Fatal(err)
+	}
+	cursor, err := OpenHistoryCursor(file, HistoryPosition{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := RotateCommitJournal(context.Background(), file, time.Now().UTC(), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendCommitRecord(file, CommitRecord{ID: "new", Time: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"old", "new"} {
+		record, ok, err := cursor.Next(context.Background())
+		if err != nil || !ok || record.ID != want {
+			t.Fatalf("Next = %#v, %v, %v; want %q", record, ok, err, want)
+		}
+	}
+	if _, ok, err := cursor.Next(context.Background()); err != nil || ok {
+		t.Fatalf("cursor did not stop at active tail: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestCommitJournalRetention(t *testing.T) {
+	dir := t.TempDir()
+	old := filepath.Join(dir, "commits-2020-01-01.jsonl")
+	if err := os.WriteFile(old, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stamp := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(old, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(dir, "commits.jsonl")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RotateCommitJournal(context.Background(), file, time.Now(), 24*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(old); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("old segment remains: %v", err)
+	}
+}
+
+func TestGarbageCollectHistoryBlobsPreservesReferencesAndFailsSafe(t *testing.T) {
+	dir := t.TempDir()
+	blobs, err := OpenBlobStore(filepath.Join(dir, "objects"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	kept, stale := []byte("kept"), []byte("stale")
+	for _, b := range [][]byte{kept, stale} {
+		if err := blobs.Put(context.Background(), hashContent(b), strings.NewReader(string(b))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	file := filepath.Join(dir, "commits.jsonl")
+	if err := appendCommitRecord(file, CommitRecord{ID: "one", Leaves: []LeafRecord{{BeforeHash: hashContent(kept)}}}); err != nil {
+		t.Fatal(err)
+	}
+	stats, err := GarbageCollectHistoryBlobs(context.Background(), dir)
+	if err != nil || stats.Objects != 1 {
+		t.Fatalf("GC = %#v, %v", stats, err)
+	}
+	if ok, _ := blobs.Has(context.Background(), hashContent(kept)); !ok {
+		t.Fatal("referenced blob deleted")
+	}
+	if err := os.WriteFile(file, []byte("{corrupt}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	third := []byte("third")
+	if err := blobs.Put(context.Background(), hashContent(third), strings.NewReader(string(third))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := GarbageCollectHistoryBlobs(context.Background(), dir); err == nil {
+		t.Fatal("corrupt journal accepted")
+	}
+	if ok, _ := blobs.Has(context.Background(), hashContent(third)); !ok {
+		t.Fatal("blob deleted after corrupt journal")
 	}
 }
 

@@ -162,6 +162,14 @@ func TestTreeSizePassesDepthToContentWalk(t *testing.T) {
 	}
 }
 
+func TestLimitRowsAppliesPageOffsetBeforeLimit(t *testing.T) {
+	rows := [][]any{{"first"}, {"second"}, {"third"}, {"fourth"}}
+	got := limitRows(rows, Params{Limit: 2, Extra: map[string]string{"_offset": "2"}})
+	if len(got) != 2 || got[0][0] != "third" || got[1][0] != "fourth" {
+		t.Fatalf("page = %#v", got)
+	}
+}
+
 func TestPipelineResumesAfterCheckpointWithoutRederivingEvents(t *testing.T) {
 	log, err := OpenEventLog(t.TempDir(), LogOptions{Compress: "none"})
 	if err != nil {

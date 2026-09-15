@@ -53,16 +53,17 @@ type writeLog struct {
 	substrate vfs.WritableFS
 	logger    *slog.Logger
 
-	mu           sync.RWMutex      // guards closed + postCommit + serializes sends against Close
-	postCommit   PostCommitHandler // optional; runs at the applier after a durable commit
-	commitState  func(context.Context, CommitInfo) error
-	preApply     func(*Identity, Attribution, vfs.ChangeSet) error
-	history      HistoryRecorder
-	commitPath   string
-	blobs        BlobStore
-	blobsEnabled bool
-	closed       bool
-	ch           chan logEntry
+	mu               sync.RWMutex      // guards closed + postCommit + serializes sends against Close
+	postCommit       PostCommitHandler // optional; runs at the applier after a durable commit
+	commitState      func(context.Context, CommitInfo) error
+	preApply         func(*Identity, Attribution, vfs.ChangeSet) error
+	history          HistoryRecorder
+	commitPath       string
+	blobs            BlobStore
+	blobsEnabled     bool
+	historyRetention time.Duration
+	closed           bool
+	ch               chan logEntry
 
 	done chan struct{} // closed when the applier goroutine has exited
 }
@@ -143,7 +144,11 @@ func (l *writeLog) run() {
 		}
 		if committed.HasCommitted() {
 			if l.commitPath != "" {
-				if recordErr := appendCommitRecord(l.commitPath, CommitRecord{ID: commitID, Time: time.Now().UTC(), Attribution: e.attribution, ChangeSet: committed.Committed, Hash: committed.Hash, Leaves: leaves}); recordErr != nil {
+				recordedAt := time.Now().UTC()
+				if rotateErr := RotateCommitJournal(context.Background(), l.commitPath, recordedAt, l.historyRetention); rotateErr != nil {
+					l.logger.Error("commit journal rotation failed after durable write", "err", rotateErr)
+				}
+				if recordErr := appendCommitRecord(l.commitPath, CommitRecord{ID: commitID, Time: recordedAt, Attribution: e.attribution, ChangeSet: committed.Committed, Hash: committed.Hash, Leaves: leaves}); recordErr != nil {
 					l.logger.Error("commit journal recording failed after durable write", "err", recordErr)
 				}
 			}
@@ -151,7 +156,7 @@ func (l *writeLog) run() {
 			history := l.history
 			l.mu.RUnlock()
 			if history != nil {
-				if recordErr := history.Record(context.Background(), historyRecords(time.Now().UTC(), e.attribution, committed)); recordErr != nil {
+				if recordErr := history.Record(context.Background(), indexedHistoryRecords(commitID, time.Now().UTC(), e.attribution, committed, leaves)); recordErr != nil {
 					l.logger.Error("commit provenance recording failed after durable write",
 						"target", e.cs.Target, "action", e.cs.Action, "hash", committed.Hash, "err", recordErr)
 				}
@@ -195,6 +200,12 @@ func (l *writeLog) SetHistoryRecorder(history HistoryRecorder) {
 func (l *writeLog) SetCommitJournal(path string, blobs BlobStore, enabled bool) {
 	l.mu.Lock()
 	l.commitPath, l.blobs, l.blobsEnabled = path, blobs, enabled
+	l.mu.Unlock()
+}
+
+func (l *writeLog) SetHistoryRetention(retention time.Duration) {
+	l.mu.Lock()
+	l.historyRetention = retention
 	l.mu.Unlock()
 }
 
@@ -254,7 +265,7 @@ func (l *writeLog) submit(ctx context.Context, identity *Identity, attribution A
 		return "", ErrLogClosed
 	}
 	select {
-	case l.ch <- logEntry{cs: cs, attribution: attribution, identity: identity, reply: reply}:
+	case l.ch <- logEntry{cs: cs, attribution: cloneAttribution(attribution), identity: identity, reply: reply}:
 		l.mu.RUnlock()
 	case <-ctx.Done():
 		l.mu.RUnlock()
@@ -270,6 +281,10 @@ func (l *writeLog) submit(ctx context.Context, identity *Identity, attribution A
 }
 
 func historyRecords(at time.Time, attribution Attribution, committed vfs.CommitResult) []HistoryRecord {
+	return historyRecordsWithCommitID("", at, attribution, committed)
+}
+
+func historyRecordsWithCommitID(commitID string, at time.Time, attribution Attribution, committed vfs.CommitResult) []HistoryRecord {
 	leaves := committed.Committed.Leaves()
 	records := make([]HistoryRecord, 0, len(leaves))
 	for _, leaf := range leaves {
@@ -283,8 +298,22 @@ func historyRecords(at time.Time, attribution Attribution, committed vfs.CommitR
 			}
 		}
 		records = append(records, HistoryRecord{
-			Time: at, Attribution: attribution, FileKey: vfs.CleanPath(leaf.Target),
+			CommitID: commitID, Time: at, Attribution: attribution, FileKey: vfs.CleanPath(leaf.Target),
 			Action: string(leaf.Action), ContentHash: hash,
+		})
+	}
+	return records
+}
+
+func indexedHistoryRecords(commitID string, at time.Time, attribution Attribution, committed vfs.CommitResult, leaves []LeafRecord) []HistoryRecord {
+	if len(leaves) == 0 {
+		return historyRecordsWithCommitID(commitID, at, attribution, committed)
+	}
+	records := make([]HistoryRecord, 0, len(leaves))
+	for _, leaf := range leaves {
+		records = append(records, HistoryRecord{
+			CommitID: commitID, Time: at, Attribution: attribution, FileKey: vfs.CleanPath(leaf.Target),
+			Action: string(leaf.Action), ContentHash: leaf.AfterHash,
 		})
 	}
 	return records

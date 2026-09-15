@@ -9,6 +9,12 @@ type HistoryBackend interface {
 	Query(principal, actor string) ([]byte, error)
 }
 
+// HistoryGCBackend is optional so existing query-only history providers remain
+// source compatible. Implementations should return a human-readable summary.
+type HistoryGCBackend interface {
+	GC() ([]byte, error)
+}
+
 type historyContext interface {
 	HistoryBackend() HistoryBackend
 }
@@ -17,6 +23,20 @@ func CmdHistory(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdi
 	provider, ok := ctx.(historyContext)
 	if !ok || provider.HistoryBackend() == nil {
 		fmt.Fprintln(w, "history: not available in this shell")
+		return 0
+	}
+	if len(args) == 1 && args[0] == "gc" {
+		gc, ok := provider.HistoryBackend().(HistoryGCBackend)
+		if !ok {
+			fmt.Fprintln(errW, "history: gc not available")
+			return 1
+		}
+		b, err := gc.GC()
+		if err != nil {
+			fmt.Fprintf(errW, "history: gc: %v\n", err)
+			return 1
+		}
+		_, _ = w.Write(b)
 		return 0
 	}
 	principal, actor := "", ""

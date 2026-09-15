@@ -79,7 +79,7 @@ func parseAnalyticsDuration(s string) (time.Duration, error) {
 func CmdAnalytics(ctx CmdContext, args []string, w, errW io.Writer, _ io.Reader) int {
 	service := analyticsService(ctx)
 	if service == nil {
-		fmt.Fprintln(errW, "analytics: experimental analytics is not enabled")
+		fmt.Fprintln(errW, "analytics: analytics is not enabled")
 		return 1
 	}
 	if len(args) == 0 {
@@ -118,7 +118,6 @@ func CmdAnalytics(ctx CmdContext, args []string, w, errW io.Writer, _ io.Reader)
 			_ = json.NewEncoder(w).Encode(m)
 			return 0
 		}
-		fmt.Fprintln(w, "Experimental analytics")
 		fmt.Fprintln(w, "Status:", m.Status)
 		if m.Note != "" {
 			fmt.Fprintln(w, m.Note)

@@ -41,8 +41,16 @@ func scalarEventKey(e Event) string {
 	return key
 }
 func limitRows(rows [][]any, p Params) [][]any {
+	offset, _ := strconv.Atoi(p.Extra["_offset"])
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= len(rows) {
+		return nil
+	}
+	rows = rows[offset:]
 	if p.Limit > 0 && len(rows) > p.Limit {
-		return rows[:p.Limit]
+		rows = rows[:p.Limit]
 	}
 	return rows
 }

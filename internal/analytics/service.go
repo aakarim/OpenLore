@@ -2,8 +2,11 @@ package analytics
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,12 +22,17 @@ type Deps struct {
 	Store      AggregationStore
 }
 type Health struct {
-	Dropped           int64 `json:"dropped"`
-	DroppedAtShutdown int64 `json:"dropped_at_shutdown"`
-	PipelineEnabled   bool  `json:"pipeline_enabled"`
-	PipelineLagEvents int64 `json:"pipeline_lag_events"`
-	ShipLagBytes      int64 `json:"ship_lag_bytes"`
-	Segments          int   `json:"segments"`
+	Dropped                 int64     `json:"dropped"`
+	DroppedAtShutdown       int64     `json:"dropped_at_shutdown"`
+	PipelineEnabled         bool      `json:"pipeline_enabled"`
+	PipelineLagEvents       int64     `json:"pipeline_lag_events"`
+	ShipLagBytes            int64     `json:"ship_lag_bytes"`
+	Segments                int       `json:"segments"`
+	LastRefresh             time.Time `json:"last_refresh,omitempty"`
+	HistoryCursorPosition   string    `json:"history_cursor_position,omitempty"`
+	HistoryCursorLagBytes   int64     `json:"history_cursor_lag_bytes,omitempty"`
+	HistoryBlobStoreObjects int64     `json:"history_blob_store_objects,omitempty"`
+	HistoryBlobStoreBytes   int64     `json:"history_blob_store_bytes,omitempty"`
 }
 type Service struct {
 	cfg        config.AnalyticsConfig
@@ -37,6 +45,8 @@ type Service struct {
 	facts      ContentFacts
 	registry   *Registry
 	aggregator *Aggregator
+	remote     RemoteEventStore
+	history    func(context.Context) (position string, lagBytes, blobObjects, blobBytes int64)
 	emitted    sync.Map
 	cancel     context.CancelFunc
 	close      sync.Once
@@ -54,8 +64,34 @@ func New(cfg config.AnalyticsConfig, deps Deps) (*Service, error) {
 	}
 	store := deps.Store
 	if store == nil {
-		store, err = OpenAggregationStore(filepath.Join(dir, "aggregations"))
+		switch strings.ToLower(strings.TrimSpace(cfg.Aggregations.Store)) {
+		case "", "file":
+			store, err = OpenFileAggregationStore(filepath.Join(dir, "aggregations"))
+		case "sqlite":
+			store, err = OpenSQLiteAggregationStore(filepath.Join(dir, "aggregations.sqlite"))
+		default:
+			err = fmt.Errorf("unsupported analytics aggregation store %q", cfg.Aggregations.Store)
+		}
 		if err != nil {
+			return nil, err
+		}
+	}
+	remote := deps.Remote
+	if remote == nil {
+		switch strings.ToLower(strings.TrimSpace(cfg.Ship.Remote)) {
+		case "", "none":
+		case "s3":
+			remote, err = OpenS3EventStore(context.Background(), S3Config{
+				Endpoint: cfg.Ship.S3.Endpoint, Region: cfg.Ship.S3.Region,
+				Bucket: cfg.Ship.S3.Bucket, Prefix: cfg.Ship.S3.Prefix,
+				PathStyle: cfg.Ship.S3.PathStyle,
+			})
+		default:
+			err = fmt.Errorf("unsupported analytics remote store %q", cfg.Ship.Remote)
+		}
+		if err != nil {
+			_ = store.Close()
+			_ = log.Close()
 			return nil, err
 		}
 	}
@@ -85,7 +121,8 @@ func New(cfg config.AnalyticsConfig, deps Deps) (*Service, error) {
 	ref := NewRefresher(reg, log, store, cfg.Aggregations.RefreshInterval)
 	rec := NewRecorder(log, cfg.Pipeline.Buffer)
 	s.recorder = rec
-	s.shipper = NewShipper(log, deps.Remote, cfg.Ship.Interval)
+	s.shipper = NewShipper(log, remote, cfg.Ship.Interval)
+	s.remote = remote
 	s.registry = reg
 	s.aggregator = agg
 	s.refresher = ref
@@ -126,18 +163,66 @@ func (s *Service) Refresh(ctx context.Context, names ...string) error {
 	return s.refresher.Refresh(ctx, names...)
 }
 func (s *Service) Replay(ctx context.Context, from time.Time) error {
+	if len(s.log.Segments()) == 0 && s.remote != nil {
+		return s.RebuildFromRemote(ctx)
+	}
 	if s.pipeline == nil {
 		return nil
 	}
 	return s.pipeline.Replay(ctx, from)
 }
+
+// RebuildFromRemote recreates disposable metrics and materializations from the
+// shipped event archive after local analytics data is lost.
+func (s *Service) RebuildFromRemote(ctx context.Context) error {
+	if s.remote == nil {
+		return errors.New("analytics remote store is not configured")
+	}
+	source := RemoteSource(s.remote)
+	s.aggregator.Reset()
+	if err := source.Scan(ctx, EventFilter{}, func(event Event) error {
+		s.emitted.Store(event.Type, struct{}{})
+		s.aggregator.Consume(ctx, event)
+		return nil
+	}); err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	params := Params{Since: now.Add(-30 * 24 * time.Hour), Until: now, Limit: 100}
+	for _, aggregation := range s.registry.List() {
+		requiresFacts := false
+		for _, requirement := range aggregation.Requires {
+			requiresFacts = requiresFacts || requirement == "facts"
+		}
+		if requiresFacts || s.registry.Status(aggregation.Name) != StatusOK {
+			continue
+		}
+		table, err := aggregation.Compute(ctx, source, s.facts, params)
+		if err != nil {
+			return err
+		}
+		materialized := Materialized{Status: StatusOK, Table: table, ComputedAt: now, Window: params}
+		if err := s.store.Put(ctx, aggregation.Name, params, materialized); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 func (s *Service) ShipNow(ctx context.Context) error { return s.shipper.ShipNow(ctx) }
+func (s *Service) SetHistoryHealth(provider func(context.Context) (string, int64, int64, int64)) {
+	s.history = provider
+}
 func (s *Service) Health() Health {
-	h := Health{Dropped: s.recorder.Dropped(), DroppedAtShutdown: s.recorder.DroppedAtShutdown(), PipelineEnabled: s.pipeline != nil, Segments: len(s.log.Segments())}
+	h := Health{Dropped: s.recorder.Dropped(), DroppedAtShutdown: s.recorder.DroppedAtShutdown(), PipelineEnabled: s.pipeline != nil, Segments: len(s.log.Segments()), LastRefresh: s.refresher.LastRefresh()}
 	if s.pipeline != nil {
 		h.PipelineLagEvents, _ = s.pipeline.Lag()
 	}
 	h.ShipLagBytes, _ = s.shipper.Lag()
+	if s.history != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		h.HistoryCursorPosition, h.HistoryCursorLagBytes, h.HistoryBlobStoreObjects, h.HistoryBlobStoreBytes = s.history(ctx)
+	}
 	return h
 }
 func (s *Service) Close(ctx context.Context) error {

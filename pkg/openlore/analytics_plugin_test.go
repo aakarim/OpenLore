@@ -46,7 +46,7 @@ func TestAnalyticsDashboardShowsObservedValues(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	(&analyticsPlugin{service: service}).dashboard(recorder, httptest.NewRequest("GET", "/analytics/", nil))
 	body := recorder.Body.String()
-	for _, want := range []string{"OpenLore analytics (experimental)", "Top commands", "stat", "Tree size", "README.md", "Top search queries", "planned"} {
+	for _, want := range []string{"Analytics", "Top commands", "stat", "Tree size", "README.md", "Top search queries", "planned", "Health", "Download CSV"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("dashboard missing %q", want)
 		}
@@ -172,12 +172,40 @@ func TestPrometheusExportPreservesJSONServerMetrics(t *testing.T) {
 }
 
 func TestAnalyticsQueryParamsParsesWindow(t *testing.T) {
-	r := httptest.NewRequest("GET", "/analytics/top-commands?since=7d&until=now&limit=12&transport=mcp&fresh=true", nil)
+	r := httptest.NewRequest("GET", "/analytics/top-commands?since=7d&until=now&limit=12&page=3&transport=mcp&fresh=true", nil)
 	p := queryParams(r)
-	if p.Limit != 12 || p.Extra["transport"] != "mcp" || p.Extra["fresh"] != "" {
+	if p.Limit != 12 || p.Extra["_offset"] != "24" || p.Extra["transport"] != "mcp" || p.Extra["fresh"] != "" || p.Extra["page"] != "" {
 		t.Fatalf("unexpected params: %#v", p)
 	}
 	if got := p.Until.Sub(p.Since); got < 7*24*time.Hour-time.Second || got > 7*24*time.Hour+time.Second {
 		t.Fatalf("window = %s", got)
+	}
+}
+
+func TestAnalyticsAggregationCSVDownloadsAllRows(t *testing.T) {
+	service, err := analytics.New(config.AnalyticsConfig{Dir: filepath.Join(t.TempDir(), "analytics"), Log: config.AnalyticsLogConfig{Compress: "none"}, Pipeline: config.AnalyticsPipelineConfig{Buffer: 8}}, analytics.Deps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.Start(context.Background())
+	for _, command := range []string{"cat", "stat"} {
+		service.Record(context.Background(), analytics.Event{Type: "command.exec", Fields: map[string]any{"command": command}})
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := service.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest("GET", "/analytics/aggregations/top-commands?format=csv&limit=1", nil)
+	request.SetPathValue("name", "top-commands")
+	recorder := httptest.NewRecorder()
+	(&analyticsPlugin{service: service}).aggregation(recorder, request)
+	if contentType := recorder.Header().Get("Content-Type"); !strings.HasPrefix(contentType, "text/csv") {
+		t.Fatalf("content type = %q", contentType)
+	}
+	for _, want := range []string{"command,count,principals,sessions,error_rate,p50_ms", "cat", "stat"} {
+		if !strings.Contains(recorder.Body.String(), want) {
+			t.Errorf("CSV missing %q: %s", want, recorder.Body.String())
+		}
 	}
 }

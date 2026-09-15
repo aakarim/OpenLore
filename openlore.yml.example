@@ -32,9 +32,7 @@ port: 2222
 # Prometheus metrics port. Set to 0 to disable.
 metrics_port: 3000
 
-# Experimental features. Analytics remains behind this gate until its storage
-# and quality-analysis phases are complete.
-# experimental: [analytics]
+# Usage analytics is enabled by default. Set enabled: false to disable it.
 # analytics:
 #   enabled: true
 #   dir: analytics
@@ -45,15 +43,23 @@ metrics_port: 3000
 #   ship:
 #     interval: 30s
 #     remote: none
+#     # remote: s3
+#     # s3:
+#     #   bucket: openlore-analytics
+#     #   region: eu-west-2
+#     #   prefix: production
+#     #   # endpoint: https://s3-compatible.example.com
+#     #   # path_style: true
 #   pipeline:
 #     enabled: true
 #     buffer: 1024
 #   shutdown_timeout: 10s
 #   aggregations:
 #     refresh_interval: 5m
-#     store: file
+#     store: file # file | sqlite
 #   history:
 #     blobs: true
+#     retention: 365d
 #   export:
 #     prometheus: true
 

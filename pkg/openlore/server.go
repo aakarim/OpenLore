@@ -304,7 +304,7 @@ func newServerWithRoot(rootDir string, rootFS, lowerFS vfs.FileSystem, opts ...c
 		s.merge.SetRoot(lowerFS)
 	}
 
-	if cfg.Analytics.IsEnabled() && cfg.ExperimentalEnabled("analytics") {
+	if cfg.Analytics.IsEnabled() {
 		analyticsCfg := cfg.Analytics
 		if !filepath.IsAbs(analyticsCfg.Dir) {
 			analyticsCfg.Dir = filepath.Join(dataDir, analyticsCfg.Dir)
@@ -346,6 +346,7 @@ func newServerWithRoot(rootDir string, rootFS, lowerFS vfs.FileSystem, opts ...c
 		}
 		commitPath := filepath.Join(dataDir, "history", "commits.jsonl")
 		s.writeLog.SetCommitJournal(commitPath, blobs, cfg.Analytics.HistoryBlobsEnabled())
+		s.writeLog.SetHistoryRetention(cfg.Analytics.History.Retention)
 		if s.analytics != nil {
 			cursor, cursorErr := OpenHistoryCursor(commitPath, HistoryPosition{})
 			if cursorErr != nil {
@@ -354,6 +355,12 @@ func newServerWithRoot(rootDir string, rootFS, lowerFS vfs.FileSystem, opts ...c
 			processor := NewScalarProcessor(cursor, blobs, IdentityStoreClassifier(s.identityStore)).(*ScalarProcessor)
 			processor.docset = (&analyticsPlugin{server: s}).docsetForPath
 			s.analytics.AddProcessor(processor)
+			s.analytics.SetHistoryHealth(func(ctx context.Context) (string, int64, int64, int64) {
+				position := cursor.Position()
+				lag, _ := HistoryCursorLagBytes(commitPath, position)
+				stats, _ := blobs.Stats(ctx)
+				return fmt.Sprintf("%s:%d", position.Segment, position.Offset), lag, stats.Objects, stats.Bytes
+			})
 		}
 		s.history = history
 		s.writeLog.SetHistoryRecorder(s.history)
@@ -1250,7 +1257,23 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 		sh.SetConfigReloadBackend(s)
 	}
 	if s.history != nil {
-		sh.SetHistoryBackend(scopedHistory{store: s.history, roots: historyRoots(s.sessionDocsets(id))})
+		history := scopedHistory{store: s.history, roots: historyRoots(s.sessionDocsets(id))}
+		if canAdmin && s.writeLog != nil {
+			historyDir := filepath.Join(s.config.DataDir, "history")
+			if s.config.DataDir == "" {
+				historyDir = filepath.Join(".openlore", "history")
+			}
+			history.gc = func() (HistoryGCStats, error) {
+				var stats HistoryGCStats
+				err := s.writeLog.Do(context.Background(), func() error {
+					var err error
+					stats, err = GarbageCollectHistoryBlobs(context.Background(), historyDir)
+					return err
+				})
+				return stats, err
+			}
+		}
+		sh.SetHistoryBackend(history)
 	}
 	sh.SetJobBackend(s.jobs)
 	sh.SetSizeBackend(sessionSizeBackend{server: s, identity: id})
