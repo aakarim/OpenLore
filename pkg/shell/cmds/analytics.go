@@ -79,11 +79,11 @@ func parseAnalyticsDuration(s string) (time.Duration, error) {
 func CmdAnalytics(ctx CmdContext, args []string, w, errW io.Writer, _ io.Reader) int {
 	service := analyticsService(ctx)
 	if service == nil {
-		fmt.Fprintln(errW, "analytics: experimental analytics is not enabled")
+		fmt.Fprintln(errW, "analytics: analytics is not enabled")
 		return 1
 	}
 	if len(args) == 0 {
-		fmt.Fprintln(errW, "usage: analytics list|show|refresh|replay|export|status|ship")
+		fmt.Fprintln(errW, "usage: analytics list|show|refresh|replay|rebuild|export|status|ship")
 		return 1
 	}
 	switch args[0] {
@@ -118,7 +118,6 @@ func CmdAnalytics(ctx CmdContext, args []string, w, errW io.Writer, _ io.Reader)
 			_ = json.NewEncoder(w).Encode(m)
 			return 0
 		}
-		fmt.Fprintln(w, "Experimental analytics")
 		fmt.Fprintln(w, "Status:", m.Status)
 		if m.Note != "" {
 			fmt.Fprintln(w, m.Note)
@@ -155,6 +154,17 @@ func CmdAnalytics(ctx CmdContext, args []string, w, errW io.Writer, _ io.Reader)
 		}
 		fmt.Fprintln(w, "replayed")
 		return 0
+	case "rebuild":
+		if len(args) != 2 || args[1] != "--from-remote" {
+			fmt.Fprintln(errW, "usage: analytics rebuild --from-remote")
+			return 1
+		}
+		if err := service.RebuildFromRemote(context.Background()); err != nil {
+			fmt.Fprintln(errW, "analytics rebuild:", err)
+			return 1
+		}
+		fmt.Fprintln(w, "rebuilt from remote")
+		return 0
 	case "export":
 		p, _, err := analyticsParams(args[1:])
 		if err != nil {
@@ -185,7 +195,7 @@ func CmdAnalytics(ctx CmdContext, args []string, w, errW io.Writer, _ io.Reader)
 		fmt.Fprintln(w, "shipped")
 		return 0
 	default:
-		names := []string{"list", "show", "refresh", "replay", "export", "status", "ship"}
+		names := []string{"list", "show", "refresh", "replay", "rebuild", "export", "status", "ship"}
 		sort.Strings(names)
 		fmt.Fprintln(errW, "analytics: unknown subcommand", args[0])
 		return 1

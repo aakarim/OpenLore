@@ -42,7 +42,7 @@ func scalarEventKey(e Event) string {
 }
 func limitRows(rows [][]any, p Params) [][]any {
 	if p.Limit > 0 && len(rows) > p.Limit {
-		return rows[:p.Limit]
+		rows = rows[:p.Limit]
 	}
 	return rows
 }

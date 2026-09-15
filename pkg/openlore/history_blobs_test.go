@@ -3,6 +3,7 @@ package openlore
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -101,6 +102,367 @@ func TestHistoryCursorDoesNotConsumePartialEOFRecord(t *testing.T) {
 	record, ok, err := cursor.Next(context.Background())
 	if err != nil || !ok || record.ID != "one" {
 		t.Fatalf("completed Next = %#v, ok %v, err %v", record, ok, err)
+	}
+}
+
+func TestCommitJournalRotationAndCompressedCursorRestart(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "commits.jsonl")
+	if err := appendCommitRecord(file, CommitRecord{ID: "old"}); err != nil {
+		t.Fatal(err)
+	}
+	yesterday := time.Now().UTC().Add(-24 * time.Hour)
+	if err := os.Chtimes(file, yesterday, yesterday); err != nil {
+		t.Fatal(err)
+	}
+	if err := RotateCommitJournal(context.Background(), file, time.Now().UTC(), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendCommitRecord(file, CommitRecord{ID: "new"}); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := OpenHistoryCursor(file, HistoryPosition{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, ok, err := c.Next(context.Background())
+	if err != nil || !ok || r.ID != "old" {
+		t.Fatalf("first = %#v, %v, %v", r, ok, err)
+	}
+	position := c.Position()
+	r, ok, err = c.Next(context.Background())
+	if err != nil || !ok || r.ID != "new" {
+		t.Fatalf("second = %#v, %v, %v", r, ok, err)
+	}
+	restarted, err := OpenHistoryCursor(file, position)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, ok, err = restarted.Next(context.Background())
+	if err != nil || !ok || r.ID != "new" {
+		t.Fatalf("restarted = %#v, %v, %v", r, ok, err)
+	}
+}
+
+func TestCommitJournalCursorOrdersRepeatedSameDayRotations(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "commits.jsonl")
+	yesterday := time.Now().UTC().Add(-24 * time.Hour)
+	for _, id := range []string{"first", "second"} {
+		if err := appendCommitRecord(file, CommitRecord{ID: id, Time: yesterday}); err != nil {
+			t.Fatal(err)
+		}
+		if err := RotateCommitJournal(context.Background(), file, time.Now().UTC(), 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := appendCommitRecord(file, CommitRecord{ID: "active", Time: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	cursor, err := OpenHistoryCursor(file, HistoryPosition{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"first", "second", "active"} {
+		record, ok, err := cursor.Next(context.Background())
+		if err != nil || !ok || record.ID != want {
+			t.Fatalf("Next = %#v, ok=%v, err=%v; want %q", record, ok, err, want)
+		}
+	}
+}
+
+func TestHistoryCursorRecoversWhenActiveJournalRotatesBehindIt(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "commits.jsonl")
+	yesterday := time.Now().UTC().Add(-24 * time.Hour)
+	if err := appendCommitRecord(file, CommitRecord{ID: "old", Time: yesterday}); err != nil {
+		t.Fatal(err)
+	}
+	cursor, err := OpenHistoryCursor(file, HistoryPosition{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := RotateCommitJournal(context.Background(), file, time.Now().UTC(), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendCommitRecord(file, CommitRecord{ID: "new", Time: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"old", "new"} {
+		record, ok, err := cursor.Next(context.Background())
+		if err != nil || !ok || record.ID != want {
+			t.Fatalf("Next = %#v, %v, %v; want %q", record, ok, err, want)
+		}
+	}
+	if _, ok, err := cursor.Next(context.Background()); err != nil || ok {
+		t.Fatalf("cursor did not stop at active tail: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestHistoryCursorRestoresActiveCheckpointAfterRotation(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "commits.jsonl")
+	yesterday := time.Now().UTC().Add(-24 * time.Hour)
+	for _, id := range []string{"first", "second"} {
+		if err := appendCommitRecord(file, CommitRecord{ID: id, Time: yesterday}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cursor, err := OpenHistoryCursor(file, HistoryPosition{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record, ok, err := cursor.Next(context.Background()); err != nil || !ok || record.ID != "first" {
+		t.Fatalf("first = %#v, ok=%v, err=%v", record, ok, err)
+	}
+	checkpoint := cursor.Position()
+	if checkpoint.Segment != "" {
+		t.Fatalf("checkpoint = %#v, want legacy active position", checkpoint)
+	}
+	if err := RotateCommitJournal(context.Background(), file, time.Now().UTC(), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendCommitRecord(file, CommitRecord{ID: strings.Repeat("active", 100), Time: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := OpenHistoryCursor(file, checkpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record, ok, err := restarted.Next(context.Background()); err != nil || !ok || record.ID != "second" {
+		t.Fatalf("restored = %#v, ok=%v, err=%v", record, ok, err)
+	}
+}
+
+func TestCommitJournalRetention(t *testing.T) {
+	dir := t.TempDir()
+	old := filepath.Join(dir, "commits-2020-01-01.jsonl")
+	if err := os.WriteFile(old, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stamp := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(old, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(dir, "commits.jsonl")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RotateCommitJournal(context.Background(), file, time.Now(), 24*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(old); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("old segment remains: %v", err)
+	}
+}
+
+func TestCommitJournalRetentionProtectsCursorAndNewerSegments(t *testing.T) {
+	dir := t.TempDir()
+	for _, day := range []string{"2020-01-01", "2021-01-01", "2022-01-01"} {
+		if err := os.WriteFile(filepath.Join(dir, "commits-"+day+".jsonl"), []byte("{}\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	file := filepath.Join(dir, "commits.jsonl")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	protected := HistoryPosition{Segment: "commits-2021-01-01.jsonl"}
+	if err := RotateCommitJournal(context.Background(), file, time.Now().UTC(), 24*time.Hour, protected); err != nil {
+		t.Fatal(err)
+	}
+	old := filepath.Join(dir, "commits-2020-01-01.jsonl")
+	if _, err := os.Stat(old); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("plain segment before cursor remains: %v", err)
+	}
+	if _, err := os.Stat(old + ".zst"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("compressed segment before cursor remains: %v", err)
+	}
+	for _, day := range []string{"2021-01-01", "2022-01-01"} {
+		plain := filepath.Join(dir, "commits-"+day+".jsonl")
+		if _, plainErr := os.Stat(plain); plainErr != nil {
+			if _, compressedErr := os.Stat(plain + ".zst"); compressedErr != nil {
+				t.Fatalf("protected segment %s pruned: plain=%v compressed=%v", day, plainErr, compressedErr)
+			}
+		}
+	}
+}
+
+func TestCommitJournalRetentionMapsActiveCursorToDetachedSegment(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "commits.jsonl")
+	old := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, id := range []string{"processed", "pending"} {
+		if err := appendCommitRecord(file, CommitRecord{ID: id, Time: old}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cursor, err := OpenHistoryCursor(file, HistoryPosition{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := cursor.Next(context.Background()); err != nil || !ok {
+		t.Fatalf("read checkpoint: ok=%v err=%v", ok, err)
+	}
+	if err := RotateCommitJournal(context.Background(), file, time.Now().UTC(), 24*time.Hour, cursor.Position()); err != nil {
+		t.Fatal(err)
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, "commits-2020-01-01*.jsonl.zst"))
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("protected detached segment = %v, err=%v", matches, err)
+	}
+}
+
+func TestHistorySegmentPositionSupportsLargeRecords(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "commits-2020-01-01.jsonl")
+	record := CommitRecord{ID: "large", ChangeSet: vfs.ChangeSet{Target: "/large.md", Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: []byte(strings.Repeat("x", 128*1024))}}}
+	if err := appendCommitRecord(file, record); err != nil {
+		t.Fatal(err)
+	}
+	offset, found, err := historySegmentPosition(file, record.ID)
+	if err != nil || !found || offset <= 128*1024 {
+		t.Fatalf("large record position = %d, found=%v, err=%v", offset, found, err)
+	}
+}
+
+func TestGarbageCollectHistoryBlobsRejectsPartialSealedRecord(t *testing.T) {
+	dir := t.TempDir()
+	blobs, err := OpenBlobStore(filepath.Join(dir, "objects"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("must remain")
+	hash := hashContent(content)
+	if err := blobs.Put(context.Background(), hash, strings.NewReader(string(content))); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "commits-2020-01-01.jsonl"), []byte(`{"id":"partial"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "commits.jsonl"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := GarbageCollectHistoryBlobs(context.Background(), dir); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("GC error = %v, want partial sealed record error", err)
+	}
+	if ok, err := blobs.Has(context.Background(), hash); err != nil || !ok {
+		t.Fatalf("blob deleted after sealed corruption: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestHistoryCursorCheckpointSurvivesBackgroundCompression(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "commits.jsonl")
+	yesterday := time.Now().UTC().Add(-24 * time.Hour)
+	for _, id := range []string{"first", "second"} {
+		if err := appendCommitRecord(file, CommitRecord{ID: id, Time: yesterday}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	segment, logicalSize, err := detachCommitJournal(file, time.Now().UTC())
+	if err != nil || segment == "" {
+		t.Fatalf("detach = %q, %v", segment, err)
+	}
+	cursor, err := OpenHistoryCursor(file, HistoryPosition{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record, ok, err := cursor.Next(context.Background()); err != nil || !ok || record.ID != "first" {
+		t.Fatalf("first = %#v, ok=%v, err=%v", record, ok, err)
+	}
+	checkpoint := cursor.Position()
+	if strings.HasSuffix(checkpoint.Segment, ".zst") {
+		t.Fatalf("checkpoint unexpectedly compressed before maintenance: %#v", checkpoint)
+	}
+	if err := appendCommitRecord(file, CommitRecord{ID: "active", Time: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := compressHistorySegment(context.Background(), segment, logicalSize); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"second", "active"} {
+		if record, ok, err := cursor.Next(context.Background()); err != nil || !ok || record.ID != want {
+			t.Fatalf("live cursor after compression = %#v, ok=%v, err=%v; want %q", record, ok, err, want)
+		}
+	}
+	restarted, err := OpenHistoryCursor(file, checkpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record, ok, err := restarted.Next(context.Background()); err != nil || !ok || record.ID != "second" {
+		t.Fatalf("restarted = %#v, ok=%v, err=%v", record, ok, err)
+	}
+	lag, err := HistoryCursorLagBytes(file, checkpoint)
+	active, statErr := os.Stat(file)
+	if statErr != nil {
+		t.Fatal(statErr)
+	}
+	wantLag := logicalSize - checkpoint.Offset + active.Size()
+	if err != nil || lag != wantLag {
+		t.Fatalf("lag from pre-compression checkpoint = %d, want %d, err=%v", lag, wantLag, err)
+	}
+}
+
+func TestGarbageCollectHistoryBlobsPreservesReferencesAndFailsSafe(t *testing.T) {
+	dir := t.TempDir()
+	blobs, err := OpenBlobStore(filepath.Join(dir, "objects"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	kept, stale := []byte("kept"), []byte("stale")
+	for _, b := range [][]byte{kept, stale} {
+		if err := blobs.Put(context.Background(), hashContent(b), strings.NewReader(string(b))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	file := filepath.Join(dir, "commits.jsonl")
+	if err := appendCommitRecord(file, CommitRecord{ID: "one", Leaves: []LeafRecord{{BeforeHash: hashContent(kept)}}}); err != nil {
+		t.Fatal(err)
+	}
+	stats, err := GarbageCollectHistoryBlobs(context.Background(), dir)
+	if err != nil || stats.Objects != 1 {
+		t.Fatalf("GC = %#v, %v", stats, err)
+	}
+	if ok, _ := blobs.Has(context.Background(), hashContent(kept)); !ok {
+		t.Fatal("referenced blob deleted")
+	}
+	if err := os.WriteFile(file, []byte("{corrupt}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	third := []byte("third")
+	if err := blobs.Put(context.Background(), hashContent(third), strings.NewReader(string(third))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := GarbageCollectHistoryBlobs(context.Background(), dir); err == nil {
+		t.Fatal("corrupt journal accepted")
+	}
+	if ok, _ := blobs.Has(context.Background(), hashContent(third)); !ok {
+		t.Fatal("blob deleted after corrupt journal")
+	}
+}
+
+func TestGarbageCollectHistoryBlobsHonorsCancellationBeforeDeleting(t *testing.T) {
+	dir := t.TempDir()
+	blobs, err := OpenBlobStore(filepath.Join(dir, "objects"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("must remain")
+	hash := hashContent(content)
+	if err := blobs.Put(context.Background(), hash, strings.NewReader(string(content))); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendCommitRecord(filepath.Join(dir, "commits.jsonl"), CommitRecord{ID: "one"}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := GarbageCollectHistoryBlobs(ctx, dir); !errors.Is(err, context.Canceled) {
+		t.Fatalf("GC error = %v, want context cancellation", err)
+	}
+	if ok, err := blobs.Has(context.Background(), hash); err != nil || !ok {
+		t.Fatalf("blob deleted by canceled GC: ok=%v err=%v", ok, err)
 	}
 }
 

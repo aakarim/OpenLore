@@ -35,3 +35,18 @@ func TestAnalyticsRetentionAcceptsDays(t *testing.T) {
 		t.Fatalf("retention = %s", cfg.Analytics.Log.Retention)
 	}
 }
+
+func TestAnalyticsPhaseThreeDriversConfig(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "openlore.yml")
+	contents := "analytics:\n  aggregations:\n    store: sqlite\n  history:\n    retention: 365d\n"
+	if err := os.WriteFile(file, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := New(WithConfigFile(file))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Analytics.Aggregations.Store != "sqlite" || cfg.Analytics.History.Retention != 365*24*time.Hour {
+		t.Fatalf("unexpected phase 3 analytics config: %#v", cfg.Analytics)
+	}
+}

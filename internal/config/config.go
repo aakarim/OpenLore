@@ -136,7 +136,10 @@ type AnalyticsAggregationConfig struct {
 	RefreshInterval time.Duration
 	Store           string
 }
-type AnalyticsHistoryConfig struct{ Blobs *bool }
+type AnalyticsHistoryConfig struct {
+	Blobs     *bool
+	Retention time.Duration
+}
 type AnalyticsExportConfig struct{ Prometheus bool }
 
 func boolDefault(v *bool, fallback bool) bool {
@@ -614,7 +617,8 @@ type analyticsYAML struct {
 	ShutdownTimeout string                                  `yaml:"shutdown_timeout"`
 	Aggregations    struct{ RefreshInterval, Store string } `yaml:"aggregations"`
 	History         struct {
-		Blobs *bool `yaml:"blobs"`
+		Blobs     *bool  `yaml:"blobs"`
+		Retention string `yaml:"retention"`
 	} `yaml:"history"`
 	Export struct {
 		Prometheus *bool `yaml:"prometheus"`
@@ -664,7 +668,7 @@ func applyAnalyticsConfig(cfg *Config, in analyticsYAML) error {
 	for _, item := range []struct {
 		value, name string
 		target      *time.Duration
-	}{{in.Log.Rotate, "log.rotate", &cfg.Analytics.Log.Rotate}, {in.Log.Retention, "log.retention", &cfg.Analytics.Log.Retention}, {in.Ship.Interval, "ship.interval", &cfg.Analytics.Ship.Interval}, {in.ShutdownTimeout, "shutdown_timeout", &cfg.Analytics.ShutdownTimeout}, {in.Aggregations.RefreshInterval, "aggregations.refresh_interval", &cfg.Analytics.Aggregations.RefreshInterval}} {
+	}{{in.Log.Rotate, "log.rotate", &cfg.Analytics.Log.Rotate}, {in.Log.Retention, "log.retention", &cfg.Analytics.Log.Retention}, {in.Ship.Interval, "ship.interval", &cfg.Analytics.Ship.Interval}, {in.ShutdownTimeout, "shutdown_timeout", &cfg.Analytics.ShutdownTimeout}, {in.Aggregations.RefreshInterval, "aggregations.refresh_interval", &cfg.Analytics.Aggregations.RefreshInterval}, {in.History.Retention, "history.retention", &cfg.Analytics.History.Retention}} {
 		if err := parseAnalyticsDuration(item.value, item.name, item.target); err != nil {
 			return err
 		}
@@ -1111,6 +1115,14 @@ func WithPort(port int) Option {
 func WithMetricsPort(port int) Option {
 	return func(cfg *Config) error {
 		cfg.MetricsPort = port
+		return nil
+	}
+}
+
+// WithAnalyticsEnabled enables or disables the built-in analytics service.
+func WithAnalyticsEnabled(enabled bool) Option {
+	return func(cfg *Config) error {
+		cfg.Analytics.Enabled = &enabled
 		return nil
 	}
 }

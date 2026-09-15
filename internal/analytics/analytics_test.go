@@ -162,6 +162,14 @@ func TestTreeSizePassesDepthToContentWalk(t *testing.T) {
 	}
 }
 
+func TestLimitRowsAppliesLimit(t *testing.T) {
+	rows := [][]any{{"first"}, {"second"}, {"third"}, {"fourth"}}
+	got := limitRows(rows, Params{Limit: 2})
+	if len(got) != 2 || got[0][0] != "first" || got[1][0] != "second" {
+		t.Fatalf("limited rows = %#v", got)
+	}
+}
+
 func TestPipelineResumesAfterCheckpointWithoutRederivingEvents(t *testing.T) {
 	log, err := OpenEventLog(t.TempDir(), LogOptions{Compress: "none"})
 	if err != nil {

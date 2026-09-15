@@ -79,9 +79,8 @@ func TestAggregationStoreMovingWindowKeyIsStable(t *testing.T) {
 	if err := store.Put(context.Background(), "test", b, Materialized{}); err != nil {
 		t.Fatal(err)
 	}
-	entries, _ := os.ReadDir(dir)
-	if len(entries) != 1 {
-		t.Fatalf("materialization files = %d, want 1", len(entries))
+	if _, ok, err := store.Get(context.Background(), "test", a); err != nil || !ok {
+		t.Fatalf("stable moving-window key was not found: ok=%v err=%v", ok, err)
 	}
 }
 

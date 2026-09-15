@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -67,6 +68,10 @@ type Server struct {
 	metricsSrv      *http.Server
 	analytics       *analytics.Service
 	analyticsCancel context.CancelFunc
+	historyPath     string
+	historyPosition func() HistoryPosition
+	historyCancel   context.CancelFunc
+	historyDone     chan struct{}
 	srv             *ssh.Server
 	httpSrv         *httpserver.Server
 	passkeys        *passkeys.Passkeys
@@ -304,7 +309,7 @@ func newServerWithRoot(rootDir string, rootFS, lowerFS vfs.FileSystem, opts ...c
 		s.merge.SetRoot(lowerFS)
 	}
 
-	if cfg.Analytics.IsEnabled() && cfg.ExperimentalEnabled("analytics") {
+	if cfg.Analytics.IsEnabled() {
 		analyticsCfg := cfg.Analytics
 		if !filepath.IsAbs(analyticsCfg.Dir) {
 			analyticsCfg.Dir = filepath.Join(dataDir, analyticsCfg.Dir)
@@ -346,6 +351,7 @@ func newServerWithRoot(rootDir string, rootFS, lowerFS vfs.FileSystem, opts ...c
 		}
 		commitPath := filepath.Join(dataDir, "history", "commits.jsonl")
 		s.writeLog.SetCommitJournal(commitPath, blobs, cfg.Analytics.HistoryBlobsEnabled())
+		s.historyPath = commitPath
 		if s.analytics != nil {
 			cursor, cursorErr := OpenHistoryCursor(commitPath, HistoryPosition{})
 			if cursorErr != nil {
@@ -354,6 +360,13 @@ func newServerWithRoot(rootDir string, rootFS, lowerFS vfs.FileSystem, opts ...c
 			processor := NewScalarProcessor(cursor, blobs, IdentityStoreClassifier(s.identityStore)).(*ScalarProcessor)
 			processor.docset = (&analyticsPlugin{server: s}).docsetForPath
 			s.analytics.AddProcessor(processor)
+			s.historyPosition = cursor.Position
+			s.analytics.SetHistoryHealth(func(ctx context.Context) (string, int64, int64, int64) {
+				position := cursor.Position()
+				lag, _ := HistoryCursorLagBytes(commitPath, position)
+				stats, _ := blobs.Stats(ctx)
+				return fmt.Sprintf("%s:%d", position.Segment, position.Offset), lag, stats.Objects, stats.Bytes
+			})
 		}
 		s.history = history
 		s.writeLog.SetHistoryRecorder(s.history)
@@ -1250,7 +1263,24 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 		sh.SetConfigReloadBackend(s)
 	}
 	if s.history != nil {
-		sh.SetHistoryBackend(scopedHistory{store: s.history, roots: historyRoots(s.sessionDocsets(id))})
+		history := scopedHistory{store: s.history, roots: historyRoots(s.sessionDocsets(id))}
+		if canAdmin && s.writeLog != nil {
+			historyDir := filepath.Join(s.config.DataDir, "history")
+			if s.config.DataDir == "" {
+				historyDir = filepath.Join(".openlore", "history")
+			}
+			history.gcTimeout = s.config.Analytics.ShutdownTimeout
+			history.gc = func(ctx context.Context) (HistoryGCStats, error) {
+				var stats HistoryGCStats
+				err := s.writeLog.Do(ctx, func() error {
+					var err error
+					stats, err = GarbageCollectHistoryBlobs(ctx, historyDir)
+					return err
+				})
+				return stats, err
+			}
+		}
+		sh.SetHistoryBackend(history)
 	}
 	sh.SetJobBackend(s.jobs)
 	sh.SetSizeBackend(sessionSizeBackend{server: s, identity: id})
@@ -1840,7 +1870,46 @@ func (s *Server) ListenAndServe() error {
 	}
 
 	s.logger.Info("SSH server starting", "port", s.config.Port)
+	s.startHistoryMaintenance()
 	return s.srv.ListenAndServe()
+}
+
+func (s *Server) startHistoryMaintenance() {
+	if s.historyPath == "" || s.historyCancel != nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s.historyCancel = cancel
+	s.historyDone = make(chan struct{})
+	go func() {
+		defer close(s.historyDone)
+		maintain := func() {
+			var protected []HistoryPosition
+			if s.historyPosition != nil {
+				protected = append(protected, s.historyPosition())
+			}
+			if err := RotateCommitJournal(ctx, s.historyPath, time.Now().UTC(), s.config.Analytics.History.Retention, protected...); err != nil && !errors.Is(err, context.Canceled) {
+				s.logger.Warn("history journal maintenance failed", "err", err)
+			}
+		}
+		maintain()
+		for {
+			now := time.Now().UTC()
+			timer := time.NewTimer(now.Truncate(24 * time.Hour).Add(24 * time.Hour).Sub(now))
+			select {
+			case <-timer.C:
+				maintain()
+			case <-ctx.Done():
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				return
+			}
+		}
+	}()
 }
 
 func (s *Server) metricsExportHandler() http.Handler {
@@ -1878,6 +1947,14 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	}
 	// Transports no longer accept commands. Drain writes next, then analytics
 	// last so every acknowledged command and commit can still emit.
+	if s.historyCancel != nil {
+		s.historyCancel()
+		select {
+		case <-s.historyDone:
+		case <-ctx.Done():
+			s.logger.Warn("shutdown: history maintenance did not stop before deadline", "err", ctx.Err())
+		}
+	}
 	if s.writeLog != nil {
 		if err := s.writeLog.Close(ctx); err != nil {
 			s.logger.Warn("shutdown: write log did not drain before deadline", "err", err)

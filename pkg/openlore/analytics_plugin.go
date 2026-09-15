@@ -2,16 +2,19 @@ package openlore
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"html"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/aakarim/go-openlore/internal/analytics"
+	"github.com/aakarim/go-openlore/internal/webstyle"
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
 
@@ -146,11 +149,11 @@ func queryParams(r *http.Request) analytics.Params {
 	if until, ok := analyticsQueryTime(r.URL.Query().Get("until"), p.Until); ok {
 		p.Until = until
 	}
-	if n, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && n > 0 {
+	if n, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && n >= 0 && r.URL.Query().Has("limit") {
 		p.Limit = n
 	}
 	for k, v := range r.URL.Query() {
-		if len(v) > 0 && k != "since" && k != "until" && k != "limit" && k != "fresh" {
+		if len(v) > 0 && k != "since" && k != "until" && k != "limit" && k != "fresh" && k != "page" && k != "format" {
 			p.Extra[k] = v[0]
 		}
 	}
@@ -176,13 +179,44 @@ func analyticsQueryTime(value string, now time.Time) (time.Time, bool) {
 	return time.Time{}, false
 }
 func (p *analyticsPlugin) aggregation(w http.ResponseWriter, r *http.Request) {
-	m, err := p.runAggregation(r, r.PathValue("name"))
+	if r.URL.Query().Get("format") == "csv" {
+		request := r.Clone(r.Context())
+		copyURL := *r.URL
+		query := copyURL.Query()
+		query.Set("limit", "0")
+		query.Del("page")
+		copyURL.RawQuery = query.Encode()
+		request.URL = &copyURL
+		m, err := p.runAggregation(request, r.PathValue("name"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		p.writeAggregationCSV(w, r.PathValue("name"), m)
+		return
+	}
+	m, err := p.runPaginatedAggregation(r, r.PathValue("name"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(m)
+}
+
+func (p *analyticsPlugin) writeAggregationCSV(w http.ResponseWriter, name string, m analytics.Materialized) {
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", name+".csv"))
+	writer := csv.NewWriter(w)
+	_ = writer.Write(m.Table.Columns)
+	for _, row := range m.Table.Rows {
+		values := make([]string, len(row))
+		for i, value := range row {
+			values[i] = fmt.Sprint(value)
+		}
+		_ = writer.Write(values)
+	}
+	writer.Flush()
 }
 func (p *analyticsPlugin) facts(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Query().Get("path")
@@ -222,34 +256,185 @@ func (p *analyticsPlugin) runAggregation(r *http.Request, name string) (analytic
 	return p.service.Registry().Run(r.Context(), name, queryParams(r), analytics.RunOptions{Fresh: r.URL.Query().Get("fresh") == "true"})
 }
 
+func (p *analyticsPlugin) runPaginatedAggregation(r *http.Request, name string) (analytics.Materialized, error) {
+	params := queryParams(r)
+	if params.Limit <= 0 {
+		return p.runAggregation(r, name)
+	}
+	request := r.Clone(r.Context())
+	copyURL := *r.URL
+	query := copyURL.Query()
+	query.Set("limit", "0")
+	query.Del("page")
+	copyURL.RawQuery = query.Encode()
+	request.URL = &copyURL
+	m, err := p.runAggregation(request, name)
+	if err != nil {
+		return m, err
+	}
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	if page-1 > len(m.Table.Rows)/params.Limit {
+		m.Table.Rows = nil
+		m.Window = params
+		return m, nil
+	}
+	offset := (page - 1) * params.Limit
+	if offset >= len(m.Table.Rows) {
+		m.Table.Rows = nil
+	} else {
+		m.Table.Rows = m.Table.Rows[offset:min(offset+params.Limit, len(m.Table.Rows))]
+	}
+	m.Window = params
+	return m, nil
+}
+
 func (p *analyticsPlugin) dashboard(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintln(w, "<!doctype html><html><head><meta charset=utf-8><title>OpenLore analytics</title></head><body><h1>OpenLore analytics (experimental)</h1>")
+	fmt.Fprintln(w, `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>OpenLore analytics</title>`+webstyle.Link+`</head><body><main class="analytics"><header><div><p class="eyebrow">OpenLore</p><h1>Analytics</h1><p class="subtitle">Usage, knowledge quality, and system health.</p></div><a href="/analytics/" class="analytics-home">Overview</a></header>`)
 	if name == "" {
-		fmt.Fprintln(w, "<h2>Health</h2><pre>")
-		b, _ := json.MarshalIndent(p.service.Health(), "", "  ")
-		fmt.Fprintln(w, html.EscapeString(string(b)), "</pre><h2>Aggregations</h2>")
+		health := p.service.Health()
+		fmt.Fprintln(w, `<section><div class="section-head"><div><p class="eyebrow">Runtime</p><h2>Health</h2></div></div><div class="health-grid">`)
+		for _, metric := range []struct {
+			label string
+			value any
+		}{
+			{"Pipeline", map[bool]string{true: "Running", false: "Paused"}[health.PipelineEnabled]}, {"Segments", health.Segments}, {"Dropped events", health.Dropped},
+			{"Dropped at shutdown", health.DroppedAtShutdown}, {"Ship lag (bytes)", health.ShipLagBytes}, {"Pipeline lag (events)", health.PipelineLagEvents},
+			{"Last refresh", formatAnalyticsTime(health.LastRefresh)}, {"History cursor", health.HistoryCursorPosition}, {"History lag (bytes)", health.HistoryCursorLagBytes},
+			{"History blobs", health.HistoryBlobStoreObjects}, {"Blob bytes", health.HistoryBlobStoreBytes},
+		} {
+			fmt.Fprintf(w, `<article class="health-card"><span>%s</span><strong>%v</strong></article>`, html.EscapeString(metric.label), metric.value)
+		}
+		fmt.Fprintln(w, `</div></section><section><div class="section-head"><div><p class="eyebrow">Explore</p><h2>Aggregations</h2></div></div><div class="analytics-list">`)
 		for _, a := range p.service.Registry().List() {
-			fmt.Fprintf(w, "<section><h3><a href=\"/analytics/%s\">%s</a></h3>", a.Name, html.EscapeString(a.Title))
-			m, err := p.runAggregation(r, a.Name)
-			if err != nil {
-				fmt.Fprintf(w, "<p>%s</p>", html.EscapeString(err.Error()))
+			fmt.Fprintf(w, `<article class="analytics-panel"><div class="panel-title"><div><h3><a href="/analytics/%s">%s</a></h3><p>%s</p></div><span class="badge">%s</span></div>`, url.PathEscape(a.Name), html.EscapeString(a.Title), html.EscapeString(a.Description), p.service.Registry().Status(a.Name))
+			if missingRequiredAnalyticsParam(a, r) {
+				fmt.Fprintln(w, `<p class="parameter-note">Open this view to choose its required parameters.</p>`)
+			} else {
+				m, err := p.runAggregation(r, a.Name)
+				if err != nil {
+					fmt.Fprintf(w, "<p>%s</p>", html.EscapeString(err.Error()))
+				} else {
+					renderAnalyticsTable(w, m)
+				}
+			}
+			fmt.Fprintf(w, `<p class="panel-actions"><a href="/analytics/%s">Open view</a>`, url.PathEscape(a.Name))
+			if !missingRequiredAnalyticsParam(a, r) {
+				fmt.Fprintf(w, ` · <a href="/analytics/aggregations/%s?format=csv">Download CSV</a>`, url.PathEscape(a.Name))
+			}
+			fmt.Fprintln(w, `</p></article>`)
+		}
+		fmt.Fprintln(w, `</div></section>`)
+	} else {
+		var selected analytics.Aggregation
+		for _, aggregation := range p.service.Registry().List() {
+			if aggregation.Name == name {
+				selected = aggregation
+				break
+			}
+		}
+		fmt.Fprintf(w, `<section><div class="section-head"><div><p class="eyebrow">Aggregation</p><h2>%s</h2></div><a class="download" href="%s">Download CSV</a></div>`, html.EscapeString(name), html.EscapeString(analyticsPageURL(r, "/analytics/aggregations/"+url.PathEscape(name), map[string]string{"format": "csv", "page": ""})))
+		if selected.Name == "" {
+			fmt.Fprintln(w, `<p class="error">Unknown aggregation.</p>`)
+		} else {
+			renderWindowLinks(w, r)
+			renderAnalyticsFilters(w, r, selected)
+			if missingRequiredAnalyticsParam(selected, r) {
+				fmt.Fprintln(w, `<p class="parameter-note">Set the required parameters to run this aggregation.</p>`)
+			} else if m, err := p.runPaginatedAggregation(r, name); err != nil {
+				fmt.Fprintf(w, `<p class="error">%s</p>`, html.EscapeString(err.Error()))
 			} else {
 				renderAnalyticsTable(w, m)
+				renderAnalyticsPagination(w, r, m.Table.Total)
 			}
-			fmt.Fprintln(w, "</section>")
 		}
-	} else {
-		m, err := p.runAggregation(r, name)
-		if err != nil {
-			fmt.Fprintln(w, html.EscapeString(err.Error()))
-		} else {
-			fmt.Fprintf(w, "<h2>%s</h2>", html.EscapeString(name))
-			renderAnalyticsTable(w, m)
+		fmt.Fprintln(w, `</section>`)
+	}
+	fmt.Fprintln(w, "</main></body></html>")
+}
+
+func missingRequiredAnalyticsParam(aggregation analytics.Aggregation, r *http.Request) bool {
+	for _, parameter := range aggregation.Params {
+		if parameter.Required && r.URL.Query().Get(parameter.Name) == "" {
+			return true
 		}
 	}
-	fmt.Fprintln(w, "</body></html>")
+	return false
+}
+
+func renderAnalyticsFilters(w io.Writer, r *http.Request, aggregation analytics.Aggregation) {
+	fmt.Fprint(w, `<form class="analytics-filters" method="get"><label>Since<input type="text" name="since" value="`+html.EscapeString(r.URL.Query().Get("since"))+`" placeholder="30d"></label><label>Rows<input type="number" min="1" max="1000" name="limit" value="`)
+	limit := r.URL.Query().Get("limit")
+	if limit == "" {
+		limit = "100"
+	}
+	fmt.Fprint(w, html.EscapeString(limit)+`"></label>`)
+	for _, parameter := range aggregation.Params {
+		value := r.URL.Query().Get(parameter.Name)
+		if value == "" {
+			value = parameter.Default
+		}
+		fmt.Fprintf(w, `<label>%s<input type="text" name="%s" value="%s"%s></label>`, html.EscapeString(parameter.Name), html.EscapeString(parameter.Name), html.EscapeString(value), map[bool]string{true: " required", false: ""}[parameter.Required])
+	}
+	fmt.Fprintln(w, `<label class="fresh"><input type="checkbox" name="fresh" value="true"> Refresh now</label><button type="submit">Apply</button></form>`)
+}
+
+func formatAnalyticsTime(value time.Time) string {
+	if value.IsZero() {
+		return "Not yet"
+	}
+	return value.UTC().Format("2006-01-02 15:04 UTC")
+}
+
+func analyticsPageURL(r *http.Request, path string, changes map[string]string) string {
+	query := r.URL.Query()
+	for key, value := range changes {
+		if value == "" {
+			query.Del(key)
+		} else {
+			query.Set(key, value)
+		}
+	}
+	return path + "?" + query.Encode()
+}
+
+func renderWindowLinks(w io.Writer, r *http.Request) {
+	fmt.Fprint(w, `<nav class="window-links" aria-label="Saved windows"><span>Window</span>`)
+	for _, window := range []string{"24h", "7d", "30d", "90d"} {
+		fmt.Fprintf(w, `<a href="%s">%s</a>`, html.EscapeString(analyticsPageURL(r, r.URL.Path, map[string]string{"since": window, "page": ""})), window)
+	}
+	fmt.Fprintln(w, `</nav>`)
+}
+
+func renderAnalyticsPagination(w io.Writer, r *http.Request, total int) {
+	limit := queryParams(r).Limit
+	if limit <= 0 {
+		return
+	}
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	if total <= limit && page == 1 {
+		return
+	}
+	pages := 1
+	if total > 0 {
+		pages = 1 + (total-1)/limit
+	}
+	fmt.Fprint(w, `<nav class="pagination" aria-label="Table pages">`)
+	if page > 1 {
+		fmt.Fprintf(w, `<a href="%s">← Previous</a>`, html.EscapeString(analyticsPageURL(r, r.URL.Path, map[string]string{"page": strconv.Itoa(page - 1)})))
+	}
+	fmt.Fprintf(w, `<span>Page %d of %d</span>`, page, pages)
+	if page < pages {
+		fmt.Fprintf(w, `<a href="%s">Next →</a>`, html.EscapeString(analyticsPageURL(r, r.URL.Path, map[string]string{"page": strconv.Itoa(page + 1)})))
+	}
+	fmt.Fprintln(w, `</nav>`)
 }
 
 func renderAnalyticsTable(w io.Writer, m analytics.Materialized) {

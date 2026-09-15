@@ -1,5 +1,5 @@
-// Package analytics contains OpenLore's experimental, export-first analytics
-// substrate. It deliberately keeps event recording independent from analysis.
+// Package analytics contains OpenLore's export-first analytics substrate. It
+// deliberately keeps event recording independent from analysis.
 package analytics
 
 import (

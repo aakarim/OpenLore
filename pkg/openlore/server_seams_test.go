@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/aakarim/go-openlore/internal/config"
 	"github.com/aakarim/go-openlore/pkg/vfs"
@@ -88,7 +89,7 @@ func TestNewServerWithRootFS_WriteLogLive(t *testing.T) {
 
 func TestWritableServerRecordsChangeHistoryWhenAnalyticsDisabled(t *testing.T) {
 	dataDir := t.TempDir()
-	s, err := NewServerWithRootFS(&wlRecordingFS{}, WithReadonly(false), config.WithDataDir(dataDir))
+	s, err := NewServerWithRootFS(&wlRecordingFS{}, WithReadonly(false), config.WithDataDir(dataDir), config.WithAnalyticsEnabled(false))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,6 +121,19 @@ func TestWritableServerRecordsChangeHistoryWhenAnalyticsDisabled(t *testing.T) {
 	}
 	if exists, err := blobs.Has(context.Background(), second.Leaves[0].BeforeHash); err != nil || !exists {
 		t.Fatalf("pre-image blob exists=%v err=%v", exists, err)
+	}
+}
+
+func TestAnalyticsIsGenerallyAvailableByDefault(t *testing.T) {
+	s, err := NewServer("", config.WithDataDir(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.analytics == nil {
+		t.Fatal("analytics should be enabled without the experimental gate")
+	}
+	if err := s.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -172,7 +186,7 @@ func TestUnsupportedShellUsageIsLoggedOnlyInDebugMode(t *testing.T) {
 }
 
 func TestCommandMetricIncrementsWithoutAnalytics(t *testing.T) {
-	s, err := NewServer("")
+	s, err := NewServer("", config.WithAnalyticsEnabled(false))
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
@@ -267,7 +281,12 @@ func TestRegisterPlugin_PostCommitFiresAfterConstruction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CommitChangeSet: %v", err)
 	}
+	deadline := time.Now().Add(time.Second)
 	infos := rec.snapshot()
+	for len(infos) == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+		infos = rec.snapshot()
+	}
 	if len(infos) != 1 {
 		t.Fatalf("post-commit fired %d times, want 1", len(infos))
 	}

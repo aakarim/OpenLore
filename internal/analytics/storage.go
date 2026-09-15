@@ -3,6 +3,7 @@ package analytics
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/klauspost/compress/zstd"
+	_ "modernc.org/sqlite"
 )
 
 type Segment struct {
@@ -434,16 +436,47 @@ func (r *Recorder) Close(ctx context.Context) error {
 	}
 }
 
+// OpenAggregationStore opens the default file-backed materialization store.
+// SQLite is opt-in through OpenSQLiteAggregationStore.
+func OpenAggregationStore(dir string) (AggregationStore, error) {
+	return OpenFileAggregationStore(dir)
+}
+
 type fileAggregationStore struct {
 	dir string
 	mu  sync.Mutex
 }
 
-func OpenAggregationStore(dir string) (AggregationStore, error) {
+func OpenFileAggregationStore(dir string) (AggregationStore, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
 	return &fileAggregationStore{dir: dir}, nil
+}
+
+type SQLiteAggregationStore struct {
+	db *sql.DB
+	mu sync.Mutex
+}
+
+// OpenSQLiteAggregationStore opens (or creates) a SQLite aggregation store at
+// path. SQLite WAL mode and a busy timeout permit concurrent readers/writers.
+func OpenSQLiteAggregationStore(path string) (*SQLiteAggregationStore, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(10000)")
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(8)
+	if _, err = db.Exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=10000; CREATE TABLE IF NOT EXISTS materializations (
+key TEXT PRIMARY KEY, name TEXT NOT NULL, value BLOB NOT NULL
+); CREATE INDEX IF NOT EXISTS materializations_name ON materializations(name)`); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return &SQLiteAggregationStore{db: db}, nil
 }
 func paramsKey(name string, p Params) string {
 	// Absolute endpoints make a periodic moving window unique forever. Key the
@@ -502,3 +535,35 @@ func (s *fileAggregationStore) Invalidate(_ context.Context, name string) error 
 	return nil
 }
 func (s *fileAggregationStore) Close() error { return nil }
+
+func (s *SQLiteAggregationStore) Put(ctx context.Context, name string, p Params, m Materialized) error {
+	b, err := json.Marshal(m)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err = s.db.ExecContext(ctx, `INSERT INTO materializations(key,name,value) VALUES(?,?,?)
+ON CONFLICT(key) DO UPDATE SET name=excluded.name,value=excluded.value`, paramsKey(name, p), name, b)
+	return err
+}
+func (s *SQLiteAggregationStore) Get(ctx context.Context, name string, p Params) (Materialized, bool, error) {
+	var b []byte
+	err := s.db.QueryRowContext(ctx, `SELECT value FROM materializations WHERE key=?`, paramsKey(name, p)).Scan(&b)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Materialized{}, false, nil
+	}
+	if err != nil {
+		return Materialized{}, false, err
+	}
+	var m Materialized
+	err = json.Unmarshal(b, &m)
+	return m, err == nil, err
+}
+func (s *SQLiteAggregationStore) Invalidate(ctx context.Context, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.ExecContext(ctx, `DELETE FROM materializations WHERE name=?`, name)
+	return err
+}
+func (s *SQLiteAggregationStore) Close() error { return s.db.Close() }
