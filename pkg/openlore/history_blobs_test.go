@@ -200,6 +200,41 @@ func TestHistoryCursorRecoversWhenActiveJournalRotatesBehindIt(t *testing.T) {
 	}
 }
 
+func TestHistoryCursorRestoresActiveCheckpointAfterRotation(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "commits.jsonl")
+	yesterday := time.Now().UTC().Add(-24 * time.Hour)
+	for _, id := range []string{"first", "second"} {
+		if err := appendCommitRecord(file, CommitRecord{ID: id, Time: yesterday}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cursor, err := OpenHistoryCursor(file, HistoryPosition{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record, ok, err := cursor.Next(context.Background()); err != nil || !ok || record.ID != "first" {
+		t.Fatalf("first = %#v, ok=%v, err=%v", record, ok, err)
+	}
+	checkpoint := cursor.Position()
+	if checkpoint.Segment != "" {
+		t.Fatalf("checkpoint = %#v, want legacy active position", checkpoint)
+	}
+	if err := RotateCommitJournal(context.Background(), file, time.Now().UTC(), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendCommitRecord(file, CommitRecord{ID: strings.Repeat("active", 100), Time: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := OpenHistoryCursor(file, checkpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record, ok, err := restarted.Next(context.Background()); err != nil || !ok || record.ID != "second" {
+		t.Fatalf("restored = %#v, ok=%v, err=%v", record, ok, err)
+	}
+}
+
 func TestCommitJournalRetention(t *testing.T) {
 	dir := t.TempDir()
 	old := filepath.Join(dir, "commits-2020-01-01.jsonl")
@@ -251,6 +286,68 @@ func TestCommitJournalRetentionProtectsCursorAndNewerSegments(t *testing.T) {
 				t.Fatalf("protected segment %s pruned: plain=%v compressed=%v", day, plainErr, compressedErr)
 			}
 		}
+	}
+}
+
+func TestCommitJournalRetentionMapsActiveCursorToDetachedSegment(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "commits.jsonl")
+	old := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, id := range []string{"processed", "pending"} {
+		if err := appendCommitRecord(file, CommitRecord{ID: id, Time: old}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cursor, err := OpenHistoryCursor(file, HistoryPosition{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := cursor.Next(context.Background()); err != nil || !ok {
+		t.Fatalf("read checkpoint: ok=%v err=%v", ok, err)
+	}
+	if err := RotateCommitJournal(context.Background(), file, time.Now().UTC(), 24*time.Hour, cursor.Position()); err != nil {
+		t.Fatal(err)
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, "commits-2020-01-01*.jsonl.zst"))
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("protected detached segment = %v, err=%v", matches, err)
+	}
+}
+
+func TestHistorySegmentPositionSupportsLargeRecords(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "commits-2020-01-01.jsonl")
+	record := CommitRecord{ID: "large", ChangeSet: vfs.ChangeSet{Target: "/large.md", Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: []byte(strings.Repeat("x", 128*1024))}}}
+	if err := appendCommitRecord(file, record); err != nil {
+		t.Fatal(err)
+	}
+	offset, found, err := historySegmentPosition(file, record.ID)
+	if err != nil || !found || offset <= 128*1024 {
+		t.Fatalf("large record position = %d, found=%v, err=%v", offset, found, err)
+	}
+}
+
+func TestGarbageCollectHistoryBlobsRejectsPartialSealedRecord(t *testing.T) {
+	dir := t.TempDir()
+	blobs, err := OpenBlobStore(filepath.Join(dir, "objects"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("must remain")
+	hash := hashContent(content)
+	if err := blobs.Put(context.Background(), hash, strings.NewReader(string(content))); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "commits-2020-01-01.jsonl"), []byte(`{"id":"partial"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "commits.jsonl"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := GarbageCollectHistoryBlobs(context.Background(), dir); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("GC error = %v, want partial sealed record error", err)
+	}
+	if ok, err := blobs.Has(context.Background(), hash); err != nil || !ok {
+		t.Fatalf("blob deleted after sealed corruption: ok=%v err=%v", ok, err)
 	}
 }
 

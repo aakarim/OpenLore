@@ -256,12 +256,8 @@ func OpenHistoryCursor(file string, from HistoryPosition) (HistoryCursor, error)
 	} else {
 		f.Close()
 	}
-	c := &fileHistoryCursor{path: file, position: from}
-	if from.Segment == "" && (from.Offset != 0 || from.LastID != "") {
-		from.Segment = filepath.Base(file)
-		c.position.Segment = from.Segment
-	}
-	if err := c.openCurrent(); err != nil {
+	c := &fileHistoryCursor{path: file}
+	if err := c.restorePositionLocked(from); err != nil {
 		return nil, err
 	}
 	return c, nil
@@ -374,6 +370,17 @@ func (m multiCloser) Close() error {
 type decoderCloser struct{ *zstd.Decoder }
 
 func (d decoderCloser) Close() error { d.Decoder.Close(); return nil }
+func (c *fileHistoryCursor) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closer == nil {
+		return nil
+	}
+	err := c.closer.Close()
+	c.closer = nil
+	c.reader = nil
+	return err
+}
 func (c *fileHistoryCursor) advance() (bool, error) {
 	segments, err := c.segments()
 	if err != nil {
@@ -424,6 +431,9 @@ func (c *fileHistoryCursor) Next(ctx context.Context) (CommitRecord, bool, error
 		return CommitRecord{}, false, nil
 	}
 	if errors.Is(err, io.EOF) {
+		if c.position.Segment != "" && c.position.Segment != filepath.Base(c.path) {
+			return CommitRecord{}, false, io.ErrUnexpectedEOF
+		}
 		// An append-only journal may be observed between the record write and
 		// its terminating newline. Do not consume that record until complete.
 		if seekErr := c.openCurrent(); seekErr != nil {
@@ -455,6 +465,15 @@ func (c *fileHistoryCursor) nextLocked(ctx context.Context) (CommitRecord, bool,
 		}
 	}
 	if errors.Is(err, io.EOF) && len(line) == 0 {
+		return CommitRecord{}, false, nil
+	}
+	if errors.Is(err, io.EOF) {
+		if c.position.Segment != "" && c.position.Segment != filepath.Base(c.path) {
+			return CommitRecord{}, false, io.ErrUnexpectedEOF
+		}
+		if seekErr := c.openCurrent(); seekErr != nil {
+			return CommitRecord{}, false, seekErr
+		}
 		return CommitRecord{}, false, nil
 	}
 	if err != nil {
@@ -509,19 +528,28 @@ func historySegmentPosition(file, id string) (int64, bool, error) {
 		return 0, false, err
 	}
 	defer closer.Close()
-	scanner := bufio.NewScanner(reader)
+	buffered := bufio.NewReader(reader)
 	var offset int64
-	for scanner.Scan() {
-		offset += int64(len(scanner.Bytes()) + 1)
+	for {
+		line, err := buffered.ReadBytes('\n')
+		if errors.Is(err, io.EOF) && len(line) == 0 {
+			return 0, false, nil
+		}
+		if errors.Is(err, io.EOF) {
+			return 0, false, io.ErrUnexpectedEOF
+		}
+		if err != nil {
+			return 0, false, err
+		}
+		offset += int64(len(line))
 		var record CommitRecord
-		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
+		if err := json.Unmarshal(line, &record); err != nil {
 			return 0, false, err
 		}
 		if record.ID == id {
 			return offset, true, nil
 		}
 	}
-	return 0, false, scanner.Err()
 }
 
 func openHistorySegment(file string) (io.Reader, io.Closer, error) {
@@ -561,11 +589,40 @@ func (c *fileHistoryCursor) Position() HistoryPosition {
 func (c *fileHistoryCursor) RestorePosition(position HistoryPosition) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.restorePositionLocked(position)
+}
+
+func (c *fileHistoryCursor) restorePositionLocked(position HistoryPosition) error {
 	c.position = position
+	active := filepath.Base(c.path)
+	wasActive := c.position.Segment == "" || c.position.Segment == active
 	if c.position.Segment == "" && (position.Offset != 0 || position.LastID != "") {
 		c.position.Segment = filepath.Base(c.path)
 	}
-	return c.openCurrent()
+	if wasActive && position.LastID != "" {
+		segments, err := c.segments()
+		if err != nil {
+			return err
+		}
+		for _, segment := range segments[:len(segments)-1] {
+			offset, found, err := historySegmentPosition(filepath.Join(filepath.Dir(c.path), segment), position.LastID)
+			if err != nil {
+				return err
+			}
+			if found {
+				c.position.Segment = segment
+				c.position.Offset = offset
+				return c.openCurrent()
+			}
+		}
+	}
+	if err := c.openCurrent(); err != nil && errors.Is(err, io.EOF) && wasActive && position.LastID != "" {
+		// Match live rotation recovery if retention removed a legacy checkpoint.
+		c.position = HistoryPosition{Segment: active}
+		return c.openCurrent()
+	} else {
+		return err
+	}
 }
 
 // HistoryCursorLagBytes reports retained journal bytes after a cursor. New
@@ -666,6 +723,9 @@ func RotateCommitJournal(ctx context.Context, file string, now time.Time, retent
 	var checkpoint *HistoryPosition
 	if len(protected) > 0 {
 		checkpoint = &protected[0]
+		if segment != "" && (checkpoint.Segment == "" || checkpoint.Segment == filepath.Base(file)) {
+			checkpoint.Segment = filepath.Base(segment) + ".zst"
+		}
 	}
 	return pruneHistory(ctx, filepath.Dir(file), now, retention, checkpoint)
 }
@@ -867,7 +927,7 @@ func historySegmentBefore(name string, protected *HistoryPosition) bool {
 		return true
 	}
 	if protected.Segment == "" {
-		return false
+		return protected.Offset > 0 || protected.LastID != ""
 	}
 	if protected.Segment == "commits.jsonl" {
 		return true
@@ -889,6 +949,9 @@ func GarbageCollectHistoryBlobs(ctx context.Context, historyDir string) (History
 	c, err := OpenHistoryCursor(active, HistoryPosition{})
 	if err != nil {
 		return HistoryGCStats{}, err
+	}
+	if closer, ok := c.(io.Closer); ok {
+		defer closer.Close()
 	}
 	refs := map[string]struct{}{}
 	for {

@@ -3,6 +3,7 @@ package openlore
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -51,6 +52,14 @@ func TestAnalyticsDashboardShowsObservedValues(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("dashboard missing %q", want)
 		}
+	}
+	requiredPanel := strings.SplitN(body, `<a href="/analytics/least-used-lines">`, 2)
+	if len(requiredPanel) != 2 {
+		t.Fatal("dashboard missing least-used-lines panel")
+	}
+	requiredPanelBody := strings.SplitN(requiredPanel[1], `</article>`, 2)[0]
+	if strings.Contains(requiredPanelBody, "Download CSV") {
+		t.Fatal("required-parameter panel links to an invalid CSV export")
 	}
 }
 
@@ -210,6 +219,25 @@ func TestAnalyticsAggregationPaginatesAfterMaterialization(t *testing.T) {
 	}
 	if materialized.Window.Limit != 1 || materialized.Window.Extra["_offset"] != "" {
 		t.Fatalf("presentation window leaked offset into aggregation params: %#v", materialized.Window)
+	}
+}
+
+func TestAnalyticsAggregationLargePageReturnsEmpty(t *testing.T) {
+	service, err := analytics.New(config.AnalyticsConfig{Dir: filepath.Join(t.TempDir(), "analytics"), Log: config.AnalyticsLogConfig{Compress: "none"}}, analytics.Deps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close(context.Background())
+	request := httptest.NewRequest("GET", fmt.Sprintf("/analytics/aggregations/top-commands?limit=100&page=%d&fresh=true", int(^uint(0)>>1)), nil)
+	request.SetPathValue("name", "top-commands")
+	recorder := httptest.NewRecorder()
+	(&analyticsPlugin{service: service}).aggregation(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("large page response = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var materialized analytics.Materialized
+	if err := json.Unmarshal(recorder.Body.Bytes(), &materialized); err != nil || len(materialized.Table.Rows) != 0 {
+		t.Fatalf("large page rows = %#v, err=%v", materialized.Table.Rows, err)
 	}
 }
 

@@ -1884,9 +1884,9 @@ func (s *Server) startHistoryMaintenance() {
 	go func() {
 		defer close(s.historyDone)
 		maintain := func() {
-			protected := []HistoryPosition{{}}
+			var protected []HistoryPosition
 			if s.historyPosition != nil {
-				protected[0] = s.historyPosition()
+				protected = append(protected, s.historyPosition())
 			}
 			if err := RotateCommitJournal(ctx, s.historyPath, time.Now().UTC(), s.config.Analytics.History.Retention, protected...); err != nil && !errors.Is(err, context.Canceled) {
 				s.logger.Warn("history journal maintenance failed", "err", err)

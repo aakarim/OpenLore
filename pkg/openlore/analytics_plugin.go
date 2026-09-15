@@ -322,7 +322,11 @@ func (p *analyticsPlugin) dashboard(w http.ResponseWriter, r *http.Request) {
 					renderAnalyticsTable(w, m)
 				}
 			}
-			fmt.Fprintf(w, `<p class="panel-actions"><a href="/analytics/%s">Open view</a> · <a href="/analytics/aggregations/%s?format=csv">Download CSV</a></p></article>`, url.PathEscape(a.Name), url.PathEscape(a.Name))
+			fmt.Fprintf(w, `<p class="panel-actions"><a href="/analytics/%s">Open view</a>`, url.PathEscape(a.Name))
+			if !missingRequiredAnalyticsParam(a, r) {
+				fmt.Fprintf(w, ` · <a href="/analytics/aggregations/%s?format=csv">Download CSV</a>`, url.PathEscape(a.Name))
+			}
+			fmt.Fprintln(w, `</p></article>`)
 		}
 		fmt.Fprintln(w, `</div></section>`)
 	} else {
@@ -418,12 +422,16 @@ func renderAnalyticsPagination(w io.Writer, r *http.Request, total int) {
 	if total <= limit && page == 1 {
 		return
 	}
+	pages := 1
+	if total > 0 {
+		pages = 1 + (total-1)/limit
+	}
 	fmt.Fprint(w, `<nav class="pagination" aria-label="Table pages">`)
 	if page > 1 {
 		fmt.Fprintf(w, `<a href="%s">← Previous</a>`, html.EscapeString(analyticsPageURL(r, r.URL.Path, map[string]string{"page": strconv.Itoa(page - 1)})))
 	}
-	fmt.Fprintf(w, `<span>Page %d of %d</span>`, page, max(1, (total+limit-1)/limit))
-	if page*limit < total {
+	fmt.Fprintf(w, `<span>Page %d of %d</span>`, page, pages)
+	if page < pages {
 		fmt.Fprintf(w, `<a href="%s">Next →</a>`, html.EscapeString(analyticsPageURL(r, r.URL.Path, map[string]string{"page": strconv.Itoa(page + 1)})))
 	}
 	fmt.Fprintln(w, `</nav>`)

@@ -187,7 +187,14 @@ func (s *Service) RebuildFromRemote(ctx context.Context) error {
 		return err
 	}
 	if s.pipeline != nil {
-		return s.pipeline.Replay(ctx, time.Time{})
+		if err := s.pipeline.Replay(ctx, time.Time{}); err != nil {
+			return err
+		}
+	}
+	for _, aggregation := range s.registry.List() {
+		if err := s.store.Invalidate(ctx, aggregation.Name); err != nil {
+			return err
+		}
 	}
 	return nil
 }

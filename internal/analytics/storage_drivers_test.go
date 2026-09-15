@@ -133,17 +133,19 @@ func TestServiceRebuildsFromRemoteAfterLocalLoss(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer service.Close(context.Background())
+	params := Params{Since: event.Time.Add(-time.Hour), Until: event.Time.Add(time.Hour), Limit: 100}
+	if err := service.store.Put(context.Background(), "top-commands", params, Materialized{Status: StatusOK, Table: Table{Rows: [][]any{{"stale"}}}}); err != nil {
+		t.Fatal(err)
+	}
 	if err := service.RebuildFromRemote(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.Refresh(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	materialized, err := service.Registry().Run(context.Background(), "top-commands", Params{
-		Since: time.Now().UTC().Add(-30 * 24 * time.Hour), Until: time.Now().UTC(), Limit: 100,
-	}, RunOptions{})
+	materialized, err := service.Registry().Run(context.Background(), "top-commands", params, RunOptions{})
 	if err != nil || materialized.Status != StatusOK || len(materialized.Table.Rows) != 1 || materialized.Table.Rows[0][0] != "stat" {
 		t.Fatalf("rebuilt aggregation = %#v, err=%v", materialized, err)
+	}
+	if err := service.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 	response := httptest.NewRecorder()
 	service.Aggregator().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/metrics", nil))
