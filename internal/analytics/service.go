@@ -71,7 +71,7 @@ func New(cfg config.AnalyticsConfig, deps Deps) (*Service, error) {
 		}
 	}
 	reg := NewRegistry(store, func() []string {
-		events := []string{"session.start", "session.end", "command.exec", "command.unknown", "syntax.unknown", "auth.login", "doc.write"}
+		events := []string{"session.start", "session.end", "command.exec", "command.unknown", "syntax.unknown", "auth.login", "doc.write", "search.query", "doc.read", "doc.hit"}
 		s.emitted.Range(func(event, _ any) bool { events = append(events, event.(string)); return true })
 		return events
 	})

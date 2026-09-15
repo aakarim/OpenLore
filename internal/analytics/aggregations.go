@@ -57,11 +57,13 @@ func BuiltinAggregations() []Aggregation {
 		{Name: "largest-docs", Title: "Largest documents", Description: "Documents with the greatest context cost", Requires: []string{"facts"}, Params: []ParamSpec{{Name: "path", Default: "/"}}, Compute: largestDocs},
 		{Name: "size-over-time", Title: "Size over time", Description: "Knowledge-base growth", Requires: []string{"doc.scalars"}, Compute: sizeOverTime},
 		{Name: "write-ratio", Title: "Write ratio", Description: "Human and agent writes", Requires: []string{"doc.scalars"}, Compute: writeRatio},
-		planned("top-search-queries", "Top search queries", []string{"search.query"}), planned("top-unfilled-queries", "Top unfilled queries", []string{"search.query"}), planned("least-used-files", "Least-used files", []string{"doc.read", "doc.hit"}), planned("most-used-files", "Most-used files", []string{"doc.read", "doc.hit"}), planned("least-used-folders", "Least-used folders", []string{"doc.read", "doc.hit"}), planned("least-used-lines", "Least-used lines", []string{"doc.read", "doc.hit"}),
+		{Name: "top-search-queries", Title: "Top search queries", Description: "Most frequent search patterns", Requires: []string{"search.query"}, Compute: topSearchQueriesTable},
+		{Name: "top-unfilled-queries", Title: "Top unfilled queries", Description: "Search patterns that returned no results", Requires: []string{"search.query"}, Compute: topUnfilledQueriesTable},
+		{Name: "least-used-files", Title: "Least-used files", Description: "Files read least recently", Requires: []string{"facts", "doc.read", "doc.hit"}, Params: []ParamSpec{{Name: "path", Default: "/"}, {Name: "order", Default: "asc"}}, Compute: fileUsageTable("asc")},
+		{Name: "most-used-files", Title: "Most-used files", Description: "Files read most recently", Requires: []string{"facts", "doc.read", "doc.hit"}, Params: []ParamSpec{{Name: "path", Default: "/"}, {Name: "order", Default: "desc"}}, Compute: fileUsageTable("desc")},
+		{Name: "least-used-folders", Title: "Least-used folders", Description: "Folders whose documents were read least recently", Requires: []string{"facts", "doc.read", "doc.hit"}, Params: []ParamSpec{{Name: "path", Default: "/"}, {Name: "depth", Default: "1"}, {Name: "order", Default: "asc"}}, Compute: leastUsedFolders},
+		{Name: "least-used-lines", Title: "Least-used lines", Description: "Line ranges read least recently at the current content hash", Requires: []string{"facts", "doc.read", "doc.hit"}, Params: []ParamSpec{{Name: "path", Required: true}}, Compute: leastUsedLines},
 	}
-}
-func planned(name, title string, requires []string) Aggregation {
-	return Aggregation{Name: name, Title: title, Requires: requires, Compute: func(context.Context, EventSource, ContentFacts, Params) (Table, error) { return Table{}, nil }}
 }
 
 type commandRollup struct {

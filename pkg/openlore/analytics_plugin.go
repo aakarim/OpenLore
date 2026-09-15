@@ -70,6 +70,7 @@ func leafAfterHash(leaves []LeafRecord, target string) string {
 }
 func (p *analyticsPlugin) docsetForPath(target string) string {
 	if p.server != nil && p.server.auth != nil {
+		target = p.server.canonicalPath(target)
 		if _, name, _, ok := owningDocset(p.server.currentAuth().Docsets, target); ok {
 			return name
 		}

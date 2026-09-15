@@ -53,6 +53,38 @@ func TestAnalyticsDashboardShowsObservedValues(t *testing.T) {
 	}
 }
 
+func TestAnalyticsDashboardShowsLiveSearchQualityResults(t *testing.T) {
+	service, err := analytics.New(config.AnalyticsConfig{
+		Dir:      filepath.Join(t.TempDir(), "analytics"),
+		Log:      config.AnalyticsLogConfig{Compress: "none"},
+		Pipeline: config.AnalyticsPipelineConfig{Buffer: 8},
+	}, analytics.Deps{FS: NewDirFS(t.TempDir(), config.FilesConfig{})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.Start(context.Background())
+	service.Record(context.Background(), analytics.Event{
+		Type:      "search.query",
+		Principal: "dashboard-test",
+		Fields:    map[string]any{"pattern": "missing runbook", "filled": false},
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := service.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest("GET", "/analytics/top-unfilled-queries", nil)
+	request.SetPathValue("name", "top-unfilled-queries")
+	recorder := httptest.NewRecorder()
+	(&analyticsPlugin{service: service}).dashboard(recorder, request)
+	for _, want := range []string{"top-unfilled-queries", "Status: ok", "missing runbook", "principals"} {
+		if !strings.Contains(recorder.Body.String(), want) {
+			t.Errorf("quality dashboard missing %q: %s", want, recorder.Body.String())
+		}
+	}
+}
+
 func TestAnalyticsRoutesAreAbsentWithoutEnforcedAuth(t *testing.T) {
 	register, err := (&analyticsPlugin{}).PrepareHTTPRoutes(&Server{authEnforced: false})
 	if err != nil {
@@ -69,10 +101,12 @@ func TestAnalyticsRoutesAreAbsentWithoutEnforcedAuth(t *testing.T) {
 
 func TestAnalyticsDocsetUsesConfiguredPathMapping(t *testing.T) {
 	s := &Server{auth: &config.AuthConfig{Docsets: map[string]config.DocsetSpec{
-		"handbook": {Paths: []config.PathMapping{{Source: "/source", Display: "/company/docs"}}},
+		"handbook": {Paths: []config.PathMapping{{Source: "/source", Display: "/company/docs"}}, Aliases: []string{"/legacy"}},
 	}}}
-	if got := (&analyticsPlugin{server: s}).docsetForPath("/company/docs/intro.md"); got != "handbook" {
-		t.Fatalf("docset = %q, want handbook", got)
+	for _, target := range []string{"/company/docs/intro.md", "/legacy/intro.md"} {
+		if got := (&analyticsPlugin{server: s}).docsetForPath(target); got != "handbook" {
+			t.Errorf("docset for %q = %q, want handbook", target, got)
+		}
 	}
 }
 

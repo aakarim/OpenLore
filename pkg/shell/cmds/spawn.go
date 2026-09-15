@@ -188,5 +188,6 @@ func (c *frozenContext) Validators() []validation.Validator                 { re
 func (c *frozenContext) Analytics() *analytics.Service                      { return nil }
 func (c *frozenContext) Facts() analytics.ContentFacts                      { return nil }
 func (c *frozenContext) EmitMetric(context.Context, string, map[string]any) {}
+func (c *frozenContext) MetricsEnabled() bool                               { return false }
 
 var _ CmdContext = (*frozenContext)(nil)
