@@ -2,6 +2,7 @@ package openlore
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -174,11 +175,41 @@ func TestPrometheusExportPreservesJSONServerMetrics(t *testing.T) {
 func TestAnalyticsQueryParamsParsesWindow(t *testing.T) {
 	r := httptest.NewRequest("GET", "/analytics/top-commands?since=7d&until=now&limit=12&page=3&transport=mcp&fresh=true", nil)
 	p := queryParams(r)
-	if p.Limit != 12 || p.Extra["_offset"] != "24" || p.Extra["transport"] != "mcp" || p.Extra["fresh"] != "" || p.Extra["page"] != "" {
+	if p.Limit != 12 || p.Extra["transport"] != "mcp" || p.Extra["fresh"] != "" || p.Extra["page"] != "" {
 		t.Fatalf("unexpected params: %#v", p)
 	}
 	if got := p.Until.Sub(p.Since); got < 7*24*time.Hour-time.Second || got > 7*24*time.Hour+time.Second {
 		t.Fatalf("window = %s", got)
+	}
+}
+
+func TestAnalyticsAggregationPaginatesAfterMaterialization(t *testing.T) {
+	service, err := analytics.New(config.AnalyticsConfig{Dir: filepath.Join(t.TempDir(), "analytics"), Log: config.AnalyticsLogConfig{Compress: "none"}, Pipeline: config.AnalyticsPipelineConfig{Buffer: 16}}, analytics.Deps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.Start(context.Background())
+	for _, command := range []string{"alpha", "alpha", "alpha", "beta", "beta", "gamma"} {
+		service.Record(context.Background(), analytics.Event{Type: "command.exec", Fields: map[string]any{"command": command}})
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := service.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest("GET", "/analytics/aggregations/top-commands?limit=1&page=2&fresh=true", nil)
+	request.SetPathValue("name", "top-commands")
+	recorder := httptest.NewRecorder()
+	(&analyticsPlugin{service: service}).aggregation(recorder, request)
+	var materialized analytics.Materialized
+	if err := json.Unmarshal(recorder.Body.Bytes(), &materialized); err != nil {
+		t.Fatalf("response %d is not materialized JSON: %v\n%s", recorder.Code, err, recorder.Body.String())
+	}
+	if len(materialized.Table.Rows) != 1 || materialized.Table.Rows[0][0] != "beta" {
+		t.Fatalf("page 2 rows = %#v, want beta", materialized.Table.Rows)
+	}
+	if materialized.Window.Limit != 1 || materialized.Window.Extra["_offset"] != "" {
+		t.Fatalf("presentation window leaked offset into aggregation params: %#v", materialized.Window)
 	}
 }
 

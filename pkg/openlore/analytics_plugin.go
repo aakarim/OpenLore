@@ -152,9 +152,6 @@ func queryParams(r *http.Request) analytics.Params {
 	if n, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && n >= 0 && r.URL.Query().Has("limit") {
 		p.Limit = n
 	}
-	if page, err := strconv.Atoi(r.URL.Query().Get("page")); err == nil && page > 1 {
-		p.Extra["_offset"] = strconv.Itoa((page - 1) * p.Limit)
-	}
 	for k, v := range r.URL.Query() {
 		if len(v) > 0 && k != "since" && k != "until" && k != "limit" && k != "fresh" && k != "page" && k != "format" {
 			p.Extra[k] = v[0]
@@ -182,38 +179,44 @@ func analyticsQueryTime(value string, now time.Time) (time.Time, bool) {
 	return time.Time{}, false
 }
 func (p *analyticsPlugin) aggregation(w http.ResponseWriter, r *http.Request) {
-	request := r
 	if r.URL.Query().Get("format") == "csv" {
-		request = r.Clone(r.Context())
+		request := r.Clone(r.Context())
 		copyURL := *r.URL
 		query := copyURL.Query()
 		query.Set("limit", "0")
 		query.Del("page")
 		copyURL.RawQuery = query.Encode()
 		request.URL = &copyURL
+		m, err := p.runAggregation(request, r.PathValue("name"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		p.writeAggregationCSV(w, r.PathValue("name"), m)
+		return
 	}
-	m, err := p.runAggregation(request, r.PathValue("name"))
+	m, err := p.runPaginatedAggregation(r, r.PathValue("name"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if r.URL.Query().Get("format") == "csv" {
-		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
-		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", r.PathValue("name")+".csv"))
-		writer := csv.NewWriter(w)
-		_ = writer.Write(m.Table.Columns)
-		for _, row := range m.Table.Rows {
-			values := make([]string, len(row))
-			for i, value := range row {
-				values[i] = fmt.Sprint(value)
-			}
-			_ = writer.Write(values)
-		}
-		writer.Flush()
-		return
-	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(m)
+}
+
+func (p *analyticsPlugin) writeAggregationCSV(w http.ResponseWriter, name string, m analytics.Materialized) {
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", name+".csv"))
+	writer := csv.NewWriter(w)
+	_ = writer.Write(m.Table.Columns)
+	for _, row := range m.Table.Rows {
+		values := make([]string, len(row))
+		for i, value := range row {
+			values[i] = fmt.Sprint(value)
+		}
+		_ = writer.Write(values)
+	}
+	writer.Flush()
 }
 func (p *analyticsPlugin) facts(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Query().Get("path")
@@ -251,6 +254,41 @@ func (p *analyticsPlugin) runAggregation(r *http.Request, name string) (analytic
 		break
 	}
 	return p.service.Registry().Run(r.Context(), name, queryParams(r), analytics.RunOptions{Fresh: r.URL.Query().Get("fresh") == "true"})
+}
+
+func (p *analyticsPlugin) runPaginatedAggregation(r *http.Request, name string) (analytics.Materialized, error) {
+	params := queryParams(r)
+	if params.Limit <= 0 {
+		return p.runAggregation(r, name)
+	}
+	request := r.Clone(r.Context())
+	copyURL := *r.URL
+	query := copyURL.Query()
+	query.Set("limit", "0")
+	query.Del("page")
+	copyURL.RawQuery = query.Encode()
+	request.URL = &copyURL
+	m, err := p.runAggregation(request, name)
+	if err != nil {
+		return m, err
+	}
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	if page-1 > len(m.Table.Rows)/params.Limit {
+		m.Table.Rows = nil
+		m.Window = params
+		return m, nil
+	}
+	offset := (page - 1) * params.Limit
+	if offset >= len(m.Table.Rows) {
+		m.Table.Rows = nil
+	} else {
+		m.Table.Rows = m.Table.Rows[offset:min(offset+params.Limit, len(m.Table.Rows))]
+	}
+	m.Window = params
+	return m, nil
 }
 
 func (p *analyticsPlugin) dashboard(w http.ResponseWriter, r *http.Request) {
@@ -303,7 +341,7 @@ func (p *analyticsPlugin) dashboard(w http.ResponseWriter, r *http.Request) {
 			renderAnalyticsFilters(w, r, selected)
 			if missingRequiredAnalyticsParam(selected, r) {
 				fmt.Fprintln(w, `<p class="parameter-note">Set the required parameters to run this aggregation.</p>`)
-			} else if m, err := p.runAggregation(r, name); err != nil {
+			} else if m, err := p.runPaginatedAggregation(r, name); err != nil {
 				fmt.Fprintf(w, `<p class="error">%s</p>`, html.EscapeString(err.Error()))
 			} else {
 				renderAnalyticsTable(w, m)

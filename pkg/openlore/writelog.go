@@ -53,17 +53,16 @@ type writeLog struct {
 	substrate vfs.WritableFS
 	logger    *slog.Logger
 
-	mu               sync.RWMutex      // guards closed + postCommit + serializes sends against Close
-	postCommit       PostCommitHandler // optional; runs at the applier after a durable commit
-	commitState      func(context.Context, CommitInfo) error
-	preApply         func(*Identity, Attribution, vfs.ChangeSet) error
-	history          HistoryRecorder
-	commitPath       string
-	blobs            BlobStore
-	blobsEnabled     bool
-	historyRetention time.Duration
-	closed           bool
-	ch               chan logEntry
+	mu           sync.RWMutex      // guards closed + postCommit + serializes sends against Close
+	postCommit   PostCommitHandler // optional; runs at the applier after a durable commit
+	commitState  func(context.Context, CommitInfo) error
+	preApply     func(*Identity, Attribution, vfs.ChangeSet) error
+	history      HistoryRecorder
+	commitPath   string
+	blobs        BlobStore
+	blobsEnabled bool
+	closed       bool
+	ch           chan logEntry
 
 	done chan struct{} // closed when the applier goroutine has exited
 }
@@ -145,9 +144,6 @@ func (l *writeLog) run() {
 		if committed.HasCommitted() {
 			if l.commitPath != "" {
 				recordedAt := time.Now().UTC()
-				if rotateErr := RotateCommitJournal(context.Background(), l.commitPath, recordedAt, l.historyRetention); rotateErr != nil {
-					l.logger.Error("commit journal rotation failed after durable write", "err", rotateErr)
-				}
 				if recordErr := appendCommitRecord(l.commitPath, CommitRecord{ID: commitID, Time: recordedAt, Attribution: e.attribution, ChangeSet: committed.Committed, Hash: committed.Hash, Leaves: leaves}); recordErr != nil {
 					l.logger.Error("commit journal recording failed after durable write", "err", recordErr)
 				}
@@ -200,12 +196,6 @@ func (l *writeLog) SetHistoryRecorder(history HistoryRecorder) {
 func (l *writeLog) SetCommitJournal(path string, blobs BlobStore, enabled bool) {
 	l.mu.Lock()
 	l.commitPath, l.blobs, l.blobsEnabled = path, blobs, enabled
-	l.mu.Unlock()
-}
-
-func (l *writeLog) SetHistoryRetention(retention time.Duration) {
-	l.mu.Lock()
-	l.historyRetention = retention
 	l.mu.Unlock()
 }
 

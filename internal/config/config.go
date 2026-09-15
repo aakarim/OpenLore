@@ -127,14 +127,6 @@ type AnalyticsLogConfig struct {
 type AnalyticsShipConfig struct {
 	Interval time.Duration
 	Remote   string
-	S3       AnalyticsS3Config
-}
-type AnalyticsS3Config struct {
-	Endpoint  string
-	Region    string
-	Bucket    string
-	Prefix    string
-	PathStyle bool
 }
 type AnalyticsPipelineConfig struct {
 	Enabled *bool
@@ -614,20 +606,10 @@ type fileConfig struct {
 }
 
 type analyticsYAML struct {
-	Enabled *bool                                        `yaml:"enabled"`
-	Dir     string                                       `yaml:"dir"`
-	Log     struct{ Rotate, Compress, Retention string } `yaml:"log"`
-	Ship    struct {
-		Interval string `yaml:"interval"`
-		Remote   string `yaml:"remote"`
-		S3       struct {
-			Endpoint  string `yaml:"endpoint"`
-			Region    string `yaml:"region"`
-			Bucket    string `yaml:"bucket"`
-			Prefix    string `yaml:"prefix"`
-			PathStyle bool   `yaml:"path_style"`
-		} `yaml:"s3"`
-	} `yaml:"ship"`
+	Enabled  *bool                                        `yaml:"enabled"`
+	Dir      string                                       `yaml:"dir"`
+	Log      struct{ Rotate, Compress, Retention string } `yaml:"log"`
+	Ship     struct{ Interval, Remote string }            `yaml:"ship"`
 	Pipeline struct {
 		Enabled *bool `yaml:"enabled"`
 		Buffer  int   `yaml:"buffer"`
@@ -676,10 +658,6 @@ func applyAnalyticsConfig(cfg *Config, in analyticsYAML) error {
 	}
 	if in.Ship.Remote != "" {
 		cfg.Analytics.Ship.Remote = in.Ship.Remote
-	}
-	cfg.Analytics.Ship.S3 = AnalyticsS3Config{
-		Endpoint: in.Ship.S3.Endpoint, Region: in.Ship.S3.Region, Bucket: in.Ship.S3.Bucket,
-		Prefix: in.Ship.S3.Prefix, PathStyle: in.Ship.S3.PathStyle,
 	}
 	if in.Aggregations.Store != "" {
 		cfg.Analytics.Aggregations.Store = in.Aggregations.Store

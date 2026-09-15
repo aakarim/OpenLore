@@ -222,6 +222,91 @@ func TestCommitJournalRetention(t *testing.T) {
 	}
 }
 
+func TestCommitJournalRetentionProtectsCursorAndNewerSegments(t *testing.T) {
+	dir := t.TempDir()
+	for _, day := range []string{"2020-01-01", "2021-01-01", "2022-01-01"} {
+		if err := os.WriteFile(filepath.Join(dir, "commits-"+day+".jsonl"), []byte("{}\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	file := filepath.Join(dir, "commits.jsonl")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	protected := HistoryPosition{Segment: "commits-2021-01-01.jsonl"}
+	if err := RotateCommitJournal(context.Background(), file, time.Now().UTC(), 24*time.Hour, protected); err != nil {
+		t.Fatal(err)
+	}
+	old := filepath.Join(dir, "commits-2020-01-01.jsonl")
+	if _, err := os.Stat(old); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("plain segment before cursor remains: %v", err)
+	}
+	if _, err := os.Stat(old + ".zst"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("compressed segment before cursor remains: %v", err)
+	}
+	for _, day := range []string{"2021-01-01", "2022-01-01"} {
+		plain := filepath.Join(dir, "commits-"+day+".jsonl")
+		if _, plainErr := os.Stat(plain); plainErr != nil {
+			if _, compressedErr := os.Stat(plain + ".zst"); compressedErr != nil {
+				t.Fatalf("protected segment %s pruned: plain=%v compressed=%v", day, plainErr, compressedErr)
+			}
+		}
+	}
+}
+
+func TestHistoryCursorCheckpointSurvivesBackgroundCompression(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "commits.jsonl")
+	yesterday := time.Now().UTC().Add(-24 * time.Hour)
+	for _, id := range []string{"first", "second"} {
+		if err := appendCommitRecord(file, CommitRecord{ID: id, Time: yesterday}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	segment, logicalSize, err := detachCommitJournal(file, time.Now().UTC())
+	if err != nil || segment == "" {
+		t.Fatalf("detach = %q, %v", segment, err)
+	}
+	cursor, err := OpenHistoryCursor(file, HistoryPosition{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record, ok, err := cursor.Next(context.Background()); err != nil || !ok || record.ID != "first" {
+		t.Fatalf("first = %#v, ok=%v, err=%v", record, ok, err)
+	}
+	checkpoint := cursor.Position()
+	if strings.HasSuffix(checkpoint.Segment, ".zst") {
+		t.Fatalf("checkpoint unexpectedly compressed before maintenance: %#v", checkpoint)
+	}
+	if err := appendCommitRecord(file, CommitRecord{ID: "active", Time: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := compressHistorySegment(context.Background(), segment, logicalSize); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"second", "active"} {
+		if record, ok, err := cursor.Next(context.Background()); err != nil || !ok || record.ID != want {
+			t.Fatalf("live cursor after compression = %#v, ok=%v, err=%v; want %q", record, ok, err, want)
+		}
+	}
+	restarted, err := OpenHistoryCursor(file, checkpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record, ok, err := restarted.Next(context.Background()); err != nil || !ok || record.ID != "second" {
+		t.Fatalf("restarted = %#v, ok=%v, err=%v", record, ok, err)
+	}
+	lag, err := HistoryCursorLagBytes(file, checkpoint)
+	active, statErr := os.Stat(file)
+	if statErr != nil {
+		t.Fatal(statErr)
+	}
+	wantLag := logicalSize - checkpoint.Offset + active.Size()
+	if err != nil || lag != wantLag {
+		t.Fatalf("lag from pre-compression checkpoint = %d, want %d, err=%v", lag, wantLag, err)
+	}
+}
+
 func TestGarbageCollectHistoryBlobsPreservesReferencesAndFailsSafe(t *testing.T) {
 	dir := t.TempDir()
 	blobs, err := OpenBlobStore(filepath.Join(dir, "objects"))
@@ -257,6 +342,30 @@ func TestGarbageCollectHistoryBlobsPreservesReferencesAndFailsSafe(t *testing.T)
 	}
 	if ok, _ := blobs.Has(context.Background(), hashContent(third)); !ok {
 		t.Fatal("blob deleted after corrupt journal")
+	}
+}
+
+func TestGarbageCollectHistoryBlobsHonorsCancellationBeforeDeleting(t *testing.T) {
+	dir := t.TempDir()
+	blobs, err := OpenBlobStore(filepath.Join(dir, "objects"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("must remain")
+	hash := hashContent(content)
+	if err := blobs.Put(context.Background(), hash, strings.NewReader(string(content))); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendCommitRecord(filepath.Join(dir, "commits.jsonl"), CommitRecord{ID: "one"}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := GarbageCollectHistoryBlobs(ctx, dir); !errors.Is(err, context.Canceled) {
+		t.Fatalf("GC error = %v, want context cancellation", err)
+	}
+	if ok, err := blobs.Has(context.Background(), hash); err != nil || !ok {
+		t.Fatalf("blob deleted by canceled GC: ok=%v err=%v", ok, err)
 	}
 }
 

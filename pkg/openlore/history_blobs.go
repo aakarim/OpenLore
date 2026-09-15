@@ -271,12 +271,19 @@ func (c *fileHistoryCursor) segments() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	var out []string
+	segments := map[string]string{}
 	for _, e := range entries {
 		n := e.Name()
 		if !e.IsDir() && (strings.HasPrefix(n, "commits-") && (strings.HasSuffix(n, ".jsonl") || strings.HasSuffix(n, ".jsonl.zst"))) {
-			out = append(out, n)
+			logical := strings.TrimSuffix(n, ".zst")
+			if previous, exists := segments[logical]; !exists || strings.HasSuffix(n, ".zst") && !strings.HasSuffix(previous, ".zst") {
+				segments[logical] = n
+			}
 		}
+	}
+	out := make([]string, 0, len(segments)+1)
+	for _, name := range segments {
+		out = append(out, name)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		iday, isequence := historySegmentOrder(out[i])
@@ -319,6 +326,14 @@ func (c *fileHistoryCursor) openCurrent() error {
 		name = segments[0]
 		if name != filepath.Base(c.path) {
 			c.position.Segment = name
+		}
+	} else if strings.HasSuffix(name, ".jsonl") {
+		for _, segment := range segments {
+			if segment == name+".zst" {
+				name = segment
+				c.position.Segment = segment
+				break
+			}
 		}
 	}
 	f, err := os.Open(filepath.Join(filepath.Dir(c.path), name))
@@ -363,6 +378,14 @@ func (c *fileHistoryCursor) advance() (bool, error) {
 	segments, err := c.segments()
 	if err != nil {
 		return false, err
+	}
+	if strings.HasSuffix(c.position.Segment, ".jsonl") {
+		for _, segment := range segments {
+			if segment == c.position.Segment+".zst" {
+				c.position.Segment = segment
+				break
+			}
+		}
 	}
 	for i, n := range segments {
 		if n == c.position.Segment && i+1 < len(segments) {
@@ -545,8 +568,9 @@ func (c *fileHistoryCursor) RestorePosition(position HistoryPosition) error {
 	return c.openCurrent()
 }
 
-// HistoryCursorLagBytes reports the retained logical journal bytes after a
-// cursor position. Compressed segments are measured after decompression.
+// HistoryCursorLagBytes reports retained journal bytes after a cursor. New
+// compressed segments carry their logical size in a sidecar; legacy segments
+// without one use physical size rather than being decompressed on a health read.
 func HistoryCursorLagBytes(file string, position HistoryPosition) (int64, error) {
 	c := &fileHistoryCursor{path: file}
 	segments, err := c.segments()
@@ -556,6 +580,13 @@ func HistoryCursorLagBytes(file string, position HistoryPosition) (int64, error)
 	current := position.Segment
 	if current == "" {
 		current = filepath.Base(file)
+	} else if strings.HasSuffix(current, ".jsonl") {
+		for _, segment := range segments {
+			if segment == current+".zst" {
+				current = segment
+				break
+			}
+		}
 	}
 	start := 0
 	for i, segment := range segments {
@@ -591,94 +622,186 @@ func historySegmentLogicalSize(file string) (int64, error) {
 		}
 		return st.Size(), nil
 	}
-	zr, err := zstd.NewReader(f)
+	b, err := os.ReadFile(file + ".size")
+	if err == nil {
+		size, parseErr := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
+		if parseErr != nil || size < 0 {
+			return 0, fmt.Errorf("invalid history segment size %q", strings.TrimSpace(string(b)))
+		}
+		return size, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return 0, err
+	}
+	st, err := f.Stat()
 	if err != nil {
 		return 0, err
 	}
-	defer zr.Close()
-	return io.Copy(io.Discard, zr)
+	return st.Size(), nil
 }
 
+var historyMaintenanceMu sync.Mutex
+
 // RotateCommitJournal seals commits.jsonl into a zstd segment and removes
-// segments older than retention. A zero retention keeps all segments.
-func RotateCommitJournal(ctx context.Context, file string, now time.Time, retention time.Duration) error {
-	commitJournalMu.Lock()
-	defer commitJournalMu.Unlock()
+// segments older than retention, but never prunes the segment containing an
+// optional protected cursor. A zero retention keeps all segments.
+func RotateCommitJournal(ctx context.Context, file string, now time.Time, retention time.Duration, protected ...HistoryPosition) error {
+	historyMaintenanceMu.Lock()
+	defer historyMaintenanceMu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if err := compressPendingHistorySegments(ctx, filepath.Dir(file)); err != nil {
+		return err
+	}
+	segment, logicalSize, err := detachCommitJournal(file, now)
+	if err != nil {
+		return err
+	}
+	if segment != "" {
+		if err := compressHistorySegment(ctx, segment, logicalSize); err != nil {
+			return err
+		}
+	}
+	var checkpoint *HistoryPosition
+	if len(protected) > 0 {
+		checkpoint = &protected[0]
+	}
+	return pruneHistory(ctx, filepath.Dir(file), now, retention, checkpoint)
+}
+
+func compressPendingHistorySegments(ctx context.Context, dir string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	var pending []string
+	for _, entry := range entries {
+		name := entry.Name()
+		if !entry.IsDir() && strings.HasPrefix(name, "commits-") && strings.HasSuffix(name, ".jsonl") {
+			pending = append(pending, filepath.Join(dir, name))
+		}
+	}
+	sort.Strings(pending)
+	for _, segment := range pending {
+		st, err := os.Stat(segment)
+		if err != nil {
+			return err
+		}
+		if err := compressHistorySegment(ctx, segment, st.Size()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// detachCommitJournal atomically gives appenders a fresh active file. The
+// potentially expensive compression runs afterwards without blocking commits.
+func detachCommitJournal(file string, now time.Time) (string, int64, error) {
+	commitJournalMu.Lock()
+	defer commitJournalMu.Unlock()
 	st, err := os.Stat(file)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
+		return "", 0, err
 	}
 	segmentDay := now.UTC()
 	if err == nil && st.Size() > 0 {
 		segmentDay = st.ModTime().UTC()
 		f, openErr := os.Open(file)
 		if openErr != nil {
-			return openErr
+			return "", 0, openErr
 		}
 		line, readErr := bufio.NewReader(f).ReadBytes('\n')
 		_ = f.Close()
 		if readErr != nil {
-			return fmt.Errorf("reading commit journal for rotation: %w", readErr)
+			return "", 0, fmt.Errorf("reading commit journal for rotation: %w", readErr)
 		}
 		var first CommitRecord
 		if decodeErr := json.Unmarshal(line, &first); decodeErr != nil {
-			return fmt.Errorf("reading commit journal for rotation: %w", decodeErr)
+			return "", 0, fmt.Errorf("reading commit journal for rotation: %w", decodeErr)
 		}
 		if !first.Time.IsZero() {
 			segmentDay = first.Time.UTC()
 		}
 	}
-	if err == nil && st.Size() > 0 && !sameUTCDate(segmentDay, now) {
-		name := fmt.Sprintf("commits-%s.jsonl.zst", segmentDay.Format("2006-01-02"))
-		dst := filepath.Join(filepath.Dir(file), name)
-		for i := 1; ; i++ {
-			if _, e := os.Stat(dst); errors.Is(e, os.ErrNotExist) {
+	if err != nil || st.Size() == 0 || sameUTCDate(segmentDay, now) {
+		return "", 0, nil
+	}
+	name := fmt.Sprintf("commits-%s.jsonl", segmentDay.Format("2006-01-02"))
+	dst := filepath.Join(filepath.Dir(file), name)
+	for i := 1; ; i++ {
+		if _, plainErr := os.Stat(dst); errors.Is(plainErr, os.ErrNotExist) {
+			if _, compressedErr := os.Stat(dst + ".zst"); errors.Is(compressedErr, os.ErrNotExist) {
 				break
 			}
-			dst = filepath.Join(filepath.Dir(file), fmt.Sprintf("commits-%s-%d.jsonl.zst", segmentDay.Format("2006-01-02"), i))
 		}
-		src, e := os.Open(file)
-		if e != nil {
-			return e
-		}
-		tmp := dst + ".tmp"
-		out, e := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if e != nil {
-			src.Close()
-			return e
-		}
-		zw, e := zstd.NewWriter(out)
-		if e == nil {
-			_, e = copyContext(ctx, zw, src)
-			if ce := zw.Close(); e == nil {
-				e = ce
-			}
-		}
-		if syncErr := out.Sync(); e == nil {
-			e = syncErr
-		}
-		if ce := out.Close(); e == nil {
-			e = ce
-		}
+		dst = filepath.Join(filepath.Dir(file), fmt.Sprintf("commits-%s-%d.jsonl", segmentDay.Format("2006-01-02"), i))
+	}
+	if err := os.Rename(file, dst); err != nil {
+		return "", 0, err
+	}
+	active, err := os.OpenFile(file, os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return "", 0, err
+	}
+	if err := active.Close(); err != nil {
+		return "", 0, err
+	}
+	if err := syncDirectory(filepath.Dir(file)); err != nil {
+		return "", 0, err
+	}
+	return dst, st.Size(), nil
+}
+
+func compressHistorySegment(ctx context.Context, segment string, logicalSize int64) error {
+	src, err := os.Open(segment)
+	if err != nil {
+		return err
+	}
+	dst := segment + ".zst"
+	tmp := dst + ".tmp"
+	sizeTmp := dst + ".size.tmp"
+	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
 		src.Close()
-		if e != nil {
-			os.Remove(tmp)
-			return e
-		}
-		if e = os.Rename(tmp, dst); e != nil {
-			return e
-		}
-		if e = syncDirectory(filepath.Dir(file)); e != nil {
-			return e
-		}
-		if e = os.Truncate(file, 0); e != nil {
-			return e
+		return err
+	}
+	zw, err := zstd.NewWriter(out)
+	if err == nil {
+		_, err = copyContext(ctx, zw, src)
+		if closeErr := zw.Close(); err == nil {
+			err = closeErr
 		}
 	}
-	return pruneHistory(ctx, filepath.Dir(file), now, retention)
+	if syncErr := out.Sync(); err == nil {
+		err = syncErr
+	}
+	if closeErr := out.Close(); err == nil {
+		err = closeErr
+	}
+	src.Close()
+	if err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	if err = os.WriteFile(sizeTmp, []byte(strconv.FormatInt(logicalSize, 10)+"\n"), 0o600); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	if err = os.Rename(tmp, dst); err != nil {
+		os.Remove(sizeTmp)
+		return err
+	}
+	if err = os.Rename(sizeTmp, dst+".size"); err != nil {
+		return err
+	}
+	if err = syncDirectory(filepath.Dir(segment)); err != nil {
+		return err
+	}
+	if err = os.Remove(segment); err != nil {
+		return err
+	}
+	return syncDirectory(filepath.Dir(segment))
 }
 func sameUTCDate(a, b time.Time) bool {
 	ay, am, ad := a.UTC().Date()
@@ -700,7 +823,7 @@ func (r readerWithContext) Read(p []byte) (int, error) {
 	}
 	return r.Reader.Read(p)
 }
-func pruneHistory(ctx context.Context, dir string, now time.Time, retention time.Duration) error {
+func pruneHistory(ctx context.Context, dir string, now time.Time, retention time.Duration, protected *HistoryPosition) error {
 	if retention <= 0 {
 		return ctx.Err()
 	}
@@ -725,12 +848,33 @@ func pruneHistory(ctx context.Context, dir string, now time.Time, retention time
 			continue
 		}
 		if day.Add(24 * time.Hour).Before(now.UTC().Add(-retention)) {
+			if !historySegmentBefore(n, protected) {
+				continue
+			}
 			if err = os.Remove(filepath.Join(dir, n)); err != nil {
+				return err
+			}
+			if err = os.Remove(filepath.Join(dir, n+".size")); err != nil && !errors.Is(err, os.ErrNotExist) {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+func historySegmentBefore(name string, protected *HistoryPosition) bool {
+	if protected == nil {
+		return true
+	}
+	if protected.Segment == "" {
+		return false
+	}
+	if protected.Segment == "commits.jsonl" {
+		return true
+	}
+	day, sequence := historySegmentOrder(name)
+	protectedDay, protectedSequence := historySegmentOrder(protected.Segment)
+	return day < protectedDay || day == protectedDay && sequence < protectedSequence
 }
 
 // GarbageCollectHistoryBlobs first validates every retained journal record,

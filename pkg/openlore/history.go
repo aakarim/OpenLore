@@ -411,16 +411,23 @@ func historyReadable(roots []string, target string) bool {
 }
 
 type scopedHistory struct {
-	store HistoryStore
-	roots []string
-	gc    func() (HistoryGCStats, error)
+	store     HistoryStore
+	roots     []string
+	gc        func(context.Context) (HistoryGCStats, error)
+	gcTimeout time.Duration
 }
 
 func (h scopedHistory) GC() ([]byte, error) {
 	if h.gc == nil {
 		return nil, errors.New("gc not available")
 	}
-	stats, err := h.gc()
+	timeout := h.gcTimeout
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	stats, err := h.gc(ctx)
 	if err != nil {
 		return nil, err
 	}

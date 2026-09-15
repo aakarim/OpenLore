@@ -80,12 +80,6 @@ func New(cfg config.AnalyticsConfig, deps Deps) (*Service, error) {
 	if remote == nil {
 		switch strings.ToLower(strings.TrimSpace(cfg.Ship.Remote)) {
 		case "", "none":
-		case "s3":
-			remote, err = OpenS3EventStore(context.Background(), S3Config{
-				Endpoint: cfg.Ship.S3.Endpoint, Region: cfg.Ship.S3.Region,
-				Bucket: cfg.Ship.S3.Bucket, Prefix: cfg.Ship.S3.Prefix,
-				PathStyle: cfg.Ship.S3.PathStyle,
-			})
 		default:
 			err = fmt.Errorf("unsupported analytics remote store %q", cfg.Ship.Remote)
 		}
@@ -163,48 +157,37 @@ func (s *Service) Refresh(ctx context.Context, names ...string) error {
 	return s.refresher.Refresh(ctx, names...)
 }
 func (s *Service) Replay(ctx context.Context, from time.Time) error {
-	if len(s.log.Segments()) == 0 && s.remote != nil {
-		return s.RebuildFromRemote(ctx)
-	}
 	if s.pipeline == nil {
 		return nil
 	}
 	return s.pipeline.Replay(ctx, from)
 }
 
-// RebuildFromRemote recreates disposable metrics and materializations from the
-// shipped event archive after local analytics data is lost.
+// RebuildFromRemote restores remote events into the local canonical log, then
+// uses the ordinary replay path to recreate metrics and materializations.
 func (s *Service) RebuildFromRemote(ctx context.Context) error {
 	if s.remote == nil {
 		return errors.New("analytics remote store is not configured")
 	}
 	source := RemoteSource(s.remote)
-	s.aggregator.Reset()
-	if err := source.Scan(ctx, EventFilter{}, func(event Event) error {
-		s.emitted.Store(event.Type, struct{}{})
-		s.aggregator.Consume(ctx, event)
+	existing := map[string]struct{}{}
+	if err := s.log.Scan(ctx, EventFilter{}, func(event Event) error {
+		existing[event.ID] = struct{}{}
 		return nil
 	}); err != nil {
 		return err
 	}
-	now := time.Now().UTC()
-	params := Params{Since: now.Add(-30 * 24 * time.Hour), Until: now, Limit: 100}
-	for _, aggregation := range s.registry.List() {
-		requiresFacts := false
-		for _, requirement := range aggregation.Requires {
-			requiresFacts = requiresFacts || requirement == "facts"
+	if err := source.Scan(ctx, EventFilter{}, func(event Event) error {
+		if _, found := existing[event.ID]; found {
+			return nil
 		}
-		if requiresFacts || s.registry.Status(aggregation.Name) != StatusOK {
-			continue
-		}
-		table, err := aggregation.Compute(ctx, source, s.facts, params)
-		if err != nil {
-			return err
-		}
-		materialized := Materialized{Status: StatusOK, Table: table, ComputedAt: now, Window: params}
-		if err := s.store.Put(ctx, aggregation.Name, params, materialized); err != nil {
-			return err
-		}
+		existing[event.ID] = struct{}{}
+		return s.log.Append(ctx, event)
+	}); err != nil {
+		return err
+	}
+	if s.pipeline != nil {
+		return s.pipeline.Replay(ctx, time.Time{})
 	}
 	return nil
 }

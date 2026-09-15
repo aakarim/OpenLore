@@ -43,13 +43,6 @@ metrics_port: 3000
 #   ship:
 #     interval: 30s
 #     remote: none
-#     # remote: s3
-#     # s3:
-#     #   bucket: openlore-analytics
-#     #   region: eu-west-2
-#     #   prefix: production
-#     #   # endpoint: https://s3-compatible.example.com
-#     #   # path_style: true
 #   pipeline:
 #     enabled: true
 #     buffer: 1024
