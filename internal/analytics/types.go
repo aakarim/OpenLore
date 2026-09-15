@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -69,6 +70,21 @@ func TeeSink(sinks ...Sink) Sink {
 				sink.Record(ctx, e)
 			}
 		}
+	})
+}
+
+// NamespacedSink confines plugin events to the plugin's event namespace. An
+// already-correct type is preserved; every other type is treated as a suffix.
+func NamespacedSink(base Sink, pluginName string) Sink {
+	prefix := "plugin." + pluginName + "."
+	return sinkFunc(func(ctx context.Context, e Event) {
+		if base == nil || strings.TrimSpace(e.Type) == "" {
+			return
+		}
+		if !strings.HasPrefix(e.Type, prefix) {
+			e.Type = prefix + e.Type
+		}
+		base.Record(ctx, e)
 	})
 }
 

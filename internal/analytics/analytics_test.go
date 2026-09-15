@@ -25,6 +25,31 @@ func (p *countingProcessor) Process(_ context.Context, e Event) []Event {
 	return []Event{{ID: e.ID + "-derived", Type: "derived"}}
 }
 
+type captureSink struct{ events []Event }
+
+func (s *captureSink) Record(_ context.Context, event Event) {
+	s.events = append(s.events, event)
+}
+
+func TestNamespacedSinkConfinesPluginEvents(t *testing.T) {
+	base := &captureSink{}
+	sink := NamespacedSink(base, "quality")
+	sink.Record(context.Background(), Event{Type: "score"})
+	sink.Record(context.Background(), Event{Type: "plugin.quality.section"})
+	sink.Record(context.Background(), Event{Type: "plugin.other.escape"})
+	sink.Record(context.Background(), Event{})
+
+	want := []string{"plugin.quality.score", "plugin.quality.section", "plugin.quality.plugin.other.escape"}
+	if len(base.events) != len(want) {
+		t.Fatalf("recorded %d events, want %d", len(base.events), len(want))
+	}
+	for i, event := range base.events {
+		if event.Type != want[i] {
+			t.Errorf("event %d type = %q, want %q", i, event.Type, want[i])
+		}
+	}
+}
+
 type testFS map[string][]byte
 
 func (f testFS) Stat(p string) (*vfs.FileInfo, error) {

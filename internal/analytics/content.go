@@ -47,7 +47,8 @@ func (sizeProvider) Scalars(_ string, b []byte) map[string]float64 {
 
 type tokenProvider struct{ t Tokenizer }
 
-func (p tokenProvider) Name() string { return "tokens" }
+func (p tokenProvider) Name() string          { return "tokens" }
+func (p tokenProvider) tokenizerName() string { return p.t.Name() }
 func (p tokenProvider) Scalars(_ string, b []byte) map[string]float64 {
 	return map[string]float64{"tokens": float64(p.t.Count(b))}
 }
@@ -74,8 +75,8 @@ func computeScalars(p string, b []byte, providers []ContentScalarProvider) DocSc
 		for k, v := range provider.Scalars(p, b) {
 			d.Scalars[k] = v
 		}
-		if provider.Name() == "tokens" {
-			d.Tokenizer = "approx"
+		if provider, ok := provider.(interface{ tokenizerName() string }); ok {
+			d.Tokenizer = provider.tokenizerName()
 		}
 	}
 	return d
