@@ -2,7 +2,32 @@
   "$schema": "https://schema.railpack.com",
   "provider": "golang",
   "steps": {
+    "dashboard": {
+      "inputs": [
+        {
+          "image": "nixos/nix:2.35.2"
+        },
+        {
+          "local": true,
+          "include": [
+            "."
+          ]
+        }
+      ],
+      "commands": [
+        "nix --extra-experimental-features 'nix-command flakes' develop --command make dashboard-build"
+      ]
+    },
     "build": {
+      "inputs": [
+        "...",
+        {
+          "step": "dashboard",
+          "include": [
+            "assets/dashboard/dist"
+          ]
+        }
+      ],
       "commands": [
         "rm assets/config/openlore.yml",
         "go build -o out ./cmd/openlore"

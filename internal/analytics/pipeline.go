@@ -130,6 +130,8 @@ type Pipeline struct {
 	cursor      logCursor
 	cancel      context.CancelFunc
 	done        chan struct{}
+	stop        chan struct{}
+	stopOnce    sync.Once
 	once        sync.Once
 	processMu   sync.Mutex
 	lastEventID string
@@ -139,7 +141,7 @@ func NewPipeline(log EventLog, checkpoint string, opts PipelineOptions) *Pipelin
 	if opts.Buffer <= 0 {
 		opts.Buffer = 1024
 	}
-	return &Pipeline{log: log, checkpoint: checkpoint, opts: opts, handoff: make(chan Event, opts.Buffer), done: make(chan struct{}), seen: map[string]struct{}{}, eventTypes: map[string]struct{}{}, cursor: logCursor{}}
+	return &Pipeline{log: log, checkpoint: checkpoint, opts: opts, handoff: make(chan Event, opts.Buffer), done: make(chan struct{}), stop: make(chan struct{}), seen: map[string]struct{}{}, eventTypes: map[string]struct{}{}, cursor: logCursor{}}
 }
 func (p *Pipeline) Handoff() chan<- Event { return p.handoff }
 func (p *Pipeline) AddProcessor(processor Processor) {
@@ -380,6 +382,8 @@ func (p *Pipeline) Run(ctx context.Context) {
 					p.drainLocked(ctx)
 					p.writeCheckpoint(p.lastEventID)
 					p.processMu.Unlock()
+				case <-p.stop:
+					return
 				case <-ctx.Done():
 					return
 				}
@@ -395,6 +399,19 @@ func cloneCursor(cursor logCursor) logCursor {
 	return clone
 }
 func (p *Pipeline) Close(ctx context.Context) error {
+	if p.cancel != nil {
+		// Stop the live worker between operations before draining its queue.
+		// Canceling first can invalidate an event it already received but has
+		// not processed yet, losing derived writes while marking them seen.
+		p.stopOnce.Do(func() { close(p.stop) })
+		select {
+		case <-p.done:
+			p.cancel()
+		case <-ctx.Done():
+			p.cancel()
+			return ctx.Err()
+		}
+	}
 	for {
 		select {
 		case e := <-p.handoff:
@@ -411,16 +428,7 @@ drained:
 	p.drainLocked(ctx)
 	p.writeCheckpoint(p.lastEventID)
 	p.processMu.Unlock()
-	if p.cancel == nil {
-		return nil
-	}
-	p.cancel()
-	select {
-	case <-p.done:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	return nil
 }
 func (p *Pipeline) Replay(ctx context.Context, from time.Time) error {
 	p.processMu.Lock()

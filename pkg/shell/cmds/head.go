@@ -78,7 +78,7 @@ func CmdHead(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 			}
 			_, _ = w.Write(content[:end])
 			if end > 0 {
-				emitDocMetric(ctx, "doc.read", p, content, byteLineRange(content, 0, end))
+				emitDocMetricSelection(ctx, "doc.read", p, content, byteLineRange(content, 0, end), content[:end])
 			}
 			continue
 		}

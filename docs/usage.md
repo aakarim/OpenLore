@@ -106,7 +106,9 @@ openlore export -o ./extracted-docs
     config: ./openlore.yml
 ```
 
-The action produces cross-platform binaries containing the selected docs.
+The action produces cross-platform binaries containing the selected docs. It
+also builds and embeds the dashboard using the repository's Nix-pinned Node
+toolchain. The resulting binary does not require Node at runtime.
 
 ## MCP over HTTP
 

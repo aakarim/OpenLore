@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"path"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/aakarim/go-openlore/internal/analytics"
 	"github.com/aakarim/go-openlore/pkg/vfs"
@@ -22,13 +23,17 @@ func metricsEnabled(ctx CmdContext) bool {
 }
 
 func emitDocMetric(ctx CmdContext, eventType, filePath string, content []byte, lines *analytics.LineRange) {
+	emitDocMetricSelection(ctx, eventType, filePath, content, lines, contentForLineRange(content, lines))
+}
+
+func emitDocMetricSelection(ctx CmdContext, eventType, filePath string, content []byte, lines *analytics.LineRange, selection []byte) {
 	if !metricsEnabled(ctx) {
 		return
 	}
-	emitDocMetricWithHash(ctx, eventType, canonicalMetricPath(ctx, filePath), metricContentHash(ctx, filePath, content), lines)
+	emitDocMetricWithHash(ctx, eventType, canonicalMetricPath(ctx, filePath), metricContentHash(ctx, filePath, content), lines, selection)
 }
 
-func emitDocMetricWithHash(ctx CmdContext, eventType, filePath, contentHash string, lines *analytics.LineRange) {
+func emitDocMetricWithHash(ctx CmdContext, eventType, filePath, contentHash string, lines *analytics.LineRange, selection []byte) {
 	unit := map[string]any{}
 	if lines != nil {
 		unit["lines"] = map[string]any{"start": lines.Start, "end": lines.End}
@@ -37,6 +42,8 @@ func emitDocMetricWithHash(ctx CmdContext, eventType, filePath, contentHash stri
 		"path":         filePath,
 		"content_hash": contentHash,
 		"unit":         unit,
+		"bytes":        len(selection),
+		"characters":   utf8.RuneCount(selection),
 	})
 }
 
@@ -51,7 +58,8 @@ func emitDocLineMetrics(ctx CmdContext, eventType, filePath string, content []by
 		for end+1 < len(lines) && lines[end+1] == lines[end]+1 {
 			end++
 		}
-		emitDocMetricWithHash(ctx, eventType, metricPath, contentHash, &analytics.LineRange{Start: lines[start], End: lines[end]})
+		lineRange := &analytics.LineRange{Start: lines[start], End: lines[end]}
+		emitDocMetricWithHash(ctx, eventType, metricPath, contentHash, lineRange, contentForLineRange(content, lineRange))
 		start = end + 1
 	}
 }
@@ -137,6 +145,36 @@ func byteLineRange(content []byte, start, end int) *analytics.LineRange {
 		endLine = startLine
 	}
 	return &analytics.LineRange{Start: startLine, End: endLine}
+}
+
+func contentForLineRange(content []byte, lines *analytics.LineRange) []byte {
+	if lines == nil || lines.Start < 1 || lines.End < lines.Start {
+		return nil
+	}
+	start, end, line := 0, len(content), 1
+	for i, b := range content {
+		if line == lines.Start {
+			start = i
+			break
+		}
+		if b == '\n' {
+			line++
+		}
+	}
+	line = 1
+	for i, b := range content {
+		if b == '\n' {
+			if line == lines.End {
+				end = i + 1
+				break
+			}
+			line++
+		}
+	}
+	if start > end || start >= len(content) {
+		return nil
+	}
+	return content[start:end]
 }
 
 func scopePaths(ctx CmdContext, targets []string) []string {

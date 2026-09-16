@@ -110,6 +110,71 @@ func TestPipelineMissingCheckpointProcessesRetainedTail(t *testing.T) {
 	}
 }
 
+type shutdownScanLog struct {
+	EventLog
+	entered  chan struct{}
+	stopping <-chan struct{}
+}
+
+func (l *shutdownScanLog) Scan(ctx context.Context, filter EventFilter, fn func(Event) error) error {
+	// Hold the startup scan until Close requests shutdown. Cancellation must
+	// not invalidate the worker's context before this accepted work completes.
+	select {
+	case l.entered <- struct{}{}:
+	default:
+	}
+	select {
+	case <-ctx.Done():
+	case <-l.stopping:
+	}
+	return l.EventLog.Scan(ctx, filter, fn)
+}
+
+func TestPipelineCloseFinishesLiveWorkBeforeCanceling(t *testing.T) {
+	log, err := OpenEventLog(t.TempDir(), LogOptions{Compress: "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	if err := log.Append(context.Background(), Event{ID: "source", Type: "source"}); err != nil {
+		t.Fatal(err)
+	}
+	gated := &shutdownScanLog{EventLog: log, entered: make(chan struct{}, 1)}
+	p := NewPipeline(gated, filepath.Join(t.TempDir(), "checkpoint"), PipelineOptions{
+		Processors: []Processor{&countingProcessor{}},
+		Sink: sinkFunc(func(ctx context.Context, e Event) {
+			if err := log.Append(ctx, e); err != nil {
+				t.Errorf("persist derived event: %v", err)
+			}
+		}),
+	})
+	gated.stopping = p.stop
+	p.Run(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	select {
+	case <-gated.entered:
+	case <-ctx.Done():
+		t.Fatal("pipeline did not start scanning")
+	}
+	if err := p.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	if err := log.Scan(context.Background(), EventFilter{}, func(e Event) error {
+		ids = append(ids, e.ID)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 2 || ids[0] != "source" || ids[1] != "source-derived" {
+		t.Fatalf("shutdown lost or duplicated an event: %v", ids)
+	}
+	if err := p.Close(ctx); err != nil {
+		t.Fatalf("repeated close: %v", err)
+	}
+}
+
 type blockingProcessor struct {
 	mu                       sync.Mutex
 	active, maxActive, calls int

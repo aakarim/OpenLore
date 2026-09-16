@@ -28,7 +28,7 @@ func (p *analyticsPlugin) PostCommitMiddleware() []PostCommitMiddleware {
 }
 func (p *analyticsPlugin) observeWrites(next PostCommitHandler) PostCommitHandler {
 	return func(ctx context.Context, info CommitInfo) error {
-		writer := analytics.WriterAgent
+		writer := analytics.WriterUnknown
 		if p.server != nil {
 			writer = IdentityStoreClassifier(p.server.identityStore).Classify(ctx, info.Attribution)
 		}
@@ -48,7 +48,7 @@ func (p *analyticsPlugin) observeWrites(next PostCommitHandler) PostCommitHandle
 			} else {
 				action = "delete"
 			}
-			fields := map[string]any{"path": vfs.CleanPath(leaf.Target), "docset": p.docsetForPath(leaf.Target), "action": action, "writer": string(writer), "commit_id": info.ID, "commit_hash": info.Hash}
+			fields := map[string]any{"path": vfs.CleanPath(leaf.Target), "docset": p.docsetForPath(leaf.Target), "action": action, "writer": string(writer), "actor_kind": string(writer), "commit_id": info.ID, "commit_hash": info.Hash}
 			if leaf.Write != nil {
 				fields["content_hash"] = leafAfterHash(info.Leaves, leaf.Target)
 				if fields["content_hash"] == "" {
@@ -95,27 +95,19 @@ func (p *analyticsPlugin) PrepareHTTPRoutes(s *Server) (HTTPRouteRegistrar, erro
 	if !s.authEnforced {
 		return func(*http.ServeMux) {}, nil
 	}
+	p.server = s
 	return func(mux *http.ServeMux) {
 		auth := func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				var id Identity
-				var ok bool
-				if s.passkeys != nil {
-					if session, valid := s.passkeys.Session(r); valid {
-						id, ok = s.identityForName(session.Identity)
-					}
-				}
-				if !ok && bearerToken(r) != "" && s.issuer != nil {
-					if claims, err := s.issuer.Verify(bearerToken(r)); err == nil {
-						id, err = s.identityStore.Resolve(r.Context(), claims)
-						ok = err == nil
-					}
-				}
+				setPrivateAnalyticsHeaders(w)
+				id, ok := p.requestIdentity(r)
 				if !ok {
-					id = s.identityFromContext(r.Context())
-					ok = id.IdentityName != "" && id.IdentityName != "guest"
+					// Let dashboard clients recover expired sessions; keep resource
+					// permission failures indistinguishable from missing resources.
+					http.Error(w, "authentication required", http.StatusUnauthorized)
+					return
 				}
-				if !ok || !s.hasCurrentCapability(id, "lore:analytics:view") {
+				if !s.hasReadableAnalyticsDocset(id) {
 					http.NotFound(w, r)
 					return
 				}
@@ -128,6 +120,36 @@ func (p *analyticsPlugin) PrepareHTTPRoutes(s *Server) (HTTPRouteRegistrar, erro
 		mux.Handle("GET /analytics/", auth(http.HandlerFunc(p.dashboard)))
 		mux.Handle("GET /analytics/{name}", auth(http.HandlerFunc(p.dashboard)))
 	}, nil
+}
+
+func setPrivateAnalyticsHeaders(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "private, no-store")
+	w.Header().Set("Vary", "Cookie, Authorization")
+}
+
+func (p *analyticsPlugin) requestIdentity(r *http.Request) (Identity, bool) {
+	if p.server == nil {
+		return Identity{}, false
+	}
+	return p.server.dashboardIdentity(r)
+}
+
+func (s *Server) hasReadableAnalyticsDocset(id Identity) bool {
+	for _, docset := range s.currentAuth().Docsets {
+		for _, mapping := range docset.Paths {
+			candidate := displayPath(mapping)
+			governing, grants, ok := s.grantsForPath(id, candidate)
+			if !ok {
+				continue
+			}
+			for _, grant := range grants {
+				if grant.CanRead(governing, candidate) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 func (p *analyticsPlugin) aggregations(w http.ResponseWriter, _ *http.Request) {
 	type item struct {
@@ -223,6 +245,13 @@ func (p *analyticsPlugin) facts(w http.ResponseWriter, r *http.Request) {
 	if path == "" {
 		path = "/"
 	}
+	if p.server != nil {
+		if _, ok := r.Context().Value(identityCtxKey{}).(Identity); !ok {
+			http.NotFound(w, r)
+			return
+		}
+		path = p.server.canonicalPath(path)
+	}
 	facts, err := p.scopedFacts(r).Stat(r.Context(), path)
 	if err != nil {
 		http.NotFound(w, r)
@@ -235,25 +264,28 @@ func (p *analyticsPlugin) facts(w http.ResponseWriter, r *http.Request) {
 func (p *analyticsPlugin) scopedFacts(r *http.Request) analytics.ContentFacts {
 	if p.server != nil {
 		if id, ok := r.Context().Value(identityCtxKey{}).(Identity); ok {
-			return p.service.NewContentFacts(p.server.buildSessionFS(id))
+			return p.service.NewContentFacts(p.server.buildCanonicalSessionFS(id))
 		}
 	}
 	return p.service.Facts()
 }
 
 func (p *analyticsPlugin) runAggregation(r *http.Request, name string) (analytics.Materialized, error) {
-	for _, a := range p.service.Registry().List() {
-		if a.Name != name {
-			continue
+	params := queryParams(r)
+	if p.server != nil {
+		id, ok := r.Context().Value(identityCtxKey{}).(Identity)
+		if !ok {
+			return analytics.Materialized{}, fmt.Errorf("authenticated analytics identity required")
 		}
-		for _, requirement := range a.Requires {
-			if requirement == "facts" {
-				return p.service.Registry().RunWithFacts(r.Context(), name, queryParams(r), p.scopedFacts(r))
-			}
+		prefix := params.Extra["path"]
+		if prefix == "" {
+			prefix = "/"
 		}
-		break
+		prefix = p.server.canonicalPath(prefix)
+		params.Extra["path"] = prefix
+		return p.service.Registry().RunWithSource(r.Context(), name, params, p.server.DashboardEventSource(id, prefix), p.scopedFacts(r))
 	}
-	return p.service.Registry().Run(r.Context(), name, queryParams(r), analytics.RunOptions{Fresh: r.URL.Query().Get("fresh") == "true"})
+	return p.service.Registry().Run(r.Context(), name, params, analytics.RunOptions{Fresh: r.URL.Query().Get("fresh") == "true"})
 }
 
 func (p *analyticsPlugin) runPaginatedAggregation(r *http.Request, name string) (analytics.Materialized, error) {
@@ -296,20 +328,9 @@ func (p *analyticsPlugin) dashboard(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintln(w, `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>OpenLore analytics</title>`+webstyle.Link+`</head><body><main class="analytics"><header><div><p class="eyebrow">OpenLore</p><h1>Analytics</h1><p class="subtitle">Usage, knowledge quality, and system health.</p></div><a href="/analytics/" class="analytics-home">Overview</a></header>`)
 	if name == "" {
-		health := p.service.Health()
-		fmt.Fprintln(w, `<section><div class="section-head"><div><p class="eyebrow">Runtime</p><h2>Health</h2></div></div><div class="health-grid">`)
-		for _, metric := range []struct {
-			label string
-			value any
-		}{
-			{"Pipeline", map[bool]string{true: "Running", false: "Paused"}[health.PipelineEnabled]}, {"Segments", health.Segments}, {"Dropped events", health.Dropped},
-			{"Dropped at shutdown", health.DroppedAtShutdown}, {"Ship lag (bytes)", health.ShipLagBytes}, {"Pipeline lag (events)", health.PipelineLagEvents},
-			{"Last refresh", formatAnalyticsTime(health.LastRefresh)}, {"History cursor", health.HistoryCursorPosition}, {"History lag (bytes)", health.HistoryCursorLagBytes},
-			{"History blobs", health.HistoryBlobStoreObjects}, {"Blob bytes", health.HistoryBlobStoreBytes},
-		} {
-			fmt.Fprintf(w, `<article class="health-card"><span>%s</span><strong>%v</strong></article>`, html.EscapeString(metric.label), metric.value)
-		}
-		fmt.Fprintln(w, `</div></section><section><div class="section-head"><div><p class="eyebrow">Explore</p><h2>Aggregations</h2></div></div><div class="analytics-list">`)
+		// Global log sizes, cursors and usage counters are operator metrics,
+		// not facts a reader of one docset is entitled to inspect.
+		fmt.Fprintln(w, `<section><div class="section-head"><div><p class="eyebrow">Explore</p><h2>Aggregations</h2></div></div><div class="analytics-list">`)
 		for _, a := range p.service.Registry().List() {
 			fmt.Fprintf(w, `<article class="analytics-panel"><div class="panel-title"><div><h3><a href="/analytics/%s">%s</a></h3><p>%s</p></div><span class="badge">%s</span></div>`, url.PathEscape(a.Name), html.EscapeString(a.Title), html.EscapeString(a.Description), p.service.Registry().Status(a.Name))
 			if missingRequiredAnalyticsParam(a, r) {
@@ -381,13 +402,6 @@ func renderAnalyticsFilters(w io.Writer, r *http.Request, aggregation analytics.
 		fmt.Fprintf(w, `<label>%s<input type="text" name="%s" value="%s"%s></label>`, html.EscapeString(parameter.Name), html.EscapeString(parameter.Name), html.EscapeString(value), map[bool]string{true: " required", false: ""}[parameter.Required])
 	}
 	fmt.Fprintln(w, `<label class="fresh"><input type="checkbox" name="fresh" value="true"> Refresh now</label><button type="submit">Apply</button></form>`)
-}
-
-func formatAnalyticsTime(value time.Time) string {
-	if value.IsZero() {
-		return "Not yet"
-	}
-	return value.UTC().Format("2006-01-02 15:04 UTC")
 }
 
 func analyticsPageURL(r *http.Request, path string, changes map[string]string) string {

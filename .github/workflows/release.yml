@@ -19,9 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
+      - uses: cachix/install-nix-action@v31
 
       - name: Verify release source
         run: |
@@ -31,6 +29,7 @@ jobs:
 
       - name: Build release artifacts
         run: |
+          nix develop --command make dashboard-build
           mkdir dist
           for platform in \
             linux/amd64 \
@@ -45,7 +44,7 @@ jobs:
             if [ "$GOOS" = windows ]; then
               output="${output}.exe"
             fi
-            CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" \
+            nix develop --command env CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" \
               go build -trimpath -o "$output" ./cmd/openlore
           done
 

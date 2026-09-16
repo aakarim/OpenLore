@@ -63,6 +63,7 @@ func BuiltinAggregations() []Aggregation {
 		{Name: "most-used-files", Title: "Most-used files", Description: "Files read most recently", Requires: []string{"facts", "doc.read", "doc.hit"}, Params: []ParamSpec{{Name: "path", Default: "/"}, {Name: "order", Default: "desc"}}, Compute: fileUsageTable("desc")},
 		{Name: "least-used-folders", Title: "Least-used folders", Description: "Folders whose documents were read least recently", Requires: []string{"facts", "doc.read", "doc.hit"}, Params: []ParamSpec{{Name: "path", Default: "/"}, {Name: "depth", Default: "1"}, {Name: "order", Default: "asc"}}, Compute: leastUsedFolders},
 		{Name: "least-used-lines", Title: "Least-used lines", Description: "Line ranges read least recently at the current content hash", Requires: []string{"facts", "doc.read", "doc.hit"}, Params: []ParamSpec{{Name: "path", Required: true}}, Compute: leastUsedLines},
+		{Name: "most-used-lines", Title: "Most-used lines", Description: "Line ranges read most often at the current content hash", Requires: []string{"facts", "doc.read", "doc.hit"}, Params: []ParamSpec{{Name: "path", Required: true}}, Compute: mostUsedLines},
 	}
 }
 
@@ -287,8 +288,8 @@ func sizeOverTime(ctx context.Context, src EventSource, _ ContentFacts, p Params
 	return Table{Columns: []string{"bucket", "docset", "writes", "bytes_delta", "lines_delta", "tokens_delta"}, Rows: limitRows(rows, p), Total: len(rows)}, nil
 }
 func writeRatio(ctx context.Context, src EventSource, _ ContentFacts, p Params) (Table, error) {
-	var human, agent int
-	var hb, ab float64
+	var human, agent, unknown int
+	var hb, ab, ub float64
 	seen := map[string]struct{}{}
 	err := src.Scan(ctx, EventFilter{From: p.Since, To: p.Until, Types: []string{"doc.scalars"}}, func(e Event) error {
 		id := scalarEventKey(e)
@@ -300,19 +301,23 @@ func writeRatio(ctx context.Context, src EventSource, _ ContentFacts, p Params) 
 		if d, ok := e.Fields["delta"].(map[string]any); ok {
 			bytes, _ = d["bytes"].(float64)
 		}
-		if fieldString(e, "writer") == string(WriterHuman) {
+		switch Writer(fieldString(e, "writer")) {
+		case WriterHuman:
 			human++
 			hb += bytes
-		} else {
+		case WriterAgent:
 			agent++
 			ab += bytes
+		default:
+			unknown++
+			ub += bytes
 		}
 		return nil
 	})
-	total := human + agent
+	total := human + agent + unknown
 	ratio := float64(0)
 	if total > 0 {
 		ratio = float64(human) / float64(total)
 	}
-	return Table{Columns: []string{"path", "human_writes", "agent_writes", "human_ratio", "human_bytes_delta", "agent_bytes_delta"}, Rows: [][]any{{p.Extra["path"], human, agent, ratio, hb, ab}}, Total: 1}, err
+	return Table{Columns: []string{"path", "human_writes", "agent_writes", "unknown_writes", "human_ratio", "human_bytes_delta", "agent_bytes_delta", "unknown_bytes_delta"}, Rows: [][]any{{p.Extra["path"], human, agent, unknown, ratio, hb, ab, ub}}, Total: 1}, err
 }

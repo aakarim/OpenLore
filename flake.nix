@@ -5,7 +5,11 @@
 
   outputs = { self, nixpkgs }:
     let
-      supportedSystems = [ "aarch64-linux" "x86_64-linux" ];
+      supportedSystems = [
+        "aarch64-linux"
+        "x86_64-linux"
+        "aarch64-darwin"
+      ];
       forEachSystem = nixpkgs.lib.genAttrs supportedSystems;
     in
     {
@@ -15,7 +19,10 @@
         in
         {
           default = pkgs.mkShell {
-            packages = [ pkgs.go_1_26 ];
+            packages = [
+              pkgs.go_1_26
+              pkgs.nodejs_24
+            ];
           };
         });
     };
