@@ -38,18 +38,20 @@ func recognizedScope(s string) bool {
 
 // Identity represents a connected caller (SSH session or MCP/HTTP request).
 type Identity struct {
-	RemoteAddr     string
-	User           string
-	PublicKey      ssh.PublicKey
-	SessionID      string
-	ConnectedAt    time.Time
-	IdentityName   string // matched identity name from auth config
-	Attribution    Attribution
-	Principal      AuthenticatedPrincipal
-	policySnapshot *AuthorizationPolicy
-	HomeDir        string   // display path of the identity's home docset ($HOME); empty = none
-	HomeDocset     string   // name of the identity's home docset; empty = none
-	Scopes         []string // token scopes narrowing authority; {ScopeFull} = full authority
+	RemoteAddr      string
+	User            string
+	PublicKey       ssh.PublicKey
+	SessionID       string
+	ClientSessionID string
+	Transport       string
+	ConnectedAt     time.Time
+	IdentityName    string // matched identity name from auth config
+	Attribution     Attribution
+	Principal       AuthenticatedPrincipal
+	policySnapshot  *AuthorizationPolicy
+	HomeDir         string   // display path of the identity's home docset ($HOME); empty = none
+	HomeDocset      string   // name of the identity's home docset; empty = none
+	Scopes          []string // token scopes narrowing authority; {ScopeFull} = full authority
 }
 
 func (i Identity) attribution() Attribution {

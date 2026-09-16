@@ -24,6 +24,7 @@ func CmdCat(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io
 			continue
 		}
 		w.Write(content)
+		emitDocMetric(ctx, "doc.read", p, content, fullLineRange(content))
 	}
 	return exitCode
 }

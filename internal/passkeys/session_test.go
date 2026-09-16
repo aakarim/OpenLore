@@ -10,7 +10,8 @@ func TestSessionCSRFTokenIsBoundToSession(t *testing.T) {
 	manager := NewSessionManager([]byte("secret"), time.Hour)
 	requestForSession := func() *SessionInfo {
 		rec := httptest.NewRecorder()
-		if err := manager.SetCookie(rec, "alice"); err != nil {
+		issuedID, err := manager.SetCookie(rec, "alice")
+		if err != nil {
 			t.Fatal(err)
 		}
 		req := httptest.NewRequest("GET", "/settings/permissions", nil)
@@ -18,6 +19,9 @@ func TestSessionCSRFTokenIsBoundToSession(t *testing.T) {
 		session, ok := manager.ValidateRequest(req)
 		if !ok {
 			t.Fatal("issued session did not validate")
+		}
+		if session.ID != issuedID {
+			t.Fatalf("decoded session ID = %q, want issued ID %q", session.ID, issuedID)
 		}
 		return session
 	}

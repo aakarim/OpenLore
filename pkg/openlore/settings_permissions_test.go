@@ -79,7 +79,7 @@ func authenticatedPermissionsRequest(t *testing.T, manager *passkeys.SessionMana
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
 	rec := httptest.NewRecorder()
-	if err := manager.SetCookie(rec, "alice"); err != nil {
+	if _, err := manager.SetCookie(rec, "alice"); err != nil {
 		t.Fatal(err)
 	}
 	req.AddCookie(rec.Result().Cookies()[0])

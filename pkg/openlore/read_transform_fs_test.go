@@ -27,6 +27,9 @@ func TestTransformedReadForwardsRawTrackedHash(t *testing.T) {
 	if !seen || h != hashBytes([]byte("raw")) {
 		t.Fatalf("tracked hash=%q seen=%v", h, seen)
 	}
+	if presentationHash := f.ReadContentHash("/SKILL.md", got); presentationHash != hashBytes(got) {
+		t.Fatalf("presentation hash=%q", presentationHash)
+	}
 	if _, err := f.WriteFileAtomic("/SKILL.md", []byte("updated"), vfs.WriteOpts{IfMatch: &h}); err != nil {
 		t.Fatalf("surgical write with raw hash: %v", err)
 	}

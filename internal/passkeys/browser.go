@@ -23,13 +23,20 @@ import (
 // the lore browser. History is best-effort: deployments without a history
 // provider still render the file view normally.
 type FileHistoryEntry struct {
-	Time        time.Time
-	Attribution string
-	Action      string
-	Hash        string
+	Time        time.Time `json:"time"`
+	Attribution string    `json:"attribution"`
+	Action      string    `json:"action"`
+	Hash        string    `json:"hash"`
 }
 
 type FileHistoryProvider func(identity, filePath string) ([]FileHistoryEntry, error)
+
+type ContentFacts struct {
+	Bytes, Lines, Tokens float64
+	Tokenizer            string
+}
+
+type ContentFactsProvider func(vfs.FileSystem, string) (ContentFacts, error)
 
 // PermissionsPath is the settings page where a principal manages which
 // delegate identities have access to what. The lore browser's identity menu
@@ -59,7 +66,7 @@ func identityMenuHTML(identity string) string {
 // docsets from an ancestor grant) are enforced identically here. There is no
 // separate allow-list in the browser: the scoped FS is the sole authority on
 // what a session may see.
-func (p *Passkeys) LoreBrowserHandler(fsForIdentity func(identity string) vfs.FileSystem, historyForFile FileHistoryProvider) http.Handler {
+func (p *Passkeys) LoreBrowserHandler(fsForIdentity func(identity string) vfs.FileSystem, historyForFile FileHistoryProvider, factsForPath ContentFactsProvider) http.Handler {
 	lorePath := "/" + strings.Trim(p.cfg.LorePath, "/")
 	if lorePath == "/" {
 		lorePath = "/lore"
@@ -98,7 +105,7 @@ func (p *Passkeys) LoreBrowserHandler(fsForIdentity func(identity string) vfs.Fi
 		}
 
 		if info.Dir {
-			p.renderDir(w, fsys, lorePath, fsPath, session.Identity)
+			p.renderDir(w, fsys, lorePath, fsPath, session.Identity, factsForPath)
 			return
 		}
 
@@ -120,7 +127,13 @@ func (p *Passkeys) LoreBrowserHandler(fsForIdentity func(identity string) vfs.Fi
 					}
 				}
 			}
-			p.renderFile(w, r, lorePath, fsPath, session.Identity, history, historyAvailable)
+			var facts *ContentFacts
+			if factsForPath != nil {
+				if value, err := factsForPath(fsys, fsPath); err == nil {
+					facts = &value
+				}
+			}
+			p.renderFile(w, r, lorePath, fsPath, session.Identity, history, historyAvailable, facts)
 			return
 		}
 		if isMarkdown(fsPath) {
@@ -138,7 +151,7 @@ func (p *Passkeys) LoreBrowserHandler(fsForIdentity func(identity string) vfs.Fi
 	})
 }
 
-func (p *Passkeys) renderFile(w http.ResponseWriter, r *http.Request, lorePath, fsPath, identity string, history []FileHistoryEntry, historyAvailable bool) {
+func (p *Passkeys) renderFile(w http.ResponseWriter, r *http.Request, lorePath, fsPath, identity string, history []FileHistoryEntry, historyAvailable bool, facts *ContentFacts) {
 	parentURL := lorePath + path.Dir(fsPath)
 	if path.Dir(fsPath) == "/" {
 		parentURL += "/"
@@ -167,7 +180,11 @@ func (p *Passkeys) renderFile(w http.ResponseWriter, r *http.Request, lorePath, 
 	b.WriteString(`<style>@font-face{font-family:'Outfit';font-style:normal;font-weight:100 900;font-display:swap;src:url('/outfit.woff2') format('woff2')}*{box-sizing:border-box}html,body{height:100%;margin:0}body{display:flex;flex-direction:column;background:#1d1a23;color:rgba(255,253,248,.88);font-weight:300;font-family:Outfit,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}.bar{height:3rem;flex:none;display:flex;align-items:center;gap:.65rem;padding:0 .85rem;border-bottom:1px solid #363046;background:#252130}.breadcrumbs{display:flex;align-items:center;gap:.5rem;min-width:0;overflow:hidden;white-space:nowrap;font-size:.9rem}.breadcrumbs a{color:#58a6ff;text-decoration:none}.breadcrumbs a:hover{text-decoration:underline}.breadcrumbs span[aria-current=page]{overflow:hidden;text-overflow:ellipsis;color:rgba(255,253,248,.88)}.separator{color:rgba(238,233,245,.45)}.history-toggle,.close{display:grid;place-items:center;height:2rem;flex:none;border:0;border-radius:6px;background:transparent;color:rgba(238,233,245,.6);font:inherit;cursor:pointer}.history-toggle{width:2rem;margin-left:auto}.history-toggle:hover,.close:hover{background:#363046;color:#fffdf8}.history-toggle svg{width:1.1rem;height:1.1rem;fill:currentColor}.close{width:2rem;text-decoration:none;font-size:1.35rem;line-height:1}.content{display:flex;min-height:0;flex:1}iframe{min-width:0;flex:1;border:0;background:#1d1a23}.history{width:20rem;flex:none;overflow:auto;border-left:1px solid #363046;background:#252130}.history[hidden]{display:none}.history-header{position:sticky;top:0;padding:1rem;border-bottom:1px solid #363046;background:#252130}.history-header h2{margin:0;color:#fffdf8;font-size:.95rem}.history-list{list-style:none;margin:0;padding:0}.history-entry{padding:1rem;border-bottom:1px solid #2f2a3c}.history-action{display:inline-block;margin-bottom:.45rem;padding:.15rem .4rem;border-radius:999px;background:#2f2a3c;color:#a880ff;font-size:.7rem;font-weight:600;text-transform:uppercase}.history-actor{overflow-wrap:anywhere;color:#fffdf8;font-size:.85rem}.history-time,.history-hash{display:block;margin-top:.3rem;color:rgba(238,233,245,.6);font-size:.75rem}.history-hash{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:SFMono-Regular,Consolas,'Liberation Mono',monospace}.history-empty{padding:1rem;color:rgba(238,233,245,.6);font-size:.85rem;line-height:1.5}@media(max-width:700px){.history{position:absolute;z-index:2;top:3rem;right:0;bottom:0;width:min(20rem,88vw);box-shadow:-12px 0 30px rgba(0,0,0,.4)}}`)
 	b.WriteString(identityMenuCSS)
 	b.WriteString(`</style></head><body>`)
-	fmt.Fprintf(&b, `<nav class="bar" aria-label="File navigation"><div class="breadcrumbs">%s</div><button class="history-toggle" id="history-toggle" type="button" aria-controls="file-history" aria-expanded="false" title="Toggle edit history"><span class="sr-only" hidden>Edit history</span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.643 3.143.427 1.927A.25.25 0 0 1 .604 1.5H4.75a.25.25 0 0 1 .25.25v4.146a.25.25 0 0 1-.427.177L3.31 4.81a5.5 5.5 0 1 1-.08 6.384.75.75 0 1 1 1.21-.888 4 4 0 1 0 .055-4.662L5.57 6.72A.75.75 0 0 1 4.51 7.78L1.643 4.914a1.25 1.25 0 0 1 0-1.77ZM8 4.5a.75.75 0 0 1 .75.75v2.44l1.53.765a.75.75 0 0 1-.67 1.342l-1.945-.973A.75.75 0 0 1 7.25 8.15v-2.9A.75.75 0 0 1 8 4.5Z"/></svg></button>%s<a class="close" href="%s" aria-label="Close file and return to folder" title="Close">×</a></nav>`, crumbs.String(), identityMenuHTML(identity), html.EscapeString(parentURL))
+	fmt.Fprintf(&b, `<nav class="bar" aria-label="File navigation"><div class="breadcrumbs">%s</div>`, crumbs.String())
+	if facts != nil {
+		fmt.Fprintf(&b, `<span class="file-facts">%.0f bytes · %.0f lines · ~%.0f tokens · %s</span>`, facts.Bytes, facts.Lines, facts.Tokens, html.EscapeString(facts.Tokenizer))
+	}
+	fmt.Fprintf(&b, `<button class="history-toggle" id="history-toggle" type="button" aria-controls="file-history" aria-expanded="false" title="Toggle edit history"><span class="sr-only" hidden>Edit history</span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.643 3.143.427 1.927A.25.25 0 0 1 .604 1.5H4.75a.25.25 0 0 1 .25.25v4.146a.25.25 0 0 1-.427.177L3.31 4.81a5.5 5.5 0 1 1-.08 6.384.75.75 0 1 1 1.21-.888 4 4 0 1 0 .055-4.662L5.57 6.72A.75.75 0 0 1 4.51 7.78L1.643 4.914a1.25 1.25 0 0 1 0-1.77ZM8 4.5a.75.75 0 0 1 .75.75v2.44l1.53.765a.75.75 0 0 1-.67 1.342l-1.945-.973A.75.75 0 0 1 7.25 8.15v-2.9A.75.75 0 0 1 8 4.5Z"/></svg></button>%s<a class="close" href="%s" aria-label="Close file and return to folder" title="Close">×</a></nav>`, identityMenuHTML(identity), html.EscapeString(parentURL))
 	fmt.Fprintf(&b, `<main class="content"><iframe src="%s" title="%s"></iframe><aside class="history" id="file-history" aria-label="Edit history" hidden><header class="history-header"><h2>Edit history</h2></header>`, html.EscapeString(iframeURL), html.EscapeString(name))
 	if !historyAvailable {
 		b.WriteString(`<p class="history-empty">Edit history is unavailable.</p>`)
@@ -199,7 +216,10 @@ func isMarkdown(filePath string) bool {
 	return ext == ".md" || ext == ".markdown"
 }
 
-func renderMarkdown(w http.ResponseWriter, source []byte) error {
+// RenderMarkdownFragment is shared by the legacy browser and dashboard. GFM
+// rendering leaves unsafe HTML and URL protocols disabled, and frontmatter is
+// always escaped rather than interpreted as HTML.
+func RenderMarkdownFragment(source []byte) (string, error) {
 	frontmatter, body, hasFrontmatter := okf.SplitFrontmatter(source)
 	if !hasFrontmatter {
 		body = source
@@ -208,20 +228,27 @@ func renderMarkdown(w http.ResponseWriter, source []byte) error {
 	var rendered bytes.Buffer
 	md := goldmark.New(goldmark.WithExtensions(extension.GFM))
 	if err := md.Convert(body, &rendered); err != nil {
-		return err
+		return "", err
 	}
 
 	var formattedFrontmatter string
 	if hasFrontmatter {
 		formattedFrontmatter = `<section class="frontmatter" aria-label="Frontmatter"><div class="frontmatter-title">Frontmatter</div><pre><code>` + html.EscapeString(strings.TrimSpace(string(frontmatter))) + `</code></pre></section>`
 	}
+	return formattedFrontmatter + rendered.String(), nil
+}
 
+func renderMarkdown(w http.ResponseWriter, source []byte) error {
+	fragment, err := RenderMarkdownFragment(source)
+	if err != nil {
+		return err
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, err := fmt.Fprintf(w, `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><base target="_top"><meta name="viewport" content="width=device-width, initial-scale=1"><style>@font-face{font-family:'Outfit';font-style:normal;font-weight:100 900;font-display:swap;src:url('/outfit.woff2') format('woff2')}:root{color-scheme:light dark}*{box-sizing:border-box}body{max-width:860px;margin:0 auto;padding:2.5rem 2rem;font:300 16px/1.65 Outfit,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#3e3453;background:#fff}h1,h2{border-bottom:1px solid #e5e0da;padding-bottom:.3em}h1,h2,h3,h4,h5,h6{line-height:1.25;margin:1.5em 0 .65em}h1:first-child{margin-top:0}a{color:#0969da}pre{overflow:auto;padding:1rem;border-radius:6px;background:#f8f6f4}code{font:85%% SFMono-Regular,Consolas,'Liberation Mono',monospace;background:#efeae6;padding:.2em .4em;border-radius:4px}pre code{background:transparent;padding:0}.frontmatter{margin:0 0 2rem;border:1px solid #e5e0da;border-radius:6px;overflow:hidden}.frontmatter-title{padding:.45rem .8rem;border-bottom:1px solid #e5e0da;background:#f8f6f4;color:rgba(62,52,83,.72);font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em}.frontmatter pre{margin:0;border-radius:0}blockquote{margin-left:0;padding-left:1em;border-left:4px solid #e5e0da;color:rgba(62,52,83,.72)}img{max-width:100%%}table{border-collapse:collapse;display:block;overflow:auto}th,td{padding:.4rem .8rem;border:1px solid #e5e0da}tr:nth-child(2n){background:#f8f6f4}hr{border:0;border-top:1px solid #e5e0da}@media(prefers-color-scheme:dark){body{color:rgba(255,253,248,.88);background:#1d1a23}a{color:#58a6ff}h1,h2,hr{border-color:#363046}pre,code,tr:nth-child(2n),.frontmatter-title{background:#252130}.frontmatter,.frontmatter-title{border-color:#363046}.frontmatter-title,blockquote{color:rgba(238,233,245,.6)}blockquote{border-color:#363046}th,td{border-color:#363046}}</style></head><body>%s%s</body></html>`, formattedFrontmatter, rendered.String())
+	_, err = fmt.Fprintf(w, `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><base target="_top"><meta name="viewport" content="width=device-width, initial-scale=1"><style>@font-face{font-family:'Outfit';font-style:normal;font-weight:100 900;font-display:swap;src:url('/outfit.woff2') format('woff2')}:root{color-scheme:light dark}*{box-sizing:border-box}body{max-width:860px;margin:0 auto;padding:2.5rem 2rem;font:300 16px/1.65 Outfit,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#3e3453;background:#fff}h1,h2{border-bottom:1px solid #e5e0da;padding-bottom:.3em}h1,h2,h3,h4,h5,h6{line-height:1.25;margin:1.5em 0 .65em}h1:first-child{margin-top:0}a{color:#0969da}pre{overflow:auto;padding:1rem;border-radius:6px;background:#f8f6f4}code{font:85%% SFMono-Regular,Consolas,'Liberation Mono',monospace;background:#efeae6;padding:.2em .4em;border-radius:4px}pre code{background:transparent;padding:0}.frontmatter{margin:0 0 2rem;border:1px solid #e5e0da;border-radius:6px;overflow:hidden}.frontmatter-title{padding:.45rem .8rem;border-bottom:1px solid #e5e0da;background:#f8f6f4;color:rgba(62,52,83,.72);font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em}.frontmatter pre{margin:0;border-radius:0}blockquote{margin-left:0;padding-left:1em;border-left:4px solid #e5e0da;color:rgba(62,52,83,.72)}img{max-width:100%%}table{border-collapse:collapse;display:block;overflow:auto}th,td{padding:.4rem .8rem;border:1px solid #e5e0da}tr:nth-child(2n){background:#f8f6f4}hr{border:0;border-top:1px solid #e5e0da}@media(prefers-color-scheme:dark){body{color:rgba(255,253,248,.88);background:#1d1a23}a{color:#58a6ff}h1,h2,hr{border-color:#363046}pre,code,tr:nth-child(2n),.frontmatter-title{background:#252130}.frontmatter,.frontmatter-title{border-color:#363046}.frontmatter-title,blockquote{color:rgba(238,233,245,.6)}blockquote{border-color:#363046}th,td{border-color:#363046}}</style></head><body>%s</body></html>`, fragment)
 	return err
 }
 
-func (p *Passkeys) renderDir(w http.ResponseWriter, fsys vfs.FileSystem, lorePath, fsPath, identity string) {
+func (p *Passkeys) renderDir(w http.ResponseWriter, fsys vfs.FileSystem, lorePath, fsPath, identity string, factsForPath ContentFactsProvider) {
 	entries, err := fsys.ReadDir(fsPath)
 	if err != nil {
 		http.Error(w, "404 not found", http.StatusNotFound)
@@ -262,10 +289,16 @@ func (p *Passkeys) renderDir(w http.ResponseWriter, fsys vfs.FileSystem, lorePat
 		href := lorePath + child
 		name := html.EscapeString(e.FileName)
 		if e.Dir {
-			fmt.Fprintf(&b, "<li><a class=\"entry dir\" href=\"%s/\" data-path=\"%s\">%s/</a></li>", html.EscapeString(href), html.EscapeString(child), name)
+			fmt.Fprintf(&b, "<li><a class=\"entry dir\" href=\"%s/\" data-path=\"%s\">%s/</a>", html.EscapeString(href), html.EscapeString(child), name)
 		} else {
-			fmt.Fprintf(&b, "<li><a class=\"entry\" href=\"%s\" data-path=\"%s\">%s</a></li>", html.EscapeString(href), html.EscapeString(child), name)
+			fmt.Fprintf(&b, "<li><a class=\"entry\" href=\"%s\" data-path=\"%s\">%s</a>", html.EscapeString(href), html.EscapeString(child), name)
 		}
+		if factsForPath != nil {
+			if facts, err := factsForPath(fsys, child); err == nil {
+				fmt.Fprintf(&b, `<span class="entry-facts">%.0f bytes · %.0f lines · ~%.0f tokens</span>`, facts.Bytes, facts.Lines, facts.Tokens)
+			}
+		}
+		b.WriteString("</li>")
 	}
 	b.WriteString(`</ul><div class="action-overlay" id="entry-actions" hidden role="dialog" aria-modal="true" aria-labelledby="action-name"><div class="action-sheet"><div class="action-name" id="action-name"></div><div class="action-hint">Double tap to open</div><div class="action-buttons"><button type="button" data-open>Open</button><button type="button" data-copy="url">Copy URL</button><button type="button" data-copy="path">Copy path<span class="action-subtext">Copy for agent</span></button></div><div class="copy-status" id="copy-status" aria-live="polite"></div></div></div>`)
 	b.WriteString(`<script>(()=>{const overlay=document.getElementById('entry-actions');const name=document.getElementById('action-name');const status=document.getElementById('copy-status');let selected=null;let tapTimer=null;function hide(){overlay.hidden=true;status.textContent='';selected=null}function show(link){selected=link;name.textContent=link.textContent;status.textContent='';overlay.hidden=false}async function copy(text,label){try{if(navigator.clipboard&&navigator.clipboard.writeText){await navigator.clipboard.writeText(text)}else{const area=document.createElement('textarea');area.value=text;area.style.position='fixed';area.style.opacity='0';document.body.appendChild(area);area.select();if(!document.execCommand('copy'))throw new Error('copy failed');area.remove()}status.textContent=label+' copied'}catch{status.textContent='Could not copy'}}document.querySelectorAll('.entry').forEach(link=>link.addEventListener('click',event=>{if(event.detail===0)return;event.preventDefault();if(tapTimer&&selected===link){clearTimeout(tapTimer);tapTimer=null;window.location.assign(link.href);return}if(tapTimer)clearTimeout(tapTimer);selected=link;tapTimer=setTimeout(()=>{tapTimer=null;show(link)},275)}));overlay.addEventListener('click',event=>{if(event.target===overlay)hide()});overlay.querySelector('[data-open]').addEventListener('click',()=>{if(selected)window.location.assign(selected.href)});overlay.querySelectorAll('[data-copy]').forEach(button=>button.addEventListener('click',()=>{if(!selected)return;const kind=button.dataset.copy;copy(kind==='url'?selected.href:selected.dataset.path,kind==='url'?'URL':'Path')}));document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!overlay.hidden)hide()})})()</script></main>` + identityMenuScript + `</body></html>`)

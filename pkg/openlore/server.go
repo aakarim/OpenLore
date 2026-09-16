@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"github.com/aakarim/go-openlore/assets"
+	"github.com/aakarim/go-openlore/internal/analytics"
 	"github.com/aakarim/go-openlore/internal/config"
 	"github.com/aakarim/go-openlore/internal/httpserver"
 	"github.com/aakarim/go-openlore/internal/legal"
@@ -59,15 +61,24 @@ type Server struct {
 	authEnforced bool
 	// grants is the registry of grant types (ro/rw + plugin-contributed like
 	// publish). A grant name in lore.json with no registered type fails startup.
-	grants   *grantRegistry
-	fs       vfs.FileSystem
-	merge    *MergeFS
-	metrics  *metrics.Metrics
-	srv      *ssh.Server
-	httpSrv  *httpserver.Server
-	passkeys *passkeys.Passkeys
-	logger   *slog.Logger
-	motd     string
+	grants             *grantRegistry
+	fs                 vfs.FileSystem
+	merge              *MergeFS
+	metrics            *metrics.Metrics
+	metricsSrv         *http.Server
+	analytics          *analytics.Service
+	analyticsCancel    context.CancelFunc
+	analyticsPluginsMu sync.Mutex
+	analyticsPlugins   map[string]struct{}
+	historyPath        string
+	historyPosition    func() HistoryPosition
+	historyCancel      context.CancelFunc
+	historyDone        chan struct{}
+	srv                *ssh.Server
+	httpSrv            *httpserver.Server
+	passkeys           *passkeys.Passkeys
+	logger             *slog.Logger
+	motd               string
 
 	onConnect    OnConnectFunc
 	onDisconnect OnDisconnectFunc
@@ -300,6 +311,21 @@ func newServerWithRoot(rootDir string, rootFS, lowerFS vfs.FileSystem, opts ...c
 		s.merge.SetRoot(lowerFS)
 	}
 
+	if cfg.Analytics.IsEnabled() {
+		analyticsCfg := cfg.Analytics
+		if !filepath.IsAbs(analyticsCfg.Dir) {
+			analyticsCfg.Dir = filepath.Join(dataDir, analyticsCfg.Dir)
+		}
+		service, analyticsErr := analytics.New(analyticsCfg, analytics.Deps{FS: s.merge})
+		if analyticsErr != nil {
+			return nil, fmt.Errorf("configuring analytics: %w", analyticsErr)
+		}
+		s.analytics = service
+		if err := s.registerPlugin(&analyticsPlugin{service: service, server: s}); err != nil {
+			return nil, err
+		}
+	}
+
 	// Enable the experimental writable substrate when the global lock is open.
 	// Fail fast if writes were requested but no backend can support them.
 	if !cfg.Readonly {
@@ -321,6 +347,30 @@ func newServerWithRoot(rootDir string, rootFS, lowerFS vfs.FileSystem, opts ...c
 			logger.Info("legacy history migrated")
 		}
 		s.writeLog = newWriteLog(s.merge, s.postCommitChain(), logger, 0)
+		blobs, blobErr := OpenBlobStore(filepath.Join(dataDir, "history", "objects"))
+		if blobErr != nil {
+			return nil, fmt.Errorf("opening history blob store: %w", blobErr)
+		}
+		commitPath := filepath.Join(dataDir, "history", "commits.jsonl")
+		s.writeLog.SetCommitJournal(commitPath, blobs, cfg.Analytics.HistoryBlobsEnabled())
+		s.historyPath = commitPath
+		if s.analytics != nil {
+			cursor, cursorErr := OpenHistoryCursor(commitPath, HistoryPosition{})
+			if cursorErr != nil {
+				return nil, fmt.Errorf("opening analytics history cursor: %w", cursorErr)
+			}
+			processor := NewScalarProcessor(cursor, blobs, IdentityStoreClassifier(s.identityStore)).(*ScalarProcessor)
+			processor.docset = (&analyticsPlugin{server: s}).docsetForPath
+			processor.SetScalarComputer(s.analytics.ComputeScalars)
+			s.analytics.AddProcessor(processor)
+			s.historyPosition = cursor.Position
+			s.analytics.SetHistoryHealth(func(ctx context.Context) (string, int64, int64, int64) {
+				position := cursor.Position()
+				lag, _ := HistoryCursorLagBytes(commitPath, position)
+				stats, _ := blobs.Stats(ctx)
+				return fmt.Sprintf("%s:%d", position.Segment, position.Offset), lag, stats.Objects, stats.Bytes
+			})
+		}
 		s.history = history
 		s.writeLog.SetHistoryRecorder(s.history)
 		s.writeLog.SetCommitState(rulesPlugin.CommitState)
@@ -422,6 +472,18 @@ func newServerWithRoot(rootDir string, rootFS, lowerFS vfs.FileSystem, opts ...c
 		s.passkeys = pk
 
 		pk.SetAuthConfig(s.auth)
+		if s.analytics != nil {
+			pk.SetLoginObserver(func(ctx context.Context, name, sessionID string) {
+				id, ok := s.identityForName(name)
+				if !ok {
+					return
+				}
+				id.Transport = "web"
+				id.SessionID = sessionID
+				s.analytics.Record(ctx, s.analyticsEvent(id, "auth.login", map[string]any{"method": "passkey"}))
+				s.analytics.Record(ctx, s.analyticsEvent(id, "session.start", nil))
+			})
+		}
 	}
 
 	if err := s.initAuth(); err != nil {
@@ -560,6 +622,9 @@ func withConn(conn, resolved Identity) Identity {
 	resolved.RemoteAddr = conn.RemoteAddr
 	resolved.User = conn.User
 	resolved.PublicKey = conn.PublicKey
+	resolved.SessionID = conn.SessionID
+	resolved.ClientSessionID = conn.SessionID
+	resolved.Transport = "ssh"
 	resolved.Principal.Source = "ssh"
 	resolved.Principal.Subject = resolved.IdentityName
 	resolved.Principal.Claims = map[string]any{"user": conn.User, "remote_addr": conn.RemoteAddr}
@@ -670,6 +735,10 @@ func (s *Server) shellHandler(next ssh.Handler) ssh.Handler {
 
 		s.metrics.ActiveSessions.Add(1)
 		s.metrics.TotalSessions.Add(1)
+		if s.analytics != nil {
+			s.analytics.Record(sess.Context(), s.analyticsEvent(id, "auth.login", map[string]any{"method": "ssh-key"}))
+			s.analytics.Record(sess.Context(), s.analyticsEvent(id, "session.start", nil))
+		}
 
 		if s.onConnect != nil {
 			s.onConnect(id)
@@ -677,6 +746,9 @@ func (s *Server) shellHandler(next ssh.Handler) ssh.Handler {
 
 		defer func() {
 			s.metrics.ActiveSessions.Add(-1)
+			if s.analytics != nil {
+				s.analytics.Record(context.Background(), s.analyticsEvent(id, "session.end", map[string]any{"duration_ms": time.Since(id.ConnectedAt).Milliseconds()}))
+			}
 			s.logger.Info("session ended",
 				"remote_addr", id.RemoteAddr,
 				"user", id.User,
@@ -697,7 +769,6 @@ func (s *Server) shellHandler(next ssh.Handler) ssh.Handler {
 		// first and cannot faithfully reconstruct shell operators such as output
 		// redirection, especially when an operator is adjacent to another word.
 		if cmdLine := sess.RawCommand(); cmdLine != "" {
-			s.metrics.TotalCommands.Add(1)
 			exitCode := sh.ExecPipeline(cmdLine, sess, sess.Stderr(), sess)
 			sess.Exit(exitCode)
 			return
@@ -845,6 +916,9 @@ func (s *Server) registerPlugin(p any) error {
 				claimed[name] = true
 			}
 		}
+	}
+	if err := s.registerAnalyticsPlugin(p); err != nil {
+		return err
 	}
 	if wp, ok := p.(WriteMiddlewareProvider); ok {
 		s.writeMW = append(s.writeMW, wp.WriteMiddleware()...)
@@ -1059,6 +1133,15 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 			id.HomeDocset, id.HomeDir = "", ""
 		}
 	}
+	attribution := cloneAttribution(id.attribution())
+	if attribution.Extra == nil {
+		attribution.Extra = map[string]string{}
+	}
+	attribution.Extra["transport"] = id.Transport
+	attribution.Extra["session_id"] = id.SessionID
+	attribution.Extra["client_session_id"] = id.ClientSessionID
+	attribution.Extra["remote_addr"] = id.RemoteAddr
+	id.Attribution = attribution
 	sessionFS := s.buildSessionFS(id)
 	// Command visibility is snapshotted, but privileged operations are narrowed
 	// again at invocation. Guest, read-scoped, and currently read-only sessions
@@ -1067,7 +1150,11 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 	canAdmin := s.authEnforced && id.policySnapshot != nil && scopeGrantsWrite(id.Scopes) && s.hasCapabilityForPolicy(*id.policySnapshot, "lore:config:edit")
 
 	sh := shell.NewShell(sessionFS)
-	if s.config.Debug {
+	sh.SetInvocationObserver(func(invocationID, parentID string) {
+		attribution.Extra["invocation_id"] = invocationID
+		attribution.Extra["parent_id"] = parentID
+	})
+	if s.config.Debug || s.analytics != nil {
 		sh.SetUnsupportedUsageHandler(func(usage shell.UnsupportedUsage) {
 			attrs := []any{"kind", usage.Kind}
 			if usage.Command != "" {
@@ -1079,9 +1166,51 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 			if id.IdentityName != "" {
 				attrs = append(attrs, "identity", id.IdentityName)
 			}
-			s.logger.Debug("unsupported shell usage", attrs...)
+			if s.config.Debug {
+				s.logger.Debug("unsupported shell usage", attrs...)
+			}
+			if s.analytics != nil {
+				eventType := "command.unknown"
+				fields := map[string]any{"command": usage.Command}
+				if usage.Kind == "unknown_syntax" {
+					eventType = "syntax.unknown"
+					fields = map[string]any{"syntax": usage.Syntax}
+				}
+				s.analytics.Record(context.Background(), s.analyticsEvent(id, eventType, fields))
+			}
 		})
 	}
+	if s.analytics != nil && s.authEnforced && id.IdentityName != "" && id.IdentityName != "guest" {
+		sh.SetAnalytics(s.analytics)
+		sh.SetAnalyticsAuthorizer(func() bool {
+			return scopeGrantsWrite(id.Scopes) && s.hasCurrentCapability(id, "lore:analytics:admin")
+		})
+	}
+	if s.analytics != nil {
+		sh.SetFacts(s.analytics.NewContentFacts(sessionFS))
+		sh.SetMetricEmitter(func(ctx context.Context, eventType string, fields map[string]any) {
+			if target, ok := fields["path"].(string); ok {
+				fields["docset"] = (&analyticsPlugin{server: s}).docsetForPath(target)
+			}
+			e := s.analyticsEvent(id, eventType, fields)
+			if invocationID, parentID, ok := analytics.InvocationFromContext(ctx); ok {
+				e.InvocationID, e.ParentID = invocationID, parentID
+			}
+			s.analytics.Record(ctx, e)
+		})
+	}
+	sh.SetCommandObserver(func(ce shell.CommandExecution) {
+		if s.metrics != nil {
+			s.metrics.TotalCommands.Add(1)
+		}
+		if s.analytics == nil {
+			return
+		}
+		e := s.analyticsEvent(id, "command.exec", map[string]any{"command": ce.Command, "argc": ce.Argc, "exit_code": ce.ExitCode, "duration_ms": ce.Duration.Milliseconds(), "bytes_out": ce.BytesOut, "pipeline_position": ce.PipelinePosition})
+		e.ID = ce.EventID
+		e.InvocationID = ce.InvocationID
+		s.analytics.Record(context.Background(), e)
+	})
 	if s.config.DefaultCwd != "" {
 		sh.SetCwd(s.config.DefaultCwd)
 	}
@@ -1143,7 +1272,24 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 		sh.SetConfigReloadBackend(s)
 	}
 	if s.history != nil {
-		sh.SetHistoryBackend(scopedHistory{store: s.history, roots: historyRoots(s.sessionDocsets(id))})
+		history := scopedHistory{store: s.history, roots: historyRoots(s.sessionDocsets(id))}
+		if canAdmin && s.writeLog != nil {
+			historyDir := filepath.Join(s.config.DataDir, "history")
+			if s.config.DataDir == "" {
+				historyDir = filepath.Join(".openlore", "history")
+			}
+			history.gcTimeout = s.config.Analytics.ShutdownTimeout
+			history.gc = func(ctx context.Context) (HistoryGCStats, error) {
+				var stats HistoryGCStats
+				err := s.writeLog.Do(ctx, func() error {
+					var err error
+					stats, err = GarbageCollectHistoryBlobs(ctx, historyDir)
+					return err
+				})
+				return stats, err
+			}
+		}
+		sh.SetHistoryBackend(history)
 	}
 	sh.SetJobBackend(s.jobs)
 	sh.SetSizeBackend(sessionSizeBackend{server: s, identity: id})
@@ -1405,6 +1551,11 @@ func (s *Server) ListenAndServe() error {
 	if err := s.validateGrants(); err != nil {
 		return err
 	}
+	if s.analytics != nil {
+		var ctx context.Context
+		ctx, s.analyticsCancel = context.WithCancel(context.Background())
+		s.analytics.Start(ctx)
+	}
 	preparedRoutes := make([]HTTPRouteRegistrar, 0, len(s.httpRoutes))
 	if s.config.HTTPPort > 0 {
 		for _, provider := range s.httpRoutes {
@@ -1414,6 +1565,7 @@ func (s *Server) ListenAndServe() error {
 			}
 			preparedRoutes = append(preparedRoutes, register)
 		}
+		preparedRoutes = append(preparedRoutes, s.dashboardRoutes(assets.Dashboard()))
 	}
 	opts := []ssh.Option{
 		wish.WithAddress(fmt.Sprintf(":%d", s.config.Port)),
@@ -1515,7 +1667,11 @@ func (s *Server) ListenAndServe() error {
 	s.srv = srv
 
 	if s.config.MetricsPort > 0 {
-		metrics.StartServer(s.config.MetricsPort, s.metrics, s.logger)
+		if s.analytics != nil && s.config.Analytics.Export.Prometheus {
+			s.metricsSrv = metrics.StartHandlerServer(s.config.MetricsPort, s.metricsExportHandler(), s.logger)
+		} else {
+			s.metricsSrv = metrics.StartServer(s.config.MetricsPort, s.metrics, s.logger)
+		}
 	}
 
 	if s.config.HTTPPort > 0 {
@@ -1586,7 +1742,7 @@ func (s *Server) ListenAndServe() error {
 				// Posture-aware bearer auth (§4): identity from a verified token
 				// (or anonymous) is placed on the request context, which the
 				// Streamable transport carries into the tool handler.
-				h := s.authMiddleware(mcpHandler, httpAuthRequired)
+				h := s.authMiddleware(s.transportMiddleware(mcpHandler, "mcp"), httpAuthRequired)
 				httpCfg.ExtraHandlers[mcpPath] = h
 				httpCfg.ExtraHandlers[mcpPath+"/"] = h
 				s.logger.Info("MCP endpoint mounted", "path", mcpPath, "http_port", s.config.HTTPPort)
@@ -1598,7 +1754,21 @@ func (s *Server) ListenAndServe() error {
 			if s.config.APIEnabled && s.config.APIPath != "" {
 				apiPath := "/" + strings.Trim(s.config.APIPath, "/")
 				api := NewMCPHTTPAPI(mcpServer, s.shellForContext)
-				httpCfg.ExtraHandlers[apiPath+"/"] = s.authMiddleware(api.Handler(apiPath), httpAuthRequired)
+				if s.analytics != nil {
+					api.sessions.onStart = func(ctx context.Context, sessionID string) {
+						id := s.identityFromContext(ctx)
+						id.Transport = "http"
+						id.SessionID, id.ClientSessionID = sessionID, sessionID
+						s.analytics.Record(ctx, s.analyticsEvent(id, "session.start", nil))
+					}
+					api.sessions.onEnd = func(ctx context.Context, sessionID string, duration time.Duration) {
+						id := s.identityFromContext(ctx)
+						id.Transport = "http"
+						id.SessionID, id.ClientSessionID = sessionID, sessionID
+						s.analytics.Record(ctx, s.analyticsEvent(id, "session.end", map[string]any{"duration_ms": duration.Milliseconds()}))
+					}
+				}
+				httpCfg.ExtraHandlers[apiPath+"/"] = s.authMiddleware(s.transportMiddleware(api.Handler(apiPath), "http"), httpAuthRequired)
 				s.logger.Info("HTTP API mounted", "path", apiPath, "http_port", s.config.HTTPPort)
 			}
 
@@ -1689,9 +1859,23 @@ func (s *Server) ListenAndServe() error {
 						}
 					}
 					return history, nil
+				}, func(fsys vfs.FileSystem, path string) (passkeys.ContentFacts, error) {
+					if s.analytics == nil {
+						return passkeys.ContentFacts{}, fmt.Errorf("analytics disabled")
+					}
+					facts, err := s.analytics.NewContentFacts(fsys).Stat(context.Background(), path)
+					return passkeys.ContentFacts{Bytes: facts.Scalars["bytes"], Lines: facts.Scalars["lines"], Tokens: facts.Scalars["tokens"], Tokenizer: facts.Tokenizer}, err
 				})
 
 				cmds.PublishBaseURL = baseURL + lorePath
+			}
+
+			if frontend := assets.Dashboard(); frontend != nil {
+				// Preserve published file links, while replacing the primary
+				// browser rather than adding a second competing interface.
+				lorePath := s.dashboardLorePath()
+				httpCfg.ExtraHandlers[lorePath] = dashboardShell(frontend)
+				httpCfg.ExtraHandlers[lorePath+"/"] = s.dashboardLoreHandler(frontend)
 			}
 
 			httpSrv, err := httpserver.New(webFS, httpCfg)
@@ -1704,7 +1888,57 @@ func (s *Server) ListenAndServe() error {
 	}
 
 	s.logger.Info("SSH server starting", "port", s.config.Port)
+	s.startHistoryMaintenance()
 	return s.srv.ListenAndServe()
+}
+
+func (s *Server) startHistoryMaintenance() {
+	if s.historyPath == "" || s.historyCancel != nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s.historyCancel = cancel
+	s.historyDone = make(chan struct{})
+	go func() {
+		defer close(s.historyDone)
+		maintain := func() {
+			var protected []HistoryPosition
+			if s.historyPosition != nil {
+				protected = append(protected, s.historyPosition())
+			}
+			if err := RotateCommitJournal(ctx, s.historyPath, time.Now().UTC(), s.config.Analytics.History.Retention, protected...); err != nil && !errors.Is(err, context.Canceled) {
+				s.logger.Warn("history journal maintenance failed", "err", err)
+			}
+		}
+		maintain()
+		for {
+			now := time.Now().UTC()
+			timer := time.NewTimer(now.Truncate(24 * time.Hour).Add(24 * time.Hour).Sub(now))
+			select {
+			case <-timer.C:
+				maintain()
+			case <-ctx.Done():
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				return
+			}
+		}
+	}()
+}
+
+func (s *Server) metricsExportHandler() http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", s.analytics.Aggregator())
+	mux.HandleFunc("/metrics.json", func(w http.ResponseWriter, r *http.Request) {
+		request := r.Clone(r.Context())
+		request.URL.Path = "/metrics"
+		s.metrics.Handler().ServeHTTP(w, request)
+	})
+	return mux
 }
 
 // Shutdown gracefully shuts down the server.
@@ -1719,15 +1953,44 @@ func (s *Server) Shutdown(ctx context.Context) error {
 			s.logger.Warn("shutdown: async jobs still running after drain timeout", "timeout", jobDrainTimeout)
 		}
 	}
-	// Stop accepting writes and drain the log so every acknowledged mutation
-	// commits before we exit (in-flight + queued entries still get their reply).
+	if s.httpSrv != nil {
+		_ = s.httpSrv.Shutdown(ctx)
+	}
+	if s.metricsSrv != nil {
+		_ = s.metricsSrv.Shutdown(ctx)
+	}
+	var transportErr error
+	if s.srv != nil {
+		transportErr = s.srv.Shutdown(ctx)
+	}
+	// Transports no longer accept commands. Drain writes next, then analytics
+	// last so every acknowledged command and commit can still emit.
+	if s.historyCancel != nil {
+		s.historyCancel()
+		select {
+		case <-s.historyDone:
+		case <-ctx.Done():
+			s.logger.Warn("shutdown: history maintenance did not stop before deadline", "err", ctx.Err())
+		}
+	}
 	if s.writeLog != nil {
 		if err := s.writeLog.Close(ctx); err != nil {
 			s.logger.Warn("shutdown: write log did not drain before deadline", "err", err)
 		}
 	}
-	if s.srv == nil {
-		return nil
+	if s.analytics != nil {
+		shutdownTimeout := s.config.Analytics.ShutdownTimeout
+		if shutdownTimeout <= 0 {
+			shutdownTimeout = 10 * time.Second
+		}
+		analyticsCtx, cancel := context.WithTimeout(ctx, shutdownTimeout)
+		if err := s.analytics.Close(analyticsCtx); err != nil {
+			s.logger.Warn("shutdown: analytics did not drain before deadline", "err", err)
+		}
+		cancel()
+		if s.analyticsCancel != nil {
+			s.analyticsCancel()
+		}
 	}
-	return s.srv.Shutdown(ctx)
+	return transportErr
 }

@@ -391,6 +391,31 @@ func TestWriteLog_PostCommitRunsWithActorAndDoesNotBlockSubmit(t *testing.T) {
 	}
 }
 
+func TestWriteLogSnapshotsAttributionBeforeAsyncPostCommit(t *testing.T) {
+	fs := &wlRecordingFS{}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	seen := make(chan string, 1)
+	l := newWriteLog(fs, func(_ context.Context, info CommitInfo) error {
+		close(started)
+		<-release
+		seen <- info.Attribution.Extra["invocation_id"]
+		return nil
+	}, nil, 1)
+	defer l.Close(context.Background())
+
+	attribution := Attribution{Principal: "alice", Extra: map[string]string{"invocation_id": "original"}}
+	if _, err := l.Submit(context.Background(), attribution, writeCS("/a")); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	attribution.Extra["invocation_id"] = "next"
+	close(release)
+	if got := <-seen; got != "original" {
+		t.Fatalf("post-commit attribution = %q, want immutable snapshot", got)
+	}
+}
+
 func TestWriteLogCommitStateRunsBeforeSuccessAndSurfacesFailure(t *testing.T) {
 	fs := &wlRecordingFS{}
 	stateErr := errors.New("state disk full")
@@ -429,7 +454,7 @@ func TestWriteLog_RecorderFailureDoesNotTurnCommittedWriteIntoFailure(t *testing
 	}
 }
 
-func TestWriteLog_CommittedDeletePurgesHistoryShard(t *testing.T) {
+func TestWriteLog_CommittedDeleteAdvancesHistoryHead(t *testing.T) {
 	fs := &wlRecordingFS{}
 	store := NewJSONLHistoryStore(t.TempDir())
 	l := newWriteLog(fs, nil, nil, 1)
@@ -445,8 +470,12 @@ func TestWriteLog_CommittedDeletePurgesHistoryShard(t *testing.T) {
 	if _, err := l.Submit(context.Background(), Attribution{Principal: "alice"}, vfs.ChangeSet{Target: "/docs/note.md", Action: vfs.ChangeActionRemove}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(store.filePath("/docs/note.md")); !os.IsNotExist(err) {
-		t.Fatalf("committed delete left history shard: %v", err)
+	page, err := store.Query(context.Background(), HistoryQuery{FileKey: "/docs/note.md", Roots: []string{"/docs"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Records) != 2 || page.Records[0].Action != string(vfs.ChangeActionRemove) || page.Records[0].CommitID == "" {
+		t.Fatalf("delete did not become the per-path history head: %#v", page.Records)
 	}
 }
 

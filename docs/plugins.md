@@ -14,6 +14,12 @@ commands continue to own the user-facing shell surface.
 | `ValidatorProvider` | Checks run by `lore validate` |
 | `MetaExtenderProvider` | Fields added to `lore meta` records |
 | `PluginInfoProvider` | Plugin name and semantic version logged at boot |
+| `MetricsEmitterProvider` | Namespaced `plugin.<name>.*` analytics events |
+| `MetricsSubscriberProvider` | Persisted analytics event consumers |
+| `MetricsProcessorProvider` | Post-persistence derived-event processors |
+| `ContentScalarProviderProvider` | Content-derived scalar values |
+| `TokenizerProvider` | Exact tokenizer replacing the built-in approximation |
+| `AggregationProvider` | Analytics aggregations shown in the CLI, API, and dashboard |
 
 Built-in plugins include `shellexec`, `inbox`, and `okf`. Go consumers register
 additional plugins through `Server.RegisterPlugin`.
@@ -23,6 +29,21 @@ Admission middleware receives an immutable `WriteOp`. It **must** use
 the first leaf is not representative. Construct operations with `NewWriteOp`.
 Middleware that defers an operation uses `op.Pending(ref)`, which captures the
 complete immutable batch for persistence and later replay.
+
+Analytics-capable plugins must also implement `PluginInfoProvider`; its stable
+lowercase name defines their event and aggregation namespace. Emitters receive
+an `AnalyticsSink` during registration. Subscribers and processors run in the
+post-persistence pipeline, not on the command path. Scalar providers are used
+for both live content facts and history-derived `doc.scalars`; changing a
+tokenizer takes effect when `analytics replay` recomputes history.
+
+Plugin analytics events must be emitted through the sink supplied to
+`SetAnalyticsSink`, including events produced by plugin commands. Calling the
+shell's built-in `EmitMetric` seam directly is reserved for core commands and
+does not apply the plugin namespace. Derived processor events are forced into
+the same namespace. Scalar providers may add new flat keys,
+but the built-in `bytes`, `lines`, `words`, and `tokens` keys are reserved;
+plugins replace token counting through `TokenizerProvider` instead.
 
 ```text
 INFO plugin registered name=shellexec version=1.0.0

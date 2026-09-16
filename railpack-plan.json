@@ -57,6 +57,26 @@
       }
     },
     {
+      "commands": [
+        {
+          "cmd": "sh -c 'nix --extra-experimental-features '\"'\"'nix-command flakes'\"'\"' develop --command make dashboard-build'",
+          "customName": "build dashboard with the Nix-pinned Node toolchain"
+        }
+      ],
+      "inputs": [
+        {
+          "image": "nixos/nix:2.35.2"
+        },
+        {
+          "include": [
+            "."
+          ],
+          "local": true
+        }
+      ],
+      "name": "dashboard"
+    },
+    {
       "caches": [
         "go-build"
       ],
@@ -108,6 +128,12 @@
       "inputs": [
         {
           "step": "install"
+        },
+        {
+          "include": [
+            "assets/dashboard/dist"
+          ],
+          "step": "dashboard"
         },
         {
           "include": [

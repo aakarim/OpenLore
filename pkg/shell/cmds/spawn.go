@@ -1,12 +1,14 @@
 package cmds
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"path"
 	"strings"
 	"time"
 
+	"github.com/aakarim/go-openlore/internal/analytics"
 	"github.com/aakarim/go-openlore/pkg/openlore/meta"
 	"github.com/aakarim/go-openlore/pkg/openlore/validation"
 	"github.com/aakarim/go-openlore/pkg/vfs"
@@ -175,13 +177,17 @@ func (c *frozenContext) ActionAllowed(Action) bool { return true }
 func (c *frozenContext) WriteConflictPolicy(string) vfs.WriteConflictPolicy {
 	return c.policy
 }
-func (c *frozenContext) Docsets() []DocsetInfo              { return nil }
-func (c *frozenContext) SkillsManagementEnabled() bool      { return false }
-func (c *frozenContext) SkillsRemoteTimeout() time.Duration { return 0 }
-func (c *frozenContext) SkillsRemoteMaxBytes() int64        { return 0 }
-func (c *frozenContext) PublishTargets() []PublishTarget    { return nil }
-func (c *frozenContext) MetaExtenders() []meta.Extender     { return nil }
-func (c *frozenContext) MetaFilters() []meta.Filter         { return nil }
-func (c *frozenContext) Validators() []validation.Validator { return nil }
+func (c *frozenContext) Docsets() []DocsetInfo                              { return nil }
+func (c *frozenContext) SkillsManagementEnabled() bool                      { return false }
+func (c *frozenContext) SkillsRemoteTimeout() time.Duration                 { return 0 }
+func (c *frozenContext) SkillsRemoteMaxBytes() int64                        { return 0 }
+func (c *frozenContext) PublishTargets() []PublishTarget                    { return nil }
+func (c *frozenContext) MetaExtenders() []meta.Extender                     { return nil }
+func (c *frozenContext) MetaFilters() []meta.Filter                         { return nil }
+func (c *frozenContext) Validators() []validation.Validator                 { return nil }
+func (c *frozenContext) Analytics() *analytics.Service                      { return nil }
+func (c *frozenContext) Facts() analytics.ContentFacts                      { return nil }
+func (c *frozenContext) EmitMetric(context.Context, string, map[string]any) {}
+func (c *frozenContext) MetricsEnabled() bool                               { return false }
 
 var _ CmdContext = (*frozenContext)(nil)

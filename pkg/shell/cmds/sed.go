@@ -53,7 +53,8 @@ func CmdSed(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io
 		for _, f := range files {
 			// Read the raw base bytes so the commit can compare-and-swap
 			// against exactly what we transformed (true CAS under hash policy).
-			orig, rerr := ctx.FS().ReadFile(ctx.Resolve(f))
+			resolved := ctx.Resolve(f)
+			orig, rerr := ctx.FS().ReadFile(resolved)
 			if rerr != nil {
 				fmt.Fprintf(errW, "sed: %s: %s\n", f, rerr)
 				code = 1
@@ -61,7 +62,7 @@ func CmdSed(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io
 			}
 			lines := splitLinesForSed(orig)
 			var buf bytes.Buffer
-			applySedCommands(cmds, lines, quiet, &buf)
+			applySedCommands(cmds, lines, quiet, &buf, nil)
 			if c := WriteFileCASMsg(ctx, errW, "sed", f, buf.Bytes(), orig); c != 0 {
 				code = c
 			}
@@ -69,13 +70,74 @@ func CmdSed(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io
 		return code
 	}
 
-	lines, code := ReadInputLines(ctx, files, stdin, errW, "sed")
+	lines, metricFiles, code := readSedInput(ctx, files, stdin, errW)
 	if code != 0 {
 		return code
 	}
 
-	applySedCommands(cmds, lines, quiet, w)
+	var printedLines []int
+	var recordPrint func(int)
+	if quiet && metricsEnabled(ctx) {
+		recordPrint = func(line int) { printedLines = append(printedLines, line) }
+	}
+	applySedCommands(cmds, lines, quiet, w, recordPrint)
+	emitSedReads(ctx, metricFiles, quiet, printedLines)
 	return 0
+}
+
+type sedMetricFile struct {
+	path       string
+	content    []byte
+	lineOffset int
+	lineCount  int
+}
+
+func readSedInput(ctx CmdContext, files []string, stdin io.Reader, errW io.Writer) ([]string, []sedMetricFile, int) {
+	if len(files) == 0 || !metricsEnabled(ctx) {
+		lines, code := ReadInputLines(ctx, files, stdin, errW, "sed")
+		return lines, nil, code
+	}
+	var lines []string
+	var tracked []sedMetricFile
+	for _, file := range files {
+		resolved := ctx.Resolve(file)
+		content, err := ctx.FS().ReadFile(resolved)
+		if err != nil {
+			fmt.Fprintf(errW, "sed: %s: %s\n", file, err)
+			return nil, nil, 1
+		}
+		fileLines := splitLinesForInput(content)
+		tracked = append(tracked, sedMetricFile{path: resolved, content: content, lineOffset: len(lines), lineCount: len(fileLines)})
+		lines = append(lines, fileLines...)
+	}
+	return lines, tracked, 0
+}
+
+func splitLinesForInput(content []byte) []string {
+	text := string(content)
+	if strings.HasSuffix(text, "\n") {
+		text = text[:len(text)-1]
+	}
+	return strings.Split(text, "\n")
+}
+
+func emitSedReads(ctx CmdContext, files []sedMetricFile, quiet bool, printedLines []int) {
+	for _, file := range files {
+		if !quiet {
+			emitDocMetric(ctx, "doc.read", file.path, file.content, fullLineRange(file.content))
+			continue
+		}
+		var selected []int
+		seen := make([]bool, file.lineCount)
+		for _, globalLine := range printedLines {
+			local := globalLine - file.lineOffset - 1
+			if local >= 0 && local < file.lineCount && !seen[local] {
+				selected = append(selected, local+1)
+				seen[local] = true
+			}
+		}
+		emitDocLineMetrics(ctx, "doc.read", file.path, file.content, selected)
+	}
 }
 
 // splitLinesForSed splits raw file bytes into lines using the same convention
@@ -94,7 +156,7 @@ func splitLinesForSed(content []byte) []string {
 
 // applySedCommands runs the parsed sed commands over lines, writing the result
 // to w. It is shared by streaming and in-place (`-i`) modes.
-func applySedCommands(cmds []sedCmd, lines []string, quiet bool, w io.Writer) {
+func applySedCommands(cmds []sedCmd, lines []string, quiet bool, w io.Writer, onPrint func(int)) {
 	totalLines := len(lines)
 	for lineNum, line := range lines {
 		deleted := false
@@ -112,6 +174,9 @@ func applySedCommands(cmds []sedCmd, lines []string, quiet bool, w io.Writer) {
 			case 'p':
 				fmt.Fprintln(w, line)
 				printed = true
+				if onPrint != nil {
+					onPrint(lineNum + 1)
+				}
 			case 's':
 				var re *regexp.Regexp
 				pattern := basicRegexpToRE2(cmd.pattern)

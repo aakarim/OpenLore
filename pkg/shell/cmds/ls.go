@@ -1,13 +1,19 @@
 package cmds
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"path"
 )
 
 func CmdLs(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.Reader) int {
+	factsProvider := analyticsFacts(ctx)
 	longFormat := false
 	allFlag := false
+	statsFlag := false
+	jsonFlag := false
 	var targets []string
 	for _, a := range args {
 		switch a {
@@ -18,6 +24,10 @@ func CmdLs(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.
 			allFlag = true
 		case "-a":
 			allFlag = true
+		case "--stats":
+			statsFlag = true
+		case "--json":
+			jsonFlag = true
 		default:
 			targets = append(targets, a)
 		}
@@ -40,7 +50,25 @@ func CmdLs(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.
 				continue
 			}
 			if longFormat {
-				PrintLong(w, f)
+				if statsFlag && factsProvider != nil {
+					facts, factErr := factsProvider.Stat(context.Background(), p)
+					if factErr != nil {
+						fmt.Fprintf(errW, "ls: %s: %s\n", target, factErr)
+						exitCode = 1
+						continue
+					}
+					fmt.Fprintf(w, "%s %8d %8.0f %8.0f %s\n", f.Mode(), f.Size(), facts.Scalars["lines"], facts.Scalars["tokens"], f.Name())
+				} else {
+					PrintLong(w, f)
+				}
+			} else if jsonFlag && factsProvider != nil {
+				facts, factErr := factsProvider.Stat(context.Background(), p)
+				if factErr != nil {
+					fmt.Fprintf(errW, "ls: %s: %s\n", target, factErr)
+					exitCode = 1
+					continue
+				}
+				_ = json.NewEncoder(w).Encode(facts)
 			} else {
 				fmt.Fprintln(w, f.Name())
 			}
@@ -52,8 +80,27 @@ func CmdLs(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.
 		}
 		for _, e := range entries {
 			ei := e
-			if longFormat {
-				PrintLong(w, &ei)
+			child := path.Join(p, e.FileName)
+			if jsonFlag && factsProvider != nil {
+				facts, factErr := factsProvider.Stat(context.Background(), child)
+				if factErr != nil {
+					fmt.Fprintf(errW, "ls: %s: %s\n", child, factErr)
+					exitCode = 1
+					continue
+				}
+				_ = json.NewEncoder(w).Encode(facts)
+			} else if longFormat {
+				if statsFlag && factsProvider != nil {
+					facts, factErr := factsProvider.Stat(context.Background(), child)
+					if factErr != nil {
+						fmt.Fprintf(errW, "ls: %s: %s\n", child, factErr)
+						exitCode = 1
+						continue
+					}
+					fmt.Fprintf(w, "%s %8d %8.0f %8.0f %s\n", ei.Mode(), ei.FileSize, facts.Scalars["lines"], facts.Scalars["tokens"], ei.Name())
+				} else {
+					PrintLong(w, &ei)
+				}
 			} else {
 				name := e.FileName
 				if e.Dir {
