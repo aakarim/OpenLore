@@ -1,8 +1,10 @@
 package cmds
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"sort"
 	"strings"
 )
@@ -127,6 +129,12 @@ func cmdLoreDocsets(ctx CmdContext, args []string, w io.Writer, errW io.Writer, 
 			grant = "ro"
 		}
 		var attrs []string
+		for _, p := range d.Paths {
+			if _, err := ctx.FS().Stat(p); errors.Is(err, fs.ErrNotExist) {
+				attrs = append(attrs, "absent")
+				break
+			}
+		}
 		if d.Home {
 			attrs = append(attrs, "home")
 		}

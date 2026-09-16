@@ -2,8 +2,10 @@ package cmds
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"path"
 	"strings"
 
@@ -113,6 +115,9 @@ func runMetaFilter(ctx CmdContext, name, narrow string, pathSet bool, w, errW io
 		seenRoots[scan] = true
 		info, err := ctx.FS().Stat(scan)
 		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
 			fmt.Fprintf(errW, "lore meta: %s\n", err)
 			return 1
 		}

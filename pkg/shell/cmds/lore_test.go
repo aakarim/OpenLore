@@ -2,6 +2,7 @@ package cmds_test
 
 import (
 	"bytes"
+	"io/fs"
 	"strings"
 	"testing"
 
@@ -73,6 +74,27 @@ func TestLoreDocsets_Table(t *testing.T) {
 	assertRow(lines[2], "public", "ro", "alias", "/public", "/docs/public")
 	assertRow(lines[3], "backend", "rw", "agent-skills", "/docs/backend,/docs/api", "-")
 	assertRow(lines[4], "home", "rw", "home,inbox", "/home/backend", "-")
+}
+
+func TestLoreDocsets_MarksMissingRootAbsent(t *testing.T) {
+	fsys := statErrorFS{mapFS: testFS(), target: "/missing", err: fs.ErrNotExist}
+	sh := shell.NewShell(fsys)
+	sh.SetDocsets([]cmds.DocsetInfo{
+		{Name: "existing", Paths: []string{"/docs"}, Grant: "ro"},
+		{Name: "missing", Paths: []string{"/missing"}, Grant: "rw", Inbox: true},
+	})
+	var out, errOut bytes.Buffer
+	code := sh.ExecPipeline("lore docsets", &out, &errOut, nil)
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, errOut.String())
+	}
+	lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
+	if fields := strings.Fields(lines[1]); len(fields) != 5 || fields[2] != "-" {
+		t.Fatalf("existing docset row = %q, want no absent attribute", lines[1])
+	}
+	if fields := strings.Fields(lines[2]); len(fields) != 5 || fields[2] != "absent,inbox" {
+		t.Fatalf("missing docset row = %q, want absent,inbox attributes", lines[2])
+	}
 }
 
 func TestLoreDocsets_EmptyShowsHeaderOnly(t *testing.T) {
