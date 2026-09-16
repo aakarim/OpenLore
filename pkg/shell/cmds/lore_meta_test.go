@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"io/fs"
 	"strings"
 	"testing"
 
@@ -185,7 +184,7 @@ func (f statErrorFS) Stat(p string) (*vfs.FileInfo, error) {
 }
 
 func TestLoreMetaFilterSkipsMissingRoot(t *testing.T) {
-	fsys := statErrorFS{mapFS: metaTreeFS(), target: "/missing", err: fs.ErrNotExist}
+	fsys := statErrorFS{mapFS: metaTreeFS(), target: "/missing", err: vfs.ErrNotFound("/missing")}
 	sh := shell.NewShell(fsys)
 	sh.SetMetaFilters([]meta.Filter{{
 		Name:          "all",

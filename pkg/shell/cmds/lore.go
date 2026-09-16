@@ -130,9 +130,14 @@ func cmdLoreDocsets(ctx CmdContext, args []string, w io.Writer, errW io.Writer, 
 		}
 		var attrs []string
 		for _, p := range d.Paths {
-			if _, err := ctx.FS().Stat(p); errors.Is(err, fs.ErrNotExist) {
+			_, err := ctx.FS().Stat(p)
+			if errors.Is(err, fs.ErrNotExist) {
 				attrs = append(attrs, "absent")
 				break
+			}
+			if err != nil {
+				fmt.Fprintf(errW, "lore docsets: %s\n", err)
+				return 1
 			}
 		}
 		if d.Home {

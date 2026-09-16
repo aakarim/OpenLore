@@ -2,19 +2,26 @@ package cmds_test
 
 import (
 	"bytes"
-	"io/fs"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/aakarim/go-openlore/pkg/openlore/validation"
 	"github.com/aakarim/go-openlore/pkg/shell"
 	"github.com/aakarim/go-openlore/pkg/shell/cmds"
+	"github.com/aakarim/go-openlore/pkg/vfs"
 )
 
 // runLore executes a command line against a shell seeded with the given docsets.
 func runLore(t *testing.T, docsets []cmds.DocsetInfo, cmd string) (string, string, int) {
 	t.Helper()
-	sh := shell.NewShell(testFS())
+	fsys := testFS()
+	for _, docset := range docsets {
+		for _, p := range docset.Paths {
+			fsys.AddDir(p)
+		}
+	}
+	sh := shell.NewShell(fsys)
 	sh.SetDocsets(docsets)
 	var out, errOut bytes.Buffer
 	code := sh.ExecPipeline(cmd, &out, &errOut, nil)
@@ -77,7 +84,7 @@ func TestLoreDocsets_Table(t *testing.T) {
 }
 
 func TestLoreDocsets_MarksMissingRootAbsent(t *testing.T) {
-	fsys := statErrorFS{mapFS: testFS(), target: "/missing", err: fs.ErrNotExist}
+	fsys := statErrorFS{mapFS: testFS(), target: "/missing", err: vfs.ErrNotFound("/missing")}
 	sh := shell.NewShell(fsys)
 	sh.SetDocsets([]cmds.DocsetInfo{
 		{Name: "existing", Paths: []string{"/docs"}, Grant: "ro"},
@@ -94,6 +101,21 @@ func TestLoreDocsets_MarksMissingRootAbsent(t *testing.T) {
 	}
 	if fields := strings.Fields(lines[2]); len(fields) != 5 || fields[2] != "absent,inbox" {
 		t.Fatalf("missing docset row = %q, want absent,inbox attributes", lines[2])
+	}
+}
+
+func TestLoreDocsets_ReportsRootStatError(t *testing.T) {
+	statErr := errors.New("storage unavailable")
+	fsys := statErrorFS{mapFS: testFS(), target: "/broken", err: statErr}
+	sh := shell.NewShell(fsys)
+	sh.SetDocsets([]cmds.DocsetInfo{{Name: "broken", Paths: []string{"/broken"}, Grant: "ro"}})
+	var out, errOut bytes.Buffer
+	code := sh.ExecPipeline("lore docsets", &out, &errOut, nil)
+	if code != 1 {
+		t.Fatalf("exit=%d, want 1", code)
+	}
+	if out.String() != "" || !strings.Contains(errOut.String(), statErr.Error()) {
+		t.Fatalf("stdout=%q stderr=%q", out.String(), errOut.String())
 	}
 }
 
