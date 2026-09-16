@@ -1,7 +1,9 @@
 package analytics
 
 import (
+	"bytes"
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -156,6 +158,31 @@ func TestLeastUsedLinesRejectsDirectory(t *testing.T) {
 	facts := NewContentFacts(testFS{"/docs/a.md": []byte("one\n")})
 	if _, err := leastUsedLines(context.Background(), nil, facts, Params{Extra: map[string]string{"path": "/docs"}}); err == nil {
 		t.Fatal("directory path was accepted")
+	}
+}
+
+func TestUsedLinesBoundsNewlineHeavyFiles(t *testing.T) {
+	log, err := OpenEventLog(t.TempDir(), LogOptions{Compress: "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts := NewContentFacts(testFS{
+		"/at-limit":   bytes.Repeat([]byte{'\n'}, 100_000),
+		"/over-limit": bytes.Repeat([]byte{'\n'}, 100_001),
+	})
+	for _, most := range []bool{false, true} {
+		table, err := usedLines(context.Background(), log, facts, Params{Extra: map[string]string{"path": "/at-limit"}}, most)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if table.Total != 1 || len(table.Rows) != 1 || table.Rows[0][1] != 1 || table.Rows[0][2] != 100_000 || table.Rows[0][4] != 0 {
+			t.Fatalf("most=%v: expected complete at-limit range, got %#v", most, table)
+		}
+		// A nil source also proves rejection happens before any event scan.
+		table, err = usedLines(context.Background(), nil, facts, Params{Limit: 1, Extra: map[string]string{"path": "/over-limit"}}, most)
+		if err == nil || !strings.Contains(err.Error(), "exceeding 100000 lines") || len(table.Rows) != 0 {
+			t.Fatalf("most=%v: expected explicit rejection, not truncation: %#v, %v", most, table, err)
+		}
 	}
 }
 

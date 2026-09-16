@@ -186,3 +186,34 @@ test("expired session clears the previously rendered document", async () => {
     screen.queryByRole("heading", { name: "Start" }),
   ).not.toBeInTheDocument();
 });
+
+test("an aggregation-only refresh recovers an expired session", async () => {
+  history.replaceState(null, "", "/dashboard/?view=analytics&path=/&tab=gaps");
+  const fetch = mockAPI();
+  const original = fetch.getMockImplementation()!;
+  render(<App />);
+  const user = userEvent.setup();
+  await screen.findByRole("heading", { name: "Top search queries" });
+  await screen.findAllByRole("cell", { name: "/guide/start.md" });
+  fetch.mockClear();
+  fetch.mockImplementation((input, init) =>
+    /\/analytics\/aggregations\/|\/dashboard\/api\/session$/.test(String(input))
+      ? Promise.resolve(new Response("Session expired", { status: 401 }))
+      : original(input, init),
+  );
+  await user.click(screen.getByRole("button", { name: "Refresh analytics" }));
+  expect(
+    await screen.findByRole("heading", { name: "Sign in to OpenLore" }),
+  ).toBeVisible();
+  expect(
+    screen.queryByRole("complementary", { name: "Knowledge tree" }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole("heading", { name: "Top search queries" }),
+  ).not.toBeInTheDocument();
+  expect(
+    fetch.mock.calls.some(([url]) =>
+      String(url).endsWith("/dashboard/api/session"),
+    ),
+  ).toBe(true);
+});

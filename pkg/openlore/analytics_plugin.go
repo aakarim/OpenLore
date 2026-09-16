@@ -101,7 +101,13 @@ func (p *analyticsPlugin) PrepareHTTPRoutes(s *Server) (HTTPRouteRegistrar, erro
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				setPrivateAnalyticsHeaders(w)
 				id, ok := p.requestIdentity(r)
-				if !ok || !s.hasReadableAnalyticsDocset(id) {
+				if !ok {
+					// Let dashboard clients recover expired sessions; keep resource
+					// permission failures indistinguishable from missing resources.
+					http.Error(w, "authentication required", http.StatusUnauthorized)
+					return
+				}
+				if !s.hasReadableAnalyticsDocset(id) {
 					http.NotFound(w, r)
 					return
 				}

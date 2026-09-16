@@ -431,6 +431,34 @@ func TestAnalyticsRoutesAreAbsentWithoutEnforcedAuth(t *testing.T) {
 	}
 }
 
+func TestAnalyticsAuthenticationFailureDiffersFromPermissionDenial(t *testing.T) {
+	s, mux, token := newDashboardTestServer(t)
+	register, err := (&analyticsPlugin{}).PrepareHTTPRoutes(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	register(mux)
+	// Keep the identity valid but remove its resource grant.
+	ds := s.auth.Docsets["public"]
+	delete(ds.Access.Allow, "reader")
+	s.auth.Docsets["public"] = ds
+	for _, endpoint := range []string{"/analytics/", "/analytics/facts", "/analytics/aggregations", "/analytics/aggregations/top-commands"} {
+		for _, supplied := range []string{"", "invalid", token} {
+			want := http.StatusUnauthorized
+			if supplied == token {
+				want = http.StatusNotFound
+			}
+			w := dashboardRequest(mux, "GET", endpoint, supplied)
+			if w.Code != want {
+				t.Fatalf("%s: got %d, want %d", endpoint, w.Code, want)
+			}
+			if w.Header().Get("Cache-Control") != "private, no-store" || w.Header().Get("Vary") != "Cookie, Authorization" {
+				t.Fatalf("failure response must remain private: %v", w.Header())
+			}
+		}
+	}
+}
+
 func TestAnalyticsDocsetUsesConfiguredPathMapping(t *testing.T) {
 	s := &Server{auth: &config.AuthConfig{Docsets: map[string]config.DocsetSpec{
 		"handbook": {Paths: []config.PathMapping{{Source: "/source", Display: "/company/docs"}}, Aliases: []string{"/legacy"}},

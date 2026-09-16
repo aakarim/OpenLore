@@ -51,8 +51,11 @@ async function absoluteRequest<T>(
     signal,
     headers: { Accept: "application/json" },
   });
-  if (!response.ok)
+  if (!response.ok) {
+    if (response.status === 401 && !signal?.aborted)
+      dispatchEvent(new Event("dashboard-auth-expired"));
     throw new APIError(`Request failed (${response.status})`, response.status);
+  }
   return response.json() as Promise<T>;
 }
 const query = (params: Record<string, string | number>) =>

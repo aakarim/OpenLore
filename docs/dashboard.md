@@ -14,6 +14,10 @@ dashboard data, even when its shell/API otherwise allows anonymous access.
 The dashboard has dedicated GET endpoints, not a wrapper around `/api/shell`.
 It cannot write files, change permissions, or restore revisions.
 
+On authenticated instances, missing or invalid credentials return 401 from
+dashboard and analytics data endpoints so the UI can recover expired sessions.
+Authenticated resource permission denials remain 404.
+
 Files and current content facts use the same identity-scoped canonical
 filesystem as other transports. A grant on a parent docset does not cross into
 a separately governed nested docset. Policy is resolved again on each request;
@@ -60,6 +64,10 @@ characters, and context estimates. **Time range** controls recorded activity,
 not those facts or Access. No recorded read in a range means exactly that; it
 does not prove a file has never been used. Period totals can include activity
 on files since deleted, while current-file rankings describe the live corpus.
+
+Most-used and least-used line rankings support files up to 100,000 lines.
+Larger files return an explicit error rather than a partial ranking, bounding
+per-request line-tracking memory even for newline-heavy content.
 
 Analytics settings are display preferences. Selecting four or six characters
 per token changes the estimate, not the backend's configured tokenizer or

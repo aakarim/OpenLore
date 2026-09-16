@@ -346,6 +346,10 @@ func mostUsedLines(ctx context.Context, src EventSource, facts ContentFacts, p P
 	return usedLines(ctx, src, facts, p, true)
 }
 
+// Bound both the per-line working set and the worst-case number of result
+// groups. A byte-size limit alone cannot bound newline-heavy files adequately.
+const maxLineUsageLines = 100_000
+
 func usedLines(ctx context.Context, src EventSource, facts ContentFacts, p Params, most bool) (Table, error) {
 	filePath := p.Extra["path"]
 	if filePath == "" {
@@ -357,6 +361,9 @@ func usedLines(ctx context.Context, src EventSource, facts ContentFacts, p Param
 	}
 	if current.ContentHash == "" {
 		return Table{}, fmt.Errorf("path must identify a file")
+	}
+	if current.Scalars["lines"] > maxLineUsageLines {
+		return Table{}, fmt.Errorf("line usage is unavailable for files exceeding %d lines", maxLineUsageLines)
 	}
 	lineCount := int(current.Scalars["lines"])
 	type lineUsage struct {
