@@ -23,10 +23,10 @@ import (
 // the lore browser. History is best-effort: deployments without a history
 // provider still render the file view normally.
 type FileHistoryEntry struct {
-	Time        time.Time
-	Attribution string
-	Action      string
-	Hash        string
+	Time        time.Time `json:"time"`
+	Attribution string    `json:"attribution"`
+	Action      string    `json:"action"`
+	Hash        string    `json:"hash"`
 }
 
 type FileHistoryProvider func(identity, filePath string) ([]FileHistoryEntry, error)
@@ -216,7 +216,10 @@ func isMarkdown(filePath string) bool {
 	return ext == ".md" || ext == ".markdown"
 }
 
-func renderMarkdown(w http.ResponseWriter, source []byte) error {
+// RenderMarkdownFragment is shared by the legacy browser and dashboard. GFM
+// rendering leaves unsafe HTML and URL protocols disabled, and frontmatter is
+// always escaped rather than interpreted as HTML.
+func RenderMarkdownFragment(source []byte) (string, error) {
 	frontmatter, body, hasFrontmatter := okf.SplitFrontmatter(source)
 	if !hasFrontmatter {
 		body = source
@@ -225,16 +228,23 @@ func renderMarkdown(w http.ResponseWriter, source []byte) error {
 	var rendered bytes.Buffer
 	md := goldmark.New(goldmark.WithExtensions(extension.GFM))
 	if err := md.Convert(body, &rendered); err != nil {
-		return err
+		return "", err
 	}
 
 	var formattedFrontmatter string
 	if hasFrontmatter {
 		formattedFrontmatter = `<section class="frontmatter" aria-label="Frontmatter"><div class="frontmatter-title">Frontmatter</div><pre><code>` + html.EscapeString(strings.TrimSpace(string(frontmatter))) + `</code></pre></section>`
 	}
+	return formattedFrontmatter + rendered.String(), nil
+}
 
+func renderMarkdown(w http.ResponseWriter, source []byte) error {
+	fragment, err := RenderMarkdownFragment(source)
+	if err != nil {
+		return err
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, err := fmt.Fprintf(w, `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><base target="_top"><meta name="viewport" content="width=device-width, initial-scale=1"><style>@font-face{font-family:'Outfit';font-style:normal;font-weight:100 900;font-display:swap;src:url('/outfit.woff2') format('woff2')}:root{color-scheme:light dark}*{box-sizing:border-box}body{max-width:860px;margin:0 auto;padding:2.5rem 2rem;font:300 16px/1.65 Outfit,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#3e3453;background:#fff}h1,h2{border-bottom:1px solid #e5e0da;padding-bottom:.3em}h1,h2,h3,h4,h5,h6{line-height:1.25;margin:1.5em 0 .65em}h1:first-child{margin-top:0}a{color:#0969da}pre{overflow:auto;padding:1rem;border-radius:6px;background:#f8f6f4}code{font:85%% SFMono-Regular,Consolas,'Liberation Mono',monospace;background:#efeae6;padding:.2em .4em;border-radius:4px}pre code{background:transparent;padding:0}.frontmatter{margin:0 0 2rem;border:1px solid #e5e0da;border-radius:6px;overflow:hidden}.frontmatter-title{padding:.45rem .8rem;border-bottom:1px solid #e5e0da;background:#f8f6f4;color:rgba(62,52,83,.72);font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em}.frontmatter pre{margin:0;border-radius:0}blockquote{margin-left:0;padding-left:1em;border-left:4px solid #e5e0da;color:rgba(62,52,83,.72)}img{max-width:100%%}table{border-collapse:collapse;display:block;overflow:auto}th,td{padding:.4rem .8rem;border:1px solid #e5e0da}tr:nth-child(2n){background:#f8f6f4}hr{border:0;border-top:1px solid #e5e0da}@media(prefers-color-scheme:dark){body{color:rgba(255,253,248,.88);background:#1d1a23}a{color:#58a6ff}h1,h2,hr{border-color:#363046}pre,code,tr:nth-child(2n),.frontmatter-title{background:#252130}.frontmatter,.frontmatter-title{border-color:#363046}.frontmatter-title,blockquote{color:rgba(238,233,245,.6)}blockquote{border-color:#363046}th,td{border-color:#363046}}</style></head><body>%s%s</body></html>`, formattedFrontmatter, rendered.String())
+	_, err = fmt.Fprintf(w, `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><base target="_top"><meta name="viewport" content="width=device-width, initial-scale=1"><style>@font-face{font-family:'Outfit';font-style:normal;font-weight:100 900;font-display:swap;src:url('/outfit.woff2') format('woff2')}:root{color-scheme:light dark}*{box-sizing:border-box}body{max-width:860px;margin:0 auto;padding:2.5rem 2rem;font:300 16px/1.65 Outfit,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#3e3453;background:#fff}h1,h2{border-bottom:1px solid #e5e0da;padding-bottom:.3em}h1,h2,h3,h4,h5,h6{line-height:1.25;margin:1.5em 0 .65em}h1:first-child{margin-top:0}a{color:#0969da}pre{overflow:auto;padding:1rem;border-radius:6px;background:#f8f6f4}code{font:85%% SFMono-Regular,Consolas,'Liberation Mono',monospace;background:#efeae6;padding:.2em .4em;border-radius:4px}pre code{background:transparent;padding:0}.frontmatter{margin:0 0 2rem;border:1px solid #e5e0da;border-radius:6px;overflow:hidden}.frontmatter-title{padding:.45rem .8rem;border-bottom:1px solid #e5e0da;background:#f8f6f4;color:rgba(62,52,83,.72);font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em}.frontmatter pre{margin:0;border-radius:0}blockquote{margin-left:0;padding-left:1em;border-left:4px solid #e5e0da;color:rgba(62,52,83,.72)}img{max-width:100%%}table{border-collapse:collapse;display:block;overflow:auto}th,td{padding:.4rem .8rem;border:1px solid #e5e0da}tr:nth-child(2n){background:#f8f6f4}hr{border:0;border-top:1px solid #e5e0da}@media(prefers-color-scheme:dark){body{color:rgba(255,253,248,.88);background:#1d1a23}a{color:#58a6ff}h1,h2,hr{border-color:#363046}pre,code,tr:nth-child(2n),.frontmatter-title{background:#252130}.frontmatter,.frontmatter-title{border-color:#363046}.frontmatter-title,blockquote{color:rgba(238,233,245,.6)}blockquote{border-color:#363046}th,td{border-color:#363046}}</style></head><body>%s</body></html>`, fragment)
 	return err
 }
 

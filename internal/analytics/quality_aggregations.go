@@ -339,6 +339,14 @@ func leastUsedFolders(ctx context.Context, src EventSource, facts ContentFacts, 
 }
 
 func leastUsedLines(ctx context.Context, src EventSource, facts ContentFacts, p Params) (Table, error) {
+	return usedLines(ctx, src, facts, p, false)
+}
+
+func mostUsedLines(ctx context.Context, src EventSource, facts ContentFacts, p Params) (Table, error) {
+	return usedLines(ctx, src, facts, p, true)
+}
+
+func usedLines(ctx context.Context, src EventSource, facts ContentFacts, p Params, most bool) (Table, error) {
 	filePath := p.Extra["path"]
 	if filePath == "" {
 		return Table{}, fmt.Errorf("path is required")
@@ -392,16 +400,25 @@ func leastUsedLines(ctx context.Context, src EventSource, facts ContentFacts, p 
 		start = end + 1
 	}
 	sort.Slice(rows, func(i, j int) bool {
+		if most && rows[i][4].(int) != rows[j][4].(int) {
+			return rows[i][4].(int) > rows[j][4].(int)
+		}
 		left, _ := rows[i][3].(*time.Time)
 		right, _ := rows[j][3].(*time.Time)
 		if left == nil || right == nil {
 			if left == nil && right == nil {
 				return rows[i][1].(int) < rows[j][1].(int)
 			}
+			if most {
+				return right == nil
+			}
 			return left == nil
 		}
 		if left.Equal(*right) {
 			return rows[i][1].(int) < rows[j][1].(int)
+		}
+		if most {
+			return left.After(*right)
 		}
 		return left.Before(*right)
 	})

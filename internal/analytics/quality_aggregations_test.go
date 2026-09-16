@@ -111,6 +111,47 @@ func TestLeastUsedLinesIgnoresStaleContentHashes(t *testing.T) {
 	}
 }
 
+func TestMostUsedLinesSortsCurrentRevisionByReadCount(t *testing.T) {
+	facts := NewContentFacts(testFS{"/docs/a.md": []byte("one\ntwo\nthree\nfour\n")})
+	current, err := facts.Stat(context.Background(), "/docs/a.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	log, err := OpenEventLog(t.TempDir(), LogOptions{Compress: "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	events := []Event{
+		{Time: now, Type: "doc.read", Fields: map[string]any{"path": "/docs/a.md", "content_hash": current.ContentHash, "unit": map[string]any{"lines": map[string]any{"start": 2, "end": 3}}}},
+		{Time: now.Add(time.Minute), Type: "doc.hit", Fields: map[string]any{"path": "/docs/a.md", "content_hash": current.ContentHash, "unit": map[string]any{"lines": map[string]any{"start": 2, "end": 2}}}},
+		{Time: now.Add(2 * time.Minute), Type: "doc.read", Fields: map[string]any{"path": "/docs/a.md", "content_hash": current.ContentHash, "unit": map[string]any{"lines": map[string]any{"start": 2, "end": 2}}}},
+		{Time: now, Type: "doc.hit", Fields: map[string]any{"path": "/docs/a.md", "content_hash": current.ContentHash, "unit": map[string]any{"lines": map[string]any{"start": 4, "end": 4}}}},
+		{Time: now.Add(time.Minute), Type: "doc.hit", Fields: map[string]any{"path": "/docs/a.md", "content_hash": current.ContentHash, "unit": map[string]any{"lines": map[string]any{"start": 4, "end": 4}}}},
+	}
+	// A heavily read prior revision must not affect current-line rankings.
+	for i := 0; i < 10; i++ {
+		events = append(events, Event{Time: now.Add(time.Duration(i) * time.Minute), Type: "doc.read", Fields: map[string]any{"path": "/docs/a.md", "content_hash": "prior-revision", "unit": map[string]any{}}})
+	}
+	appendEvents(t, log, events...)
+	table, err := mostUsedLines(context.Background(), log, facts, Params{Extra: map[string]string{"path": "/docs/a.md"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantColumns := []string{"path", "start", "end", "last_read_at", "reads"}
+	if len(table.Columns) != len(wantColumns) {
+		t.Fatalf("columns = %#v", table.Columns)
+	}
+	for i := range wantColumns {
+		if table.Columns[i] != wantColumns[i] {
+			t.Fatalf("columns = %#v", table.Columns)
+		}
+	}
+	if len(table.Rows) != 4 || table.Rows[0][1] != 2 || table.Rows[0][4] != 3 || table.Rows[1][1] != 4 || table.Rows[1][4] != 2 || table.Rows[2][1] != 3 || table.Rows[2][4] != 1 || table.Rows[3][1] != 1 || table.Rows[3][4] != 0 {
+		t.Fatalf("most-used line rows = %#v", table.Rows)
+	}
+}
+
 func TestLeastUsedLinesRejectsDirectory(t *testing.T) {
 	facts := NewContentFacts(testFS{"/docs/a.md": []byte("one\n")})
 	if _, err := leastUsedLines(context.Background(), nil, facts, Params{Extra: map[string]string{"path": "/docs"}}); err == nil {
@@ -126,7 +167,7 @@ func TestPhaseTwoAggregationsAreRegisteredAsLive(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for _, name := range []string{"top-search-queries", "top-unfilled-queries", "least-used-files", "most-used-files", "least-used-folders", "least-used-lines"} {
+	for _, name := range []string{"top-search-queries", "top-unfilled-queries", "least-used-files", "most-used-files", "least-used-folders", "least-used-lines", "most-used-lines"} {
 		if got := registry.Status(name); got != StatusOK {
 			t.Errorf("%s status = %s, want ok", name, got)
 		}

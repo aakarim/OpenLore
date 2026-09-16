@@ -79,7 +79,7 @@ func CmdTail(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 			}
 			_, _ = w.Write(content[start:])
 			if start < len(content) {
-				emitDocMetric(ctx, "doc.read", p, content, byteLineRange(content, start, len(content)))
+				emitDocMetricSelection(ctx, "doc.read", p, content, byteLineRange(content, start, len(content)), content[start:])
 			}
 			continue
 		}

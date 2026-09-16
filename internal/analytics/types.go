@@ -117,8 +117,9 @@ type Processor interface {
 type Writer string
 
 const (
-	WriterHuman Writer = "human"
-	WriterAgent Writer = "agent"
+	WriterHuman   Writer = "human"
+	WriterAgent   Writer = "agent"
+	WriterUnknown Writer = "unknown"
 )
 
 type Status string
@@ -253,7 +254,17 @@ func (r *Registry) RunWithFacts(ctx context.Context, name string, p Params, fact
 	return r.run(ctx, name, p, RunOptions{Fresh: true}, facts, false)
 }
 
+// RunWithSource computes against caller-scoped events and current content.
+// Scoped results never use or populate the process-wide materialization store.
+func (r *Registry) RunWithSource(ctx context.Context, name string, p Params, source EventSource, facts ContentFacts) (Materialized, error) {
+	return r.runWith(ctx, name, p, RunOptions{Fresh: true}, source, facts, false)
+}
+
 func (r *Registry) run(ctx context.Context, name string, p Params, opts RunOptions, facts ContentFacts, materialize bool) (Materialized, error) {
+	return r.runWith(ctx, name, p, opts, r.source, facts, materialize)
+}
+
+func (r *Registry) runWith(ctx context.Context, name string, p Params, opts RunOptions, source EventSource, facts ContentFacts, materialize bool) (Materialized, error) {
 	r.mu.RLock()
 	a, ok := r.items[name]
 	r.mu.RUnlock()
@@ -274,7 +285,7 @@ func (r *Registry) run(ctx context.Context, name string, p Params, opts RunOptio
 			return m, nil
 		}
 	}
-	t, err := a.Compute(ctx, r.source, facts, p)
+	t, err := a.Compute(ctx, source, facts, p)
 	if err != nil {
 		return Materialized{}, err
 	}

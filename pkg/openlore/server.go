@@ -1562,6 +1562,7 @@ func (s *Server) ListenAndServe() error {
 			}
 			preparedRoutes = append(preparedRoutes, register)
 		}
+		preparedRoutes = append(preparedRoutes, s.dashboardRoutes(assets.Dashboard()))
 	}
 	opts := []ssh.Option{
 		wish.WithAddress(fmt.Sprintf(":%d", s.config.Port)),
@@ -1864,6 +1865,14 @@ func (s *Server) ListenAndServe() error {
 				})
 
 				cmds.PublishBaseURL = baseURL + lorePath
+			}
+
+			if frontend := assets.Dashboard(); frontend != nil {
+				// Preserve published file links, while replacing the primary
+				// browser rather than adding a second competing interface.
+				lorePath := s.dashboardLorePath()
+				httpCfg.ExtraHandlers[lorePath] = dashboardShell(frontend)
+				httpCfg.ExtraHandlers[lorePath+"/"] = s.dashboardLoreHandler(frontend)
 			}
 
 			httpSrv, err := httpserver.New(webFS, httpCfg)

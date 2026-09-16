@@ -156,3 +156,18 @@ func TestRenderMarkdownFormatsGFMAndDoesNotRenderRawHTML(t *testing.T) {
 		t.Errorf("Content-Type = %q", got)
 	}
 }
+
+func TestMarkdownFragmentCannotExecuteDocumentHTML(t *testing.T) {
+	fragment, err := RenderMarkdownFragment([]byte("---\ntitle: '<img src=x onerror=alert(1)>'\n---\n# Safe\n\n[link](javascript:alert%281%29)\n\n<script>alert(1)</script>\n\n![image](data:text/html;base64,PHNjcmlwdD4=)\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(fragment, "<h1>Safe</h1>") || !strings.Contains(fragment, "&lt;img") {
+		t.Fatalf("missing rendered body or escaped frontmatter: %s", fragment)
+	}
+	for _, unsafe := range []string{"<script", "<img src=x", `href="javascript:`, `src="data:text/html`} {
+		if strings.Contains(fragment, unsafe) {
+			t.Fatalf("unsafe fragment contains %q: %s", unsafe, fragment)
+		}
+	}
+}

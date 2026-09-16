@@ -365,9 +365,14 @@ func TestAnalyticsDashboardShowsObservedValues(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	(&analyticsPlugin{service: service}).dashboard(recorder, httptest.NewRequest("GET", "/analytics/", nil))
 	body := recorder.Body.String()
-	for _, want := range []string{"Analytics", "Top commands", "stat", "Tree size", "README.md", "Top search queries", "planned", "Health", "Download CSV"} {
+	for _, want := range []string{"Analytics", "Top commands", "stat", "Tree size", "README.md", "Top search queries", "planned", "Download CSV"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("dashboard missing %q", want)
+		}
+	}
+	for _, private := range []string{"health-grid", "History cursor", "Blob bytes", "Ship lag"} {
+		if strings.Contains(body, private) {
+			t.Errorf("docset reader received global operator metric %q", private)
 		}
 	}
 	requiredPanel := strings.SplitN(body, `<a href="/analytics/least-used-lines">`, 2)
@@ -583,5 +588,43 @@ func TestAnalyticsAggregationCSVDownloadsAllRows(t *testing.T) {
 		if !strings.Contains(recorder.Body.String(), want) {
 			t.Errorf("CSV missing %q: %s", want, recorder.Body.String())
 		}
+	}
+}
+
+func TestAnalyticsAggregationCSVNeverUsesGlobalMaterialization(t *testing.T) {
+	service, err := analytics.New(config.AnalyticsConfig{Dir: filepath.Join(t.TempDir(), "analytics"), Log: config.AnalyticsLogConfig{Compress: "none"}, Pipeline: config.AnalyticsPipelineConfig{Buffer: 8}}, analytics.Deps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.Start(context.Background())
+	now := time.Now().UTC()
+	for _, event := range []analytics.Event{
+		{ID: "allowed-command", Time: now, Type: "command.exec", InvocationID: "allowed", Fields: map[string]any{"command": "cat"}},
+		{ID: "allowed-read", Time: now, Type: "doc.read", InvocationID: "allowed", ParentID: "allowed-command", Fields: map[string]any{"path": "/docs/note.md"}},
+		{ID: "secret-command", Time: now, Type: "command.exec", InvocationID: "secret", Fields: map[string]any{"command": "secret-command"}},
+		{ID: "secret-read", Time: now, Type: "doc.read", InvocationID: "secret", ParentID: "secret-command", Fields: map[string]any{"path": "/docs/private/secret.md"}},
+	} {
+		service.Record(context.Background(), event)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := service.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Seed the shared cache with both commands. The scoped CSV must neither read
+	// this result nor write its caller-specific result back to the cache.
+	if _, err := service.Registry().Run(context.Background(), "top-commands", analytics.Params{Extra: map[string]string{}}, analytics.RunOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	server, alice, _ := analyticsScopeServer()
+	server.analytics = service
+	request := httptest.NewRequest("GET", "/analytics/aggregations/top-commands?format=csv&path=/docs", nil)
+	request.SetPathValue("name", "top-commands")
+	request = request.WithContext(contextWithIdentity(request.Context(), alice))
+	recorder := httptest.NewRecorder()
+	(&analyticsPlugin{service: service, server: server}).aggregation(recorder, request)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "cat") || strings.Contains(recorder.Body.String(), "secret-command") {
+		t.Fatalf("scoped CSV response = %d: %s", recorder.Code, recorder.Body.String())
 	}
 }

@@ -45,45 +45,42 @@ outputs:
 runs:
   using: 'composite'
   steps:
-    - name: Set up Go
-      uses: actions/setup-go@v5
-      with:
-        go-version: '1.26'
+    - name: Install Nix
+      uses: cachix/install-nix-action@v31
 
-    - name: Clone OpenLore
+    - name: Build dashboard assets
       shell: bash
-      run: |
-        git clone --depth 1 https://github.com/aakarim/go-openlore.git /tmp/openlore-build
+      run: nix develop "${{ github.action_path }}" --command make -C "${{ github.action_path }}" dashboard-build
 
     - name: Embed documentation
       shell: bash
       run: |
         # Clear placeholder
-        rm -rf /tmp/openlore-build/assets/lore/*
+        rm -rf "${{ github.action_path }}/assets/lore/"*
 
         # Copy docs
-        cp -r ${{ inputs.docs-dir }}/* /tmp/openlore-build/assets/lore/
+        cp -r "${{ inputs.docs-dir }}/"* "${{ github.action_path }}/assets/lore/"
 
         # Copy config if provided
         if [ -n "${{ inputs.config }}" ] && [ -f "${{ inputs.config }}" ]; then
-          cp "${{ inputs.config }}" /tmp/openlore-build/assets/config/openlore.yml
+          cp "${{ inputs.config }}" "${{ github.action_path }}/assets/config/openlore.yml"
         fi
 
         # Copy auth config if provided
         if [ -n "${{ inputs.auth }}" ] && [ -f "${{ inputs.auth }}" ]; then
-          cp "${{ inputs.auth }}" /tmp/openlore-build/assets/config/lore.json
+          cp "${{ inputs.auth }}" "${{ github.action_path }}/assets/config/lore.json"
         fi
 
         # Copy skills if provided
         if [ -n "${{ inputs.skills-dir }}" ] && [ -d "${{ inputs.skills-dir }}" ]; then
-          cp -r "${{ inputs.skills-dir }}"/* /tmp/openlore-build/assets/skills/
+          cp -r "${{ inputs.skills-dir }}/"* "${{ github.action_path }}/assets/skills/"
         fi
 
         # Set version
         if [ -n "${{ inputs.version-file }}" ] && [ -f "${{ inputs.version-file }}" ]; then
-          cp "${{ inputs.version-file }}" /tmp/openlore-build/assets/config/VERSION
+          cp "${{ inputs.version-file }}" "${{ github.action_path }}/assets/config/VERSION"
         else
-          echo "${{ github.sha }}" > /tmp/openlore-build/assets/config/VERSION
+          echo "${{ github.sha }}" > "${{ github.action_path }}/assets/config/VERSION"
         fi
 
     - name: Build binaries
@@ -105,8 +102,9 @@ runs:
           OUTPUT="${{ inputs.output-dir }}/${{ inputs.binary-name }}-${GOOS}-${GOARCH}${EXT}"
           
           echo "Building for ${GOOS}/${GOARCH}..."
-          cd /tmp/openlore-build
-          GOOS=$GOOS GOARCH=$GOARCH go build -o "${GITHUB_WORKSPACE}/${OUTPUT}" ./cmd/openlore
+          cd "${{ github.action_path }}"
+          nix develop --command env GOOS=$GOOS GOARCH=$GOARCH \
+            go build -o "${GITHUB_WORKSPACE}/${OUTPUT}" ./cmd/openlore
           cd "${GITHUB_WORKSPACE}"
           
           if [ -n "$BINARIES" ]; then

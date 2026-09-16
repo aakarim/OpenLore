@@ -145,6 +145,37 @@ func TestContentCommandsEmitBestEffortLineRanges(t *testing.T) {
 	}
 }
 
+func TestContentMetricsRecordUnicodeCharactersAndActualRangeBytes(t *testing.T) {
+	fs := newMapFS()
+	fs.AddFile("/unicode.txt", "a😀\néé\nz\n")
+	tests := []struct {
+		command                   string
+		eventType                 string
+		wantBytes, wantCharacters int
+	}{
+		{"cat /unicode.txt", "doc.read", 13, 8},
+		{"head -c 5 /unicode.txt", "doc.read", 5, 2},
+		{"tail -c 2 /unicode.txt", "doc.read", 2, 2},
+		{"sed -n '2p' /unicode.txt", "doc.read", 5, 3},
+		{"grep é /unicode.txt", "doc.hit", 5, 3},
+	}
+	for _, test := range tests {
+		t.Run(test.command, func(t *testing.T) {
+			events := runWithMetricsFS(t, fs, test.command)
+			var event *analytics.Event
+			for i := range events {
+				if events[i].Type == test.eventType {
+					event = &events[i]
+					break
+				}
+			}
+			if event == nil || event.Fields["bytes"] != test.wantBytes || event.Fields["characters"] != test.wantCharacters {
+				t.Fatalf("events = %#v, want %d bytes and %d characters", events, test.wantBytes, test.wantCharacters)
+			}
+		})
+	}
+}
+
 func TestSedInPlaceDoesNotCountAsDocumentRead(t *testing.T) {
 	if events := runWithMetrics(t, "sed -i 's/Hello/Goodbye/' /docs/readme.md"); len(events) != 0 {
 		t.Fatalf("sed -i events = %#v, want none", events)

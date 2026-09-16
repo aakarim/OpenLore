@@ -180,6 +180,9 @@ cd go-openlore
 go build -o openlore ./cmd/openlore
 ```
 
+This normal Go build is backend-only and does not require Node. Release binaries
+and containers include the dashboard; see [Dashboard build and distribution](docs/dashboard-build.md).
+
 ### Embed docs in a binary
 
 Place documentation in `assets/lore/` and build. The resulting binary contains
