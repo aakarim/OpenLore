@@ -16,6 +16,7 @@ import (
 	"github.com/aakarim/go-openlore/internal/analytics"
 	"github.com/aakarim/go-openlore/internal/config"
 	servermetrics "github.com/aakarim/go-openlore/internal/metrics"
+	"github.com/aakarim/go-openlore/pkg/openlore/meta"
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
 
@@ -37,7 +38,7 @@ func (phase4Processor) Process(_ context.Context, event AnalyticsEvent) []Analyt
 	if event.Type != "plugin.quality.measured" {
 		return nil
 	}
-	return []AnalyticsEvent{{ID: event.ID + "-processed", Type: "plugin.quality.processed"}}
+	return []AnalyticsEvent{{ID: event.ID + "-processed", Type: "processed"}}
 }
 
 type phase4Scalar struct{}
@@ -58,6 +59,29 @@ type phase4Plugin struct {
 }
 
 type phase4SubscriberPlugin struct{ consumer AnalyticsConsumer }
+
+type phase4AggregationPlugin struct {
+	name         string
+	aggregations []AnalyticsAggregation
+}
+
+func (p *phase4AggregationPlugin) Info() PluginInfo {
+	return PluginInfo{Name: p.name, Version: "1.0.0"}
+}
+func (p *phase4AggregationPlugin) Aggregations() []AnalyticsAggregation { return p.aggregations }
+
+type phase4FilterPlugin struct {
+	consumer *phase4Consumer
+	filters  []meta.Filter
+}
+
+func (*phase4FilterPlugin) Info() PluginInfo {
+	return PluginInfo{Name: "filter-analytics", Version: "1.0.0"}
+}
+func (p *phase4FilterPlugin) AnalyticsConsumers() []AnalyticsConsumer {
+	return []AnalyticsConsumer{p.consumer}
+}
+func (p *phase4FilterPlugin) MetaFilters() []meta.Filter { return p.filters }
 
 func (*phase4SubscriberPlugin) Info() PluginInfo {
 	return PluginInfo{Name: "runtime-subscriber", Version: "1.0.0"}
@@ -120,7 +144,9 @@ func TestAnalyticsPluginExtensionCapabilities(t *testing.T) {
 	}
 	consumer := &phase4Consumer{}
 	plugin := &phase4Plugin{consumer: consumer}
-	server := &Server{analytics: service}
+	merge := NewMergeFS()
+	merge.SetRoot(NewDirFS(root, config.FilesConfig{}))
+	server := &Server{analytics: service, merge: merge, config: config.Config{Readonly: true}, auth: &config.AuthConfig{}, grants: newGrantRegistry()}
 	if err := server.registerPlugin(plugin); err != nil {
 		t.Fatal(err)
 	}
@@ -153,6 +179,22 @@ func TestAnalyticsPluginExtensionCapabilities(t *testing.T) {
 	}
 	if facts.Scalars["readability"] != 42 || facts.Scalars["bytes"] != 4 || facts.Scalars["tokens"] != 4 || facts.Tokenizer != "exact-test" {
 		t.Fatalf("plugin content facts = %#v, tokenizer %q", facts.Scalars, facts.Tokenizer)
+	}
+	directoryFacts, err := service.NewContentFacts(NewDirFS(root, config.FilesConfig{})).Stat(context.Background(), "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if directoryFacts.Scalars["tokens"] != 4 || directoryFacts.Tokenizer != "exact-test" {
+		t.Fatalf("plugin directory facts = %#v, tokenizer %q", directoryFacts.Scalars, directoryFacts.Tokenizer)
+	}
+	request := httptest.NewRequest("GET", "/analytics/facts?path=/doc.md", nil)
+	request = request.WithContext(contextWithIdentity(request.Context(), Identity{}))
+	scopedFacts, err := (&analyticsPlugin{service: service, server: server}).scopedFacts(request).Stat(request.Context(), "/doc.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scopedFacts.Scalars["readability"] != 42 || scopedFacts.Tokenizer != "exact-test" {
+		t.Fatalf("plugin scoped facts = %#v, tokenizer %q", scopedFacts.Scalars, scopedFacts.Tokenizer)
 	}
 
 	service.Start(context.Background())
@@ -236,6 +278,60 @@ func TestAnalyticsSubscriberCanRegisterAfterStart(t *testing.T) {
 	defer consumer.mu.Unlock()
 	if !containsString(consumer.types, "plugin.runtime.sentinel") {
 		t.Fatalf("runtime subscriber events = %v", consumer.types)
+	}
+}
+
+func TestAnalyticsPluginRejectsEmptyAggregationNameBeforeRegistration(t *testing.T) {
+	service, err := analytics.New(config.AnalyticsConfig{Dir: filepath.Join(t.TempDir(), "analytics"), Log: config.AnalyticsLogConfig{Compress: "none"}}, analytics.Deps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close(context.Background())
+	server := &Server{analytics: service}
+	compute := func(context.Context, AnalyticsEventSource, AnalyticsContentFacts, AnalyticsParams) (AnalyticsTable, error) {
+		return AnalyticsTable{}, nil
+	}
+	if err := server.registerPlugin(&phase4AggregationPlugin{name: "empty-aggregation", aggregations: []AnalyticsAggregation{{Name: "", Compute: compute}}}); err == nil {
+		t.Fatal("empty aggregation name was accepted")
+	}
+	if err := server.registerPlugin(&phase4AggregationPlugin{name: "empty-aggregation", aggregations: []AnalyticsAggregation{{Name: "valid", Compute: compute}}}); err != nil {
+		t.Fatalf("failed registration reserved plugin name: %v", err)
+	}
+}
+
+func TestRejectedMetadataPluginDoesNotInstallAnalytics(t *testing.T) {
+	service, err := analytics.New(config.AnalyticsConfig{
+		Dir:      filepath.Join(t.TempDir(), "analytics"),
+		Log:      config.AnalyticsLogConfig{Compress: "none"},
+		Pipeline: config.AnalyticsPipelineConfig{Buffer: 8},
+	}, analytics.Deps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rejectedConsumer := &phase4Consumer{}
+	acceptedConsumer := &phase4Consumer{}
+	server := &Server{analytics: service, metaFilters: []meta.Filter{{Name: "taken"}}}
+	if err := server.registerPlugin(&phase4FilterPlugin{consumer: rejectedConsumer, filters: []meta.Filter{{Name: "taken"}}}); err == nil {
+		t.Fatal("metadata filter collision was accepted")
+	}
+	if err := server.registerPlugin(&phase4FilterPlugin{consumer: acceptedConsumer}); err != nil {
+		t.Fatalf("rejected plugin left analytics registration behind: %v", err)
+	}
+	service.Start(context.Background())
+	service.Record(context.Background(), analytics.Event{Type: "plugin.filter-analytics.sentinel"})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := service.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	rejectedConsumer.mu.Lock()
+	rejectedCount := len(rejectedConsumer.types)
+	rejectedConsumer.mu.Unlock()
+	acceptedConsumer.mu.Lock()
+	accepted := containsString(acceptedConsumer.types, "plugin.filter-analytics.sentinel")
+	acceptedConsumer.mu.Unlock()
+	if rejectedCount != 0 || !accepted {
+		t.Fatalf("rejected consumer count = %d, accepted consumer saw sentinel = %v", rejectedCount, accepted)
 	}
 }
 

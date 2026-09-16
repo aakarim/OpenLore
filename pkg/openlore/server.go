@@ -900,9 +900,6 @@ func (s *Server) canonicalChangeSet(cs vfs.ChangeSet) vfs.ChangeSet {
 // per-session at buildSessionShell time, but the post-commit chain is composed
 // once when newWriteLog is constructed.
 func (s *Server) registerPlugin(p any) error {
-	if err := s.registerAnalyticsPlugin(p); err != nil {
-		return err
-	}
 	if fp, ok := p.(MetaFilterProvider); ok {
 		claimed := map[string]bool{}
 		for _, existing := range s.metaFilters {
@@ -919,6 +916,9 @@ func (s *Server) registerPlugin(p any) error {
 				claimed[name] = true
 			}
 		}
+	}
+	if err := s.registerAnalyticsPlugin(p); err != nil {
+		return err
 	}
 	if wp, ok := p.(WriteMiddlewareProvider); ok {
 		s.writeMW = append(s.writeMW, wp.WriteMiddleware()...)

@@ -607,6 +607,9 @@ func TestScalarProcessorUsesCustomProviders(t *testing.T) {
 	if after["custom"] != 30 || len(after) != 1 {
 		t.Fatalf("custom scalars not used exclusively: %#v", after)
 	}
+	if tokenizer := events[0].Fields["tokenizer"]; tokenizer != "approx" {
+		t.Fatalf("tokenizer = %q, want approx", tokenizer)
+	}
 }
 
 func TestScalarProcessorProcessesHistoryBeforeCorrelatedTarget(t *testing.T) {

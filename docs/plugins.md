@@ -40,7 +40,8 @@ tokenizer takes effect when `analytics replay` recomputes history.
 Plugin analytics events must be emitted through the sink supplied to
 `SetAnalyticsSink`, including events produced by plugin commands. Calling the
 shell's built-in `EmitMetric` seam directly is reserved for core commands and
-does not apply the plugin namespace. Scalar providers may add new flat keys,
+does not apply the plugin namespace. Derived processor events are forced into
+the same namespace. Scalar providers may add new flat keys,
 but the built-in `bytes`, `lines`, `words`, and `tokens` keys are reserved;
 plugins replace token counting through `TokenizerProvider` instead.
 

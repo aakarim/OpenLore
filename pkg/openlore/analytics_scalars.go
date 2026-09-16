@@ -126,7 +126,9 @@ func (p *ScalarProcessor) processRecord(ctx context.Context, record CommitRecord
 				r.Close()
 				facts := p.computeScalars(leaf.Target, b)
 				before = facts.Scalars
-				tokenizer = facts.Tokenizer
+				if facts.Tokenizer != "" {
+					tokenizer = facts.Tokenizer
+				}
 			} else {
 				firstSeen = true
 			}
@@ -140,7 +142,9 @@ func (p *ScalarProcessor) processRecord(ctx context.Context, record CommitRecord
 			}
 			facts := p.computeScalars(leaf.Target, b)
 			after = facts.Scalars
-			tokenizer = facts.Tokenizer
+			if facts.Tokenizer != "" {
+				tokenizer = facts.Tokenizer
+			}
 			if contentHash == "" {
 				contentHash = facts.ContentHash
 			}

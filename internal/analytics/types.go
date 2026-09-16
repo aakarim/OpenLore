@@ -78,14 +78,26 @@ func TeeSink(sinks ...Sink) Sink {
 func NamespacedSink(base Sink, pluginName string) Sink {
 	prefix := "plugin." + pluginName + "."
 	return sinkFunc(func(ctx context.Context, e Event) {
-		if base == nil || strings.TrimSpace(e.Type) == "" {
+		if base == nil {
 			return
 		}
-		if !strings.HasPrefix(e.Type, prefix) {
-			e.Type = prefix + e.Type
+		var ok bool
+		e.Type, ok = namespacedType(e.Type, prefix)
+		if !ok {
+			return
 		}
 		base.Record(ctx, e)
 	})
+}
+
+func namespacedType(eventType, prefix string) (string, bool) {
+	if strings.TrimSpace(eventType) == "" {
+		return "", false
+	}
+	if !strings.HasPrefix(eventType, prefix) {
+		eventType = prefix + eventType
+	}
+	return eventType, true
 }
 
 type EventFilter struct {

@@ -70,7 +70,7 @@ func ComputeScalars(path string, content []byte) DocScalars {
 }
 func computeScalars(p string, b []byte, providers []ContentScalarProvider) DocScalars {
 	h := sha256.Sum256(b)
-	d := DocScalars{Path: vfs.CleanPath(p), ContentHash: hex.EncodeToString(h[:]), Scalars: map[string]float64{}, Tokenizer: "approx", ComputedAt: time.Now().UTC()}
+	d := DocScalars{Path: vfs.CleanPath(p), ContentHash: hex.EncodeToString(h[:]), Scalars: map[string]float64{}, Tokenizer: tokenizerName(providers), ComputedAt: time.Now().UTC()}
 	for _, provider := range providers {
 		for k, v := range provider.Scalars(p, b) {
 			if reservedScalar(k) && !builtinScalarProvider(provider, k) {
@@ -78,11 +78,17 @@ func computeScalars(p string, b []byte, providers []ContentScalarProvider) DocSc
 			}
 			d.Scalars[k] = v
 		}
-		if provider, ok := provider.(interface{ tokenizerName() string }); ok {
-			d.Tokenizer = provider.tokenizerName()
-		}
 	}
 	return d
+}
+
+func tokenizerName(providers []ContentScalarProvider) string {
+	for i := len(providers) - 1; i >= 0; i-- {
+		if provider, ok := providers[i].(interface{ tokenizerName() string }); ok {
+			return provider.tokenizerName()
+		}
+	}
+	return "approx"
 }
 
 func reservedScalar(name string) bool {
@@ -131,7 +137,7 @@ func (f *contentFacts) Stat(ctx context.Context, p string) (DocScalars, error) {
 		}
 		return computeScalars(p, b, f.providers), nil
 	}
-	total := DocScalars{Path: vfs.CleanPath(p), Scalars: map[string]float64{}, Tokenizer: "approx", ComputedAt: time.Now().UTC()}
+	total := DocScalars{Path: vfs.CleanPath(p), Scalars: map[string]float64{}, Tokenizer: tokenizerName(f.providers), ComputedAt: time.Now().UTC()}
 	err = f.Walk(ctx, p, WalkOptions{}, func(d DocScalars) error {
 		if d.Path != total.Path {
 			for k, v := range d.Scalars {

@@ -32,6 +32,72 @@ type ProcessorReplayer interface {
 	ResetForReplay(time.Time) error
 }
 
+type namespacedProcessor struct {
+	base   Processor
+	prefix string
+}
+
+// NamespacedProcessor confines every derived event and the checkpoint key to
+// one plugin namespace while preserving optional processor capabilities.
+func NamespacedProcessor(base Processor, pluginName string) Processor {
+	if base == nil {
+		return nil
+	}
+	return namespacedProcessor{base: base, prefix: "plugin." + pluginName + "."}
+}
+
+func (p namespacedProcessor) Name() string {
+	name, ok := namespacedType(p.base.Name(), p.prefix)
+	if !ok {
+		return p.prefix + "processor"
+	}
+	return name
+}
+
+func (p namespacedProcessor) Process(ctx context.Context, event Event) []Event {
+	return p.namespace(p.base.Process(ctx, event))
+}
+
+func (p namespacedProcessor) Drain(ctx context.Context) []Event {
+	if drainer, ok := p.base.(ProcessorDrainer); ok {
+		return p.namespace(drainer.Drain(ctx))
+	}
+	return nil
+}
+
+func (p namespacedProcessor) MarshalCheckpointState() (json.RawMessage, error) {
+	if checkpointer, ok := p.base.(ProcessorCheckpointer); ok {
+		return checkpointer.MarshalCheckpointState()
+	}
+	return nil, nil
+}
+
+func (p namespacedProcessor) RestoreCheckpointState(state json.RawMessage) error {
+	if checkpointer, ok := p.base.(ProcessorCheckpointer); ok {
+		return checkpointer.RestoreCheckpointState(state)
+	}
+	return nil
+}
+
+func (p namespacedProcessor) ResetForReplay(from time.Time) error {
+	if replayer, ok := p.base.(ProcessorReplayer); ok {
+		return replayer.ResetForReplay(from)
+	}
+	return nil
+}
+
+func (p namespacedProcessor) namespace(events []Event) []Event {
+	out := events[:0]
+	for _, event := range events {
+		var ok bool
+		event.Type, ok = namespacedType(event.Type, p.prefix)
+		if ok {
+			out = append(out, event)
+		}
+	}
+	return out
+}
+
 // ConsumerResetter clears consumer state before replaying its input window.
 type ConsumerResetter interface {
 	Reset()

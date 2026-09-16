@@ -90,6 +90,9 @@ func (s *Server) registerAnalyticsPlugin(p any) error {
 			prefix := "plugin." + name + "."
 			aggregations := append([]analytics.Aggregation(nil), provider.Aggregations()...)
 			for i := range aggregations {
+				if strings.TrimSpace(aggregations[i].Name) == "" || aggregations[i].Name == prefix {
+					return fmt.Errorf("analytics plugin %q has an aggregation with an empty name", name)
+				}
 				if !strings.HasPrefix(aggregations[i].Name, prefix) {
 					aggregations[i].Name = prefix + aggregations[i].Name
 				}
@@ -118,7 +121,7 @@ func (s *Server) registerAnalyticsPlugin(p any) error {
 	}
 	if provider, ok := p.(MetricsProcessorProvider); ok {
 		for _, processor := range provider.AnalyticsProcessors() {
-			s.analytics.AddProcessor(processor)
+			s.analytics.AddProcessor(analytics.NamespacedProcessor(processor, name))
 		}
 	}
 	if provider, ok := p.(ContentScalarProviderProvider); ok {
