@@ -184,8 +184,8 @@ func (p *Passkeys) renderFile(w http.ResponseWriter, r *http.Request, lorePath, 
 	if facts != nil {
 		fmt.Fprintf(&b, `<span class="file-facts">%.0f bytes · %.0f lines · ~%.0f tokens · %s</span>`, facts.Bytes, facts.Lines, facts.Tokens, html.EscapeString(facts.Tokenizer))
 	}
-	fmt.Fprintf(&b, `<button class="history-toggle" id="history-toggle" type="button" aria-controls="file-history" aria-expanded="true" title="Toggle edit history"><span class="sr-only" hidden>Edit history</span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.643 3.143.427 1.927A.25.25 0 0 1 .604 1.5H4.75a.25.25 0 0 1 .25.25v4.146a.25.25 0 0 1-.427.177L3.31 4.81a5.5 5.5 0 1 1-.08 6.384.75.75 0 1 1 1.21-.888 4 4 0 1 0 .055-4.662L5.57 6.72A.75.75 0 0 1 4.51 7.78L1.643 4.914a1.25 1.25 0 0 1 0-1.77ZM8 4.5a.75.75 0 0 1 .75.75v2.44l1.53.765a.75.75 0 0 1-.67 1.342l-1.945-.973A.75.75 0 0 1 7.25 8.15v-2.9A.75.75 0 0 1 8 4.5Z"/></svg></button>%s<a class="close" href="%s" aria-label="Close file and return to folder" title="Close">×</a></nav>`, identityMenuHTML(identity), html.EscapeString(parentURL))
-	fmt.Fprintf(&b, `<main class="content"><iframe src="%s" title="%s"></iframe><aside class="history" id="file-history" aria-label="Edit history"><header class="history-header"><h2>Edit history</h2></header>`, html.EscapeString(iframeURL), html.EscapeString(name))
+	fmt.Fprintf(&b, `<button class="history-toggle" id="history-toggle" type="button" aria-controls="file-history" aria-expanded="false" title="Toggle edit history"><span class="sr-only" hidden>Edit history</span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.643 3.143.427 1.927A.25.25 0 0 1 .604 1.5H4.75a.25.25 0 0 1 .25.25v4.146a.25.25 0 0 1-.427.177L3.31 4.81a5.5 5.5 0 1 1-.08 6.384.75.75 0 1 1 1.21-.888 4 4 0 1 0 .055-4.662L5.57 6.72A.75.75 0 0 1 4.51 7.78L1.643 4.914a1.25 1.25 0 0 1 0-1.77ZM8 4.5a.75.75 0 0 1 .75.75v2.44l1.53.765a.75.75 0 0 1-.67 1.342l-1.945-.973A.75.75 0 0 1 7.25 8.15v-2.9A.75.75 0 0 1 8 4.5Z"/></svg></button>%s<a class="close" href="%s" aria-label="Close file and return to folder" title="Close">×</a></nav>`, identityMenuHTML(identity), html.EscapeString(parentURL))
+	fmt.Fprintf(&b, `<main class="content"><iframe src="%s" title="%s"></iframe><aside class="history" id="file-history" aria-label="Edit history" hidden><header class="history-header"><h2>Edit history</h2></header>`, html.EscapeString(iframeURL), html.EscapeString(name))
 	if !historyAvailable {
 		b.WriteString(`<p class="history-empty">Edit history is unavailable.</p>`)
 	} else if len(history) == 0 {
@@ -203,7 +203,7 @@ func (p *Passkeys) renderFile(w http.ResponseWriter, r *http.Request, lorePath, 
 		}
 		b.WriteString(`</ol>`)
 	}
-	b.WriteString(`</aside></main><script>(()=>{const button=document.getElementById('history-toggle');const history=document.getElementById('file-history');button.addEventListener('click',()=>{const open=button.getAttribute('aria-expanded')==='true';button.setAttribute('aria-expanded',String(!open));history.hidden=open})})()</script>`)
+	b.WriteString(`</aside></main><script>(()=>{const button=document.getElementById('history-toggle');const history=document.getElementById('file-history');function setOpen(open){button.setAttribute('aria-expanded',String(open));history.hidden=!open}setOpen(!window.matchMedia('(max-width:700px)').matches);button.addEventListener('click',()=>setOpen(button.getAttribute('aria-expanded')!=='true'))})()</script>`)
 	b.WriteString(identityMenuScript)
 	b.WriteString(`</body></html>`)
 

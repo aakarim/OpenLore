@@ -1100,7 +1100,7 @@ func (m *MergeFS) resolve(p string) (string, vfs.FileSystem, error) {
 		return "/" + p, m.root, nil
 	}
 
-	return "", nil, fmt.Errorf("not found: %s", p)
+	return "", nil, vfs.ErrNotFound(p)
 }
 
 // HostDir follows the same mount routing as content operations.

@@ -170,6 +170,60 @@ func TestLoreMetaFilterExactFilePath(t *testing.T) {
 	}
 }
 
+type statErrorFS struct {
+	*mapFS
+	target string
+	err    error
+}
+
+func (f statErrorFS) Stat(p string) (*vfs.FileInfo, error) {
+	if vfs.CleanPath(p) == f.target {
+		return nil, f.err
+	}
+	return f.mapFS.Stat(p)
+}
+
+func TestLoreMetaFilterSkipsMissingRoot(t *testing.T) {
+	fsys := statErrorFS{mapFS: metaTreeFS(), target: "/missing", err: vfs.ErrNotFound("/missing")}
+	sh := shell.NewShell(fsys)
+	sh.SetMetaFilters([]meta.Filter{{
+		Name:          "all",
+		Roots:         []string{"/missing", "/docs"},
+		AbsolutePaths: true,
+		Selector:      func(string, meta.Record) bool { return true },
+	}})
+
+	out, errOut, code := runMeta(t, sh, "/", "lore meta --filter all")
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, errOut)
+	}
+	if errOut != "" {
+		t.Fatalf("missing root should not write stderr, got %q", errOut)
+	}
+	if recs := parseNDJSON(t, out); len(recs) != 3 {
+		t.Fatalf("existing root records = %v, want 3", recs)
+	}
+}
+
+func TestLoreMetaFilterReportsNonNotFoundRootError(t *testing.T) {
+	statErr := errors.New("storage unavailable")
+	fsys := statErrorFS{mapFS: metaTreeFS(), target: "/broken", err: statErr}
+	sh := shell.NewShell(fsys)
+	sh.SetMetaFilters([]meta.Filter{{
+		Name:     "all",
+		Roots:    []string{"/broken", "/docs"},
+		Selector: func(string, meta.Record) bool { return true },
+	}})
+
+	_, errOut, code := runMeta(t, sh, "/", "lore meta --filter all")
+	if code != 1 {
+		t.Fatalf("exit=%d, want 1", code)
+	}
+	if !strings.Contains(errOut, statErr.Error()) {
+		t.Fatalf("stderr missing root error: %q", errOut)
+	}
+}
+
 type errorWriter struct{ err error }
 
 func (w errorWriter) Write([]byte) (int, error) { return 0, w.err }
