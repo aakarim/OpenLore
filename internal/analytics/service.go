@@ -35,22 +35,25 @@ type Health struct {
 	HistoryBlobStoreBytes   int64     `json:"history_blob_store_bytes,omitempty"`
 }
 type Service struct {
-	cfg        config.AnalyticsConfig
-	log        EventLog
-	recorder   *Recorder
-	pipeline   *Pipeline
-	shipper    *Shipper
-	refresher  *Refresher
-	store      AggregationStore
-	facts      ContentFacts
-	registry   *Registry
-	aggregator *Aggregator
-	remote     RemoteEventStore
-	history    func(context.Context) (position string, lagBytes, blobObjects, blobBytes int64)
-	emitted    sync.Map
-	cancel     context.CancelFunc
-	close      sync.Once
-	closeErr   error
+	cfg         config.AnalyticsConfig
+	fs          vfs.FileSystem
+	log         EventLog
+	recorder    *Recorder
+	pipeline    *Pipeline
+	shipper     *Shipper
+	refresher   *Refresher
+	store       AggregationStore
+	facts       ContentFacts
+	registry    *Registry
+	aggregator  *Aggregator
+	remote      RemoteEventStore
+	history     func(context.Context) (position string, lagBytes, blobObjects, blobBytes int64)
+	emitted     sync.Map
+	providersMu sync.RWMutex
+	providers   []ContentScalarProvider
+	cancel      context.CancelFunc
+	close       sync.Once
+	closeErr    error
 }
 
 func New(cfg config.AnalyticsConfig, deps Deps) (*Service, error) {
@@ -89,12 +92,12 @@ func New(cfg config.AnalyticsConfig, deps Deps) (*Service, error) {
 			return nil, err
 		}
 	}
-	providers := defaultProviders
+	providers := append([]ContentScalarProvider(nil), defaultProviders...)
 	if deps.Tokenizer != nil {
 		providers = []ContentScalarProvider{sizeProvider{}, tokenProvider{deps.Tokenizer}}
 	}
 	facts := NewContentFacts(deps.FS, providers...)
-	s := &Service{cfg: cfg, log: log, store: store, facts: facts}
+	s := &Service{cfg: cfg, fs: deps.FS, log: log, store: store, facts: facts, providers: providers}
 	for _, processor := range deps.Processors {
 		if processor != nil && processor.Name() == "doc-scalars" {
 			s.emitted.Store("doc.scalars", true)
@@ -103,6 +106,9 @@ func New(cfg config.AnalyticsConfig, deps Deps) (*Service, error) {
 	reg := NewRegistry(store, func() []string {
 		events := []string{"session.start", "session.end", "command.exec", "command.unknown", "syntax.unknown", "auth.login", "doc.write", "search.query", "doc.read", "doc.hit"}
 		s.emitted.Range(func(event, _ any) bool { events = append(events, event.(string)); return true })
+		if s.pipeline != nil {
+			events = append(events, s.pipeline.EventTypes()...)
+		}
 		return events
 	})
 	reg.Bind(log, facts)
@@ -142,17 +148,67 @@ func (s *Service) Start(ctx context.Context) {
 func (s *Service) Sink() Sink { return s.recorder }
 func (s *Service) AddProcessor(processor Processor) {
 	if s.pipeline != nil && processor != nil {
-		s.pipeline.opts.Processors = append(s.pipeline.opts.Processors, processor)
+		s.pipeline.AddProcessor(processor)
 		if processor.Name() == "doc-scalars" {
 			s.emitted.Store("doc.scalars", true)
 		}
 	}
 }
+func (s *Service) AddConsumer(consumer Consumer) {
+	if s.pipeline != nil && consumer != nil {
+		s.pipeline.AddConsumer(consumer)
+	}
+}
+func (s *Service) AddContentScalarProvider(provider ContentScalarProvider) {
+	if provider == nil {
+		return
+	}
+	s.providersMu.Lock()
+	s.providers = append(s.providers, provider)
+	s.facts = NewContentFacts(s.fs, s.providers...)
+	s.registry.Bind(s.log, s.facts)
+	s.providersMu.Unlock()
+}
+func (s *Service) SetTokenizer(tokenizer Tokenizer) {
+	if tokenizer == nil {
+		return
+	}
+	s.providersMu.Lock()
+	providers := make([]ContentScalarProvider, 0, len(s.providers))
+	for _, provider := range s.providers {
+		if _, builtin := provider.(tokenProvider); !builtin {
+			providers = append(providers, provider)
+		}
+	}
+	s.providers = append(providers, tokenProvider{tokenizer})
+	s.facts = NewContentFacts(s.fs, s.providers...)
+	s.registry.Bind(s.log, s.facts)
+	s.providersMu.Unlock()
+}
+func (s *Service) RegisterAggregations(aggregations []Aggregation) error {
+	return s.registry.RegisterAll(aggregations)
+}
+func (s *Service) NewContentFacts(fs vfs.FileSystem) ContentFacts {
+	s.providersMu.RLock()
+	providers := append([]ContentScalarProvider(nil), s.providers...)
+	s.providersMu.RUnlock()
+	return NewContentFacts(fs, providers...)
+}
+func (s *Service) ComputeScalars(path string, content []byte) DocScalars {
+	s.providersMu.RLock()
+	providers := append([]ContentScalarProvider(nil), s.providers...)
+	s.providersMu.RUnlock()
+	return computeScalars(path, content, providers)
+}
 func (s *Service) Record(ctx context.Context, e Event) { s.recorder.Record(ctx, e) }
 func (s *Service) Registry() *Registry                 { return s.registry }
-func (s *Service) Facts() ContentFacts                 { return s.facts }
-func (s *Service) EventSource() EventSource            { return s.log }
-func (s *Service) Aggregator() http.Handler            { return http.HandlerFunc(s.aggregator.ServeHTTP) }
+func (s *Service) Facts() ContentFacts {
+	s.providersMu.RLock()
+	defer s.providersMu.RUnlock()
+	return s.facts
+}
+func (s *Service) EventSource() EventSource { return s.log }
+func (s *Service) Aggregator() http.Handler { return http.HandlerFunc(s.aggregator.ServeHTTP) }
 func (s *Service) Refresh(ctx context.Context, names ...string) error {
 	return s.refresher.Refresh(ctx, names...)
 }

@@ -38,6 +38,7 @@ type ScalarProcessor struct {
 	blobs     BlobStore
 	writer    WriterClassifier
 	providers []analytics.ContentScalarProvider
+	computer  func(string, []byte) analytics.DocScalars
 	mu        sync.Mutex
 	processed map[string]struct{}
 	commits   map[string]struct{}
@@ -47,6 +48,9 @@ type ScalarProcessor struct {
 
 func NewScalarProcessor(history HistoryCursor, blobs BlobStore, writer WriterClassifier, providers ...analytics.ContentScalarProvider) analytics.Processor {
 	return &ScalarProcessor{history: history, blobs: blobs, writer: writer, providers: providers, processed: map[string]struct{}{}, commits: map[string]struct{}{}}
+}
+func (p *ScalarProcessor) SetScalarComputer(computer func(string, []byte) analytics.DocScalars) {
+	p.computer = computer
 }
 func (p *ScalarProcessor) Name() string { return "doc-scalars" }
 func (p *ScalarProcessor) Process(ctx context.Context, e analytics.Event) []analytics.Event {
@@ -112,6 +116,7 @@ func (p *ScalarProcessor) processRecord(ctx context.Context, record CommitRecord
 		}
 		p.processed[key] = struct{}{}
 		var before, after map[string]float64
+		tokenizer := "approx"
 		beforeExists := leaf.BeforeExists || leaf.BeforeHash != "" // BeforeHash supports older journal records.
 		firstSeen := !beforeExists || leaf.BeforeUnknown
 		if leaf.BeforeHash != "" && p.blobs != nil {
@@ -121,6 +126,9 @@ func (p *ScalarProcessor) processRecord(ctx context.Context, record CommitRecord
 				r.Close()
 				facts := p.computeScalars(leaf.Target, b)
 				before = facts.Scalars
+				if facts.Tokenizer != "" {
+					tokenizer = facts.Tokenizer
+				}
 			} else {
 				firstSeen = true
 			}
@@ -134,6 +142,9 @@ func (p *ScalarProcessor) processRecord(ctx context.Context, record CommitRecord
 			}
 			facts := p.computeScalars(leaf.Target, b)
 			after = facts.Scalars
+			if facts.Tokenizer != "" {
+				tokenizer = facts.Tokenizer
+			}
 			if contentHash == "" {
 				contentHash = facts.ContentHash
 			}
@@ -163,7 +174,7 @@ func (p *ScalarProcessor) processRecord(ctx context.Context, record CommitRecord
 			if p.docset != nil {
 				docset = p.docset(leaf.Target)
 			}
-			out = append(out, analytics.Event{ID: analytics.NewID(), Time: record.Time, Type: "doc.scalars", Principal: record.Attribution.Principal, Actor: record.Attribution.Actor, InvocationID: invocationID, ParentID: parentID, Fields: map[string]any{"path": leaf.Target, "docset": docset, "action": action, "writer": string(writer), "commit_id": record.ID, "content_hash": contentHash, "before": before, "after": after, "delta": delta, "tokenizer": "approx", "first_seen": firstSeen}})
+			out = append(out, analytics.Event{ID: analytics.NewID(), Time: record.Time, Type: "doc.scalars", Principal: record.Attribution.Principal, Actor: record.Attribution.Actor, InvocationID: invocationID, ParentID: parentID, Fields: map[string]any{"path": leaf.Target, "docset": docset, "action": action, "writer": string(writer), "commit_id": record.ID, "content_hash": contentHash, "before": before, "after": after, "delta": delta, "tokenizer": tokenizer, "first_seen": firstSeen}})
 		}
 	}
 	return out
@@ -206,6 +217,9 @@ func (p *ScalarProcessor) RestoreCheckpointState(raw json.RawMessage) error {
 }
 
 func (p *ScalarProcessor) computeScalars(path string, content []byte) analytics.DocScalars {
+	if p.computer != nil {
+		return p.computer(path, content)
+	}
 	if len(p.providers) == 0 {
 		return analytics.ComputeScalars(path, content)
 	}

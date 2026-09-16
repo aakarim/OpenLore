@@ -61,22 +61,24 @@ type Server struct {
 	authEnforced bool
 	// grants is the registry of grant types (ro/rw + plugin-contributed like
 	// publish). A grant name in lore.json with no registered type fails startup.
-	grants          *grantRegistry
-	fs              vfs.FileSystem
-	merge           *MergeFS
-	metrics         *metrics.Metrics
-	metricsSrv      *http.Server
-	analytics       *analytics.Service
-	analyticsCancel context.CancelFunc
-	historyPath     string
-	historyPosition func() HistoryPosition
-	historyCancel   context.CancelFunc
-	historyDone     chan struct{}
-	srv             *ssh.Server
-	httpSrv         *httpserver.Server
-	passkeys        *passkeys.Passkeys
-	logger          *slog.Logger
-	motd            string
+	grants             *grantRegistry
+	fs                 vfs.FileSystem
+	merge              *MergeFS
+	metrics            *metrics.Metrics
+	metricsSrv         *http.Server
+	analytics          *analytics.Service
+	analyticsCancel    context.CancelFunc
+	analyticsPluginsMu sync.Mutex
+	analyticsPlugins   map[string]struct{}
+	historyPath        string
+	historyPosition    func() HistoryPosition
+	historyCancel      context.CancelFunc
+	historyDone        chan struct{}
+	srv                *ssh.Server
+	httpSrv            *httpserver.Server
+	passkeys           *passkeys.Passkeys
+	logger             *slog.Logger
+	motd               string
 
 	onConnect    OnConnectFunc
 	onDisconnect OnDisconnectFunc
@@ -359,6 +361,7 @@ func newServerWithRoot(rootDir string, rootFS, lowerFS vfs.FileSystem, opts ...c
 			}
 			processor := NewScalarProcessor(cursor, blobs, IdentityStoreClassifier(s.identityStore)).(*ScalarProcessor)
 			processor.docset = (&analyticsPlugin{server: s}).docsetForPath
+			processor.SetScalarComputer(s.analytics.ComputeScalars)
 			s.analytics.AddProcessor(processor)
 			s.historyPosition = cursor.Position
 			s.analytics.SetHistoryHealth(func(ctx context.Context) (string, int64, int64, int64) {
@@ -914,6 +917,9 @@ func (s *Server) registerPlugin(p any) error {
 			}
 		}
 	}
+	if err := s.registerAnalyticsPlugin(p); err != nil {
+		return err
+	}
 	if wp, ok := p.(WriteMiddlewareProvider); ok {
 		s.writeMW = append(s.writeMW, wp.WriteMiddleware()...)
 	}
@@ -1178,7 +1184,7 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 		sh.SetAnalytics(s.analytics)
 	}
 	if s.analytics != nil {
-		sh.SetFacts(analytics.NewContentFacts(sessionFS))
+		sh.SetFacts(s.analytics.NewContentFacts(sessionFS))
 		sh.SetMetricEmitter(func(ctx context.Context, eventType string, fields map[string]any) {
 			if target, ok := fields["path"].(string); ok {
 				fields["docset"] = (&analyticsPlugin{server: s}).docsetForPath(target)
@@ -1853,7 +1859,7 @@ func (s *Server) ListenAndServe() error {
 					if s.analytics == nil {
 						return passkeys.ContentFacts{}, fmt.Errorf("analytics disabled")
 					}
-					facts, err := analytics.NewContentFacts(fsys).Stat(context.Background(), path)
+					facts, err := s.analytics.NewContentFacts(fsys).Stat(context.Background(), path)
 					return passkeys.ContentFacts{Bytes: facts.Scalars["bytes"], Lines: facts.Scalars["lines"], Tokens: facts.Scalars["tokens"], Tokenizer: facts.Tokenizer}, err
 				})
 

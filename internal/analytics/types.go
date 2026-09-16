@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -70,6 +71,33 @@ func TeeSink(sinks ...Sink) Sink {
 			}
 		}
 	})
+}
+
+// NamespacedSink confines plugin events to the plugin's event namespace. An
+// already-correct type is preserved; every other type is treated as a suffix.
+func NamespacedSink(base Sink, pluginName string) Sink {
+	prefix := "plugin." + pluginName + "."
+	return sinkFunc(func(ctx context.Context, e Event) {
+		if base == nil {
+			return
+		}
+		var ok bool
+		e.Type, ok = namespacedType(e.Type, prefix)
+		if !ok {
+			return
+		}
+		base.Record(ctx, e)
+	})
+}
+
+func namespacedType(eventType, prefix string) (string, bool) {
+	if strings.TrimSpace(eventType) == "" {
+		return "", false
+	}
+	if !strings.HasPrefix(eventType, prefix) {
+		eventType = prefix + eventType
+	}
+	return eventType, true
 }
 
 type EventFilter struct {
@@ -157,15 +185,29 @@ func (r *Registry) SetPaused(paused bool)                    { r.paused = paused
 var aggregationName = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]*$`)
 
 func (r *Registry) Register(a Aggregation) error {
-	if !aggregationName.MatchString(a.Name) || a.Compute == nil {
-		return fmt.Errorf("invalid aggregation %q", a.Name)
-	}
+	return r.RegisterAll([]Aggregation{a})
+}
+
+// RegisterAll validates and installs a set of aggregations atomically.
+func (r *Registry) RegisterAll(aggregations []Aggregation) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if _, exists := r.items[a.Name]; exists {
-		return fmt.Errorf("aggregation %q already registered", a.Name)
+	names := make(map[string]struct{}, len(aggregations))
+	for _, aggregation := range aggregations {
+		if !aggregationName.MatchString(aggregation.Name) || aggregation.Compute == nil {
+			return fmt.Errorf("invalid aggregation %q", aggregation.Name)
+		}
+		if _, exists := r.items[aggregation.Name]; exists {
+			return fmt.Errorf("aggregation %q already registered", aggregation.Name)
+		}
+		if _, exists := names[aggregation.Name]; exists {
+			return fmt.Errorf("aggregation %q already registered", aggregation.Name)
+		}
+		names[aggregation.Name] = struct{}{}
 	}
-	r.items[a.Name] = a
+	for _, aggregation := range aggregations {
+		r.items[aggregation.Name] = aggregation
+	}
 	return nil
 }
 func (r *Registry) List() []Aggregation {

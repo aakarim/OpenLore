@@ -235,7 +235,7 @@ func (p *analyticsPlugin) facts(w http.ResponseWriter, r *http.Request) {
 func (p *analyticsPlugin) scopedFacts(r *http.Request) analytics.ContentFacts {
 	if p.server != nil {
 		if id, ok := r.Context().Value(identityCtxKey{}).(Identity); ok {
-			return analytics.NewContentFacts(p.server.buildSessionFS(id))
+			return p.service.NewContentFacts(p.server.buildSessionFS(id))
 		}
 	}
 	return p.service.Facts()

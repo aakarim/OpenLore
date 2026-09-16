@@ -47,7 +47,8 @@ func (sizeProvider) Scalars(_ string, b []byte) map[string]float64 {
 
 type tokenProvider struct{ t Tokenizer }
 
-func (p tokenProvider) Name() string { return "tokens" }
+func (p tokenProvider) Name() string          { return "tokens" }
+func (p tokenProvider) tokenizerName() string { return p.t.Name() }
 func (p tokenProvider) Scalars(_ string, b []byte) map[string]float64 {
 	return map[string]float64{"tokens": float64(p.t.Count(b))}
 }
@@ -69,16 +70,40 @@ func ComputeScalars(path string, content []byte) DocScalars {
 }
 func computeScalars(p string, b []byte, providers []ContentScalarProvider) DocScalars {
 	h := sha256.Sum256(b)
-	d := DocScalars{Path: vfs.CleanPath(p), ContentHash: hex.EncodeToString(h[:]), Scalars: map[string]float64{}, Tokenizer: "approx", ComputedAt: time.Now().UTC()}
+	d := DocScalars{Path: vfs.CleanPath(p), ContentHash: hex.EncodeToString(h[:]), Scalars: map[string]float64{}, Tokenizer: tokenizerName(providers), ComputedAt: time.Now().UTC()}
 	for _, provider := range providers {
 		for k, v := range provider.Scalars(p, b) {
+			if reservedScalar(k) && !builtinScalarProvider(provider, k) {
+				continue
+			}
 			d.Scalars[k] = v
-		}
-		if provider.Name() == "tokens" {
-			d.Tokenizer = "approx"
 		}
 	}
 	return d
+}
+
+func tokenizerName(providers []ContentScalarProvider) string {
+	for i := len(providers) - 1; i >= 0; i-- {
+		if provider, ok := providers[i].(interface{ tokenizerName() string }); ok {
+			return provider.tokenizerName()
+		}
+	}
+	return "approx"
+}
+
+func reservedScalar(name string) bool {
+	return name == "bytes" || name == "lines" || name == "words" || name == "tokens"
+}
+
+func builtinScalarProvider(provider ContentScalarProvider, scalar string) bool {
+	switch provider.(type) {
+	case sizeProvider:
+		return scalar != "tokens"
+	case tokenProvider:
+		return scalar == "tokens"
+	default:
+		return false
+	}
 }
 
 type WalkOptions struct {
@@ -112,7 +137,7 @@ func (f *contentFacts) Stat(ctx context.Context, p string) (DocScalars, error) {
 		}
 		return computeScalars(p, b, f.providers), nil
 	}
-	total := DocScalars{Path: vfs.CleanPath(p), Scalars: map[string]float64{}, Tokenizer: "approx", ComputedAt: time.Now().UTC()}
+	total := DocScalars{Path: vfs.CleanPath(p), Scalars: map[string]float64{}, Tokenizer: tokenizerName(f.providers), ComputedAt: time.Now().UTC()}
 	err = f.Walk(ctx, p, WalkOptions{}, func(d DocScalars) error {
 		if d.Path != total.Path {
 			for k, v := range d.Scalars {
