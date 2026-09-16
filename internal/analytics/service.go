@@ -106,6 +106,9 @@ func New(cfg config.AnalyticsConfig, deps Deps) (*Service, error) {
 	reg := NewRegistry(store, func() []string {
 		events := []string{"session.start", "session.end", "command.exec", "command.unknown", "syntax.unknown", "auth.login", "doc.write", "search.query", "doc.read", "doc.hit"}
 		s.emitted.Range(func(event, _ any) bool { events = append(events, event.(string)); return true })
+		if s.pipeline != nil {
+			events = append(events, s.pipeline.EventTypes()...)
+		}
 		return events
 	})
 	reg.Bind(log, facts)
@@ -145,7 +148,7 @@ func (s *Service) Start(ctx context.Context) {
 func (s *Service) Sink() Sink { return s.recorder }
 func (s *Service) AddProcessor(processor Processor) {
 	if s.pipeline != nil && processor != nil {
-		s.pipeline.opts.Processors = append(s.pipeline.opts.Processors, processor)
+		s.pipeline.AddProcessor(processor)
 		if processor.Name() == "doc-scalars" {
 			s.emitted.Store("doc.scalars", true)
 		}
@@ -153,7 +156,7 @@ func (s *Service) AddProcessor(processor Processor) {
 }
 func (s *Service) AddConsumer(consumer Consumer) {
 	if s.pipeline != nil && consumer != nil {
-		s.pipeline.opts.Consumers = append(s.pipeline.opts.Consumers, consumer)
+		s.pipeline.AddConsumer(consumer)
 	}
 }
 func (s *Service) AddContentScalarProvider(provider ContentScalarProvider) {
@@ -182,8 +185,8 @@ func (s *Service) SetTokenizer(tokenizer Tokenizer) {
 	s.registry.Bind(s.log, s.facts)
 	s.providersMu.Unlock()
 }
-func (s *Service) RegisterAggregation(aggregation Aggregation) error {
-	return s.registry.Register(aggregation)
+func (s *Service) RegisterAggregations(aggregations []Aggregation) error {
+	return s.registry.RegisterAll(aggregations)
 }
 func (s *Service) NewContentFacts(fs vfs.FileSystem) ContentFacts {
 	s.providersMu.RLock()

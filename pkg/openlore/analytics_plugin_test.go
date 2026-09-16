@@ -44,7 +44,7 @@ type phase4Scalar struct{}
 
 func (phase4Scalar) Name() string { return "readability" }
 func (phase4Scalar) Scalars(_ string, _ []byte) map[string]float64 {
-	return map[string]float64{"readability": 42}
+	return map[string]float64{"readability": 42, "bytes": 999, "tokens": 999}
 }
 
 type phase4Tokenizer struct{}
@@ -55,6 +55,18 @@ func (phase4Tokenizer) Count(content []byte) int { return len(content) }
 type phase4Plugin struct {
 	sink     AnalyticsSink
 	consumer *phase4Consumer
+}
+
+type phase4SubscriberPlugin struct{ consumer AnalyticsConsumer }
+
+func (*phase4SubscriberPlugin) Info() PluginInfo {
+	return PluginInfo{Name: "runtime-subscriber", Version: "1.0.0"}
+}
+func (p *phase4SubscriberPlugin) AnalyticsConsumers() []AnalyticsConsumer {
+	return []AnalyticsConsumer{p.consumer}
+}
+func (*phase4SubscriberPlugin) AnalyticsProcessors() []AnalyticsProcessor {
+	return []AnalyticsProcessor{phase4Processor{}}
 }
 
 func (*phase4Plugin) Info() PluginInfo                      { return PluginInfo{Name: "quality", Version: "1.0.0"} }
@@ -70,16 +82,25 @@ func (*phase4Plugin) ContentScalarProviders() []ContentScalarProvider {
 }
 func (*phase4Plugin) Tokenizer() AnalyticsTokenizer { return phase4Tokenizer{} }
 func (*phase4Plugin) Aggregations() []AnalyticsAggregation {
-	return []AnalyticsAggregation{{
-		Name: "scores",
-		Compute: func(ctx context.Context, _ AnalyticsEventSource, facts AnalyticsContentFacts, _ AnalyticsParams) (AnalyticsTable, error) {
-			doc, err := facts.Stat(ctx, "/doc.md")
-			if err != nil {
-				return AnalyticsTable{}, err
-			}
-			return AnalyticsTable{Columns: []string{"score"}, Rows: [][]any{{doc.Scalars["readability"]}}}, nil
+	return []AnalyticsAggregation{
+		{
+			Name: "scores",
+			Compute: func(ctx context.Context, _ AnalyticsEventSource, facts AnalyticsContentFacts, _ AnalyticsParams) (AnalyticsTable, error) {
+				doc, err := facts.Stat(ctx, "/doc.md")
+				if err != nil {
+					return AnalyticsTable{}, err
+				}
+				return AnalyticsTable{Columns: []string{"score"}, Rows: [][]any{{doc.Scalars["readability"]}}}, nil
+			},
 		},
-	}}
+		{
+			Name:     "events",
+			Requires: []string{"plugin.quality.measured"},
+			Compute: func(context.Context, AnalyticsEventSource, AnalyticsContentFacts, AnalyticsParams) (AnalyticsTable, error) {
+				return AnalyticsTable{}, nil
+			},
+		},
+	}
 }
 
 func TestAnalyticsPluginExtensionCapabilities(t *testing.T) {
@@ -87,11 +108,13 @@ func TestAnalyticsPluginExtensionCapabilities(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "doc.md"), []byte("four"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	service, err := analytics.New(config.AnalyticsConfig{
-		Dir:      filepath.Join(t.TempDir(), "analytics"),
+	analyticsDir := filepath.Join(t.TempDir(), "analytics")
+	analyticsConfig := config.AnalyticsConfig{
+		Dir:      analyticsDir,
 		Log:      config.AnalyticsLogConfig{Compress: "none"},
 		Pipeline: config.AnalyticsPipelineConfig{Buffer: 8},
-	}, analytics.Deps{FS: NewDirFS(root, config.FilesConfig{})})
+	}
+	service, err := analytics.New(analyticsConfig, analytics.Deps{FS: NewDirFS(root, config.FilesConfig{})})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,6 +123,9 @@ func TestAnalyticsPluginExtensionCapabilities(t *testing.T) {
 	server := &Server{analytics: service}
 	if err := server.registerPlugin(plugin); err != nil {
 		t.Fatal(err)
+	}
+	if err := server.registerPlugin(plugin); err == nil {
+		t.Fatal("duplicate plugin registration succeeded")
 	}
 	if plugin.sink == nil {
 		t.Fatal("emitter did not receive an analytics sink")
@@ -110,6 +136,9 @@ func TestAnalyticsPluginExtensionCapabilities(t *testing.T) {
 	}
 	if !registered {
 		t.Fatal("plugin aggregation was not namespaced and registered")
+	}
+	if got := service.Registry().Status("plugin.quality.events"); got != analytics.StatusPlanned {
+		t.Fatalf("plugin event aggregation status before event = %q, want planned", got)
 	}
 	result, err := service.Registry().Run(context.Background(), "plugin.quality.scores", analytics.Params{}, analytics.RunOptions{Fresh: true})
 	if err != nil {
@@ -122,7 +151,7 @@ func TestAnalyticsPluginExtensionCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if facts.Scalars["readability"] != 42 || facts.Scalars["tokens"] != 4 || facts.Tokenizer != "exact-test" {
+	if facts.Scalars["readability"] != 42 || facts.Scalars["bytes"] != 4 || facts.Scalars["tokens"] != 4 || facts.Tokenizer != "exact-test" {
 		t.Fatalf("plugin content facts = %#v, tokenizer %q", facts.Scalars, facts.Tokenizer)
 	}
 
@@ -143,10 +172,70 @@ func TestAnalyticsPluginExtensionCapabilities(t *testing.T) {
 	if !containsString(persisted, "plugin.quality.measured") || !containsString(persisted, "plugin.quality.processed") {
 		t.Fatalf("persisted plugin events = %v", persisted)
 	}
+	if got := service.Registry().Status("plugin.quality.events"); got != analytics.StatusOK {
+		t.Fatalf("plugin event aggregation status after event = %q, want ok", got)
+	}
+	consumer.mu.Lock()
+	if !containsString(consumer.types, "plugin.quality.measured") || !containsString(consumer.types, "plugin.quality.processed") {
+		consumer.mu.Unlock()
+		t.Fatalf("subscriber events = %v", consumer.types)
+	}
+	consumer.mu.Unlock()
+
+	restarted, err := analytics.New(analyticsConfig, analytics.Deps{FS: NewDirFS(root, config.FilesConfig{})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	restartedPlugin := &phase4Plugin{consumer: &phase4Consumer{}}
+	if err := (&Server{analytics: restarted}).registerPlugin(restartedPlugin); err != nil {
+		t.Fatal(err)
+	}
+	restarted.Start(context.Background())
+	if got := restarted.Registry().Status("plugin.quality.events"); got != analytics.StatusOK {
+		t.Fatalf("plugin event aggregation status after restart = %q, want ok", got)
+	}
+	restartCloseCtx, restartCloseCancel := context.WithTimeout(context.Background(), time.Second)
+	defer restartCloseCancel()
+	if err := restarted.Close(restartCloseCtx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAnalyticsSubscriberCanRegisterAfterStart(t *testing.T) {
+	service, err := analytics.New(config.AnalyticsConfig{
+		Dir:      filepath.Join(t.TempDir(), "analytics"),
+		Log:      config.AnalyticsLogConfig{Compress: "none"},
+		Pipeline: config.AnalyticsPipelineConfig{Buffer: 256},
+	}, analytics.Deps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.Start(context.Background())
+
+	recordingDone := make(chan struct{})
+	go func() {
+		defer close(recordingDone)
+		for i := 0; i < 200; i++ {
+			service.Record(context.Background(), analytics.Event{Type: "plugin.runtime.background"})
+		}
+	}()
+	consumer := &phase4Consumer{}
+	server := &Server{analytics: service}
+	if err := server.registerPlugin(&phase4SubscriberPlugin{consumer: consumer}); err != nil {
+		t.Fatal(err)
+	}
+	<-recordingDone
+	service.Record(context.Background(), analytics.Event{Type: "plugin.runtime.sentinel"})
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := service.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
 	consumer.mu.Lock()
 	defer consumer.mu.Unlock()
-	if !containsString(consumer.types, "plugin.quality.measured") || !containsString(consumer.types, "plugin.quality.processed") {
-		t.Fatalf("subscriber events = %v", consumer.types)
+	if !containsString(consumer.types, "plugin.runtime.sentinel") {
+		t.Fatalf("runtime subscriber events = %v", consumer.types)
 	}
 }
 

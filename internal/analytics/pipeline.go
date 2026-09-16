@@ -39,6 +39,7 @@ type ConsumerResetter interface {
 
 type pipelineCheckpoint struct {
 	EventID    string                     `json:"event_id,omitempty"`
+	EventTypes []string                   `json:"event_types,omitempty"`
 	Processors map[string]json.RawMessage `json:"processors,omitempty"`
 	Segments   logCursor                  `json:"segments,omitempty"`
 }
@@ -58,6 +59,8 @@ type Pipeline struct {
 	seenMu      sync.Mutex
 	seen        map[string]struct{}
 	seenOrder   []string
+	typesMu     sync.RWMutex
+	eventTypes  map[string]struct{}
 	cursor      logCursor
 	cancel      context.CancelFunc
 	done        chan struct{}
@@ -70,9 +73,49 @@ func NewPipeline(log EventLog, checkpoint string, opts PipelineOptions) *Pipelin
 	if opts.Buffer <= 0 {
 		opts.Buffer = 1024
 	}
-	return &Pipeline{log: log, checkpoint: checkpoint, opts: opts, handoff: make(chan Event, opts.Buffer), done: make(chan struct{}), seen: map[string]struct{}{}, cursor: logCursor{}}
+	return &Pipeline{log: log, checkpoint: checkpoint, opts: opts, handoff: make(chan Event, opts.Buffer), done: make(chan struct{}), seen: map[string]struct{}{}, eventTypes: map[string]struct{}{}, cursor: logCursor{}}
 }
 func (p *Pipeline) Handoff() chan<- Event { return p.handoff }
+func (p *Pipeline) AddProcessor(processor Processor) {
+	if processor == nil {
+		return
+	}
+	p.processMu.Lock()
+	defer p.processMu.Unlock()
+	state := p.loadCheckpoint()
+	if raw := state.Processors[processor.Name()]; raw != nil {
+		if checkpointer, ok := processor.(ProcessorCheckpointer); ok {
+			_ = checkpointer.RestoreCheckpointState(raw)
+		}
+	}
+	p.opts.Processors = append(p.opts.Processors, processor)
+}
+func (p *Pipeline) AddConsumer(consumer Consumer) {
+	if consumer == nil {
+		return
+	}
+	p.processMu.Lock()
+	p.opts.Consumers = append(p.opts.Consumers, consumer)
+	p.processMu.Unlock()
+}
+func (p *Pipeline) EventTypes() []string {
+	p.typesMu.RLock()
+	defer p.typesMu.RUnlock()
+	types := make([]string, 0, len(p.eventTypes))
+	for eventType := range p.eventTypes {
+		types = append(types, eventType)
+	}
+	sort.Strings(types)
+	return types
+}
+func (p *Pipeline) observeEventType(eventType string) {
+	if eventType == "" {
+		return
+	}
+	p.typesMu.Lock()
+	p.eventTypes[eventType] = struct{}{}
+	p.typesMu.Unlock()
+}
 func (p *Pipeline) markSeen(id string) bool {
 	if id == "" {
 		return false
@@ -99,12 +142,14 @@ func (p *Pipeline) handleLocked(ctx context.Context, e Event) {
 	if p.markSeen(e.ID) {
 		return
 	}
+	p.observeEventType(e.Type)
 	for _, processor := range p.opts.Processors {
 		for _, derived := range processor.Process(ctx, e) {
 			if p.opts.Sink != nil {
 				p.opts.Sink.Record(ctx, derived)
 			}
 			p.markSeen(derived.ID)
+			p.observeEventType(derived.Type)
 			for _, consumer := range p.opts.Consumers {
 				consumer.Consume(ctx, derived)
 			}
@@ -117,7 +162,10 @@ func (p *Pipeline) handleLocked(ctx context.Context, e Event) {
 	p.writeCheckpoint(e.ID)
 }
 func (p *Pipeline) consumePersisted(ctx context.Context, e Event) {
+	p.processMu.Lock()
+	defer p.processMu.Unlock()
 	p.markSeen(e.ID)
+	p.observeEventType(e.Type)
 	for _, consumer := range p.opts.Consumers {
 		consumer.Consume(ctx, e)
 	}
@@ -128,6 +176,7 @@ func (p *Pipeline) emitDerived(ctx context.Context, events []Event) {
 			p.opts.Sink.Record(ctx, derived)
 		}
 		p.markSeen(derived.ID)
+		p.observeEventType(derived.Type)
 		for _, consumer := range p.opts.Consumers {
 			consumer.Consume(ctx, derived)
 		}
@@ -141,7 +190,7 @@ func (p *Pipeline) drainLocked(ctx context.Context) {
 	}
 }
 func (p *Pipeline) writeCheckpoint(id string) {
-	state := pipelineCheckpoint{EventID: id, Processors: map[string]json.RawMessage{}, Segments: logCursor{}}
+	state := pipelineCheckpoint{EventID: id, EventTypes: p.EventTypes(), Processors: map[string]json.RawMessage{}, Segments: logCursor{}}
 	for path, offset := range p.cursor {
 		state.Segments[path] = offset
 	}
@@ -161,7 +210,7 @@ func (p *Pipeline) writeCheckpoint(id string) {
 		_ = os.Rename(tmp, p.checkpoint)
 	}
 }
-func (p *Pipeline) readCheckpoint() pipelineCheckpoint {
+func (p *Pipeline) loadCheckpoint() pipelineCheckpoint {
 	b, err := os.ReadFile(p.checkpoint)
 	if err != nil {
 		return pipelineCheckpoint{}
@@ -171,6 +220,13 @@ func (p *Pipeline) readCheckpoint() pipelineCheckpoint {
 		// Checkpoints written before processor state was introduced contained
 		// only the last event ID.
 		state.EventID = string(bytesTrimSpace(b))
+	}
+	return state
+}
+func (p *Pipeline) readCheckpoint() pipelineCheckpoint {
+	state := p.loadCheckpoint()
+	for _, eventType := range state.EventTypes {
+		p.observeEventType(eventType)
 	}
 	for _, processor := range p.opts.Processors {
 		if raw := state.Processors[processor.Name()]; raw != nil {

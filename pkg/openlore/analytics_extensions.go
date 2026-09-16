@@ -66,6 +66,39 @@ func (s *Server) registerAnalyticsPlugin(p any) error {
 	if !analyticsPluginName.MatchString(name) {
 		return fmt.Errorf("analytics plugin %T has invalid name %q", p, name)
 	}
+	s.analyticsPluginsMu.Lock()
+	if _, exists := s.analyticsPlugins[name]; exists {
+		s.analyticsPluginsMu.Unlock()
+		return fmt.Errorf("analytics plugin %q is already registered", name)
+	}
+	if s.analyticsPlugins == nil {
+		s.analyticsPlugins = map[string]struct{}{}
+	}
+	s.analyticsPlugins[name] = struct{}{}
+	s.analyticsPluginsMu.Unlock()
+	registered := false
+	defer func() {
+		if !registered {
+			s.analyticsPluginsMu.Lock()
+			delete(s.analyticsPlugins, name)
+			s.analyticsPluginsMu.Unlock()
+		}
+	}()
+
+	if s.analytics != nil {
+		if provider, ok := p.(AggregationProvider); ok {
+			prefix := "plugin." + name + "."
+			aggregations := append([]analytics.Aggregation(nil), provider.Aggregations()...)
+			for i := range aggregations {
+				if !strings.HasPrefix(aggregations[i].Name, prefix) {
+					aggregations[i].Name = prefix + aggregations[i].Name
+				}
+			}
+			if err := s.analytics.RegisterAggregations(aggregations); err != nil {
+				return err
+			}
+		}
+	}
 
 	var base analytics.Sink
 	if s.analytics != nil {
@@ -75,6 +108,7 @@ func (s *Server) registerAnalyticsPlugin(p any) error {
 		provider.SetAnalyticsSink(analytics.NamespacedSink(base, name))
 	}
 	if s.analytics == nil {
+		registered = true
 		return nil
 	}
 	if provider, ok := p.(MetricsSubscriberProvider); ok {
@@ -95,17 +129,7 @@ func (s *Server) registerAnalyticsPlugin(p any) error {
 	if provider, ok := p.(TokenizerProvider); ok {
 		s.analytics.SetTokenizer(provider.Tokenizer())
 	}
-	if provider, ok := p.(AggregationProvider); ok {
-		prefix := "plugin." + name + "."
-		for _, aggregation := range provider.Aggregations() {
-			if !strings.HasPrefix(aggregation.Name, prefix) {
-				aggregation.Name = prefix + aggregation.Name
-			}
-			if err := s.analytics.RegisterAggregation(aggregation); err != nil {
-				return err
-			}
-		}
-	}
+	registered = true
 	return nil
 }
 

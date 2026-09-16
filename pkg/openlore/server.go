@@ -61,22 +61,24 @@ type Server struct {
 	authEnforced bool
 	// grants is the registry of grant types (ro/rw + plugin-contributed like
 	// publish). A grant name in lore.json with no registered type fails startup.
-	grants          *grantRegistry
-	fs              vfs.FileSystem
-	merge           *MergeFS
-	metrics         *metrics.Metrics
-	metricsSrv      *http.Server
-	analytics       *analytics.Service
-	analyticsCancel context.CancelFunc
-	historyPath     string
-	historyPosition func() HistoryPosition
-	historyCancel   context.CancelFunc
-	historyDone     chan struct{}
-	srv             *ssh.Server
-	httpSrv         *httpserver.Server
-	passkeys        *passkeys.Passkeys
-	logger          *slog.Logger
-	motd            string
+	grants             *grantRegistry
+	fs                 vfs.FileSystem
+	merge              *MergeFS
+	metrics            *metrics.Metrics
+	metricsSrv         *http.Server
+	analytics          *analytics.Service
+	analyticsCancel    context.CancelFunc
+	analyticsPluginsMu sync.Mutex
+	analyticsPlugins   map[string]struct{}
+	historyPath        string
+	historyPosition    func() HistoryPosition
+	historyCancel      context.CancelFunc
+	historyDone        chan struct{}
+	srv                *ssh.Server
+	httpSrv            *httpserver.Server
+	passkeys           *passkeys.Passkeys
+	logger             *slog.Logger
+	motd               string
 
 	onConnect    OnConnectFunc
 	onDisconnect OnDisconnectFunc

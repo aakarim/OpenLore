@@ -73,6 +73,9 @@ func computeScalars(p string, b []byte, providers []ContentScalarProvider) DocSc
 	d := DocScalars{Path: vfs.CleanPath(p), ContentHash: hex.EncodeToString(h[:]), Scalars: map[string]float64{}, Tokenizer: "approx", ComputedAt: time.Now().UTC()}
 	for _, provider := range providers {
 		for k, v := range provider.Scalars(p, b) {
+			if reservedScalar(k) && !builtinScalarProvider(provider, k) {
+				continue
+			}
 			d.Scalars[k] = v
 		}
 		if provider, ok := provider.(interface{ tokenizerName() string }); ok {
@@ -80,6 +83,21 @@ func computeScalars(p string, b []byte, providers []ContentScalarProvider) DocSc
 		}
 	}
 	return d
+}
+
+func reservedScalar(name string) bool {
+	return name == "bytes" || name == "lines" || name == "words" || name == "tokens"
+}
+
+func builtinScalarProvider(provider ContentScalarProvider, scalar string) bool {
+	switch provider.(type) {
+	case sizeProvider:
+		return scalar != "tokens"
+	case tokenProvider:
+		return scalar == "tokens"
+	default:
+		return false
+	}
 }
 
 type WalkOptions struct {

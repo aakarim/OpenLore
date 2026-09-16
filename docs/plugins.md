@@ -37,6 +37,13 @@ post-persistence pipeline, not on the command path. Scalar providers are used
 for both live content facts and history-derived `doc.scalars`; changing a
 tokenizer takes effect when `analytics replay` recomputes history.
 
+Plugin analytics events must be emitted through the sink supplied to
+`SetAnalyticsSink`, including events produced by plugin commands. Calling the
+shell's built-in `EmitMetric` seam directly is reserved for core commands and
+does not apply the plugin namespace. Scalar providers may add new flat keys,
+but the built-in `bytes`, `lines`, `words`, and `tokens` keys are reserved;
+plugins replace token counting through `TokenizerProvider` instead.
+
 ```text
 INFO plugin registered name=shellexec version=1.0.0
 INFO plugin registered name=okf version=0.2.0
