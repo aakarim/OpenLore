@@ -82,6 +82,11 @@ func CmdAnalytics(ctx CmdContext, args []string, w, errW io.Writer, _ io.Reader)
 		fmt.Fprintln(errW, "analytics: analytics is not enabled")
 		return 1
 	}
+	admin, ok := ctx.(interface{ AnalyticsAdminAllowed() bool })
+	if !ok || !admin.AnalyticsAdminAllowed() {
+		fmt.Fprintln(errW, "analytics: global operations require lore:analytics:admin and full scope")
+		return 1
+	}
 	if len(args) == 0 {
 		fmt.Fprintln(errW, "usage: analytics list|show|refresh|replay|rebuild|export|status|ship")
 		return 1
@@ -211,5 +216,8 @@ func analyticsService(ctx CmdContext) *analytics.Service {
 }
 
 func analyticsFacts(ctx CmdContext) analytics.ContentFacts {
-	return ctx.Facts()
+	if provider, ok := ctx.(interface{ Facts() analytics.ContentFacts }); ok {
+		return provider.Facts()
+	}
+	return nil
 }

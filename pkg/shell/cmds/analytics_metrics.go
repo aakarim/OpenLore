@@ -17,7 +17,20 @@ type metricsState interface {
 	MetricsEnabled() bool
 }
 
+type metricEmitter interface {
+	EmitMetric(context.Context, string, map[string]any)
+}
+
+func emitMetric(ctx CmdContext, eventType string, fields map[string]any) {
+	if emitter, ok := ctx.(metricEmitter); ok {
+		emitter.EmitMetric(context.Background(), eventType, fields)
+	}
+}
+
 func metricsEnabled(ctx CmdContext) bool {
+	if _, ok := ctx.(metricEmitter); !ok {
+		return false
+	}
 	state, ok := ctx.(metricsState)
 	return !ok || state.MetricsEnabled()
 }
@@ -38,7 +51,7 @@ func emitDocMetricWithHash(ctx CmdContext, eventType, filePath, contentHash stri
 	if lines != nil {
 		unit["lines"] = map[string]any{"start": lines.Start, "end": lines.End}
 	}
-	ctx.EmitMetric(context.Background(), eventType, map[string]any{
+	emitMetric(ctx, eventType, map[string]any{
 		"path":         filePath,
 		"content_hash": contentHash,
 		"unit":         unit,
@@ -88,7 +101,7 @@ func emitSearchMetric(ctx CmdContext, pattern string, scope []string, matchedFil
 	if !metricsEnabled(ctx) {
 		return
 	}
-	ctx.EmitMetric(context.Background(), "search.query", map[string]any{
+	emitMetric(ctx, "search.query", map[string]any{
 		"pattern":       pattern,
 		"scope":         scope,
 		"matched_files": matchedFiles,

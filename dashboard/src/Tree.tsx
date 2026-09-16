@@ -47,6 +47,9 @@ function Branch({
               } else props.onFile(entry.path);
             }}
             aria-current={props.selected === entry.path ? "page" : undefined}
+            aria-expanded={
+              entry.directory ? props.expanded.includes(entry.path) : undefined
+            }
           >
             {entry.directory && (
               <span className="chevron" aria-hidden>
@@ -80,6 +83,7 @@ export function Tree(props: Props) {
       </div>
       <button
         className={`tree-row root ${props.selected === "/" ? "selected" : ""}`}
+        aria-expanded={props.expanded.includes("/")}
         onClick={() => {
           props.onFolder("/");
           togglePath("/", props);

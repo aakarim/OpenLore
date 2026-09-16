@@ -59,6 +59,7 @@ type Shell struct {
 	jobs                 cmds.JobBackend
 	size                 cmds.SizeBackend
 	analytics            *analytics.Service
+	analyticsAuthorizer  func() bool
 	facts                analytics.ContentFacts
 	metricEmitter        func(context.Context, string, map[string]any)
 	invocationObserver   func(string, string)
@@ -194,7 +195,14 @@ func (s *Shell) SetAnalytics(service *analytics.Service) {
 		s.facts = analytics.NewContentFacts(s.fs)
 	}
 }
-func (s *Shell) Analytics() *analytics.Service         { return s.analytics }
+func (s *Shell) Analytics() *analytics.Service { return s.analytics }
+
+// SetAnalyticsAuthorizer installs a live authorization check for instance-wide
+// analytics operations. Without one, those operations are denied.
+func (s *Shell) SetAnalyticsAuthorizer(fn func() bool) { s.analyticsAuthorizer = fn }
+func (s *Shell) AnalyticsAdminAllowed() bool {
+	return s.analyticsAuthorizer != nil && s.analyticsAuthorizer()
+}
 func (s *Shell) SetFacts(facts analytics.ContentFacts) { s.facts = facts }
 func (s *Shell) Facts() analytics.ContentFacts         { return s.facts }
 func (s *Shell) SetMetricEmitter(fn func(context.Context, string, map[string]any)) {

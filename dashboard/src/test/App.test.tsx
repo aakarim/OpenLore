@@ -16,7 +16,18 @@ test("desktop tree opens a production API document and switches views without lo
   const tree = await screen.findByRole("complementary", {
     name: "Knowledge tree",
   });
-  await user.click(await within(tree).findByRole("button", { name: /guide/ }));
+  const root = within(tree).getByRole("button", { name: /Workspace/ });
+  expect(root).toHaveAttribute("aria-expanded", "true");
+  await user.click(root);
+  expect(root).toHaveAttribute("aria-expanded", "false");
+  await user.click(root);
+  const folder = await within(tree).findByRole("button", { name: /guide/ });
+  expect(folder).toHaveAttribute("aria-expanded", "false");
+  await user.click(folder);
+  expect(folder).toHaveAttribute("aria-expanded", "true");
+  expect(
+    await within(tree).findByRole("button", { name: /start.md/ }),
+  ).not.toHaveAttribute("aria-expanded");
   await user.click(
     await within(tree).findByRole("button", { name: /start.md/ }),
   );
@@ -114,9 +125,11 @@ test("file-scoped usage requests both current-hash line rankings", async () => {
   expect(
     screen.getByRole("heading", { name: "Least-used lines" }),
   ).toBeVisible();
-  const requests = fetch.mock.calls.map(([input]) => String(input));
-  expect(requests.some((url) => url.includes("/most-used-lines?"))).toBe(true);
-  expect(requests.some((url) => url.includes("/least-used-lines?"))).toBe(true);
+  await waitFor(() => {
+    const requests = fetch.mock.calls.map(([input]) => String(input));
+    expect(requests.some((url) => url.includes("/most-used-lines?"))).toBe(true);
+    expect(requests.some((url) => url.includes("/least-used-lines?"))).toBe(true);
+  });
 });
 
 test("direct file wins restoration, browser back resolves lore pathname, and file analytics targets exactly that file", async () => {

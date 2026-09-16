@@ -31,6 +31,15 @@ queries, paths, or attribution. Scoped results bypass the instance-wide
 materialization cache, including JSON and CSV exports. Browser previews do not
 count as agent reads.
 
+The shell `analytics` command is an instance-wide operator interface, not a
+docset-scoped reader interface. All subcommands require the explicit
+`lore:analytics:admin` capability and full token scope; current policy is checked
+on every invocation, including revocation and deny rules. Neither docset access
+nor the former `lore:analytics:view` capability grants this authority. Operators
+may grant it through their chosen role's `allow.capabilities`. Scoped readers
+use the dashboard/API instead. Standalone shell hosts must explicitly install
+an analytics authorizer; supplying the service alone does not grant access.
+
 ### Access tab
 
 Operators can grant the read-only **`lore:access:view`** capability to whichever

@@ -9,6 +9,7 @@ import (
 	"github.com/aakarim/go-openlore/internal/analytics"
 	"github.com/aakarim/go-openlore/internal/config"
 	"github.com/aakarim/go-openlore/pkg/shell"
+	"github.com/aakarim/go-openlore/pkg/shell/cmds"
 )
 
 func newAnalyticsService(t *testing.T, fs *mapFS) *analytics.Service {
@@ -77,6 +78,7 @@ func TestAnalyticsReplayReportsParseError(t *testing.T) {
 	fs := newMapFS()
 	sh := shell.NewShell(fs)
 	sh.SetAnalytics(newAnalyticsService(t, fs))
+	sh.SetAnalyticsAuthorizer(func() bool { return true })
 
 	var out, errOut bytes.Buffer
 	if code := sh.Exec("analytics replay --since definitely-not-a-duration", &out, &errOut, nil); code == 0 {
@@ -84,5 +86,29 @@ func TestAnalyticsReplayReportsParseError(t *testing.T) {
 	}
 	if got := errOut.String(); !strings.Contains(got, "analytics replay:") || !strings.Contains(got, "invalid duration") {
 		t.Fatalf("analytics replay hid parse error: %q", got)
+	}
+}
+
+// Embedding only the stable interface deliberately hides optional extensions.
+type legacyContext struct{ cmds.CmdContext }
+
+func TestLegacyContextWithoutAnalyticsExtensions(t *testing.T) {
+	fs := newMapFS()
+	fs.AddFile("/doc.md", "hello\n")
+	ctx := legacyContext{shell.NewShell(fs)}
+	var out, errOut bytes.Buffer
+	if code := cmds.CmdCat(ctx, []string{"/doc.md"}, &out, &errOut, nil); code != 0 || out.String() != "hello\n" {
+		t.Fatalf("legacy cat: %d %q %q", code, out.String(), errOut.String())
+	}
+}
+
+func TestAnalyticsGlobalOperationsFailClosed(t *testing.T) {
+	sh := shell.NewShell(newMapFS())
+	sh.SetAnalytics(newAnalyticsService(t, newMapFS()))
+	for _, command := range []string{"list", "show tree-size", "export", "status", "refresh", "replay", "ship", "rebuild --from-remote"} {
+		var out, errOut bytes.Buffer
+		if code := sh.Exec("analytics "+command, &out, &errOut, nil); code == 0 || out.Len() != 0 || !strings.Contains(errOut.String(), "lore:analytics:admin") {
+			t.Fatalf("unprivileged %s: %d %q %q", command, code, out.String(), errOut.String())
+		}
 	}
 }

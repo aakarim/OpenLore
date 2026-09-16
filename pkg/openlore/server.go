@@ -1180,8 +1180,11 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 			}
 		})
 	}
-	if s.analytics != nil && s.authEnforced && id.IdentityName != "" && id.IdentityName != "guest" && id.policySnapshot != nil && s.hasCapabilityForPolicy(*id.policySnapshot, "lore:analytics:view") {
+	if s.analytics != nil && s.authEnforced && id.IdentityName != "" && id.IdentityName != "guest" {
 		sh.SetAnalytics(s.analytics)
+		sh.SetAnalyticsAuthorizer(func() bool {
+			return scopeGrantsWrite(id.Scopes) && s.hasCurrentCapability(id, "lore:analytics:admin")
+		})
 	}
 	if s.analytics != nil {
 		sh.SetFacts(s.analytics.NewContentFacts(sessionFS))

@@ -1,6 +1,7 @@
 package openlore
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -77,6 +78,46 @@ func TestDashboardAuthenticationAndReadOnlyMethods(t *testing.T) {
 	if got := dashboardRequest(mux, "GET", "/dashboard/api/context?path=/", token); got.Code != 404 {
 		t.Fatalf("authless dashboard returned %d", got.Code)
 	}
+}
+
+func TestShellAnalyticsRequiresLiveAdministrativeCapability(t *testing.T) {
+	s, _, _ := newDashboardTestServer(t)
+	disabled := false
+	service, err := analytics.New(config.AnalyticsConfig{Dir: t.TempDir(), Pipeline: config.AnalyticsPipelineConfig{Enabled: &disabled}}, analytics.Deps{FS: s.merge})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close(context.Background())
+	s.analytics = service
+	id, ok := s.identityForName("reader")
+	if !ok {
+		t.Fatal("missing reader")
+	}
+	id.Scopes = []string{ScopeFull}
+	sh := s.buildSessionShell(id)
+	check := func(want bool) {
+		t.Helper()
+		var out, errOut bytes.Buffer
+		if code := sh.Exec("analytics status", &out, &errOut, nil); (code == 0) != want {
+			t.Fatalf("allowed=%v: %d %s %s", want, code, out.String(), errOut.String())
+		}
+	}
+	s.auth.Roles["reader"] = config.RoleSpec{Allow: config.CapabilityRules{Capabilities: []string{"lore:analytics:view"}}}
+	check(false)
+	s.auth.Roles["reader"] = config.RoleSpec{Allow: config.CapabilityRules{Capabilities: []string{"lore:analytics:admin"}}}
+	check(true)
+	id.Scopes = []string{ScopeRead}
+	readShell := s.buildSessionShell(id)
+	if readShell.AnalyticsAdminAllowed() {
+		t.Fatal("read token granted global administration")
+	}
+	s.auth.Roles["reader"] = config.RoleSpec{
+		Allow: config.CapabilityRules{Capabilities: []string{"lore:analytics:admin"}},
+		Deny:  config.CapabilityRules{Capabilities: []string{"lore:analytics:admin"}},
+	}
+	check(false)
+	s.auth.Roles["reader"] = config.RoleSpec{}
+	check(false)
 }
 
 func TestDashboardScopesFilesFactsAndHistory(t *testing.T) {
