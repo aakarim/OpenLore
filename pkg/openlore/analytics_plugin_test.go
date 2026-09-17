@@ -21,14 +21,20 @@ import (
 )
 
 type phase4Consumer struct {
-	mu    sync.Mutex
-	types []string
+	mu      sync.Mutex
+	types   []string
+	waitFor string
+	seen    chan struct{}
+	seenOne sync.Once
 }
 
 func (c *phase4Consumer) Consume(_ context.Context, event AnalyticsEvent) {
 	c.mu.Lock()
 	c.types = append(c.types, event.Type)
 	c.mu.Unlock()
+	if event.Type == c.waitFor && c.seen != nil {
+		c.seenOne.Do(func() { close(c.seen) })
+	}
 }
 
 type phase4Processor struct{}
@@ -253,6 +259,13 @@ func TestAnalyticsSubscriberCanRegisterAfterStart(t *testing.T) {
 		t.Fatal(err)
 	}
 	service.Start(context.Background())
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := service.Close(ctx); err != nil {
+			t.Errorf("close analytics service: %v", err)
+		}
+	})
 
 	recordingDone := make(chan struct{})
 	go func() {
@@ -261,18 +274,19 @@ func TestAnalyticsSubscriberCanRegisterAfterStart(t *testing.T) {
 			service.Record(context.Background(), analytics.Event{Type: "plugin.runtime.background"})
 		}
 	}()
-	consumer := &phase4Consumer{}
+	const sentinel = "plugin.runtime.sentinel"
+	consumer := &phase4Consumer{waitFor: sentinel, seen: make(chan struct{})}
 	server := &Server{analytics: service}
 	if err := server.registerPlugin(&phase4SubscriberPlugin{consumer: consumer}); err != nil {
 		t.Fatal(err)
 	}
 	<-recordingDone
-	service.Record(context.Background(), analytics.Event{Type: "plugin.runtime.sentinel"})
+	service.Record(context.Background(), analytics.Event{Type: sentinel})
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	if err := service.Close(ctx); err != nil {
-		t.Fatal(err)
+	select {
+	case <-consumer.seen:
+	case <-time.After(10 * time.Second):
+		t.Fatal("runtime subscriber did not receive sentinel")
 	}
 	consumer.mu.Lock()
 	defer consumer.mu.Unlock()
