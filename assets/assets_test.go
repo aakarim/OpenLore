@@ -7,31 +7,25 @@ import (
 	"testing/fstest"
 )
 
-func TestWebConnectionExamplesUseCurrentHostAndAdvertisedSSHPort(t *testing.T) {
-	index, err := fs.ReadFile(Web(), "index.html")
+func TestDefaultSiteUsesPublicServerMetadata(t *testing.T) {
+	index, err := fs.ReadFile(Site(), "index.html")
 	if err != nil {
 		t.Fatal(err)
 	}
 	html := string(index)
 
-	if strings.Contains(html, "openlore.sh") {
-		t.Fatal("web connection examples must not hard-code the production hostname")
-	}
-	if count := strings.Count(html, "data-server-host"); count != 5 {
-		t.Fatalf("data-server-host occurrences: got %d, want 5", count)
-	}
-	if count := strings.Count(html, "data-ssh-port"); count != 5 {
-		t.Fatalf("data-ssh-port occurrences: got %d, want 5", count)
-	}
-	for _, script := range []string{
-		"var host = location.hostname;",
-		"element.textContent = host;",
-		"var portFlag = sshPort !== '22' ? ' -p ' + sshPort : '';",
-		"element.textContent = portFlag;",
+	for _, content := range []string{
+		"fetch('/.well-known/openlore')",
+		"location.hostname",
+		"metadata.ssh.port",
+		"metadata.routes[name]",
 	} {
-		if !strings.Contains(html, script) {
-			t.Fatalf("index.html does not contain %q", script)
+		if !strings.Contains(html, content) {
+			t.Fatalf("index.html does not contain %q", content)
 		}
+	}
+	if _, err := fs.Stat(Site(), "404.html"); err != nil {
+		t.Fatal("default site does not include 404.html")
 	}
 }
 

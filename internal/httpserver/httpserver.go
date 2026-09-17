@@ -9,6 +9,8 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path"
+	"strings"
 
 	gossh "golang.org/x/crypto/ssh"
 )
@@ -52,7 +54,7 @@ func New(fsys fs.FS, cfg Config) (*Server, error) {
 		mux.Handle(pattern, handler)
 	}
 
-	mux.Handle("/", http.FileServer(http.FS(fsys)))
+	mux.Handle("/", siteHandler(fsys))
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", cfg.Port),
@@ -80,6 +82,43 @@ func New(fsys fs.FS, cfg Config) (*Server, error) {
 	}
 
 	return &Server{srv: srv, config: cfg}, nil
+}
+
+// siteHandler serves the replaceable static website while allowing it to own
+// the 404 experience. Application and protocol routes are registered on the
+// mux before this fallback and therefore always take precedence.
+func siteHandler(fsys fs.FS) http.Handler {
+	files := http.FileServer(http.FS(fsys))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		name := strings.TrimPrefix(path.Clean("/"+r.URL.Path), "/")
+		if name == "" {
+			name = "index.html"
+		}
+		if info, err := fs.Stat(fsys, name); err == nil {
+			if info.IsDir() {
+				name = path.Join(name, "index.html")
+			}
+			if _, err := fs.Stat(fsys, name); err == nil {
+				files.ServeHTTP(w, r)
+				return
+			}
+		}
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			files.ServeHTTP(w, r)
+			return
+		}
+		notFound, err := fs.ReadFile(fsys, "404.html")
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.WriteHeader(http.StatusNotFound)
+		if r.Method != http.MethodHead {
+			_, _ = w.Write(notFound)
+		}
+	})
 }
 
 // hostKeyHandler returns an HTTP handler that serves the SSH host public key.

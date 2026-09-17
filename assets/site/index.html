@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenLore server</title>
+  <style>
+    :root { color-scheme: dark; --bg:#17151c; --panel:#211e29; --border:#393243; --text:#fffaf3; --muted:#b8afbd; --accent:#ff8a50; }
+    * { box-sizing: border-box; }
+    body { min-height:100vh; margin:0; display:grid; place-items:center; padding:2rem; background:var(--bg); color:var(--text); font:16px/1.6 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    main { width:min(720px,100%); }
+    .eyebrow { margin:0 0 .5rem; color:var(--accent); font-size:.78rem; font-weight:700; letter-spacing:.12em; text-transform:uppercase; }
+    h1 { margin:0; font-size:clamp(2.5rem,8vw,4.5rem); letter-spacing:-.05em; line-height:1; }
+    .lede { max-width:580px; margin:1.25rem 0 2rem; color:var(--muted); font-size:1.1rem; }
+    .status { display:inline-flex; align-items:center; gap:.5rem; margin-bottom:2rem; padding:.35rem .7rem; border:1px solid var(--border); border-radius:999px; color:var(--muted); font-size:.85rem; }
+    .dot { width:.55rem; height:.55rem; border-radius:50%; background:#4bd28f; box-shadow:0 0 14px #4bd28f66; }
+    .panel { padding:1.25rem; border:1px solid var(--border); border-radius:14px; background:var(--panel); }
+    .panel + .panel { margin-top:1rem; }
+    .label { margin:0 0 .55rem; color:var(--muted); font-size:.78rem; font-weight:650; letter-spacing:.08em; text-transform:uppercase; }
+    code, pre { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; }
+    pre { margin:0; overflow:auto; color:#f8e8dc; white-space:pre-wrap; overflow-wrap:anywhere; }
+    nav { display:flex; flex-wrap:wrap; gap:.75rem; margin-top:1.25rem; }
+    a { padding:.65rem .9rem; border:1px solid var(--border); border-radius:9px; color:var(--text); text-decoration:none; }
+    a:hover { border-color:var(--accent); }
+    [hidden] { display:none !important; }
+    footer { margin-top:1.5rem; color:var(--muted); font-size:.82rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="eyebrow">Self-hosted knowledge server</p>
+    <h1>OpenLore</h1>
+    <p class="lede">This OpenLore server exposes its knowledge to people and agents over the web, SSH, and optional protocol endpoints.</p>
+    <div class="status"><span class="dot"></span> Server is running <span id="version"></span></div>
+
+    <section class="panel">
+      <p class="label">Connect over SSH</p>
+      <pre><code id="ssh-command">ssh this-server</code></pre>
+    </section>
+
+    <section class="panel" id="host-key-panel" hidden>
+      <p class="label">SSH host key</p>
+      <pre><code id="host-key"></code></pre>
+    </section>
+
+    <nav aria-label="Server links">
+      <a id="lore-link" href="/lore/" hidden>Browse lore</a>
+      <a id="dashboard-link" href="/dashboard/" hidden>Open dashboard</a>
+      <a id="mcp-link" href="/mcp" hidden>MCP endpoint</a>
+      <a href="/legal/">Legal notices</a>
+      <a href="https://github.com/aakarim/OpenLore">OpenLore source</a>
+    </nav>
+    <footer>This is the default server page. Operators can replace the website without replacing the OpenLore app.</footer>
+  </main>
+  <script>
+    (async function () {
+      try {
+        var response = await fetch('/.well-known/openlore');
+        if (!response.ok) return;
+        var metadata = await response.json();
+        var port = metadata.ssh && metadata.ssh.port;
+        var portFlag = port && port !== 22 ? ' -p ' + port : '';
+        document.getElementById('ssh-command').textContent = 'ssh' + portFlag + ' ' + location.hostname;
+        if (metadata.version) document.getElementById('version').textContent = '· v' + metadata.version;
+        ['lore', 'dashboard', 'mcp'].forEach(function (name) {
+          if (!metadata.routes || !metadata.routes[name]) return;
+          var link = document.getElementById(name + '-link');
+          link.href = metadata.routes[name];
+          link.hidden = false;
+        });
+        if (metadata.ssh && metadata.ssh.host_key_url) {
+          var keyResponse = await fetch(metadata.ssh.host_key_url);
+          if (keyResponse.ok) {
+            document.getElementById('host-key').textContent = (await keyResponse.text()).trim();
+            document.getElementById('host-key-panel').hidden = false;
+          }
+        }
+      } catch (_) {}
+    })();
+  </script>
+</body>
+</html>

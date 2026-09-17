@@ -58,7 +58,7 @@ func TestPasskeyPagesUseSharedStylesheet(t *testing.T) {
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, target, nil))
 		body := rec.Body.String()
-		if !strings.Contains(body, `href="/assets/openlore.css"`) {
+		if !strings.Contains(body, `href="/assets/openlore/app.css"`) {
 			t.Errorf("%s does not use the shared stylesheet", target)
 		}
 		if strings.Contains(body, "<style>") {
