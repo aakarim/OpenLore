@@ -117,7 +117,6 @@ func (s *Server) dashboardRoutes(frontend fs.FS) HTTPRouteRegistrar {
 			dashboardError(w, http.StatusNotFound, "not found")
 		})
 		if frontend != nil {
-			mux.Handle("GET /{$}", dashboardShell(frontend))
 			mux.Handle("GET /dashboard/{$}", dashboardShell(frontend))
 			mux.Handle("GET /dashboard/assets/", http.StripPrefix("/dashboard/", http.FileServer(http.FS(frontend))))
 		}

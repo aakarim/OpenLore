@@ -15,8 +15,8 @@ var configFS embed.FS
 //go:embed all:skills
 var skillsFS embed.FS
 
-//go:embed all:web
-var webFS embed.FS
+//go:embed all:site
+var siteFS embed.FS
 
 //go:embed all:legal
 var legalFS embed.FS
@@ -79,9 +79,11 @@ func Skills() fs.FS {
 	return sub
 }
 
-// Web returns the embedded web assets filesystem (rooted inside web/).
-func Web() fs.FS {
-	sub, _ := fs.Sub(webFS, "web")
+// Site returns the replaceable static website (rooted inside site/). OpenLore's
+// application routes and assets are served separately and are not part of this
+// filesystem.
+func Site() fs.FS {
+	sub, _ := fs.Sub(siteFS, "site")
 	return sub
 }
 

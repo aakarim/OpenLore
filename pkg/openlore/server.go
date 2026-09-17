@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -1675,8 +1676,8 @@ func (s *Server) ListenAndServe() error {
 	}
 
 	if s.config.HTTPPort > 0 {
-		webFS := assets.Web()
-		if webFS != nil {
+		siteFS := assets.Site()
+		if siteFS != nil {
 			httpCfg := httpserver.Config{
 				Port:           s.config.HTTPPort,
 				TLSCert:        s.config.TLSCert,
@@ -1697,15 +1698,12 @@ func (s *Server) ListenAndServe() error {
 				httpCfg.ExtraHandlers["/legal/"] = legalHandler
 				s.logger.Info("legal notices mounted", "path", "/legal", "http_port", s.config.HTTPPort)
 			}
-			httpCfg.ExtraHandlers["/assets/openlore.css"] = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.Method != http.MethodGet {
-					http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-					return
-				}
-				w.Header().Set("Content-Type", "text/css; charset=utf-8")
-				w.Header().Set("Cache-Control", "public, max-age=3600")
-				_, _ = w.Write(webstyle.CSS)
-			})
+			appCSS := staticAppAsset("text/css; charset=utf-8", webstyle.CSS)
+			httpCfg.ExtraHandlers["/assets/openlore/app.css"] = appCSS
+			// Compatibility for existing login and permissions links.
+			httpCfg.ExtraHandlers["/assets/openlore.css"] = appCSS
+			httpCfg.ExtraHandlers["/assets/openlore/outfit.woff2"] = staticAppAsset("font/woff2", webstyle.Outfit)
+			httpCfg.ExtraHandlers["/.well-known/openlore"] = http.HandlerFunc(s.openLoreMetadata)
 
 			// A single MCP server backs both the Streamable HTTP endpoint and
 			// the plain JSON HTTP API below. Its `shell` tool builds a
@@ -1878,7 +1876,7 @@ func (s *Server) ListenAndServe() error {
 				httpCfg.ExtraHandlers[lorePath+"/"] = s.dashboardLoreHandler(frontend)
 			}
 
-			httpSrv, err := httpserver.New(webFS, httpCfg)
+			httpSrv, err := httpserver.New(siteFS, httpCfg)
 			if err != nil {
 				return fmt.Errorf("creating HTTP server: %w", err)
 			}
@@ -1993,4 +1991,59 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		}
 	}
 	return transportErr
+}
+
+func staticAppAsset(contentType string, content []byte) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("Cache-Control", "public, max-age=3600")
+		if r.Method == http.MethodGet {
+			_, _ = w.Write(content)
+		}
+	})
+}
+
+func (s *Server) openLoreMetadata(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	routes := map[string]string{"legal": "/legal/"}
+	ssh := map[string]any{"port": s.advertisedSSHPort()}
+	if s.config.HostKeyPath != "" {
+		routes["host_key"] = "/host-key"
+		ssh["host_key_url"] = "/host-key"
+	}
+	if assets.Dashboard() != nil {
+		routes["dashboard"] = "/dashboard/"
+		routes["lore"] = s.dashboardLorePath() + "/"
+	} else if s.passkeys != nil {
+		routes["lore"] = s.dashboardLorePath() + "/"
+	}
+	if s.passkeys != nil {
+		routes["login"] = "/passkey/login"
+	}
+	if s.config.MCPEnabled && s.config.MCPPath != "" {
+		routes["mcp"] = "/" + strings.Trim(s.config.MCPPath, "/")
+	}
+	if s.config.APIEnabled && s.config.APIPath != "" {
+		routes["api"] = "/" + strings.Trim(s.config.APIPath, "/") + "/"
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "public, max-age=300")
+	if r.Method == http.MethodHead {
+		return
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"version": assets.Version(),
+		"ssh":     ssh,
+		"routes": routes,
+	})
 }

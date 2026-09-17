@@ -5,4 +5,7 @@ import _ "embed"
 //go:embed openlore.css
 var CSS []byte
 
-const Link = `<link rel="stylesheet" href="/assets/openlore.css">`
+//go:embed outfit.woff2
+var Outfit []byte
+
+const Link = `<link rel="stylesheet" href="/assets/openlore/app.css">`

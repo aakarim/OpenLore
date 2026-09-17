@@ -386,11 +386,14 @@ func TestDashboardShellPreservesLinksAndRejectsWriteMethods(t *testing.T) {
 	mux = http.NewServeMux()
 	s.dashboardRoutes(frontend)(mux)
 	mux.Handle("/lore/", s.dashboardLoreHandler(frontend))
-	for _, target := range []string{"/", "/?view=analytics&path=/public", "/lore/read%20me.md"} {
+	for _, target := range []string{"/dashboard/", "/lore/read%20me.md"} {
 		w := dashboardRequest(mux, "GET", target, "")
 		if w.Code != 200 || !strings.Contains(w.Body.String(), "id=dashboard") || !strings.Contains(w.Header().Get("Content-Security-Policy"), "object-src 'none'") {
 			t.Fatalf("deep link did not serve safe public shell: %s %d %s", target, w.Code, w.Body.String())
 		}
+	}
+	if w := dashboardRequest(mux, "GET", "/", ""); w.Code != http.StatusNotFound {
+		t.Fatalf("dashboard claimed website root: %d", w.Code)
 	}
 	w := dashboardRequest(mux, "GET", "/lore/public/payload.html?raw=1", token)
 	if w.Code != 200 || !strings.HasPrefix(w.Header().Get("Content-Disposition"), "attachment;") {
