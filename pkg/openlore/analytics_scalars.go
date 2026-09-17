@@ -27,6 +27,16 @@ func IdentityStoreClassifier(_ IdentityStore) WriterClassifier {
 }
 
 func classifyAttribution(a Attribution) analytics.Writer {
+	if a.ActorKind != "" {
+		switch analytics.Writer(a.ActorKind) {
+		case analytics.WriterHuman:
+			return analytics.WriterHuman
+		case analytics.WriterAgent:
+			return analytics.WriterAgent
+		default:
+			return analytics.WriterUnknown
+		}
+	}
 	if a.Extra != nil {
 		kind, explicit := a.Extra["actor_kind"]
 		switch analytics.Writer(kind) {

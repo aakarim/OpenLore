@@ -177,6 +177,7 @@ func TestAnalyticsActorClassification(t *testing.T) {
 		{"delegated actor", Attribution{Principal: "alice", Actor: "claude@claude.ai"}, analytics.WriterAgent},
 		{"explicit human", Attribution{Principal: "alice", Extra: map[string]string{"actor_kind": "human"}}, analytics.WriterHuman},
 		{"explicit agent", Attribution{Principal: "alice", Extra: map[string]string{"actor_kind": "agent"}}, analytics.WriterAgent},
+		{"persisted agent", Attribution{Principal: "system", ActorKind: "agent"}, analytics.WriterAgent},
 		{"internal operation", Attribution{Principal: "system", internal: true}, analytics.WriterAgent},
 		{"invalid explicit value", Attribution{Principal: "alice", Extra: map[string]string{"actor_kind": "person"}}, analytics.WriterUnknown},
 		{"guest", Attribution{Principal: "guest"}, analytics.WriterUnknown},
