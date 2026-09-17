@@ -429,9 +429,14 @@ func parseSedExpr(expr string) sedCmd {
 	switch expr[i] {
 	case 'a':
 		cmd.command = 'a'
-		cmd.text = strings.TrimPrefix(expr[i+1:], "\\")
-		cmd.text = strings.TrimPrefix(cmd.text, "\r\n")
-		cmd.text = strings.TrimPrefix(cmd.text, "\n")
+		cmd.text = expr[i+1:]
+		if strings.HasPrefix(cmd.text, "\\") {
+			cmd.text = strings.TrimPrefix(cmd.text, "\\")
+			cmd.text = strings.TrimPrefix(cmd.text, "\r\n")
+			cmd.text = strings.TrimPrefix(cmd.text, "\n")
+		} else {
+			cmd.text = strings.TrimLeft(cmd.text, " \t")
+		}
 	case 's':
 		cmd.command = 's'
 		if i+1 < len(expr) {
