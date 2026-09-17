@@ -54,7 +54,9 @@ test("canonicalizes internal links once, preserves modified clicks, and protects
     path: "/docs/current.md",
     html: `<a id="relative" href="a%20b.md#part">Relative</a>
       <a id="absolute" href="${location.origin}/lore/shared/guide.md">Absolute</a>
-      <a id="remote" href="https://outside.example/guide">Remote</a>
+      <a id="remote" href="https://outside.example/guide" target="_blank">Remote</a>
+      <a id="protocol-relative" href="//outside.example/guide" target="_blank">Protocol relative</a>
+      <a id="email" href="mailto:reader@example.test" target="_blank">Email</a>
       <img alt="local" src="images/pic%20one.png">
       <img alt="remote image" src="https://outside.example/pixel.png">`,
   };
@@ -78,7 +80,10 @@ test("canonicalizes internal links once, preserves modified clicks, and protects
 
   fireEvent.click(screen.getByText("Absolute"));
   expect(onFile).toHaveBeenLastCalledWith("/shared/guide.md");
-  expect(screen.getByText("Remote")).toHaveAttribute("target", "_blank");
+  expect(screen.getByText("Remote")).not.toHaveAttribute("target");
+  expect(screen.getByText("Remote")).toHaveAttribute("rel", "noreferrer");
+  expect(screen.getByText("Protocol relative")).not.toHaveAttribute("target");
+  expect(screen.getByText("Email")).not.toHaveAttribute("target");
   const localImage = screen.getByAltText("local") as HTMLImageElement;
   expect(new URL(localImage.src).pathname).toBe("/dashboard/api/raw");
   expect(new URL(localImage.src).searchParams.get("path")).toBe(

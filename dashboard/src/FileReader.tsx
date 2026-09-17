@@ -66,15 +66,15 @@ function Markdown({
       const raw = anchor.getAttribute("href") || "";
       if (raw.startsWith("#")) return;
       if (/^(mailto:|tel:)/i.test(raw)) {
-        anchor.target = "_blank";
-        anchor.rel = "noreferrer noopener";
+        anchor.removeAttribute("target");
+        anchor.rel = "noreferrer";
         return;
       }
       const path = internalPath(raw, file.path, session);
       if (!path) {
-        if (/^https?:/i.test(raw)) {
-          anchor.target = "_blank";
-          anchor.rel = "noreferrer noopener";
+        if (/^(https?:)?\/\//i.test(raw)) {
+          anchor.removeAttribute("target");
+          anchor.rel = "noreferrer";
         } else if (/^[a-z]+:/i.test(raw)) {
           anchor.removeAttribute("href");
         }

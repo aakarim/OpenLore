@@ -489,7 +489,7 @@ function Workspace({ session }: { session: Session }) {
       {sheet === "folders" && (
         <Sheet title="Folders" onClose={() => setSheet(null)}>
           <div className="sheet-tree">
-            <Tree {...treeProps} />
+            <Tree {...treeProps} onFolder={undefined} />
           </div>
         </Sheet>
       )}
