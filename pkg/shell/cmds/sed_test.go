@@ -137,6 +137,37 @@ func TestSedPreservesSemicolonsInDelimitedValues(t *testing.T) {
 	}
 }
 
+func TestSedAppendWhitespace(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+		want    string
+	}{
+		{"one-line form ignores separator whitespace", "echo x | sed '1a \t hello'", "x\nhello\n"},
+		{"backslash form preserves whitespace", `echo x | sed '1a\  hello'`, "x\n  hello\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, errOut, code := execCmd(t, testFS(), tt.command)
+			if code != 0 || out != tt.want {
+				t.Fatalf("code=%d stdout=%q stderr=%s, want %q", code, out, errOut, tt.want)
+			}
+		})
+	}
+}
+
+func TestHelpDocumentsSedAppendForms(t *testing.T) {
+	out, errOut, code := execCmd(t, testFS(), "help")
+	if code != 0 {
+		t.Fatalf("help failed: code=%d stderr=%s", code, errOut)
+	}
+	for _, form := range []string{"sed '/pat/a text'", `sed '/pat/a\<text>'`} {
+		if !strings.Contains(out, form) {
+			t.Errorf("help does not document %q", form)
+		}
+	}
+}
+
 func TestSedAppendMultilineInPlace(t *testing.T) {
 	fs := testFS()
 	command := "sed -i '/This is/a\\\n* idea, with context (important); keep it\n* another idea' /docs/readme.md"
