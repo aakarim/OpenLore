@@ -7,7 +7,7 @@ type Props = {
   expanded: string[];
   onExpanded: (paths: string[]) => void;
   onFile: (path: string) => void;
-  onFolder: (path: string) => void;
+  onFolder?: (path: string) => void;
 };
 function Branch({
   path,
@@ -42,7 +42,7 @@ function Branch({
             style={{ paddingLeft: 10 + depth * 16 }}
             onClick={() => {
               if (entry.directory) {
-                props.onFolder(entry.path);
+                props.onFolder?.(entry.path);
                 togglePath(entry.path, props);
               } else props.onFile(entry.path);
             }}
@@ -85,7 +85,7 @@ export function Tree(props: Props) {
         className={`tree-row root ${props.selected === "/" ? "selected" : ""}`}
         aria-expanded={props.expanded.includes("/")}
         onClick={() => {
-          props.onFolder("/");
+          props.onFolder?.("/");
           togglePath("/", props);
         }}
       >

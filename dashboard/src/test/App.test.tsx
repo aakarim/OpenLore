@@ -92,6 +92,27 @@ test("mobile uses category and details sheets instead of horizontal analytics ta
   await waitFor(() => expect(dialog).not.toBeInTheDocument());
 });
 
+test("mobile folder tree stays open while unfurling folders", async () => {
+  mockAPI();
+  render(<App />);
+  const user = userEvent.setup();
+  await screen.findByRole("complementary", { name: "Knowledge tree" });
+  await user.click(screen.getByRole("button", { name: /▱ Folders/ }));
+
+  const dialog = screen.getByRole("dialog", { name: "Folders" });
+  const tree = within(dialog).getByRole("complementary", {
+    name: "Knowledge tree",
+  });
+  const folder = await within(tree).findByRole("button", { name: /guide/ });
+  await user.click(folder);
+
+  expect(dialog).toBeInTheDocument();
+  expect(folder).toHaveAttribute("aria-expanded", "true");
+  expect(
+    await within(tree).findByRole("button", { name: /start.md/ }),
+  ).toBeVisible();
+});
+
 test("shows honest oversized-context error and hides Access without permission", async () => {
   history.replaceState(
     null,
