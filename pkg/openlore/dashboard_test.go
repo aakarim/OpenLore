@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -16,7 +17,20 @@ import (
 	"github.com/aakarim/go-openlore/internal/analytics"
 	"github.com/aakarim/go-openlore/internal/config"
 	"github.com/aakarim/go-openlore/internal/passkeys"
+	"github.com/aakarim/go-openlore/pkg/vfs"
 )
+
+type disappearingDashboardFS struct {
+	vfs.FileSystem
+	path string
+}
+
+func (f disappearingDashboardFS) ReadFile(target string) ([]byte, error) {
+	if vfs.CleanPath(target) == f.path {
+		return nil, fs.ErrNotExist
+	}
+	return f.FileSystem.ReadFile(target)
+}
 
 func newDashboardTestServer(t *testing.T) (*Server, *http.ServeMux, string) {
 	t.Helper()
@@ -288,6 +302,30 @@ func TestDashboardLargeFolderAndContextBudget(t *testing.T) {
 	nodes, budget := 0, int64(7)
 	if _, err := s.dashboardContextNode(context.Background(), NewFSAdapter(files), "/nested/record-000.md", 0, &nodes, &budget); err != errDashboardSize {
 		t.Fatalf("oversized context silently truncated: %v", err)
+	}
+}
+
+func TestDashboardRootContextToleratesConcurrentlyRemovedDescendant(t *testing.T) {
+	s, mux, token := newDashboardTestServer(t)
+	s.merge.Mount("public", disappearingDashboardFS{
+		FileSystem: NewFSAdapter(fstest.MapFS{
+			"keep.md": {Data: []byte("kept\n")},
+			"gone.md": {Data: []byte("removed during traversal\n")},
+		}),
+		path: "/gone.md",
+	})
+
+	w := dashboardRequest(mux, "GET", "/dashboard/api/context?path=/", token)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"path":"/public/keep.md"`) || strings.Contains(w.Body.String(), "gone.md") {
+		t.Fatalf("root context failed around removed descendant: %d %s", w.Code, w.Body.String())
+	}
+	var root dashboardNode
+	if err := json.Unmarshal(w.Body.Bytes(), &root); err != nil || root.Bytes != 5 || root.Lines != 1 {
+		t.Fatalf("root context included removed content: node=%+v err=%v", root, err)
+	}
+	w = dashboardRequest(mux, "GET", "/dashboard/api/context?path=/public/gone.md", token)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("directly selected removed file returned %d: %s", w.Code, w.Body.String())
 	}
 }
 
