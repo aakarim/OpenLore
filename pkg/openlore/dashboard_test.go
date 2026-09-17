@@ -22,14 +22,28 @@ import (
 
 type disappearingDashboardFS struct {
 	vfs.FileSystem
-	path string
+	vanished   string
+	listedSize int64
 }
 
 func (f disappearingDashboardFS) ReadFile(target string) ([]byte, error) {
-	if vfs.CleanPath(target) == f.path {
+	if vfs.CleanPath(target) == f.vanished {
 		return nil, fs.ErrNotExist
 	}
 	return f.FileSystem.ReadFile(target)
+}
+
+func (f disappearingDashboardFS) ReadDir(target string) ([]vfs.FileInfo, error) {
+	entries, err := f.FileSystem.ReadDir(target)
+	if err != nil {
+		return nil, err
+	}
+	for i := range entries {
+		if vfs.CleanPath(target+"/"+entries[i].Name()) == f.vanished && f.listedSize > 0 {
+			entries[i].FileSize = f.listedSize
+		}
+	}
+	return entries, nil
 }
 
 func newDashboardTestServer(t *testing.T) (*Server, *http.ServeMux, string) {
@@ -312,7 +326,7 @@ func TestDashboardRootContextToleratesConcurrentlyRemovedDescendant(t *testing.T
 			"keep.md": {Data: []byte("kept\n")},
 			"gone.md": {Data: []byte("removed during traversal\n")},
 		}),
-		path: "/gone.md",
+		vanished: "/gone.md",
 	})
 
 	w := dashboardRequest(mux, "GET", "/dashboard/api/context?path=/", token)
@@ -326,6 +340,42 @@ func TestDashboardRootContextToleratesConcurrentlyRemovedDescendant(t *testing.T
 	w = dashboardRequest(mux, "GET", "/dashboard/api/context?path=/public/gone.md", token)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("directly selected removed file returned %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestDashboardRootContextRevalidatesOversizedRemovedDescendant(t *testing.T) {
+	s, mux, token := newDashboardTestServer(t)
+	s.merge.Mount("public", disappearingDashboardFS{
+		FileSystem: NewFSAdapter(fstest.MapFS{
+			"keep.md": {Data: []byte("kept\n")},
+			"gone.md": {Data: []byte("stale listing\n")},
+		}),
+		vanished:   "/gone.md",
+		listedSize: dashboardMaxBytes + 1,
+	})
+
+	w := dashboardRequest(mux, "GET", "/dashboard/api/context?path=/", token)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"path":"/public/keep.md"`) || strings.Contains(w.Body.String(), "gone.md") {
+		t.Fatalf("stale oversized descendant broke root context: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestDashboardContextRestoresCountersForRemovedChild(t *testing.T) {
+	files := disappearingDashboardFS{
+		FileSystem: NewFSAdapter(fstest.MapFS{
+			"a-gone.md": {Data: []byte("gone")},
+			"z-keep.md": {Data: []byte("12345")},
+		}),
+		vanished: "/a-gone.md",
+	}
+	s := &Server{}
+	nodes, budget := 9998, int64(5)
+	root, err := s.dashboardContextNode(context.Background(), files, "/", 0, &nodes, &budget)
+	if err != nil {
+		t.Fatalf("removed child consumed traversal counters: %v", err)
+	}
+	if root.Bytes != 5 || len(root.Children) != 1 || root.Children[0].Path != "/z-keep.md" || nodes != 10000 || budget != 0 {
+		t.Fatalf("removed child affected result: root=%+v nodes=%d budget=%d", root, nodes, budget)
 	}
 }
 
