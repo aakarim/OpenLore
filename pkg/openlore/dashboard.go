@@ -222,6 +222,14 @@ var errDashboardSize = errors.New("context is too large; select a narrower folde
 // Limit expensive full-content context walks rather than silently displaying a
 // partial corpus as an exact total. The lazy tree stays available for drilldown.
 func (s *Server) dashboardContextNode(ctx context.Context, scoped vfs.FileSystem, target string, depth int, nodes *int, budget *int64) (*dashboardNode, error) {
+	info, err := scoped.Stat(target)
+	if err != nil {
+		return nil, fmt.Errorf("stat %s: %w", target, err)
+	}
+	return s.dashboardContextNodeFromInfo(ctx, scoped, target, info, depth, nodes, budget)
+}
+
+func (s *Server) dashboardContextNodeFromInfo(ctx context.Context, scoped vfs.FileSystem, target string, info *vfs.FileInfo, depth int, nodes *int, budget *int64) (*dashboardNode, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -229,14 +237,22 @@ func (s *Server) dashboardContextNode(ctx context.Context, scoped vfs.FileSystem
 	if *nodes > 10000 || depth > 64 {
 		return nil, errDashboardSize
 	}
-	info, err := scoped.Stat(target)
-	if err != nil {
-		return nil, fmt.Errorf("stat %s: %w", target, err)
-	}
 	node := &dashboardNode{Path: target, Name: path.Base(target), Directory: info.Dir}
 	if !info.Dir {
 		if info.Size() > *budget {
-			return nil, errDashboardSize
+			// ReadDir metadata may be stale. Revalidate before rejecting an
+			// oversized child so a file removed during the walk is handled as a
+			// vanished descendant rather than an oversized live one.
+			current, err := scoped.Stat(target)
+			if err != nil {
+				return nil, fmt.Errorf("stat %s: %w", target, err)
+			}
+			if current.Dir {
+				return nil, fmt.Errorf("stat %s: changed type: %w", target, fs.ErrNotExist)
+			}
+			if current.Size() > *budget {
+				return nil, errDashboardSize
+			}
 		}
 		content, err := scoped.ReadFile(target)
 		if err != nil {
@@ -260,9 +276,20 @@ func (s *Server) dashboardContextNode(ctx context.Context, scoped vfs.FileSystem
 		return nil, fmt.Errorf("list %s: %w", target, err)
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
-	for _, entry := range entries {
-		child, err := s.dashboardContextNode(ctx, scoped, path.Join(target, entry.Name()), depth+1, nodes, budget)
+	for i := range entries {
+		entry := &entries[i]
+		childTarget := path.Join(target, entry.Name())
+		previousNodes, previousBudget := *nodes, *budget
+		child, err := s.dashboardContextNodeFromInfo(ctx, scoped, childTarget, entry, depth+1, nodes, budget)
 		if err != nil {
+			// A workspace-wide walk spans many files and can race a concurrent
+			// removal. The vanished child is no longer part of the live context;
+			// keep computing the remaining readable snapshot. Errors at the
+			// selected target and all non-not-found errors still fail the request.
+			if errors.Is(err, fs.ErrNotExist) {
+				*nodes, *budget = previousNodes, previousBudget
+				continue
+			}
 			return nil, err
 		}
 		node.Children = append(node.Children, child)
