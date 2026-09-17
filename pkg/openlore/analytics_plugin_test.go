@@ -497,7 +497,7 @@ func TestWriteEventPreservesInvocationAndSessionCorrelation(t *testing.T) {
 	p := &analyticsPlugin{service: service}
 	info := CommitInfo{
 		ID: "commit-1",
-		Attribution: Attribution{Principal: "alice", Extra: map[string]string{
+		Attribution: Attribution{Principal: "alice", Actor: "claude@claude.ai", Extra: map[string]string{
 			"transport": "ssh", "session_id": "session-1", "client_session_id": "client-1",
 			"invocation_id": "invocation-1", "parent_id": "command-1", "remote_addr": "127.0.0.1:22",
 		}},
@@ -518,6 +518,9 @@ func TestWriteEventPreservesInvocationAndSessionCorrelation(t *testing.T) {
 	}
 	if got.InvocationID != "invocation-1" || got.ParentID != "command-1" || got.SessionID != "session-1" || got.ClientSessionID != "client-1" || got.Transport != "ssh" || got.RemoteAddr != "127.0.0.1:22" {
 		t.Fatalf("correlation envelope = %#v", got)
+	}
+	if got.Actor != "claude@claude.ai" || got.Fields["writer"] != "agent" || got.Fields["actor_kind"] != "agent" {
+		t.Fatalf("write attribution = %#v", got)
 	}
 }
 
