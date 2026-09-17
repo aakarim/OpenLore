@@ -15,7 +15,7 @@
         }
       ],
       "commands": [
-        "nix --extra-experimental-features 'nix-command flakes' develop --command make dashboard-build"
+        "/nix/var/nix/profiles/default/bin/nix --extra-experimental-features 'nix-command flakes' develop --command make dashboard-build"
       ]
     },
     "build": {

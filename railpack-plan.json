@@ -59,7 +59,7 @@
     {
       "commands": [
         {
-          "cmd": "sh -c 'nix --extra-experimental-features '\"'\"'nix-command flakes'\"'\"' develop --command make dashboard-build'",
+          "cmd": "sh -c '/nix/var/nix/profiles/default/bin/nix --extra-experimental-features '\"'\"'nix-command flakes'\"'\"' develop --command make dashboard-build'",
           "customName": "build dashboard with the Nix-pinned Node toolchain"
         }
       ],
