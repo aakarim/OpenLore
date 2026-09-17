@@ -72,7 +72,7 @@ function Markdown({
       }
       const path = internalPath(raw, file.path, session);
       if (!path) {
-        if (/^https?:/i.test(raw)) {
+        if (/^(https?:)?\/\//i.test(raw)) {
           anchor.removeAttribute("target");
           anchor.rel = "noreferrer";
         } else if (/^[a-z]+:/i.test(raw)) {
