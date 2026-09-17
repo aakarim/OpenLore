@@ -167,21 +167,56 @@ func TestDashboardEventSourceCanonicalizesCopiedResourceFields(t *testing.T) {
 	}
 }
 
-func TestAnalyticsActorClassificationRequiresExplicitEvidence(t *testing.T) {
+func TestAnalyticsActorClassification(t *testing.T) {
 	for _, test := range []struct {
 		name string
 		in   Attribution
 		want analytics.Writer
 	}{
-		{"named identity is unknown", Attribution{Principal: "alice"}, analytics.WriterUnknown},
+		{"direct principal", Attribution{Principal: "alice"}, analytics.WriterHuman},
+		{"delegated actor", Attribution{Principal: "alice", Actor: "claude@claude.ai"}, analytics.WriterAgent},
 		{"explicit human", Attribution{Principal: "alice", Extra: map[string]string{"actor_kind": "human"}}, analytics.WriterHuman},
 		{"explicit agent", Attribution{Principal: "alice", Extra: map[string]string{"actor_kind": "agent"}}, analytics.WriterAgent},
+		{"persisted agent", Attribution{Principal: "system", ActorKind: "agent"}, analytics.WriterAgent},
 		{"internal operation", Attribution{Principal: "system", internal: true}, analytics.WriterAgent},
 		{"invalid explicit value", Attribution{Principal: "alice", Extra: map[string]string{"actor_kind": "person"}}, analytics.WriterUnknown},
+		{"guest", Attribution{Principal: "guest"}, analytics.WriterUnknown},
+		{"anonymous", Attribution{Principal: "anonymous"}, analytics.WriterUnknown},
+		{"missing attribution", Attribution{}, analytics.WriterUnknown},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if got := classifyAttribution(test.in); got != test.want {
 				t.Fatalf("classification = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestAnalyticsEventClassifiesDirectAndDelegatedCallers(t *testing.T) {
+	s := &Server{}
+	for _, test := range []struct {
+		name string
+		id   Identity
+		want analytics.Writer
+	}{
+		{
+			name: "direct ssh principal",
+			id:   Identity{IdentityName: "adil", Attribution: Attribution{Principal: "adil"}, Transport: "ssh"},
+			want: analytics.WriterHuman,
+		},
+		{
+			name: "delegated mcp actor",
+			id:   Identity{IdentityName: "adil", Attribution: Attribution{Principal: "adil", Actor: "claude@claude.ai"}, Transport: "mcp"},
+			want: analytics.WriterAgent,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			event := s.analyticsEvent(test.id, "command.exec", nil)
+			if got := event.Fields["actor_kind"]; got != string(test.want) {
+				t.Fatalf("actor_kind = %q, want %q", got, test.want)
+			}
+			if event.Actor != test.id.Attribution.Actor || event.Transport != test.id.Transport {
+				t.Fatalf("event attribution = %#v", event)
 			}
 		})
 	}

@@ -133,18 +133,19 @@ func (l *writeLog) run() {
 		if committed.HasCommitted() {
 			leaves = fillAfter(leaves, committed.Committed)
 		}
+		attribution := durableAttribution(e.attribution)
 		if err == nil && committed.HasCommitted() {
 			l.mu.RLock()
 			state := l.commitState
 			l.mu.RUnlock()
 			if state != nil {
-				err = state(context.Background(), CommitInfo{ID: commitID, ChangeSet: committed.Committed, Hash: committed.Hash, Leaves: leaves, Attribution: e.attribution})
+				err = state(context.Background(), CommitInfo{ID: commitID, ChangeSet: committed.Committed, Hash: committed.Hash, Leaves: leaves, Attribution: attribution})
 			}
 		}
 		if committed.HasCommitted() {
 			if l.commitPath != "" {
 				recordedAt := time.Now().UTC()
-				if recordErr := appendCommitRecord(l.commitPath, CommitRecord{ID: commitID, Time: recordedAt, Attribution: e.attribution, ChangeSet: committed.Committed, Hash: committed.Hash, Leaves: leaves}); recordErr != nil {
+				if recordErr := appendCommitRecord(l.commitPath, CommitRecord{ID: commitID, Time: recordedAt, Attribution: attribution, ChangeSet: committed.Committed, Hash: committed.Hash, Leaves: leaves}); recordErr != nil {
 					l.logger.Error("commit journal recording failed after durable write", "err", recordErr)
 				}
 			}
@@ -152,7 +153,7 @@ func (l *writeLog) run() {
 			history := l.history
 			l.mu.RUnlock()
 			if history != nil {
-				if recordErr := history.Record(context.Background(), indexedHistoryRecords(commitID, time.Now().UTC(), e.attribution, committed, leaves)); recordErr != nil {
+				if recordErr := history.Record(context.Background(), indexedHistoryRecords(commitID, time.Now().UTC(), attribution, committed, leaves)); recordErr != nil {
 					l.logger.Error("commit provenance recording failed after durable write",
 						"target", e.cs.Target, "action", e.cs.Action, "hash", committed.Hash, "err", recordErr)
 				}
@@ -168,7 +169,7 @@ func (l *writeLog) run() {
 		if pc == nil {
 			continue
 		}
-		if perr := pc(context.Background(), CommitInfo{ID: commitID, ChangeSet: committed.Committed, Hash: committed.Hash, Leaves: leaves, Attribution: e.attribution}); perr != nil {
+		if perr := pc(context.Background(), CommitInfo{ID: commitID, ChangeSet: committed.Committed, Hash: committed.Hash, Leaves: leaves, Attribution: attribution}); perr != nil {
 			l.logger.Error("post-commit chain failed; log continues",
 				"target", e.cs.Target, "action", e.cs.Action, "err", perr)
 		}

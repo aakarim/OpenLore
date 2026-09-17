@@ -28,10 +28,7 @@ func (p *analyticsPlugin) PostCommitMiddleware() []PostCommitMiddleware {
 }
 func (p *analyticsPlugin) observeWrites(next PostCommitHandler) PostCommitHandler {
 	return func(ctx context.Context, info CommitInfo) error {
-		writer := analytics.WriterUnknown
-		if p.server != nil {
-			writer = IdentityStoreClassifier(p.server.identityStore).Classify(ctx, info.Attribution)
-		}
+		writer := classifyAttribution(info.Attribution)
 		for _, leaf := range info.ChangeSet.Leaves() {
 			if leaf.Action != vfs.ChangeActionWrite && leaf.Action != vfs.ChangeActionRemove && leaf.Action != vfs.ChangeActionRemoveAll {
 				continue

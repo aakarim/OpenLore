@@ -575,9 +575,7 @@ func TestScalarProcessorDerivesExactBeforeAfterDelta(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	processor := NewScalarProcessor(cursor, blobs, writerClassifierFunc(func(context.Context, Attribution) analytics.Writer {
-		return analytics.WriterHuman
-	}))
+	processor := NewScalarProcessor(cursor, blobs, IdentityStoreClassifier(nil))
 	events := processor.Process(ctx, analytics.Event{ID: "write-1", Type: "doc.write", InvocationID: "invocation-1", Fields: map[string]any{"commit_id": "commit-1"}})
 	if len(events) != 1 {
 		t.Fatalf("events = %#v", events)

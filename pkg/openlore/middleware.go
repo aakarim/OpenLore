@@ -12,6 +12,7 @@ import (
 type Attribution struct {
 	Principal  string            `json:"principal"`
 	Actor      string            `json:"actor,omitempty"`
+	ActorKind  string            `json:"actor_kind,omitempty"`
 	ClientAuth ClientAuthLevel   `json:"client_auth,omitempty"`
 	Extra      map[string]string `json:"-"`
 	// internal is an unforgeable package capability. Public callers can set ID
@@ -61,6 +62,22 @@ func cloneAttribution(attribution Attribution) Attribution {
 			extra[key] = value
 		}
 		attribution.Extra = extra
+	}
+	return attribution
+}
+
+// durableAttribution preserves classification evidence that cannot otherwise
+// survive JSON persistence. Principal and Actor already provide durable human
+// and delegated-agent evidence; internal and explicit classifications do not.
+func durableAttribution(attribution Attribution) Attribution {
+	attribution = cloneAttribution(attribution)
+	if attribution.ActorKind != "" {
+		return attribution
+	}
+	if kind, ok := attribution.Extra["actor_kind"]; ok {
+		attribution.ActorKind = kind
+	} else if attribution.internal {
+		attribution.ActorKind = "agent"
 	}
 	return attribution
 }

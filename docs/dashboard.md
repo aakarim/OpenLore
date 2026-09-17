@@ -84,8 +84,9 @@ validation rules. Context-window percentage compares current content with the
 selected window; period token totals estimate cumulative input across recorded
 reads. They are not monetary costs or model billing records. Unknown historical
 read sizes remain explicitly incomplete rather than using the current revision.
-Human, agent, and unknown attribution are distinct; an identity's name alone
-does not prove that it represents a human.
+Human, agent, and unknown attribution are distinct. A delegated actor is counted
+as an agent, a named principal acting directly is counted as human, and activity
+without either attribution remains unknown.
 
 Refresh recomputes visible stats and exposes their computation time. Analytics
 is buffered telemetry, not an audit-proof record of every operation; delayed or

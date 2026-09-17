@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aakarim/go-openlore/internal/analytics"
 	"github.com/aakarim/go-openlore/internal/config"
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
@@ -436,6 +437,31 @@ func TestWriteLogCommitStateRunsBeforeSuccessAndSurfacesFailure(t *testing.T) {
 	}
 	if content, err := fs.ReadFile("/committed"); err != nil || string(content) != "x" {
 		t.Fatalf("content was not committed: content=%q err=%v", content, err)
+	}
+}
+
+func TestWriteLogPersistsInternalActorKindForReplay(t *testing.T) {
+	fs := &wlRecordingFS{}
+	commitPath := filepath.Join(t.TempDir(), "commits.jsonl")
+	l := newWriteLog(fs, nil, nil, 1)
+	l.commitPath = commitPath
+	if _, err := l.Submit(context.Background(), Attribution{Principal: "agent_skills_remote", internal: true}, writeCS("/internal")); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	cursor, err := OpenHistoryCursor(commitPath, HistoryPosition{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, ok, err := cursor.Next(context.Background())
+	if err != nil || !ok {
+		t.Fatalf("persisted commit: ok=%v err=%v", ok, err)
+	}
+	if record.Attribution.ActorKind != "agent" || classifyAttribution(record.Attribution) != analytics.WriterAgent {
+		t.Fatalf("persisted attribution = %#v", record.Attribution)
 	}
 }
 
