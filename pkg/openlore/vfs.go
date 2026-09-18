@@ -768,6 +768,22 @@ func (d *DirFS) ReadFile(p string) ([]byte, error) {
 	return os.ReadFile(full)
 }
 
+func (d *DirFS) ReadFileBounded(p string, maxBytes int64) ([]byte, error) {
+	dirConfig := isDirConfigPath(p)
+	if isTrashPath(vfs.CleanPath(p)) || (hasReservedPath(p) && !dirConfig) || hasTraversal(p) {
+		return nil, os.ErrNotExist
+	}
+	if !dirConfig && !isAllowed(path.Base(p), d.files) {
+		return nil, fmt.Errorf("access denied: %s", p)
+	}
+	file, err := os.Open(d.resolve(p))
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	return readAllBounded(file, maxBytes)
+}
+
 // MergeFS merges multiple filesystems under named mount points.
 // An optional root filesystem serves content directly at "/".
 type MergeFS struct {
@@ -1175,6 +1191,17 @@ func (m *MergeFS) ReadFile(p string) ([]byte, error) {
 	return fsys.ReadFile(subPath)
 }
 
+func (m *MergeFS) ReadFileBounded(p string, maxBytes int64) ([]byte, error) {
+	subPath, fsys, err := m.resolve(p)
+	if err != nil {
+		return nil, err
+	}
+	if fsys == nil {
+		return nil, fmt.Errorf("cannot read directory")
+	}
+	return readFileBounded(fsys, subPath, maxBytes)
+}
+
 // EmbedFS serves files from an embed.FS.
 type EmbedFS struct {
 	fs    embed.FS
@@ -1264,6 +1291,18 @@ func (e *EmbedFS) ReadFile(p string) ([]byte, error) {
 
 	full := e.resolve(p)
 	return e.fs.ReadFile(full)
+}
+
+func (e *EmbedFS) ReadFileBounded(p string, maxBytes int64) ([]byte, error) {
+	if !isAllowed(path.Base(p), e.files) {
+		return nil, fmt.Errorf("access denied: %s", p)
+	}
+	file, err := e.fs.Open(e.resolve(p))
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	return readAllBounded(file, maxBytes)
 }
 
 // isAllowed checks if a filename matches the allowed patterns (and is not denied).
@@ -1373,6 +1412,19 @@ func (a *FSAdapter) ReadFile(p string) ([]byte, error) {
 		p = "."
 	}
 	return fs.ReadFile(a.fsys, p)
+}
+
+func (a *FSAdapter) ReadFileBounded(p string, maxBytes int64) ([]byte, error) {
+	p = strings.TrimPrefix(path.Clean("/"+p), "/")
+	if p == "" {
+		p = "."
+	}
+	file, err := a.fsys.Open(p)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	return readAllBounded(file, maxBytes)
 }
 
 // Ensure all types implement vfs.FileSystem; DirFS and MergeFS are writable.

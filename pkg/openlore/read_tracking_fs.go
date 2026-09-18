@@ -44,6 +44,14 @@ func (f *readTrackingFS) ReadFile(p string) ([]byte, error) {
 	return data, err
 }
 
+func (f *readTrackingFS) ReadFileBounded(p string, maxBytes int64) ([]byte, error) {
+	data, err := readFileBounded(f.WritableFS, p, maxBytes)
+	if err == nil {
+		f.note(p, hashBytes(data))
+	}
+	return data, err
+}
+
 // WriteFileAtomic delegates the write and, on success, updates the tracked hash
 // so repeated writes to the same file in one session chain correctly.
 func (f *readTrackingFS) WriteFileAtomic(p string, data []byte, opts vfs.WriteOpts) (string, error) {

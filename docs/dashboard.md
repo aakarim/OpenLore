@@ -111,6 +111,8 @@ persisted. Restored paths must be revalidated. Data responses use `private,
 no-store`; do not configure an external proxy to cache them.
 
 The lazy folder tree supports large folders. Full context walks are bounded to
-10,000 nodes, 64 levels, and 64 MiB of content per request. If a selected scope
-exceeds a limit, choose a narrower folder; a truncated total is never presented
-as a complete one. File previews/downloads have a 64 MiB limit.
+10,000 nodes and 64 levels, while each file read is limited to 64 MiB. A
+workspace may contain more than 64 MiB in total and still receive exact root
+analytics. If a selected scope exceeds a structural limit, choose a narrower
+folder; a truncated total is never presented as a complete one. File
+previews/downloads also have a 64 MiB per-file limit.

@@ -279,4 +279,15 @@ func (f *JobsFS) ReadFile(p string) ([]byte, error) {
 	return renderJob(j), nil
 }
 
+func (f *JobsFS) ReadFileBounded(p string, maxBytes int64) ([]byte, error) {
+	content, err := f.ReadFile(p)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(content)) > maxBytes {
+		return nil, errFileTooLarge
+	}
+	return content, nil
+}
+
 var _ cmds.JobBackend = (*JobManager)(nil)

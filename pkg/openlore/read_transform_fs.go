@@ -44,6 +44,20 @@ func (f *readTransformFS) ReadFile(p string) ([]byte, error) {
 	return b, nil
 }
 
+func (f *readTransformFS) ReadFileBounded(p string, maxBytes int64) ([]byte, error) {
+	b, err := readFileBounded(f.FileSystem, p, maxBytes)
+	if err != nil {
+		return nil, err
+	}
+	for _, transform := range f.transforms {
+		b = transform(p, b)
+		if int64(len(b)) > maxBytes {
+			return nil, errFileTooLarge
+		}
+	}
+	return b, nil
+}
+
 var _ vfs.FileSystem = (*readTransformFS)(nil)
 
 func (f *readTransformFS) LastReadHash(p string) (string, bool) {
@@ -128,6 +142,10 @@ func (f *writableReadTransformFS) ReadFile(p string) ([]byte, error) {
 		b = transform(p, b)
 	}
 	return b, nil
+}
+
+func (f *writableReadTransformFS) ReadFileBounded(p string, maxBytes int64) ([]byte, error) {
+	return (&readTransformFS{FileSystem: f.WritableFS, transforms: f.transforms}).ReadFileBounded(p, maxBytes)
 }
 
 func (f *writableReadTransformFS) AdmitChangeSet(cs vfs.ChangeSet) error {

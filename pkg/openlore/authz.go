@@ -704,6 +704,13 @@ func (s *scopedReadFS) ReadFile(p string) ([]byte, error) {
 	return s.FileSystem.ReadFile(p)
 }
 
+func (s *scopedReadFS) ReadFileBounded(p string, maxBytes int64) ([]byte, error) {
+	if !s.within(p) {
+		return nil, fs.ErrNotExist
+	}
+	return readFileBounded(s.FileSystem, p, maxBytes)
+}
+
 func (s *scopedReadFS) ReadDir(p string) ([]vfs.FileInfo, error) {
 	if !s.readable(p) {
 		return nil, fs.ErrNotExist

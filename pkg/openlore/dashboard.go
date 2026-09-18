@@ -218,17 +218,18 @@ func (s *Server) dashboardTree(w http.ResponseWriter, r *http.Request) {
 
 var errDashboardSize = errors.New("context is too large; select a narrower folder")
 
-// Limit expensive full-content context walks rather than silently displaying a
-// partial corpus as an exact total. The lazy tree stays available for drilldown.
-func (s *Server) dashboardContextNode(ctx context.Context, scoped vfs.FileSystem, target string, depth int, nodes *int, budget *int64) (*dashboardNode, error) {
+// Limit response complexity and individual file reads rather than silently
+// displaying a partial corpus as an exact total. The lazy tree remains
+// available when a scope has too many nodes or is too deeply nested.
+func (s *Server) dashboardContextNode(ctx context.Context, scoped vfs.FileSystem, target string, depth int, nodes *int) (*dashboardNode, error) {
 	info, err := scoped.Stat(target)
 	if err != nil {
 		return nil, fmt.Errorf("stat %s: %w", target, err)
 	}
-	return s.dashboardContextNodeFromInfo(ctx, scoped, target, info, depth, nodes, budget)
+	return s.dashboardContextNodeFromInfo(ctx, scoped, target, info, depth, nodes)
 }
 
-func (s *Server) dashboardContextNodeFromInfo(ctx context.Context, scoped vfs.FileSystem, target string, info *vfs.FileInfo, depth int, nodes *int, budget *int64) (*dashboardNode, error) {
+func (s *Server) dashboardContextNodeFromInfo(ctx context.Context, scoped vfs.FileSystem, target string, info *vfs.FileInfo, depth int, nodes *int) (*dashboardNode, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -238,7 +239,7 @@ func (s *Server) dashboardContextNodeFromInfo(ctx context.Context, scoped vfs.Fi
 	}
 	node := &dashboardNode{Path: target, Name: path.Base(target), Directory: info.Dir}
 	if !info.Dir {
-		if info.Size() > *budget {
+		if info.Size() > dashboardMaxBytes {
 			// ReadDir metadata may be stale. Revalidate before rejecting an
 			// oversized child so a file removed during the walk is handled as a
 			// vanished descendant rather than an oversized live one.
@@ -249,17 +250,16 @@ func (s *Server) dashboardContextNodeFromInfo(ctx context.Context, scoped vfs.Fi
 			if current.Dir {
 				return nil, fmt.Errorf("stat %s: changed type: %w", target, fs.ErrNotExist)
 			}
-			if current.Size() > *budget {
+			if current.Size() > dashboardMaxBytes {
 				return nil, errDashboardSize
 			}
 		}
-		content, err := scoped.ReadFile(target)
+		content, err := readFileBounded(scoped, target, dashboardMaxBytes)
 		if err != nil {
+			if errors.Is(err, errFileTooLarge) {
+				return nil, errDashboardSize
+			}
 			return nil, fmt.Errorf("read %s: %w", target, err)
-		}
-		*budget -= int64(len(content))
-		if *budget < 0 {
-			return nil, errDashboardSize
 		}
 		compute := analytics.ComputeScalars
 		if s.analytics != nil {
@@ -278,15 +278,15 @@ func (s *Server) dashboardContextNodeFromInfo(ctx context.Context, scoped vfs.Fi
 	for i := range entries {
 		entry := &entries[i]
 		childTarget := path.Join(target, entry.Name())
-		previousNodes, previousBudget := *nodes, *budget
-		child, err := s.dashboardContextNodeFromInfo(ctx, scoped, childTarget, entry, depth+1, nodes, budget)
+		previousNodes := *nodes
+		child, err := s.dashboardContextNodeFromInfo(ctx, scoped, childTarget, entry, depth+1, nodes)
 		if err != nil {
 			// A workspace-wide walk spans many files and can race a concurrent
 			// removal. The vanished child is no longer part of the live context;
 			// keep computing the remaining readable snapshot. Errors at the
 			// selected target and all non-not-found errors still fail the request.
 			if errors.Is(err, fs.ErrNotExist) {
-				*nodes, *budget = previousNodes, previousBudget
+				*nodes = previousNodes
 				continue
 			}
 			return nil, err
@@ -302,8 +302,8 @@ func (s *Server) dashboardContextNodeFromInfo(ctx context.Context, scoped vfs.Fi
 
 func (s *Server) dashboardContext(w http.ResponseWriter, r *http.Request) {
 	_, scoped, target := s.dashboardPath(r)
-	nodes, budget := 0, int64(dashboardMaxBytes)
-	node, err := s.dashboardContextNode(r.Context(), scoped, target, 0, &nodes, &budget)
+	nodes := 0
+	node, err := s.dashboardContextNode(r.Context(), scoped, target, 0, &nodes)
 	if errors.Is(err, errDashboardSize) {
 		dashboardError(w, http.StatusRequestEntityTooLarge, err.Error())
 		return
@@ -323,8 +323,8 @@ func dashboardReadFile(scoped vfs.FileSystem, target string) ([]byte, error) {
 	if info.Size() > dashboardMaxBytes {
 		return nil, errDashboardSize
 	}
-	content, err := scoped.ReadFile(target)
-	if len(content) > dashboardMaxBytes {
+	content, err := readFileBounded(scoped, target, dashboardMaxBytes)
+	if errors.Is(err, errFileTooLarge) {
 		return nil, errDashboardSize
 	}
 	return content, err
