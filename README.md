@@ -31,7 +31,7 @@ For one agent working in one repository, that's fine.
 
 OpenLore becomes useful when knowledge needs to be shared across agents, repositories or teams, or when you need permissions, publishing, review and a single source of truth without copying the same files everywhere.
 
-[![OpenLore Skills import demo](assets/demo/v0.4.0/openlore-skills-import.gif)](assets/demo/v0.4.0/openlore-skills-import.mp4)
+[![OpenLore Skills import demo](https://raw.githubusercontent.com/aakarim/openlore-videos/main/assets/demo/v0.4.0/openlore-skills-import.gif)](https://raw.githubusercontent.com/aakarim/openlore-videos/main/assets/demo/v0.4.0/openlore-skills-import.mp4)
 
 ## Quick Start
 
@@ -107,7 +107,7 @@ See [Installation](#installation) for more ways to install and package OpenLore.
 - **Governed knowledge contribution** — Let contributors publish into inboxes
   while reserving sensitive paths for approvers and preventing accidental
   overwrites.
-- **Remote review of agent artifacts** — Expose reports, logs, screenshots, and
+- **Artifact repository** — Store and expose reports, logs, screenshots, and
   generated files through the browser or SSH without building a custom artifact
   viewer or granting access to the agent's machine.
 - **Identity-specific workspaces** — Mount a private home for each agent plus
