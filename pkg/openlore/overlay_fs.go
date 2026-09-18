@@ -64,6 +64,14 @@ func (o *OverlayFS) ReadFile(p string) ([]byte, error) {
 	return o.lower.ReadFile(p)
 }
 
+func (o *OverlayFS) ReadFileBounded(p string, maxBytes int64) ([]byte, error) {
+	b, err := readFileBounded(o.upper, p, maxBytes)
+	if err == nil || !errors.Is(err, fs.ErrNotExist) || o.lower == nil {
+		return b, err
+	}
+	return readFileBounded(o.lower, p, maxBytes)
+}
+
 func (o *OverlayFS) ReadDir(p string) ([]vfs.FileInfo, error) {
 	upperInfo, upperErr := o.upper.Stat(p)
 	if upperErr != nil {

@@ -251,3 +251,32 @@ test("an aggregation-only refresh recovers an expired session", async () => {
     ),
   ).toBe(true);
 });
+
+test("returning to an analytics tab reuses its fetched results", async () => {
+  history.replaceState(
+    null,
+    "",
+    "/dashboard/?view=analytics&path=/&tab=overview",
+  );
+  const fetch = mockAPI();
+  render(<App />);
+  const user = userEvent.setup();
+  await screen.findByText("Context by folder");
+
+  await user.click(screen.getByRole("tab", { name: "Gaps" }));
+  await screen.findByRole("heading", { name: "Top search queries" });
+  const analyticsRequests = () =>
+    fetch.mock.calls
+      .map(([input]) => String(input))
+      .filter((url) =>
+        /\/api\/(context|usage)\?|\/analytics\/aggregations\//.test(url),
+      );
+  const afterFirstVisit = analyticsRequests();
+
+  await user.click(screen.getByRole("tab", { name: "Overview" }));
+  await screen.findByText("Context by folder");
+  await user.click(screen.getByRole("tab", { name: "Gaps" }));
+  await screen.findByRole("heading", { name: "Top search queries" });
+
+  expect(analyticsRequests()).toEqual(afterFirstVisit);
+});

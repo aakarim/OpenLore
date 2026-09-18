@@ -52,6 +52,13 @@ func (r *readChainFS) ReadFile(p string) ([]byte, error) {
 	return r.FileSystem.ReadFile(p)
 }
 
+func (r *readChainFS) ReadFileBounded(p string, maxBytes int64) ([]byte, error) {
+	if err := r.gate(context.Background(), ReadOp{Path: p, Kind: ReadKindFile, Attribution: r.attribution}); err != nil {
+		return nil, err
+	}
+	return readFileBounded(r.FileSystem, p, maxBytes)
+}
+
 func (r *readChainFS) GetXattr(p, name string) ([]byte, error) {
 	x, ok := r.FileSystem.(vfs.XattrReader)
 	if !ok {

@@ -38,6 +38,10 @@ func newMiddlewareFS(readView vfs.FileSystem, attribution Attribution, admit Wri
 	return &middlewareFS{FileSystem: readView, attribution: attribution, admit: admit}
 }
 
+func (m *middlewareFS) ReadFileBounded(p string, maxBytes int64) ([]byte, error) {
+	return readFileBounded(m.FileSystem, p, maxBytes)
+}
+
 // run drives a ChangeSet through the admission chain and returns the committed
 // hash (empty for non-write actions) or the chain's error. A deferred write
 // surfaces as *vfs.PendingChangeError; a rejected one as the middleware's error.

@@ -254,12 +254,12 @@ func (s *Server) dashboardContextNodeFromInfo(ctx context.Context, scoped vfs.Fi
 				return nil, errDashboardSize
 			}
 		}
-		content, err := scoped.ReadFile(target)
+		content, err := readFileBounded(scoped, target, dashboardMaxBytes)
 		if err != nil {
+			if errors.Is(err, errFileTooLarge) {
+				return nil, errDashboardSize
+			}
 			return nil, fmt.Errorf("read %s: %w", target, err)
-		}
-		if len(content) > dashboardMaxBytes {
-			return nil, errDashboardSize
 		}
 		compute := analytics.ComputeScalars
 		if s.analytics != nil {
@@ -323,8 +323,8 @@ func dashboardReadFile(scoped vfs.FileSystem, target string) ([]byte, error) {
 	if info.Size() > dashboardMaxBytes {
 		return nil, errDashboardSize
 	}
-	content, err := scoped.ReadFile(target)
-	if len(content) > dashboardMaxBytes {
+	content, err := readFileBounded(scoped, target, dashboardMaxBytes)
+	if errors.Is(err, errFileTooLarge) {
 		return nil, errDashboardSize
 	}
 	return content, err

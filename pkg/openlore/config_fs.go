@@ -86,6 +86,21 @@ func (f *configViewFS) ReadFile(name string) ([]byte, error) {
 	return f.WritableFS.ReadFile(name)
 }
 
+func (f *configViewFS) ReadFileBounded(name string, maxBytes int64) ([]byte, error) {
+	if vfs.CleanPath(name) != authConfigVFSPath {
+		return readFileBounded(f.WritableFS, name, maxBytes)
+	}
+	if !f.authorized() {
+		return nil, os.ErrPermission
+	}
+	file, err := os.Open(f.server.config.AuthFile)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	return readAllBounded(file, maxBytes)
+}
+
 func (f *configViewFS) WriteFileAtomic(name string, data []byte, opts vfs.WriteOpts) (string, error) {
 	if vfs.CleanPath(name) != authConfigVFSPath {
 		return f.WritableFS.WriteFileAtomic(name, data, opts)

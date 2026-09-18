@@ -33,6 +33,13 @@ func (f disappearingDashboardFS) ReadFile(target string) ([]byte, error) {
 	return f.FileSystem.ReadFile(target)
 }
 
+func (f disappearingDashboardFS) ReadFileBounded(target string, maxBytes int64) ([]byte, error) {
+	if vfs.CleanPath(target) == f.vanished {
+		return nil, fs.ErrNotExist
+	}
+	return readFileBounded(f.FileSystem, target, maxBytes)
+}
+
 func (f disappearingDashboardFS) ReadDir(target string) ([]vfs.FileInfo, error) {
 	entries, err := f.FileSystem.ReadDir(target)
 	if err != nil {
@@ -56,6 +63,16 @@ func (f sizedDashboardFileFS) Stat(string) (*vfs.FileInfo, error) {
 }
 func (sizedDashboardFileFS) ReadDir(string) ([]vfs.FileInfo, error) { return nil, nil }
 func (f sizedDashboardFileFS) ReadFile(string) ([]byte, error)      { return f.content, nil }
+
+type growingDashboardFileFS struct{ sizedDashboardFileFS }
+
+func (growingDashboardFileFS) ReadFile(string) ([]byte, error) {
+	panic("dashboard used an unbounded read")
+}
+
+func (growingDashboardFileFS) ReadFileBounded(string, int64) ([]byte, error) {
+	return nil, errFileTooLarge
+}
 
 func newDashboardTestServer(t *testing.T) (*Server, *http.ServeMux, string) {
 	t.Helper()
@@ -327,6 +344,10 @@ func TestDashboardLargeFolderAndContextLimits(t *testing.T) {
 	nodes := 0
 	if _, err := s.dashboardContextNode(context.Background(), sizedDashboardFileFS{size: dashboardMaxBytes + 1}, "/large.md", 0, &nodes); err != errDashboardSize {
 		t.Fatalf("oversized file was accepted: %v", err)
+	}
+	nodes = 0
+	if _, err := s.dashboardContextNode(context.Background(), growingDashboardFileFS{sizedDashboardFileFS{size: 1}}, "/growing.md", 0, &nodes); err != errDashboardSize {
+		t.Fatalf("file that grew during its bounded read was accepted: %v", err)
 	}
 }
 

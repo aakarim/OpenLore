@@ -36,6 +36,10 @@ func newScopedWriteFS(base vfs.FileSystem, authz writeAuthorizer) *scopedWriteFS
 	return &scopedWriteFS{FileSystem: base, inner: w, authorize: authz}
 }
 
+func (s *scopedWriteFS) ReadFileBounded(p string, maxBytes int64) ([]byte, error) {
+	return readFileBounded(s.FileSystem, p, maxBytes)
+}
+
 func (s *scopedWriteFS) WriteFileAtomic(p string, data []byte, opts vfs.WriteOpts) (string, error) {
 	if s.inner == nil || !s.authorize(vfs.ChangeActionWrite, p) {
 		return "", mutationDeniedError(s.FileSystem, vfs.ChangeActionWrite, p)

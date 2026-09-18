@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { api } from "./api";
 import { useAsync } from "./hooks";
 import { Sunburst, estimatedTokens } from "./Sunburst";
@@ -529,6 +529,20 @@ export function Analytics({
   onComputed: (time: string) => void;
   onDays: (days: number) => void;
 }) {
+  const [visitedTabs, setVisitedTabs] = useState<Set<AnalyticsTab>>(
+    () => new Set([tab]),
+  );
+  useEffect(() => {
+    setVisitedTabs((visited) => {
+      if (visited.has(tab)) return visited;
+      return new Set([...visited, tab]);
+    });
+  }, [tab]);
+  const tabHasBeenVisited = (candidate: AnalyticsTab) =>
+    candidate === tab || visitedTabs.has(candidate);
+  const needsUsage = ["overview", "knowledge", "usage"].some((candidate) =>
+    tabHasBeenVisited(candidate as AnalyticsTab),
+  );
   const context = useAsync(
     (signal) => api.context(path, signal),
     [path],
@@ -538,7 +552,7 @@ export function Analytics({
   const usage = useAsync(
     (signal) => api.usage(path, days, ratio, signal),
     [path, days, ratio],
-    ["overview", "knowledge", "usage"].includes(tab),
+    needsUsage,
     true,
   );
   const folder = useAsync((signal) => api.tree(path, signal), [path]);
@@ -546,8 +560,8 @@ export function Analytics({
     if (usage.data?.computed_at) onComputed(usage.data.computed_at);
   }, [usage.data?.computed_at, onComputed]);
   const visibleTabs = tabs.filter((item) => item.id !== "access" || canAccess);
-  const body = () => {
-    switch (tab) {
+  const body = (selectedTab: AnalyticsTab) => {
+    switch (selectedTab) {
       case "overview":
         return (
           context.data &&
@@ -734,7 +748,15 @@ export function Analytics({
             : undefined
         }
       >
-        <div className="analytics-content">{body()}</div>
+        <div className="analytics-content">
+          {visibleTabs
+            .filter((item) => tabHasBeenVisited(item.id))
+            .map((item) => (
+              <div key={item.id} hidden={item.id !== tab}>
+                {body(item.id)}
+              </div>
+            ))}
+        </div>
         {usage.data?.note && <p className="coverage-note">{usage.data.note}</p>}
         {tab !== "access" && (
           <p className="coverage-note">
