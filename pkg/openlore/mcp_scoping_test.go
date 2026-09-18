@@ -97,10 +97,15 @@ func TestMCPScoping_AnonymousListingHidesNonDefaultDocset(t *testing.T) {
 func TestMCPScoping_AnonymousIsReadOnly(t *testing.T) {
 	h := newScopedTestAPI(t)
 
-	// A write verb must be unavailable to a read-only anonymous session.
+	// A write verb must explain why it is unavailable to an anonymous session.
 	resp := runShell(t, h, "echo pwned > /public/hello.txt")
-	if !strings.Contains(resp.Output, "exit code") && !strings.Contains(resp.Output, "read-only") && !strings.Contains(resp.Output, "not found") {
-		t.Fatalf("expected write to be rejected for read-only anonymous session; got %q", resp.Output)
+	if !strings.Contains(resp.Output, "current user is a guest; guests cannot write") {
+		t.Fatalf("expected guest write restriction to be explained; got %q", resp.Output)
+	}
+
+	resp = runShell(t, h, "mkdir /public/new")
+	if !strings.Contains(resp.Output, "mkdir: current user is a guest; guests cannot write") {
+		t.Fatalf("expected guest write command restriction to be explained; got %q", resp.Output)
 	}
 
 	// And the file is unchanged.
