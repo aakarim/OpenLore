@@ -46,6 +46,17 @@ func (f disappearingDashboardFS) ReadDir(target string) ([]vfs.FileInfo, error) 
 	return entries, nil
 }
 
+type sizedDashboardFileFS struct {
+	size    int64
+	content []byte
+}
+
+func (f sizedDashboardFileFS) Stat(string) (*vfs.FileInfo, error) {
+	return &vfs.FileInfo{FileName: "large.md", FilePath: "/large.md", FileSize: f.size}, nil
+}
+func (sizedDashboardFileFS) ReadDir(string) ([]vfs.FileInfo, error) { return nil, nil }
+func (f sizedDashboardFileFS) ReadFile(string) ([]byte, error)      { return f.content, nil }
+
 func newDashboardTestServer(t *testing.T) (*Server, *http.ServeMux, string) {
 	t.Helper()
 	s := newTokenTestServer(t, true, "deny")
@@ -287,7 +298,7 @@ func TestDashboardPreviewRawAndTimeline(t *testing.T) {
 	}
 }
 
-func TestDashboardLargeFolderAndContextBudget(t *testing.T) {
+func TestDashboardLargeFolderAndContextLimits(t *testing.T) {
 	s, mux, token := newDashboardTestServer(t)
 	files := fstest.MapFS{}
 	for i := range 100 {
@@ -313,9 +324,31 @@ func TestDashboardLargeFolderAndContextBudget(t *testing.T) {
 	if node.Bytes != 800 || node.Characters != 800 || node.Lines != 200 || len(node.Children[0].Children) != 100 {
 		t.Fatalf("incorrect aggregate context: %+v", node)
 	}
-	nodes, budget := 0, int64(7)
-	if _, err := s.dashboardContextNode(context.Background(), NewFSAdapter(files), "/nested/record-000.md", 0, &nodes, &budget); err != errDashboardSize {
-		t.Fatalf("oversized context silently truncated: %v", err)
+	nodes := 0
+	if _, err := s.dashboardContextNode(context.Background(), sizedDashboardFileFS{size: dashboardMaxBytes + 1}, "/large.md", 0, &nodes); err != errDashboardSize {
+		t.Fatalf("oversized file was accepted: %v", err)
+	}
+}
+
+func TestDashboardContextAllowsCorpusLargerThanSingleFileLimit(t *testing.T) {
+	s, mux, token := newDashboardTestServer(t)
+	content := bytes.Repeat([]byte{'a'}, dashboardMaxBytes/2+1)
+	s.merge.Mount("public", NewFSAdapter(fstest.MapFS{
+		"large/a.md": {Data: content},
+		"large/b.md": {Data: content},
+	}))
+
+	w := dashboardRequest(mux, "GET", "/dashboard/api/context?path=/public/large", token)
+	if w.Code != http.StatusOK {
+		t.Fatalf("large corpus context status %d: %s", w.Code, w.Body.String())
+	}
+	var node dashboardNode
+	if err := json.Unmarshal(w.Body.Bytes(), &node); err != nil {
+		t.Fatal(err)
+	}
+	want := int64(2 * len(content))
+	if node.Bytes != want || node.Characters != want || len(node.Children) != 2 {
+		t.Fatalf("large corpus totals = %+v, want bytes and characters %d across two files", node, want)
 	}
 }
 
@@ -360,7 +393,7 @@ func TestDashboardRootContextRevalidatesOversizedRemovedDescendant(t *testing.T)
 	}
 }
 
-func TestDashboardContextRestoresCountersForRemovedChild(t *testing.T) {
+func TestDashboardContextRestoresNodeCounterForRemovedChild(t *testing.T) {
 	files := disappearingDashboardFS{
 		FileSystem: NewFSAdapter(fstest.MapFS{
 			"a-gone.md": {Data: []byte("gone")},
@@ -369,13 +402,13 @@ func TestDashboardContextRestoresCountersForRemovedChild(t *testing.T) {
 		vanished: "/a-gone.md",
 	}
 	s := &Server{}
-	nodes, budget := 9998, int64(5)
-	root, err := s.dashboardContextNode(context.Background(), files, "/", 0, &nodes, &budget)
+	nodes := 9998
+	root, err := s.dashboardContextNode(context.Background(), files, "/", 0, &nodes)
 	if err != nil {
-		t.Fatalf("removed child consumed traversal counters: %v", err)
+		t.Fatalf("removed child consumed traversal counter: %v", err)
 	}
-	if root.Bytes != 5 || len(root.Children) != 1 || root.Children[0].Path != "/z-keep.md" || nodes != 10000 || budget != 0 {
-		t.Fatalf("removed child affected result: root=%+v nodes=%d budget=%d", root, nodes, budget)
+	if root.Bytes != 5 || len(root.Children) != 1 || root.Children[0].Path != "/z-keep.md" || nodes != 10000 {
+		t.Fatalf("removed child affected result: root=%+v nodes=%d", root, nodes)
 	}
 }
 
