@@ -28,8 +28,9 @@ type Shell struct {
 	// "unrestricted" — every action is allowed (the default, backward
 	// compatible). When non-nil, a command (or redirect) whose capability
 	// class is absent is treated as if it does not exist.
-	allowedActions   map[cmds.Action]bool
-	actionAuthorizer func(cmds.Action) bool
+	allowedActions      map[cmds.Action]bool
+	actionAuthorizer    func(cmds.Action) bool
+	actionDeniedMessage string
 	// conflictPolicyFn resolves the write-conflict policy for a resolved path.
 	// nil means "use the default" (vfs.PolicyHash). The server sets this to a
 	// per-docset resolver; standalone shells get the default.
@@ -129,6 +130,11 @@ func (s *Shell) ActionAllowed(a cmds.Action) bool {
 
 // SetActionAuthorizer installs a per-invocation narrowing check.
 func (s *Shell) SetActionAuthorizer(fn func(cmds.Action) bool) { s.actionAuthorizer = fn }
+
+// SetActionDeniedMessage makes capability denials explicit instead of hiding
+// the denied command. An empty message retains the default "command not found"
+// behavior.
+func (s *Shell) SetActionDeniedMessage(message string) { s.actionDeniedMessage = message }
 
 // SetConflictPolicyFn installs a resolver that maps a resolved path to its
 // write-conflict policy. Passing nil restores the default (vfs.PolicyHash).
@@ -428,6 +434,10 @@ func (s *Shell) execCallObserved(call *parser.CallExpr, w io.Writer, errW io.Wri
 		// A file redirect is a write; gate it at parse time (Part B) so a
 		// read-only session cannot use `>`/`>>` to mutate a docset.
 		if !s.ActionAllowed(cmds.ActionWrite) {
+			if s.actionDeniedMessage != "" {
+				fmt.Fprintf(errW, "redirect: %s: %s\n", target, s.actionDeniedMessage)
+				return 1
+			}
 			fmt.Fprintf(errW, "redirect: %s: read-only filesystem\n", target)
 			return 1
 		}
@@ -503,6 +513,10 @@ func (s *Shell) execCallInner(call *parser.CallExpr, w io.Writer, errW io.Writer
 		// not allowed to perform is hidden — it reports "command not found"
 		// so the restricted surface is not even discoverable.
 		if !s.ActionAllowed(cmds.InvocationAction(cmdName, cmdArgs)) {
+			if s.actionDeniedMessage != "" {
+				fmt.Fprintf(errW, "%s: %s\n", cmdName, s.actionDeniedMessage)
+				return 1
+			}
 			fmt.Fprintf(errW, "%s: command not found\n", cmdName)
 			fmt.Fprintln(errW, "Type 'help' for available commands.")
 			return 127

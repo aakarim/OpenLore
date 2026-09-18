@@ -1244,6 +1244,9 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 		} else {
 			sh.SetAllowedActions(nil) // read-only (ActionRead implied)
 		}
+		if id.IdentityName == "guest" {
+			sh.SetActionDeniedMessage("current user is a guest; guests cannot write")
+		}
 		sh.SetActionAuthorizer(func(action cmds.Action) bool {
 			if action == cmds.ActionWrite && !canWrite {
 				return s.hasCurrentCapability(id, "lore:config:edit")
