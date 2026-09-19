@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
+	"log"
 	"net/http"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/aakarim/go-openlore/internal/config"
 	"github.com/aakarim/go-openlore/pkg/vfs"
@@ -43,6 +46,8 @@ type Service struct {
 	shipper     *Shipper
 	refresher   *Refresher
 	store       AggregationStore
+	index       FactsIndex
+	indexer     *factsIndexer
 	facts       ContentFacts
 	registry    *Registry
 	aggregator  *Aggregator
@@ -51,6 +56,7 @@ type Service struct {
 	emitted     sync.Map
 	providersMu sync.RWMutex
 	providers   []ContentScalarProvider
+	indexLog    sync.Once
 	cancel      context.CancelFunc
 	close       sync.Once
 	closeErr    error
@@ -68,9 +74,9 @@ func New(cfg config.AnalyticsConfig, deps Deps) (*Service, error) {
 	store := deps.Store
 	if store == nil {
 		switch strings.ToLower(strings.TrimSpace(cfg.Aggregations.Store)) {
-		case "", "file":
+		case "file":
 			store, err = OpenFileAggregationStore(filepath.Join(dir, "aggregations"))
-		case "sqlite":
+		case "", "sqlite":
 			store, err = OpenSQLiteAggregationStore(filepath.Join(dir, "aggregations.sqlite"))
 		default:
 			err = fmt.Errorf("unsupported analytics aggregation store %q", cfg.Aggregations.Store)
@@ -96,8 +102,15 @@ func New(cfg config.AnalyticsConfig, deps Deps) (*Service, error) {
 	if deps.Tokenizer != nil {
 		providers = []ContentScalarProvider{sizeProvider{}, tokenProvider{deps.Tokenizer}}
 	}
-	facts := NewContentFacts(deps.FS, providers...)
-	s := &Service{cfg: cfg, fs: deps.FS, log: log, store: store, facts: facts, providers: providers}
+	var index FactsIndex
+	if sqliteStore, ok := store.(*SQLiteAggregationStore); ok {
+		index = newSQLiteFactsIndex(sqliteStore)
+	}
+	s := &Service{cfg: cfg, fs: deps.FS, log: log, store: store, index: index, providers: providers}
+	s.facts = newIndexedContentFacts(deps.FS, deps.FS, index, &s.indexLog, providers)
+	if index != nil && deps.FS != nil {
+		s.indexer = newFactsIndexer(s, cfg.Index.Workers)
+	}
 	for _, processor := range deps.Processors {
 		if processor != nil && processor.Name() == "doc-scalars" {
 			s.emitted.Store("doc.scalars", true)
@@ -111,7 +124,7 @@ func New(cfg config.AnalyticsConfig, deps Deps) (*Service, error) {
 		}
 		return events
 	})
-	reg.Bind(log, facts)
+	reg.Bind(log, s.facts)
 	for _, a := range BuiltinAggregations() {
 		if err := reg.Register(a); err != nil {
 			return nil, err
@@ -138,6 +151,9 @@ func New(cfg config.AnalyticsConfig, deps Deps) (*Service, error) {
 }
 func (s *Service) Start(ctx context.Context) {
 	ctx, s.cancel = context.WithCancel(ctx)
+	if s.indexer != nil {
+		s.indexer.start(ctx)
+	}
 	s.recorder.Start(ctx)
 	if s.pipeline != nil {
 		s.pipeline.Run(ctx)
@@ -165,9 +181,10 @@ func (s *Service) AddContentScalarProvider(provider ContentScalarProvider) {
 	}
 	s.providersMu.Lock()
 	s.providers = append(s.providers, provider)
-	s.facts = NewContentFacts(s.fs, s.providers...)
+	s.facts = newIndexedContentFacts(s.fs, s.fs, s.index, &s.indexLog, s.providers)
 	s.registry.Bind(s.log, s.facts)
 	s.providersMu.Unlock()
+	s.EnqueueFacts("/")
 }
 func (s *Service) SetTokenizer(tokenizer Tokenizer) {
 	if tokenizer == nil {
@@ -181,9 +198,16 @@ func (s *Service) SetTokenizer(tokenizer Tokenizer) {
 		}
 	}
 	s.providers = append(providers, tokenProvider{tokenizer})
-	s.facts = NewContentFacts(s.fs, s.providers...)
+	s.facts = newIndexedContentFacts(s.fs, s.fs, s.index, &s.indexLog, s.providers)
 	s.registry.Bind(s.log, s.facts)
 	s.providersMu.Unlock()
+	s.EnqueueFacts("/")
+}
+
+func (s *Service) EnqueueFacts(p string) {
+	if s.indexer != nil {
+		s.indexer.enqueue(p)
+	}
 }
 func (s *Service) RegisterAggregations(aggregations []Aggregation) error {
 	return s.registry.RegisterAll(aggregations)
@@ -192,7 +216,41 @@ func (s *Service) NewContentFacts(fs vfs.FileSystem) ContentFacts {
 	s.providersMu.RLock()
 	providers := append([]ContentScalarProvider(nil), s.providers...)
 	s.providersMu.RUnlock()
-	return NewContentFacts(fs, providers...)
+	return newIndexedContentFacts(fs, s.fs, s.index, &s.indexLog, providers)
+}
+
+func (s *Service) HasFactsIndex() bool { return s.index != nil }
+
+func (s *Service) CurrentFacts(ctx context.Context, p string, info *vfs.FileInfo, read func() ([]byte, error)) (DocScalars, error) {
+	s.providersMu.RLock()
+	providers := append([]ContentScalarProvider(nil), s.providers...)
+	s.providersMu.RUnlock()
+	if s.index != nil {
+		fact, hit, err := s.index.Lookup(ctx, p, info.Size(), info.ModTime().UnixNano(), sourceNames(providers))
+		if err == nil && hit {
+			return docScalarsFromIndexed(fact, providers)
+		}
+		if err != nil {
+			s.indexLog.Do(func() { log.Printf("analytics facts index unavailable; computing uncached: %v", err) })
+		}
+	}
+	content, err := read()
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) && s.index != nil {
+			_ = s.index.Delete(ctx, p)
+		}
+		return DocScalars{}, err
+	}
+	if s.index == nil {
+		doc := computeScalars(p, content, providers)
+		doc.Scalars["characters"] = float64(utf8.RuneCount(content))
+		return doc, nil
+	}
+	fact := indexedFacts(p, info, content, providers)
+	if err := s.index.Upsert(ctx, fact); err != nil {
+		s.indexLog.Do(func() { log.Printf("analytics facts index unavailable; computing uncached: %v", err) })
+	}
+	return docScalarsFromIndexed(fact, providers)
 }
 func (s *Service) ComputeScalars(path string, content []byte) DocScalars {
 	s.providersMu.RLock()
@@ -290,8 +348,16 @@ func (s *Service) Close(ctx context.Context) error {
 		if s.cancel != nil {
 			s.cancel()
 		}
+		if s.indexer != nil {
+			s.indexer.wait()
+		}
 		if err := s.log.Close(); err != nil && s.closeErr == nil {
 			s.closeErr = err
+		}
+		if s.index != nil {
+			if err := s.index.Close(); err != nil && s.closeErr == nil {
+				s.closeErr = err
+			}
 		}
 		if err := s.store.Close(); err != nil && s.closeErr == nil {
 			s.closeErr = err

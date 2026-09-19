@@ -355,9 +355,10 @@ func TestAnalyticsDashboardShowsObservedValues(t *testing.T) {
 		t.Fatal(err)
 	}
 	service, err := analytics.New(config.AnalyticsConfig{
-		Dir:      filepath.Join(t.TempDir(), "analytics"),
-		Log:      config.AnalyticsLogConfig{Compress: "none"},
-		Pipeline: config.AnalyticsPipelineConfig{Buffer: 8},
+		Dir:          filepath.Join(t.TempDir(), "analytics"),
+		Log:          config.AnalyticsLogConfig{Compress: "none"},
+		Pipeline:     config.AnalyticsPipelineConfig{Buffer: 8},
+		Aggregations: config.AnalyticsAggregationConfig{Store: "file"},
 	}, analytics.Deps{FS: NewDirFS(root, config.FilesConfig{})})
 	if err != nil {
 		t.Fatal(err)
@@ -401,9 +402,10 @@ func TestAnalyticsDashboardShowsObservedValues(t *testing.T) {
 
 func TestAnalyticsDashboardShowsLiveSearchQualityResults(t *testing.T) {
 	service, err := analytics.New(config.AnalyticsConfig{
-		Dir:      filepath.Join(t.TempDir(), "analytics"),
-		Log:      config.AnalyticsLogConfig{Compress: "none"},
-		Pipeline: config.AnalyticsPipelineConfig{Buffer: 8},
+		Dir:          filepath.Join(t.TempDir(), "analytics"),
+		Log:          config.AnalyticsLogConfig{Compress: "none"},
+		Pipeline:     config.AnalyticsPipelineConfig{Buffer: 8},
+		Aggregations: config.AnalyticsAggregationConfig{Store: "file"},
 	}, analytics.Deps{FS: NewDirFS(t.TempDir(), config.FilesConfig{})})
 	if err != nil {
 		t.Fatal(err)
@@ -560,7 +562,7 @@ func TestAnalyticsQueryParamsParsesWindow(t *testing.T) {
 }
 
 func TestAnalyticsAggregationPaginatesAfterMaterialization(t *testing.T) {
-	service, err := analytics.New(config.AnalyticsConfig{Dir: filepath.Join(t.TempDir(), "analytics"), Log: config.AnalyticsLogConfig{Compress: "none"}, Pipeline: config.AnalyticsPipelineConfig{Buffer: 16}}, analytics.Deps{})
+	service, err := analytics.New(config.AnalyticsConfig{Dir: filepath.Join(t.TempDir(), "analytics"), Log: config.AnalyticsLogConfig{Compress: "none"}, Pipeline: config.AnalyticsPipelineConfig{Buffer: 16}, Aggregations: config.AnalyticsAggregationConfig{Store: "file"}}, analytics.Deps{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -609,7 +611,7 @@ func TestAnalyticsAggregationLargePageReturnsEmpty(t *testing.T) {
 }
 
 func TestAnalyticsAggregationCSVDownloadsAllRows(t *testing.T) {
-	service, err := analytics.New(config.AnalyticsConfig{Dir: filepath.Join(t.TempDir(), "analytics"), Log: config.AnalyticsLogConfig{Compress: "none"}, Pipeline: config.AnalyticsPipelineConfig{Buffer: 8}}, analytics.Deps{})
+	service, err := analytics.New(config.AnalyticsConfig{Dir: filepath.Join(t.TempDir(), "analytics"), Log: config.AnalyticsLogConfig{Compress: "none"}, Pipeline: config.AnalyticsPipelineConfig{Buffer: 8}, Aggregations: config.AnalyticsAggregationConfig{Store: "file"}}, analytics.Deps{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -637,7 +639,7 @@ func TestAnalyticsAggregationCSVDownloadsAllRows(t *testing.T) {
 }
 
 func TestAnalyticsAggregationCSVNeverUsesGlobalMaterialization(t *testing.T) {
-	service, err := analytics.New(config.AnalyticsConfig{Dir: filepath.Join(t.TempDir(), "analytics"), Log: config.AnalyticsLogConfig{Compress: "none"}, Pipeline: config.AnalyticsPipelineConfig{Buffer: 8}}, analytics.Deps{})
+	service, err := analytics.New(config.AnalyticsConfig{Dir: filepath.Join(t.TempDir(), "analytics"), Log: config.AnalyticsLogConfig{Compress: "none"}, Pipeline: config.AnalyticsPipelineConfig{Buffer: 8}, Aggregations: config.AnalyticsAggregationConfig{Store: "file"}}, analytics.Deps{})
 	if err != nil {
 		t.Fatal(err)
 	}

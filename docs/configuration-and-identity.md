@@ -58,6 +58,26 @@ rules:
 # tls_key: ./key.pem
 ```
 
+Analytics uses SQLite by default for both aggregation materializations and the
+per-file current-facts cache:
+
+```yaml
+analytics:
+  enabled: true
+  dir: analytics
+  aggregations:
+    store: sqlite # use file for the legacy materialization store (no facts cache)
+  index:
+    workers: 2
+```
+
+`analytics.enabled: false` disables the complete analytics application,
+including the facts index. Index workers warm and reconcile raw filesystem
+facts in the background after startup and writes; requests remain read-through
+and compute exact values when a row is absent or the index is unavailable.
+Rows are considered current when size and modification time match. External
+edits that preserve both values are a known blind spot until a later change.
+
 Debug logging can also be enabled with `openlore --debug`. Unknown-command
 events include only the command name, not its arguments. Parser-failure events
 include a syntax sample capped at 512 bytes and the parser error.

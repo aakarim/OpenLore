@@ -56,6 +56,7 @@ func (p *analyticsPlugin) observeWrites(next PostCommitHandler) PostCommitHandle
 			}
 			event := analytics.Event{ID: analytics.NewID(), Time: time.Now().UTC(), Type: "doc.write", Principal: info.Attribution.Principal, Actor: info.Attribution.Actor, Transport: info.Attribution.Extra["transport"], SessionID: info.Attribution.Extra["session_id"], ClientSessionID: info.Attribution.Extra["client_session_id"], RemoteAddr: info.Attribution.Extra["remote_addr"], InvocationID: info.Attribution.Extra["invocation_id"], ParentID: info.Attribution.Extra["parent_id"], Fields: fields}
 			p.service.Record(ctx, event)
+			p.service.EnqueueFacts(leaf.Target)
 		}
 		return next(ctx, info)
 	}

@@ -116,6 +116,7 @@ type AnalyticsConfig struct {
 	Pipeline        AnalyticsPipelineConfig
 	ShutdownTimeout time.Duration
 	Aggregations    AnalyticsAggregationConfig
+	Index           AnalyticsIndexConfig
 	History         AnalyticsHistoryConfig
 	Export          AnalyticsExportConfig
 }
@@ -136,6 +137,7 @@ type AnalyticsAggregationConfig struct {
 	RefreshInterval time.Duration
 	Store           string
 }
+type AnalyticsIndexConfig struct{ Workers int }
 type AnalyticsHistoryConfig struct {
 	Blobs     *bool
 	Retention time.Duration
@@ -616,7 +618,10 @@ type analyticsYAML struct {
 	} `yaml:"pipeline"`
 	ShutdownTimeout string                                  `yaml:"shutdown_timeout"`
 	Aggregations    struct{ RefreshInterval, Store string } `yaml:"aggregations"`
-	History         struct {
+	Index           struct {
+		Workers int `yaml:"workers"`
+	} `yaml:"index"`
+	History struct {
 		Blobs     *bool  `yaml:"blobs"`
 		Retention string `yaml:"retention"`
 	} `yaml:"history"`
@@ -661,6 +666,9 @@ func applyAnalyticsConfig(cfg *Config, in analyticsYAML) error {
 	}
 	if in.Aggregations.Store != "" {
 		cfg.Analytics.Aggregations.Store = in.Aggregations.Store
+	}
+	if in.Index.Workers > 0 {
+		cfg.Analytics.Index.Workers = in.Index.Workers
 	}
 	if in.Export.Prometheus != nil {
 		cfg.Analytics.Export.Prometheus = *in.Export.Prometheus
@@ -774,7 +782,7 @@ func New(opts ...Option) (Config, error) {
 		WriteConflictPolicy: vfs.DefaultWriteConflictPolicy, // "hash": overwrites are compare-and-swap
 		MaxJobs:             8,                              // bound concurrent async spawn jobs
 		Rules:               RulesConfig{Growth: 1.25},
-		Analytics:           AnalyticsConfig{Dir: "analytics", Log: AnalyticsLogConfig{Rotate: 24 * time.Hour, Compress: "zstd"}, Ship: AnalyticsShipConfig{Interval: 30 * time.Second, Remote: "none"}, Pipeline: AnalyticsPipelineConfig{Buffer: 1024}, ShutdownTimeout: 10 * time.Second, Aggregations: AnalyticsAggregationConfig{RefreshInterval: 5 * time.Minute, Store: "file"}, Export: AnalyticsExportConfig{Prometheus: true}},
+		Analytics:           AnalyticsConfig{Dir: "analytics", Log: AnalyticsLogConfig{Rotate: 24 * time.Hour, Compress: "zstd"}, Ship: AnalyticsShipConfig{Interval: 30 * time.Second, Remote: "none"}, Pipeline: AnalyticsPipelineConfig{Buffer: 1024}, ShutdownTimeout: 10 * time.Second, Aggregations: AnalyticsAggregationConfig{RefreshInterval: 5 * time.Minute, Store: "sqlite"}, Index: AnalyticsIndexConfig{Workers: 2}, Export: AnalyticsExportConfig{Prometheus: true}},
 		Plugins:             PluginsConfig{Skills: SkillsPluginConfig{RemoteCheckTTL: 60 * time.Second, RemoteTimeout: 3 * time.Second, RemoteMaxBytes: 10 * 1024 * 1024}},
 		Passkeys: PasskeysConfig{
 			Enabled:      true,

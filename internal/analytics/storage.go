@@ -436,8 +436,8 @@ func (r *Recorder) Close(ctx context.Context) error {
 	}
 }
 
-// OpenAggregationStore opens the default file-backed materialization store.
-// SQLite is opt-in through OpenSQLiteAggregationStore.
+// OpenAggregationStore opens the legacy file-backed materialization store.
+// New services default to OpenSQLiteAggregationStore.
 func OpenAggregationStore(dir string) (AggregationStore, error) {
 	return OpenFileAggregationStore(dir)
 }
@@ -465,14 +465,23 @@ func OpenSQLiteAggregationStore(path string) (*SQLiteAggregationStore, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(10000)")
+	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(10000)&_pragma=foreign_keys(1)")
 	if err != nil {
 		return nil, err
 	}
 	db.SetMaxOpenConns(8)
-	if _, err = db.Exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=10000; CREATE TABLE IF NOT EXISTS materializations (
+	if _, err = db.Exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=10000; PRAGMA foreign_keys=ON; CREATE TABLE IF NOT EXISTS materializations (
 key TEXT PRIMARY KEY, name TEXT NOT NULL, value BLOB NOT NULL
-); CREATE INDEX IF NOT EXISTS materializations_name ON materializations(name)`); err != nil {
+); CREATE INDEX IF NOT EXISTS materializations_name ON materializations(name);
+CREATE TABLE IF NOT EXISTS files (
+path TEXT PRIMARY KEY, size INTEGER NOT NULL, mtime_ns INTEGER NOT NULL,
+content_hash TEXT NOT NULL, computed_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS file_scalars (
+path TEXT NOT NULL REFERENCES files(path) ON DELETE CASCADE,
+source TEXT NOT NULL, scalar TEXT NOT NULL, value REAL NOT NULL,
+PRIMARY KEY(path, source, scalar)
+)`); err != nil {
 		db.Close()
 		return nil, err
 	}

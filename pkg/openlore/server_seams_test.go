@@ -149,7 +149,7 @@ func TestUnsupportedShellUsageIsLoggedOnlyInDebugMode(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var logs bytes.Buffer
 			logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-			s, err := NewServer("", WithLogger(logger), WithDebug(tt.debug))
+			s, err := NewServer("", WithLogger(logger), WithDebug(tt.debug), config.WithDataDir(t.TempDir()))
 			if err != nil {
 				t.Fatalf("NewServer: %v", err)
 			}
@@ -209,7 +209,7 @@ func TestNewServerWarnsForInvalidConfigurationValue(t *testing.T) {
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, nil))
 
-	if _, err := NewServer("", WithConfigFile(path), WithLogger(logger)); err != nil {
+	if _, err := NewServer("", WithConfigFile(path), WithLogger(logger), config.WithDataDir(t.TempDir())); err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
 	got := logs.String()
@@ -343,7 +343,7 @@ func TestCommitChangeSet_CASErrorPropagates(t *testing.T) {
 
 func TestCommitChangeSet_ReadonlyServer(t *testing.T) {
 	// Default config is read-only → no write log → CommitChangeSet is read-only.
-	s, err := NewServer("")
+	s, err := NewServer("", config.WithDataDir(t.TempDir()))
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
