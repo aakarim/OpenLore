@@ -104,7 +104,7 @@ func TestMCPHTTPSessionLifecyclePreservesShellState(t *testing.T) {
 	}
 }
 
-func TestMCPHTTPSessionShellReportsFailure(t *testing.T) {
+func TestMCPHTTPSessionShellCommandFailureIsResult(t *testing.T) {
 	_, handler := newSessionTestAPI(t)
 	identity := Identity{IdentityName: "adil", Principal: AuthenticatedPrincipal{Subject: "adil"}, Attribution: Attribution{Principal: "adil"}, Scopes: []string{ScopeFull}}
 	created := createSession(t, handler, identity)
@@ -118,17 +118,21 @@ func TestMCPHTTPSessionShellReportsFailure(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatal(err)
 	}
-	if !resp.IsError {
-		t.Fatalf("is_error = false, want true; body = %+v", resp)
+	if resp.IsError {
+		t.Fatalf("completed shell invocation is_error = true; body = %+v", resp)
 	}
 	if resp.ExitCode != 1 {
 		t.Fatalf("exit_code = %d, want 1", resp.ExitCode)
 	}
-	if strings.HasPrefix(resp.Output, "\n") {
-		t.Fatalf("output starts with a blank line: %q", resp.Output)
+	if resp.Stdout != "" {
+		t.Fatalf("stdout = %q, want empty", resp.Stdout)
 	}
-	if !strings.HasSuffix(resp.Output, "exit code: 1") {
-		t.Fatalf("output %q does not end with %q", resp.Output, "exit code: 1")
+	stderrLower := strings.ToLower(resp.Stderr)
+	if !strings.Contains(stderrLower, "not exist") && !strings.Contains(stderrLower, "no such") {
+		t.Fatalf("stderr = %q, want missing-file diagnostic", resp.Stderr)
+	}
+	if resp.Output != resp.Stderr {
+		t.Fatalf("output = %q, want backwards-compatible merged stderr %q", resp.Output, resp.Stderr)
 	}
 
 	w = sessionRequest(t, handler, identity, http.MethodPost, path, `{"command":"pwd"}`)

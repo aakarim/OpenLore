@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"sort"
 	"strings"
 
@@ -156,36 +155,30 @@ func newMCPShellHandler(fs vfs.FileSystem, envVars map[string]string, factory fu
 			}
 		}
 
-		output, exitCode, isError := execShellTranscript(sh, input.Command)
+		output, stdout, stderr, exitCode := execShellTranscript(sh, input.Command)
 
 		return &mcp.CallToolResult{
 			Content:           []mcp.Content{&mcp.TextContent{Text: output}},
-			StructuredContent: map[string]any{"output": output, "exit_code": exitCode},
-			IsError:           isError,
+			StructuredContent: map[string]any{"output": output, "stdout": stdout, "stderr": stderr, "exit_code": exitCode},
 		}, nil, nil
 	}
 }
 
-// execShellTranscript executes command in sh and returns the merged transcript plus the
-// exit code and whether the result is an error. A non-zero command that writes
-// stdout but no stderr is a valid result (for example, grep -c with no matches),
-// so only failures without stdout or with stderr are rendered as errors.
-func execShellTranscript(sh *shell.Shell, command string) (string, int, bool) {
-	var stdout, stderr bytes.Buffer
-	exitCode := sh.ExecPipeline(command, &stdout, &stderr, nil)
-	isError := exitCode != 0 && (stdout.Len() == 0 || stderr.Len() > 0)
+// execShellTranscript executes command in sh and returns its output streams
+// separately, along with a merged output value for backwards compatibility.
+// The exit code remains result data and is never added to either stream.
+func execShellTranscript(sh *shell.Shell, command string) (output, stdout, stderr string, exitCode int) {
+	var stdoutBuffer, stderrBuffer bytes.Buffer
+	exitCode = sh.ExecPipeline(command, &stdoutBuffer, &stderrBuffer, nil)
 
-	sections := make([]string, 0, 3)
-	if stdout.Len() > 0 {
-		sections = append(sections, stdout.String())
+	sections := make([]string, 0, 2)
+	if stdoutBuffer.Len() > 0 {
+		sections = append(sections, stdoutBuffer.String())
 	}
-	if stderr.Len() > 0 {
-		sections = append(sections, stderr.String())
+	if stderrBuffer.Len() > 0 {
+		sections = append(sections, stderrBuffer.String())
 	}
-	if isError {
-		sections = append(sections, fmt.Sprintf("exit code: %d", exitCode))
-	}
-	return strings.Join(sections, "\n"), exitCode, isError
+	return strings.Join(sections, "\n"), stdoutBuffer.String(), stderrBuffer.String(), exitCode
 }
 
 // exitCodeFromStructured extracts the exit_code field the shell tool places in
