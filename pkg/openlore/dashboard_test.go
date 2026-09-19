@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -72,6 +75,102 @@ func (growingDashboardFileFS) ReadFile(string) ([]byte, error) {
 
 func (growingDashboardFileFS) ReadFileBounded(string, int64) ([]byte, error) {
 	return nil, errFileTooLarge
+}
+
+type countingDashboardFS struct {
+	vfs.FileSystem
+	mu    sync.Mutex
+	reads int
+}
+
+type toggledDashboardFS struct {
+	vfs.FileSystem
+	mu     sync.Mutex
+	mtime  time.Time
+	vanish bool
+	reads  int
+}
+
+func (f *toggledDashboardFS) Stat(p string) (*vfs.FileInfo, error) {
+	info, err := f.FileSystem.Stat(p)
+	if err == nil && !info.Dir {
+		f.mu.Lock()
+		info.FileModTime = f.mtime
+		f.mu.Unlock()
+	}
+	return info, err
+}
+
+func (f *toggledDashboardFS) ReadDir(p string) ([]vfs.FileInfo, error) {
+	entries, err := f.FileSystem.ReadDir(p)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := range entries {
+		if !entries[i].Dir {
+			entries[i].FileModTime = f.mtime
+		}
+	}
+	return entries, err
+}
+
+func (f *toggledDashboardFS) ReadFile(p string) ([]byte, error) {
+	f.mu.Lock()
+	f.reads++
+	vanish := f.vanish
+	f.mu.Unlock()
+	if vanish {
+		return nil, fs.ErrNotExist
+	}
+	return f.FileSystem.ReadFile(p)
+}
+
+func (f *toggledDashboardFS) ReadFileBounded(p string, max int64) ([]byte, error) {
+	f.mu.Lock()
+	f.reads++
+	vanish := f.vanish
+	f.mu.Unlock()
+	if vanish {
+		return nil, fs.ErrNotExist
+	}
+	return readFileBounded(f.FileSystem, p, max)
+}
+
+func (f *toggledDashboardFS) set(mtime time.Time, vanish bool) {
+	f.mu.Lock()
+	f.mtime, f.vanish, f.reads = mtime, vanish, 0
+	f.mu.Unlock()
+}
+
+func (f *toggledDashboardFS) readCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.reads
+}
+
+func (f *countingDashboardFS) ReadFile(p string) ([]byte, error) {
+	f.mu.Lock()
+	f.reads++
+	f.mu.Unlock()
+	return f.FileSystem.ReadFile(p)
+}
+
+func (f *countingDashboardFS) ReadFileBounded(p string, max int64) ([]byte, error) {
+	f.mu.Lock()
+	f.reads++
+	f.mu.Unlock()
+	return readFileBounded(f.FileSystem, p, max)
+}
+
+func (f *countingDashboardFS) reset() {
+	f.mu.Lock()
+	f.reads = 0
+	f.mu.Unlock()
+}
+
+func (f *countingDashboardFS) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.reads
 }
 
 func newDashboardTestServer(t *testing.T) (*Server, *http.ServeMux, string) {
@@ -348,6 +447,157 @@ func TestDashboardLargeFolderAndContextLimits(t *testing.T) {
 	nodes = 0
 	if _, err := s.dashboardContextNode(context.Background(), growingDashboardFileFS{sizedDashboardFileFS{size: 1}}, "/growing.md", 0, &nodes); err != errDashboardSize {
 		t.Fatalf("file that grew during its bounded read was accepted: %v", err)
+	}
+}
+
+func TestDashboardContextSecondRootRequestReadsNoFiles(t *testing.T) {
+	s, mux, token := newDashboardTestServer(t)
+	counted := &countingDashboardFS{FileSystem: NewFSAdapter(fstest.MapFS{
+		"one.md": {Data: []byte("one\n")},
+		"two.md": {Data: []byte("two words\n")},
+	})}
+	s.merge.Mount("public", counted)
+	service, err := analytics.New(config.AnalyticsConfig{Dir: t.TempDir(), Log: config.AnalyticsLogConfig{Compress: "none"}}, analytics.Deps{FS: s.merge})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close(context.Background())
+	s.analytics = service
+	if w := dashboardRequest(mux, "GET", "/dashboard/api/context?path=/", token); w.Code != http.StatusOK {
+		t.Fatalf("first request: %d %s", w.Code, w.Body.String())
+	}
+	if counted.count() != 2 {
+		t.Fatalf("first request reads=%d, want 2", counted.count())
+	}
+	counted.reset()
+	if w := dashboardRequest(mux, "GET", "/dashboard/api/context?path=/", token); w.Code != http.StatusOK {
+		t.Fatalf("second request: %d %s", w.Code, w.Body.String())
+	}
+	if counted.count() != 0 {
+		t.Fatalf("second root request performed %d ReadFile calls", counted.count())
+	}
+}
+
+func TestDashboardContextFoldsSameIndexRowsPerIdentity(t *testing.T) {
+	s, mux, readerToken := newDashboardTestServer(t)
+	service, err := analytics.New(config.AnalyticsConfig{Dir: t.TempDir(), Log: config.AnalyticsLogConfig{Compress: "none"}}, analytics.Deps{FS: s.merge})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close(context.Background())
+	s.analytics = service
+	aliceToken := mint(t, s, "alice", ScopeRead)
+	readTotal := func(token string) int64 {
+		w := dashboardRequest(mux, "GET", "/dashboard/api/context?path=/", token)
+		if w.Code != http.StatusOK {
+			t.Fatalf("context: %d %s", w.Code, w.Body.String())
+		}
+		var node dashboardNode
+		if err := json.Unmarshal(w.Body.Bytes(), &node); err != nil {
+			t.Fatal(err)
+		}
+		return node.Bytes
+	}
+	rootTotal := readTotal(aliceToken)
+	restrictedTotal := readTotal(readerToken)
+	if restrictedTotal >= rootTotal {
+		t.Fatalf("restricted total=%d, root total=%d", restrictedTotal, rootTotal)
+	}
+}
+
+func TestDashboardNodeLimitAppliesWithWarmIndex(t *testing.T) {
+	s := &Server{merge: NewMergeFS()}
+	s.merge.SetRoot(NewFSAdapter(fstest.MapFS{"a.md": {Data: []byte("a")}}))
+	service, err := analytics.New(config.AnalyticsConfig{Dir: t.TempDir(), Log: config.AnalyticsLogConfig{Compress: "none"}}, analytics.Deps{FS: s.merge})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close(context.Background())
+	s.analytics = service
+	info, err := s.merge.Stat("/a.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes := 0
+	if _, err := s.dashboardContextNodeFromInfo(context.Background(), s.merge, "/a.md", info, 0, &nodes); err != nil {
+		t.Fatal(err)
+	}
+	nodes = 10000
+	if _, err := s.dashboardContextNodeFromInfo(context.Background(), s.merge, "/a.md", info, 0, &nodes); !errors.Is(err, errDashboardSize) {
+		t.Fatalf("warm 10,001st node error=%v", err)
+	}
+}
+
+func TestDashboardFactsUseRawBytesNotReadTransform(t *testing.T) {
+	raw := NewMergeFS()
+	raw.SetRoot(NewFSAdapter(fstest.MapFS{"SKILL.md": {Data: []byte("raw")}}))
+	service, err := analytics.New(config.AnalyticsConfig{Dir: t.TempDir(), Log: config.AnalyticsLogConfig{Compress: "none"}}, analytics.Deps{FS: raw})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close(context.Background())
+	s := &Server{merge: raw, analytics: service}
+	scoped := &readTransformFS{FileSystem: raw, transforms: []ContentTransform{func(_ string, content []byte) []byte {
+		return append(content, []byte("-remote-status")...)
+	}}}
+	nodes := 0
+	node, err := s.dashboardContextNode(context.Background(), scoped, "/SKILL.md", 0, &nodes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if node.Bytes != 3 || node.Characters != 3 {
+		t.Fatalf("dashboard facts used transformed SKILL.md: %+v", node)
+	}
+}
+
+func TestDashboardIndexFailureFallsBackAndLogsOnce(t *testing.T) {
+	s, mux, token := newDashboardTestServer(t)
+	service, err := analytics.New(config.AnalyticsConfig{Dir: t.TempDir(), Log: config.AnalyticsLogConfig{Compress: "none"}}, analytics.Deps{FS: s.merge})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	s.analytics = service
+	var logs bytes.Buffer
+	original := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(original) })
+	for range 2 {
+		w := dashboardRequest(mux, "GET", "/dashboard/api/context?path=/public/other.md", token)
+		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"bytes":11`) || !strings.Contains(w.Body.String(), `"characters":7`) {
+			t.Fatalf("fallback response: %d %s", w.Code, w.Body.String())
+		}
+	}
+	if got := strings.Count(logs.String(), "analytics facts index unavailable; computing uncached"); got != 1 {
+		t.Fatalf("index failure log count=%d: %s", got, logs.String())
+	}
+}
+
+func TestDashboardErrNotExistMidWalkDeletesIndexRow(t *testing.T) {
+	s, mux, token := newDashboardTestServer(t)
+	files := &toggledDashboardFS{FileSystem: NewFSAdapter(fstest.MapFS{"gone.md": {Data: []byte("same")}}), mtime: time.Unix(1, 0)}
+	s.merge.Mount("public", files)
+	service, err := analytics.New(config.AnalyticsConfig{Dir: t.TempDir(), Log: config.AnalyticsLogConfig{Compress: "none"}}, analytics.Deps{FS: s.merge})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close(context.Background())
+	s.analytics = service
+	if w := dashboardRequest(mux, "GET", "/dashboard/api/context?path=/", token); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "gone.md") {
+		t.Fatalf("warm request: %d %s", w.Code, w.Body.String())
+	}
+	files.set(time.Unix(2, 0), true)
+	if w := dashboardRequest(mux, "GET", "/dashboard/api/context?path=/", token); w.Code != http.StatusOK || strings.Contains(w.Body.String(), "gone.md") {
+		t.Fatalf("mid-walk removal: %d %s", w.Code, w.Body.String())
+	}
+	files.set(time.Unix(1, 0), false)
+	if w := dashboardRequest(mux, "GET", "/dashboard/api/context?path=/", token); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "gone.md") {
+		t.Fatalf("restored request: %d %s", w.Code, w.Body.String())
+	}
+	if files.readCount() != 1 {
+		t.Fatalf("restored file reads=%d; stale index row was not removed", files.readCount())
 	}
 }
 

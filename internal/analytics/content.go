@@ -5,8 +5,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"io/fs"
+	"log"
 	"path"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aakarim/go-openlore/pkg/vfs"
@@ -116,14 +120,48 @@ type ContentFacts interface {
 }
 type contentFacts struct {
 	fs        vfs.FileSystem
+	raw       vfs.FileSystem
+	index     FactsIndex
 	providers []ContentScalarProvider
+	indexLog  *sync.Once
 }
 
 func NewContentFacts(fs vfs.FileSystem, providers ...ContentScalarProvider) ContentFacts {
 	if len(providers) == 0 {
 		providers = defaultProviders
 	}
-	return &contentFacts{fs, providers}
+	return &contentFacts{fs: fs, raw: fs, providers: providers, indexLog: &sync.Once{}}
+}
+
+func newIndexedContentFacts(scoped, raw vfs.FileSystem, index FactsIndex, indexLog *sync.Once, providers []ContentScalarProvider) ContentFacts {
+	return &contentFacts{fs: scoped, raw: raw, index: index, providers: providers, indexLog: indexLog}
+}
+
+func (f *contentFacts) file(ctx context.Context, p string, info *vfs.FileInfo) (DocScalars, error) {
+	if f.index != nil {
+		fact, hit, err := f.index.Lookup(ctx, p, info.Size(), info.ModTime().UnixNano(), sourceNames(f.providers))
+		if err == nil && hit {
+			return docScalarsFromIndexed(fact, f.providers)
+		}
+		if err != nil {
+			f.indexLog.Do(func() { log.Printf("analytics facts index unavailable; computing uncached: %v", err) })
+		}
+	}
+	b, err := f.raw.ReadFile(p)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) && f.index != nil {
+			_ = f.index.Delete(ctx, p)
+		}
+		return DocScalars{}, err
+	}
+	if f.index == nil {
+		return computeScalars(p, b, f.providers), nil
+	}
+	fact := indexedFacts(p, info, b, f.providers)
+	if err := f.index.Upsert(ctx, fact); err != nil {
+		f.indexLog.Do(func() { log.Printf("analytics facts index unavailable; computing uncached: %v", err) })
+	}
+	return docScalarsFromIndexed(fact, f.providers)
 }
 func (f *contentFacts) Stat(ctx context.Context, p string) (DocScalars, error) {
 	info, err := f.fs.Stat(vfs.CleanPath(p))
@@ -131,11 +169,7 @@ func (f *contentFacts) Stat(ctx context.Context, p string) (DocScalars, error) {
 		return DocScalars{}, err
 	}
 	if !info.Dir {
-		b, err := f.fs.ReadFile(p)
-		if err != nil {
-			return DocScalars{}, err
-		}
-		return computeScalars(p, b, f.providers), nil
+		return f.file(ctx, p, info)
 	}
 	total := DocScalars{Path: vfs.CleanPath(p), Scalars: map[string]float64{}, Tokenizer: tokenizerName(f.providers), ComputedAt: time.Now().UTC()}
 	err = f.Walk(ctx, p, WalkOptions{}, func(d DocScalars) error {
@@ -164,11 +198,11 @@ func (f *contentFacts) Walk(ctx context.Context, prefix string, opts WalkOptions
 			if opts.StatOnly {
 				d = DocScalars{Path: p, Scalars: map[string]float64{"bytes": float64(info.FileSize)}, ComputedAt: time.Now().UTC()}
 			} else {
-				b, e := f.fs.ReadFile(p)
+				var e error
+				d, e = f.file(ctx, p, info)
 				if e != nil {
 					return e
 				}
-				d = computeScalars(p, b, f.providers)
 			}
 			return fn(d)
 		}

@@ -17,7 +17,7 @@ func TestAnalyticsConfigAndExperimentalEnv(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.ExperimentalEnabled("analytics") || cfg.Analytics.PipelineEnabled() || cfg.Analytics.ShutdownTimeout != 3*time.Second {
+	if !cfg.ExperimentalEnabled("analytics") || cfg.Analytics.PipelineEnabled() || cfg.Analytics.ShutdownTimeout != 3*time.Second || cfg.Analytics.Aggregations.Store != "sqlite" || cfg.Analytics.Index.Workers != 2 {
 		t.Fatalf("unexpected config: %#v", cfg.Analytics)
 	}
 }
@@ -48,5 +48,19 @@ func TestAnalyticsPhaseThreeDriversConfig(t *testing.T) {
 	}
 	if cfg.Analytics.Aggregations.Store != "sqlite" || cfg.Analytics.History.Retention != 365*24*time.Hour {
 		t.Fatalf("unexpected phase 3 analytics config: %#v", cfg.Analytics)
+	}
+}
+
+func TestAnalyticsIndexWorkersConfig(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "openlore.yml")
+	if err := os.WriteFile(file, []byte("analytics:\n  aggregations:\n    store: file\n  index:\n    workers: 7\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := New(WithConfigFile(file))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Analytics.Aggregations.Store != "file" || cfg.Analytics.Index.Workers != 7 {
+		t.Fatalf("unexpected index config: %#v", cfg.Analytics)
 	}
 }

@@ -254,6 +254,20 @@ func (s *Server) dashboardContextNodeFromInfo(ctx context.Context, scoped vfs.Fi
 				return nil, errDashboardSize
 			}
 		}
+		if s.analytics != nil && s.analytics.HasFactsIndex() {
+			facts, err := s.analytics.CurrentFacts(ctx, target, info, func() ([]byte, error) {
+				return readFileBounded(s.merge, target, dashboardMaxBytes)
+			})
+			if err != nil {
+				if errors.Is(err, errFileTooLarge) {
+					return nil, errDashboardSize
+				}
+				return nil, fmt.Errorf("read %s: %w", target, err)
+			}
+			node.Bytes, node.Lines = int64(facts.Scalars["bytes"]), int64(facts.Scalars["lines"])
+			node.Characters, node.Tokens = int64(facts.Scalars["characters"]), int64(facts.Scalars["tokens"])
+			return node, nil
+		}
 		content, err := readFileBounded(scoped, target, dashboardMaxBytes)
 		if err != nil {
 			if errors.Is(err, errFileTooLarge) {

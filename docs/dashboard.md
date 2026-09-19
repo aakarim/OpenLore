@@ -23,6 +23,15 @@ filesystem as other transports. A grant on a parent docset does not cross into
 a separately governed nested docset. Policy is resolved again on each request;
 an open browser is not a new source of authority.
 
+With the default SQLite analytics store, per-file current facts are cached in
+`<analytics.dir>/aggregations.sqlite`. Identity filtering still happens before
+visible files are folded into folder totals, and facts are computed from raw
+on-disk bytes rather than display transforms. Cache hits compare file size and
+modification time and avoid rereading unchanged files. An external edit that
+preserves both size and modification time is therefore not detected until that
+file changes again. Selecting `analytics.aggregations.store: file` or disabling
+analytics keeps the uncached behavior.
+
 Analytics is shared among readers of a docset. `lore:analytics:view` is no longer
 required for these scoped views. Historical events must also satisfy current
 docset permissions and the selected path. Mixed-scope searches and ambiguous

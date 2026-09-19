@@ -49,7 +49,9 @@ metrics_port: 3000
 #   shutdown_timeout: 10s
 #   aggregations:
 #     refresh_interval: 5m
-#     store: file # file | sqlite
+#     store: sqlite # sqlite | file
+#   index:
+#     workers: 2
 #   history:
 #     blobs: true
 #     retention: 365d
