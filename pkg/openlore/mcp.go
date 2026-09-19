@@ -156,24 +156,24 @@ func newMCPShellHandler(fs vfs.FileSystem, envVars map[string]string, factory fu
 			}
 		}
 
-		output, exitCode := execShellTranscript(sh, input.Command)
+		output, exitCode, isError := execShellTranscript(sh, input.Command)
 
 		return &mcp.CallToolResult{
 			Content:           []mcp.Content{&mcp.TextContent{Text: output}},
 			StructuredContent: map[string]any{"output": output, "exit_code": exitCode},
-			IsError:           exitCode != 0,
+			IsError:           isError,
 		}, nil, nil
 	}
 }
 
 // execShellTranscript executes command in sh and returns the merged transcript plus the
-// exit code. stdout comes first, then stderr, then a trailing "exit code: N"
-// line on failure. Sections are separated by a single newline and the
-// transcript never starts with one, even when only stderr or only the exit
-// code is present.
-func execShellTranscript(sh *shell.Shell, command string) (string, int) {
+// exit code and whether the result is an error. A non-zero command that writes
+// stdout but no stderr is a valid result (for example, grep -c with no matches),
+// so only failures without stdout or with stderr are rendered as errors.
+func execShellTranscript(sh *shell.Shell, command string) (string, int, bool) {
 	var stdout, stderr bytes.Buffer
 	exitCode := sh.ExecPipeline(command, &stdout, &stderr, nil)
+	isError := exitCode != 0 && (stdout.Len() == 0 || stderr.Len() > 0)
 
 	sections := make([]string, 0, 3)
 	if stdout.Len() > 0 {
@@ -182,10 +182,10 @@ func execShellTranscript(sh *shell.Shell, command string) (string, int) {
 	if stderr.Len() > 0 {
 		sections = append(sections, stderr.String())
 	}
-	if exitCode != 0 {
+	if isError {
 		sections = append(sections, fmt.Sprintf("exit code: %d", exitCode))
 	}
-	return strings.Join(sections, "\n"), exitCode
+	return strings.Join(sections, "\n"), exitCode, isError
 }
 
 // exitCodeFromStructured extracts the exit_code field the shell tool places in

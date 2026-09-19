@@ -98,8 +98,10 @@ func TestMCPToolAnnotations(t *testing.T) {
 	}
 }
 
-func TestMCPShellFailureIsError(t *testing.T) {
-	fs := NewFSAdapter(fstest.MapFS{})
+func TestMCPShellErrorClassification(t *testing.T) {
+	fs := NewFSAdapter(fstest.MapFS{
+		"docs/a.md": &fstest.MapFile{Data: []byte("hello\n")},
+	})
 	server := NewMCPServer(fs)
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
 	serverSession, err := server.Connect(t.Context(), serverTransport, nil)
@@ -146,6 +148,25 @@ func TestMCPShellFailureIsError(t *testing.T) {
 	if structured["output"] != output {
 		t.Fatalf("structured output = %#v, want %q", structured["output"], output)
 	}
+
+	result, err = clientSession.CallTool(t.Context(), &mcp.CallToolParams{
+		Name:      "shell",
+		Arguments: map[string]any{"command": "grep -c absent /docs/a.md"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatal("no-match grep IsError = true, want false")
+	}
+	output = result.Content[0].(*mcp.TextContent).Text
+	if output != "0\n" {
+		t.Fatalf("no-match grep output = %q, want %q", output, "0\n")
+	}
+	exitCode, ok = exitCodeFromStructured(result.StructuredContent)
+	if !ok || exitCode != 1 {
+		t.Fatalf("no-match grep exit_code = %d, %t; want 1, true", exitCode, ok)
+	}
 }
 
 func TestExecShellTranscriptNeverStartsWithBlankLine(t *testing.T) {
@@ -159,16 +180,21 @@ func TestExecShellTranscriptNeverStartsWithBlankLine(t *testing.T) {
 		wantPrefix string
 		wantSuffix string
 		wantExit   int
+		wantError  bool
 	}{
 		{name: "stdout only", command: "cat /docs/a.md", wantPrefix: "hello\n", wantSuffix: "hello\n"},
-		{name: "stderr only", command: "cat /does/not/exist", wantPrefix: "cat: ", wantSuffix: "\nexit code: 1", wantExit: 1},
-		{name: "exit code only", command: "false", wantPrefix: "exit code: 1", wantSuffix: "exit code: 1", wantExit: 1},
+		{name: "nonzero with stdout", command: "grep -c absent /docs/a.md", wantPrefix: "0\n", wantSuffix: "0\n", wantExit: 1},
+		{name: "stderr only", command: "cat /does/not/exist", wantPrefix: "cat: ", wantSuffix: "\nexit code: 1", wantExit: 1, wantError: true},
+		{name: "exit code only", command: "false", wantPrefix: "exit code: 1", wantSuffix: "exit code: 1", wantExit: 1, wantError: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, exitCode := execShellTranscript(sh, tc.command)
+			got, exitCode, isError := execShellTranscript(sh, tc.command)
 			if exitCode != tc.wantExit {
 				t.Fatalf("exit code = %d, want %d", exitCode, tc.wantExit)
+			}
+			if isError != tc.wantError {
+				t.Fatalf("isError = %t, want %t", isError, tc.wantError)
 			}
 			if strings.HasPrefix(got, "\n") {
 				t.Fatalf("transcript starts with a blank line: %q", got)
