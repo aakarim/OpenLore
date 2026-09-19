@@ -56,7 +56,7 @@ func TestMCPHTTPAPI_Shell(t *testing.T) {
 	}
 }
 
-func TestMCPHTTPAPI_ShellFailure(t *testing.T) {
+func TestMCPHTTPAPI_ShellCommandFailureIsResult(t *testing.T) {
 	h := newTestAPI(t)
 
 	body := strings.NewReader(`{"command":"cat /does/not/exist"}`)
@@ -72,17 +72,21 @@ func TestMCPHTTPAPI_ShellFailure(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decoding response: %v", err)
 	}
-	if !resp.IsError {
-		t.Fatalf("is_error = false, want true: %q", resp.Output)
+	if resp.IsError {
+		t.Fatalf("completed shell invocation is_error = true: %q", resp.Output)
 	}
 	if resp.ExitCode != 1 {
 		t.Fatalf("exit_code = %d, want 1", resp.ExitCode)
 	}
-	if strings.HasPrefix(resp.Output, "\n") {
-		t.Fatalf("output starts with a blank line: %q", resp.Output)
+	if resp.Stdout != "" {
+		t.Fatalf("stdout = %q, want empty", resp.Stdout)
 	}
-	if !strings.HasSuffix(resp.Output, "exit code: 1") {
-		t.Fatalf("output %q does not end with %q", resp.Output, "exit code: 1")
+	stderrLower := strings.ToLower(resp.Stderr)
+	if !strings.Contains(stderrLower, "not exist") && !strings.Contains(stderrLower, "no such") {
+		t.Fatalf("stderr = %q, want missing-file diagnostic", resp.Stderr)
+	}
+	if resp.Output != resp.Stderr {
+		t.Fatalf("output = %q, want backwards-compatible merged stderr %q", resp.Output, resp.Stderr)
 	}
 }
 

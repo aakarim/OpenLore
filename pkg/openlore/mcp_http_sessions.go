@@ -232,10 +232,11 @@ func randomHTTPSessionID() (string, error) {
 }
 
 func executeSessionShell(sh *shell.Shell, command string) toolResponse {
-	output, exitCode := execShellTranscript(sh, command)
+	output, stdout, stderr, exitCode := execShellTranscript(sh, command)
 	return toolResponse{
 		Output:   output,
-		IsError:  exitCode != 0,
+		Stdout:   stdout,
+		Stderr:   stderr,
 		ExitCode: exitCode,
 	}
 }

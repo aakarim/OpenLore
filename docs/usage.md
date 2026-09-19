@@ -147,13 +147,26 @@ The MCP server exposes:
 | `shell` | Execute a command against the virtual filesystem |
 | `list_commands` | List commands supported by that server |
 
-The `shell` tool returns the command's exit code as structured content. A
-non-zero exit is an MCP tool error (`isError: true`), while its text content
-continues to include stderr and a trailing `exit code: N` line. The plain JSON
-`POST /api/shell` endpoint and the persistent-session endpoint
-`POST /api/sessions/{id}/shell` follow the same convention: commands that run
-return HTTP 200 with `{"output":"...","is_error":false,"exit_code":0}`;
-non-zero exits set `is_error` to `true` and populate `exit_code`.
+The `shell` tool returns completed command invocations as normal MCP results,
+including when the command exits non-zero. Its structured content keeps
+`stdout`, `stderr`, and `exit_code` separate. The existing `output` field and
+text content contain stdout followed by stderr for compatibility, without a
+synthetic exit-code line. MCP `isError` is reserved for failures of the tool
+invocation itself rather than command exit status.
+
+The plain JSON `POST /api/shell` endpoint and persistent-session
+`POST /api/sessions/{id}/shell` endpoint use the same result contract and
+return HTTP 200 for completed commands:
+
+```json
+{
+  "output": "...",
+  "stdout": "...",
+  "stderr": "...",
+  "is_error": false,
+  "exit_code": 1
+}
+```
 
 ## MCP over stdio
 

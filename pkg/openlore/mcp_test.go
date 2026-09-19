@@ -98,8 +98,10 @@ func TestMCPToolAnnotations(t *testing.T) {
 	}
 }
 
-func TestMCPShellFailureIsError(t *testing.T) {
-	fs := NewFSAdapter(fstest.MapFS{})
+func TestMCPShellErrorClassification(t *testing.T) {
+	fs := NewFSAdapter(fstest.MapFS{
+		"docs/a.md": &fstest.MapFile{Data: []byte("hello\n")},
+	})
 	server := NewMCPServer(fs)
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
 	serverSession, err := server.Connect(t.Context(), serverTransport, nil)
@@ -122,8 +124,8 @@ func TestMCPShellFailureIsError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.IsError {
-		t.Fatal("IsError = false, want true")
+	if result.IsError {
+		t.Fatal("completed shell invocation IsError = true, want false")
 	}
 	output := result.Content[0].(*mcp.TextContent).Text
 	if strings.HasPrefix(output, "\n") {
@@ -132,8 +134,8 @@ func TestMCPShellFailureIsError(t *testing.T) {
 	if !strings.Contains(output, "structured-output") {
 		t.Fatalf("output %q does not contain stdout", output)
 	}
-	if !strings.HasSuffix(output, "exit code: 1") {
-		t.Fatalf("output %q does not end with %q", output, "exit code: 1")
+	if strings.Contains(output, "exit code:") {
+		t.Fatalf("output %q contains a synthetic exit-code line", output)
 	}
 	exitCode, ok := exitCodeFromStructured(result.StructuredContent)
 	if !ok {
@@ -146,9 +148,36 @@ func TestMCPShellFailureIsError(t *testing.T) {
 	if structured["output"] != output {
 		t.Fatalf("structured output = %#v, want %q", structured["output"], output)
 	}
+	if structured["stdout"] != "structured-output\n" {
+		t.Fatalf("structured stdout = %#v, want %q", structured["stdout"], "structured-output\n")
+	}
+	stderr, ok := structured["stderr"].(string)
+	stderrLower := strings.ToLower(stderr)
+	if !ok || (!strings.Contains(stderrLower, "not exist") && !strings.Contains(stderrLower, "no such")) {
+		t.Fatalf("structured stderr = %#v, want missing-file diagnostic", structured["stderr"])
+	}
+
+	result, err = clientSession.CallTool(t.Context(), &mcp.CallToolParams{
+		Name:      "shell",
+		Arguments: map[string]any{"command": "grep -c absent /docs/a.md"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatal("no-match grep IsError = true, want false")
+	}
+	output = result.Content[0].(*mcp.TextContent).Text
+	if output != "0\n" {
+		t.Fatalf("no-match grep output = %q, want %q", output, "0\n")
+	}
+	exitCode, ok = exitCodeFromStructured(result.StructuredContent)
+	if !ok || exitCode != 1 {
+		t.Fatalf("no-match grep exit_code = %d, %t; want 1, true", exitCode, ok)
+	}
 }
 
-func TestExecShellTranscriptNeverStartsWithBlankLine(t *testing.T) {
+func TestExecShellTranscriptPreservesStreams(t *testing.T) {
 	sh := shell.NewShell(NewFSAdapter(fstest.MapFS{
 		"docs/a.md": &fstest.MapFile{Data: []byte("hello\n")},
 	}))
@@ -156,25 +185,30 @@ func TestExecShellTranscriptNeverStartsWithBlankLine(t *testing.T) {
 	cases := []struct {
 		name       string
 		command    string
-		wantPrefix string
-		wantSuffix string
+		wantOutput string
+		wantStdout string
+		wantStderr string
 		wantExit   int
 	}{
-		{name: "stdout only", command: "cat /docs/a.md", wantPrefix: "hello\n", wantSuffix: "hello\n"},
-		{name: "stderr only", command: "cat /does/not/exist", wantPrefix: "cat: ", wantSuffix: "\nexit code: 1", wantExit: 1},
-		{name: "exit code only", command: "false", wantPrefix: "exit code: 1", wantSuffix: "exit code: 1", wantExit: 1},
+		{name: "stdout only", command: "cat /docs/a.md", wantOutput: "hello\n", wantStdout: "hello\n"},
+		{name: "nonzero with stdout", command: "grep -c absent /docs/a.md", wantOutput: "0\n", wantStdout: "0\n", wantExit: 1},
+		{name: "stderr only", command: "cat /does/not/exist", wantOutput: "cat: /does/not/exist: open does/not/exist: file does not exist\n", wantStderr: "cat: /does/not/exist: open does/not/exist: file does not exist\n", wantExit: 1},
+		{name: "exit code only", command: "false", wantExit: 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, exitCode := execShellTranscript(sh, tc.command)
+			output, stdout, stderr, exitCode := execShellTranscript(sh, tc.command)
 			if exitCode != tc.wantExit {
 				t.Fatalf("exit code = %d, want %d", exitCode, tc.wantExit)
 			}
-			if strings.HasPrefix(got, "\n") {
-				t.Fatalf("transcript starts with a blank line: %q", got)
+			if output != tc.wantOutput {
+				t.Fatalf("output = %q, want %q", output, tc.wantOutput)
 			}
-			if !strings.HasPrefix(got, tc.wantPrefix) || !strings.HasSuffix(got, tc.wantSuffix) {
-				t.Fatalf("transcript = %q, want prefix %q and suffix %q", got, tc.wantPrefix, tc.wantSuffix)
+			if stdout != tc.wantStdout {
+				t.Fatalf("stdout = %q, want %q", stdout, tc.wantStdout)
+			}
+			if stderr != tc.wantStderr {
+				t.Fatalf("stderr = %q, want %q", stderr, tc.wantStderr)
 			}
 		})
 	}
