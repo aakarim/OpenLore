@@ -1,9 +1,13 @@
 # OPE-56 — Per-file current facts index
 
-Status: agreed design, not yet implemented.
+Status: implemented in [#108](https://github.com/aakarim/OpenLore/pull/108).
+This document records the agreed design and its rationale; the code in
+`internal/analytics/factsindex.go`, `internal/analytics/indexer.go`, and
+`pkg/openlore/dashboard.go` is authoritative for current behaviour.
 Linear: [OPE-56](https://linear.app/oiya/issue/OPE-56/cache-current-analytics-facts-per-file).
-Related: OPE-55 (context unavailable at root), follow-up issue for event-log
-columnar storage (see "Out of scope").
+Related: OPE-55 (context unavailable at root);
+[OPE-62](https://linear.app/oiya/issue/OPE-62/columnar-storage-for-the-analytics-event-log)
+for event-log columnar storage (see "Out of scope").
 
 ## Problem
 
