@@ -156,18 +156,19 @@ test("MobileDetails exposes preview/source mode and ratio-derived facts", async 
   expect(screen.getByText("3")).toBeVisible();
 });
 
-test("Sheet locks and restores body scroll, focus, and both dialog-edge tabs", () => {
+test("Sheet shows a clear close control and manages scroll and focus", () => {
   let scrollY = 88;
   Object.defineProperty(window, "scrollY", {
     configurable: true,
     get: () => scrollY,
   });
   const scrollTo = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+  const onClose = vi.fn();
   const outside = document.createElement("button");
   document.body.append(outside);
   outside.focus();
   const { unmount } = render(
-    <Sheet title="Safe sheet" onClose={vi.fn()}>
+    <Sheet title="Safe sheet" onClose={onClose}>
       <button>First action</button>
       <button>Last action</button>
     </Sheet>,
@@ -176,7 +177,11 @@ test("Sheet locks and restores body scroll, focus, and both dialog-edge tabs", (
   expect(dialog).toHaveFocus();
   expect(document.body.style.position).toBe("fixed");
   fireEvent.keyDown(dialog, { key: "Tab" });
-  expect(screen.getByRole("button", { name: "Close" })).toHaveFocus();
+  const close = screen.getByRole("button", { name: "Close" });
+  expect(close).toHaveTextContent("Close");
+  expect(close).toHaveFocus();
+  fireEvent.click(close);
+  expect(onClose).toHaveBeenCalledOnce();
   dialog.focus();
   fireEvent.keyDown(dialog, { key: "Tab", shiftKey: true });
   expect(screen.getByRole("button", { name: "Last action" })).toHaveFocus();

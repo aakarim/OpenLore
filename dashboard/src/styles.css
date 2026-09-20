@@ -805,8 +805,8 @@ select:focus-visible,
   font-size: 17px;
 }
 .close {
-  font-size: 22px;
-  width: 38px;
+  font-size: 13px;
+  padding: 0 12px;
   height: 38px;
 }
 .settings label {

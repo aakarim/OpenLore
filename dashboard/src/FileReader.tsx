@@ -560,8 +560,8 @@ export function Sheet({
       >
         <header>
           <h2 id="sheet-title">{title}</h2>
-          <button className="close" onClick={onClose} aria-label="Close">
-            ×
+          <button className="close" onClick={onClose}>
+            Close
           </button>
         </header>
         {children}
