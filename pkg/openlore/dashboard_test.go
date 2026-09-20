@@ -550,6 +550,26 @@ func TestDashboardFactsUseRawBytesNotReadTransform(t *testing.T) {
 	}
 }
 
+func TestDashboardFactsReadSyntheticSessionFile(t *testing.T) {
+	raw := NewMergeFS()
+	raw.SetRoot(NewFSAdapter(fstest.MapFS{}))
+	service, err := analytics.New(config.AnalyticsConfig{Dir: t.TempDir(), Log: config.AnalyticsLogConfig{Compress: "none"}}, analytics.Deps{FS: raw})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close(context.Background())
+	s := &Server{merge: raw, analytics: service}
+	scoped := NewFSAdapter(fstest.MapFS{"opt/openlore/lore.json": {Data: []byte("{\"version\":1}\n")}})
+	nodes := 0
+	node, err := s.dashboardContextNode(context.Background(), scoped, authConfigVFSPath, 0, &nodes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if node.Bytes != 14 || node.Characters != 14 || node.Lines != 1 {
+		t.Fatalf("dashboard facts did not read synthetic config view: %+v", node)
+	}
+}
+
 func TestDashboardIndexFailureFallsBackAndLogsOnce(t *testing.T) {
 	s, mux, token := newDashboardTestServer(t)
 	service, err := analytics.New(config.AnalyticsConfig{Dir: t.TempDir(), Log: config.AnalyticsLogConfig{Compress: "none"}}, analytics.Deps{FS: s.merge})
