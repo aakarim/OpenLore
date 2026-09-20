@@ -256,11 +256,14 @@ func (s *Server) dashboardContextNodeFromInfo(ctx context.Context, scoped vfs.Fi
 		}
 		if s.analytics != nil && s.analytics.HasFactsIndex() {
 			facts, err := s.analytics.CurrentFacts(ctx, target, info, func() ([]byte, error) {
+				if target == authConfigVFSPath {
+					// The authorized config view deliberately overrides a durable
+					// file at the same path, so its displayed bytes take precedence.
+					return readFileBounded(scoped, target, dashboardMaxBytes)
+				}
 				content, err := readFileBounded(s.merge, target, dashboardMaxBytes)
 				if errors.Is(err, fs.ErrNotExist) {
-					// Session wrappers can synthesize files such as the authorized
-					// config view. Prefer durable bytes for ordinary files, but read
-					// a visible synthetic file from the scoped view that exposed it.
+					// Future session wrappers may expose other synthetic files.
 					return readFileBounded(scoped, target, dashboardMaxBytes)
 				}
 				return content, err
