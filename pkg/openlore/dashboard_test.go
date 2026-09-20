@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -547,6 +549,50 @@ func TestDashboardFactsUseRawBytesNotReadTransform(t *testing.T) {
 	}
 	if node.Bytes != 3 || node.Characters != 3 {
 		t.Fatalf("dashboard facts used transformed SKILL.md: %+v", node)
+	}
+}
+
+func TestDashboardFactsUseAuthorizedConfigView(t *testing.T) {
+	sessionContent := []byte("{\"session\":true}\n")
+	authPath := filepath.Join(t.TempDir(), "lore.json")
+	if err := os.WriteFile(authPath, sessionContent, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	raw := NewMergeFS()
+	raw.SetRoot(NewFSAdapter(fstest.MapFS{
+		"opt/openlore/lore.json": {Data: []byte("{\"durable\":true,\"larger\":true}\n")},
+	}))
+	service, err := analytics.New(config.AnalyticsConfig{Dir: t.TempDir(), Log: config.AnalyticsLogConfig{Compress: "none"}}, analytics.Deps{FS: raw})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close(context.Background())
+	auth := &config.AuthConfig{
+		Roles:      map[string]config.RoleSpec{"admin": {Allow: config.CapabilityRules{Capabilities: []string{"lore:config:edit"}}}},
+		Docsets:    map[string]config.DocsetSpec{},
+		Identities: []config.AuthIdentity{{Name: "adil", Roles: []string{"admin"}}},
+	}
+	s := &Server{
+		merge: raw, analytics: service, auth: auth, authEnforced: true,
+		grants: newGrantRegistry(), config: config.Config{AuthFile: authPath},
+		authorizationStore: fileAuthorizationStore{auth: auth},
+	}
+	id, ok := s.identityForName("adil")
+	if !ok {
+		t.Fatal("missing config administrator")
+	}
+	scoped := s.buildCanonicalSessionFS(id)
+	content, err := readFileBounded(scoped, authConfigVFSPath, dashboardMaxBytes)
+	if err != nil || !bytes.Equal(content, sessionContent) {
+		t.Fatalf("authorized config view = %q, %v", content, err)
+	}
+	nodes := 0
+	node, err := s.dashboardContextNode(context.Background(), scoped, authConfigVFSPath, 0, &nodes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if node.Bytes != int64(len(sessionContent)) || node.Characters != int64(len(sessionContent)) || node.Lines != 1 {
+		t.Fatalf("dashboard facts did not prefer authorized config view: %+v", node)
 	}
 }
 
