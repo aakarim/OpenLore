@@ -50,11 +50,12 @@ type FactsIndex interface {
 }
 
 type FactsScanState struct {
-	Generation  int64
-	State       string
-	StartedAt   time.Time
-	CompletedAt time.Time
-	Error       string
+	Generation          int64
+	State               string
+	StartedAt           time.Time
+	CompletedAt         time.Time
+	Error               string
+	OwnershipCompatible bool
 }
 
 type sqliteFactsIndex struct{ db *sql.DB }
@@ -225,7 +226,7 @@ func (x *sqliteFactsIndex) PrefixScan(ctx context.Context, prefix string, limits
 	if limit <= 0 {
 		return nil, fmt.Errorf("facts scan limit must be positive")
 	}
-	rows, err := x.db.QueryContext(ctx, `SELECT path,owner,size,mtime_ns,content_hash,computed_at FROM files WHERE path=? OR (path>=? AND path<?) ORDER BY path LIMIT ?`, prefix, start, end, limit)
+	rows, err := x.db.QueryContext(ctx, `SELECT path,owner,size,mtime_ns,content_hash,computed_at,generation FROM files WHERE path=? OR (path>=? AND path<?) ORDER BY path LIMIT ?`, prefix, start, end, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -234,7 +235,7 @@ func (x *sqliteFactsIndex) PrefixScan(ctx context.Context, prefix string, limits
 	for rows.Next() {
 		var fact IndexedFacts
 		var computed int64
-		if err := rows.Scan(&fact.Path, &fact.Owner, &fact.Size, &fact.MTimeNS, &fact.ContentHash, &computed); err != nil {
+		if err := rows.Scan(&fact.Path, &fact.Owner, &fact.Size, &fact.MTimeNS, &fact.ContentHash, &computed, &fact.Generation); err != nil {
 			return nil, err
 		}
 		fact.ComputedAt = time.Unix(0, computed).UTC()
@@ -376,8 +377,8 @@ func (x *sqliteFactsIndex) StartScan(ctx context.Context, scopes []KnowledgeScop
 	}
 	generation++
 	now := time.Now().UTC().UnixNano()
-	if _, err = tx.ExecContext(ctx, `INSERT INTO facts_scan_state(id,generation,state,started_at,completed_at,error,scope_hash)
-VALUES(1,?,'updating',?,0,'',?) ON CONFLICT(id) DO UPDATE SET generation=excluded.generation,state='updating',started_at=excluded.started_at,error='',scope_hash=excluded.scope_hash`, generation, now, scopeHash); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO facts_scan_state(id,generation,state,started_at,completed_at,error,scope_hash,completed_scope_hash)
+VALUES(1,?,'updating',?,0,'',?,'') ON CONFLICT(id) DO UPDATE SET generation=excluded.generation,state='updating',started_at=excluded.started_at,error='',scope_hash=excluded.scope_hash`, generation, now, scopeHash); err != nil {
 		return 0, err
 	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM facts_scan_queue`); err != nil {
@@ -400,7 +401,8 @@ VALUES(1,?,'updating',?,0,'',?) ON CONFLICT(id) DO UPDATE SET generation=exclude
 func (x *sqliteFactsIndex) ScanState(ctx context.Context) (FactsScanState, error) {
 	var state FactsScanState
 	var started, completed int64
-	err := x.db.QueryRowContext(ctx, `SELECT generation,state,started_at,completed_at,error FROM facts_scan_state WHERE id=1`).Scan(&state.Generation, &state.State, &started, &completed, &state.Error)
+	var compatible int
+	err := x.db.QueryRowContext(ctx, `SELECT generation,state,started_at,completed_at,error,scope_hash=completed_scope_hash FROM facts_scan_state WHERE id=1`).Scan(&state.Generation, &state.State, &started, &completed, &state.Error, &compatible)
 	if errors.Is(err, sql.ErrNoRows) {
 		return state, nil
 	}
@@ -411,6 +413,7 @@ func (x *sqliteFactsIndex) ScanState(ctx context.Context) (FactsScanState, error
 	if completed > 0 {
 		state.CompletedAt = time.Unix(0, completed).UTC()
 	}
+	state.OwnershipCompatible = compatible != 0
 	return state, nil
 }
 
@@ -504,7 +507,7 @@ func (x *sqliteFactsIndex) FinishScan(ctx context.Context, generation int64) (bo
 	if len(stale) == factsBatchSize {
 		return false, nil
 	}
-	result, err := x.db.ExecContext(ctx, `UPDATE facts_scan_state SET state='ready',completed_at=?,error='' WHERE id=1 AND generation=? AND NOT EXISTS(SELECT 1 FROM facts_scan_queue WHERE generation=?)`, time.Now().UTC().UnixNano(), generation, generation)
+	result, err := x.db.ExecContext(ctx, `UPDATE facts_scan_state SET state='ready',completed_at=?,error='',completed_scope_hash=scope_hash WHERE id=1 AND generation=? AND NOT EXISTS(SELECT 1 FROM facts_scan_queue WHERE generation=?)`, time.Now().UTC().UnixNano(), generation, generation)
 	if err != nil {
 		return false, err
 	}
