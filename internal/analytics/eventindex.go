@@ -34,22 +34,31 @@ ON CONFLICT(id) DO UPDATE SET time_ns=excluded.time_ns,type=excluded.type,princi
 	return err
 }
 
-func (x *sqliteEventIndex) run(ctx context.Context, log EventLog, checkpoint string) {
+func (x *sqliteEventIndex) run(ctx context.Context, log EventLog, checkpoint string, processor *workProcessor) {
 	defer close(x.done)
 	x.mu.Lock()
 	x.cursor, x.log, x.checkpoint = loadLogCursor(checkpoint), log, checkpoint
 	x.mu.Unlock()
-	if err := x.catchUp(ctx); err != nil {
-		x.caughtUp.Store(false)
+	schedule := func() {
+		if processor == nil {
+			if err := x.catchUp(ctx); err != nil {
+				x.caughtUp.Store(false)
+			}
+			return
+		}
+		processor.enqueue("event-index", false, func(jobCtx context.Context) {
+			if err := x.catchUp(jobCtx); err != nil {
+				x.caughtUp.Store(false)
+			}
+		})
 	}
+	schedule()
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
-			if err := x.catchUp(ctx); err != nil {
-				x.caughtUp.Store(false)
-			}
+			schedule()
 		case <-ctx.Done():
 			return
 		}

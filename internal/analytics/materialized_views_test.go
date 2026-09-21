@@ -3,8 +3,11 @@ package analytics
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -12,6 +15,10 @@ import (
 
 	"github.com/aakarim/go-openlore/internal/config"
 )
+
+type consumerFunc func(context.Context, Event)
+
+func (f consumerFunc) Consume(ctx context.Context, event Event) { f(ctx, event) }
 
 func TestDirectoryFactsKeepNestedDocsetOwnershipSeparate(t *testing.T) {
 	store, index := testFactsIndex(t)
@@ -38,6 +45,49 @@ func TestDirectoryFactsKeepNestedDocsetOwnershipSeparate(t *testing.T) {
 	}
 	assert("/docs", "parent", 1, 5, 2, 4, 1)
 	assert("/docs", "nested", 1, 11, 3, 9, 3)
+}
+
+func TestLiveMetricsIgnoreAnalyticsProcessingAndDurableReplay(t *testing.T) {
+	dir := t.TempDir()
+	disabled := false
+	open := func(enabled *bool) *Service {
+		t.Helper()
+		service, err := New(config.AnalyticsConfig{Dir: dir, Log: config.AnalyticsLogConfig{Compress: "none"}, Pipeline: config.AnalyticsPipelineConfig{Enabled: enabled}}, Deps{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		service.Start(context.Background())
+		return service
+	}
+	metric := func(service *Service) string {
+		t.Helper()
+		response := httptest.NewRecorder()
+		service.Aggregator().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+		return response.Body.String()
+	}
+	first := open(&disabled)
+	first.Record(context.Background(), Event{ID: "live-disabled", Type: "command.exec", Transport: "ssh", Fields: map[string]any{"command": "cat"}})
+	deadline := time.Now().Add(time.Second)
+	for !strings.Contains(metric(first), `openlore_commands_total{command="cat",transport="ssh",exit_class="success"} 1`) {
+		if time.Now().After(deadline) {
+			t.Fatalf("disabled processing stopped live metrics:\n%s", metric(first))
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err := first.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	second := open(nil)
+	defer second.Close(context.Background())
+	for deadline := time.Now().Add(2 * time.Second); second.pipeline != nil && !second.pipeline.CaughtUp(); {
+		if time.Now().After(deadline) {
+			t.Fatal("pipeline did not catch up")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if strings.Contains(metric(second), `command="cat"`) {
+		t.Fatalf("restart replay contaminated resettable metrics:\n%s", metric(second))
+	}
 }
 
 func TestDashboardUsageDeduplicatesAndPublishesOnlyCompleteResult(t *testing.T) {
@@ -119,6 +169,45 @@ func TestWorkProcessorRunsOneExpensiveUnitAtATime(t *testing.T) {
 	}
 }
 
+func TestPipelineCatchUpSharesExpensiveWorkGate(t *testing.T) {
+	dir := t.TempDir()
+	log, err := OpenEventLog(filepath.Join(dir, "events"), LogOptions{Compress: "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := log.Append(context.Background(), Event{ID: "one", Type: "doc.read"}); err != nil {
+		t.Fatal(err)
+	}
+	gate := make(chan struct{}, 1)
+	processor := newWorkProcessor(gate)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go processor.run(ctx)
+	entered, release := make(chan struct{}), make(chan struct{})
+	pipeline := NewPipeline(log, filepath.Join(dir, "pipeline.checkpoint"), PipelineOptions{Gate: gate, Consumers: []Consumer{consumerFunc(func(context.Context, Event) {
+		close(entered)
+		<-release
+	})}})
+	pipeline.Run(ctx)
+	<-entered
+	requested := make(chan struct{})
+	processor.enqueue("requested", true, func(context.Context) { close(requested) })
+	select {
+	case <-requested:
+		t.Fatal("requested job overlapped pipeline catch-up")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-requested:
+	case <-time.After(time.Second):
+		t.Fatal("requested job did not run after pipeline released budget")
+	}
+	if err := pipeline.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDisabledProcessingKeepsEventLogAndReenableCatchesUpIdempotently(t *testing.T) {
 	dir := t.TempDir()
 	disabled := false
@@ -194,7 +283,7 @@ func TestEventIndexUsesIndependentCheckpointAndDoesNotAdvanceOnFailure(t *testin
 	}
 	index := &sqliteEventIndex{db: store.db, done: make(chan struct{})}
 	ctx, cancel := context.WithCancel(context.Background())
-	go index.run(ctx, log, filepath.Join(dir, "event-index.checkpoint"))
+	go index.run(ctx, log, filepath.Join(dir, "event-index.checkpoint"), nil)
 	deadline := time.Now().Add(time.Second)
 	for !index.caughtUp.Load() {
 		if time.Now().After(deadline) {
@@ -213,7 +302,7 @@ func TestEventIndexUsesIndependentCheckpointAndDoesNotAdvanceOnFailure(t *testin
 	failed := &sqliteEventIndex{db: store.db, done: make(chan struct{})}
 	failedCtx, failedCancel := context.WithCancel(context.Background())
 	failedCheckpoint := filepath.Join(dir, "failed.checkpoint")
-	go failed.run(failedCtx, log, failedCheckpoint)
+	go failed.run(failedCtx, log, failedCheckpoint, nil)
 	time.Sleep(20 * time.Millisecond)
 	failedCancel()
 	<-failed.done
