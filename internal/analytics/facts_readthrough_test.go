@@ -26,6 +26,28 @@ type controlledFactsFS struct {
 	large    string
 }
 
+type failingUpsertIndex struct {
+	FactsIndex
+	mu   sync.Mutex
+	fail bool
+}
+
+func (x *failingUpsertIndex) Upsert(ctx context.Context, fact IndexedFacts) error {
+	x.mu.Lock()
+	fail := x.fail
+	x.mu.Unlock()
+	if fail {
+		return errors.New("injected upsert failure")
+	}
+	return x.FactsIndex.Upsert(ctx, fact)
+}
+
+func (x *failingUpsertIndex) setFail(fail bool) {
+	x.mu.Lock()
+	x.fail = fail
+	x.mu.Unlock()
+}
+
 func (f *controlledFactsFS) Stat(p string) (*vfs.FileInfo, error) {
 	if vfs.CleanPath(p) == f.large {
 		return &vfs.FileInfo{FileName: path.Base(p), FilePath: p, FileSize: maxIndexedFileBytes + 1}, nil
@@ -397,5 +419,73 @@ func TestPathSensitiveFactsAreFilteredInBoundedBackgroundBatches(t *testing.T) {
 	}
 	if len(rows) != 1 || rows[0].Path != "/docs/039.md" {
 		t.Fatalf("filtered rows=%+v", rows)
+	}
+}
+
+func TestFactsScanDoesNotPublishAfterUpsertFailureAndRecovers(t *testing.T) {
+	service := newIndexedTestService(t, testFS{"/docs/a.md": []byte("content")})
+	service.SetKnowledgeScopes([]KnowledgeScope{{Name: "docs", Root: "/docs"}})
+	base := service.index
+	failing := &failingUpsertIndex{FactsIndex: base, fail: true}
+	service.index = failing
+	service.Start(context.Background())
+	deadline := time.Now().Add(2 * time.Second)
+	var failed SnapshotStatus
+	for {
+		_, failed, _ = service.IndexedFacts(context.Background(), "/docs", 10)
+		if failed.State == "failed" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("upsert failure was not published: %+v", failed)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if failed.Complete || !strings.Contains(failed.Error, "injected upsert failure") {
+		t.Fatalf("failure was misleading: %+v", failed)
+	}
+	state, err := base.ScanState(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	queued, err := base.NextScanPaths(context.Background(), state.Generation, 10)
+	if err != nil || len(queued) == 0 || queued[0] != "/docs/a.md" {
+		t.Fatalf("failed file did not remain durable work: %v err=%v", queued, err)
+	}
+	failing.setFail(false)
+	service.PromoteFacts("/docs/a.md")
+	deadline = time.Now().Add(2 * time.Second)
+	for {
+		rows, status, err := service.IndexedFacts(context.Background(), "/docs", 10)
+		if err == nil && status.Complete {
+			if len(rows) != 1 || rows[0].Path != "/docs/a.md" {
+				t.Fatalf("recovered rows=%+v", rows)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("scan did not recover: %+v err=%v", status, err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestDisabledAnalyticsDoesNotInitializePathFilterWork(t *testing.T) {
+	disabled := false
+	service, err := New(config.AnalyticsConfig{Dir: t.TempDir(), Log: config.AnalyticsLogConfig{Compress: "none"}, Pipeline: config.AnalyticsPipelineConfig{Enabled: &disabled}}, Deps{FS: testFS{"/docs/a.md": []byte("a")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close(context.Background())
+	service.SetKnowledgeScopes([]KnowledgeScope{{Name: "docs", Root: "/docs"}})
+	service.Start(context.Background())
+	_, _, status, err := service.AuthorizedIndexedFacts(context.Background(), "disabled-policy", "/docs", nil, []string{"docs"}, 10, func(string) bool { return true })
+	if err != nil || status.State != "disabled" || status.Updating {
+		t.Fatalf("disabled filtered status=%+v err=%v", status, err)
+	}
+	store := service.store.(*SQLiteAggregationStore)
+	var count int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM dashboard_fact_state WHERE key='disabled-policy'`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("disabled filtering initialized work: count=%d err=%v", count, err)
 	}
 }
