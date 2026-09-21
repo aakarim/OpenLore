@@ -47,7 +47,7 @@ func (x *sqliteEventIndex) run(ctx context.Context, log EventLog, checkpoint str
 			return
 		}
 		processor.enqueue("event-index", false, func(jobCtx context.Context) {
-			if err := x.catchUp(jobCtx); err != nil {
+			if _, err := x.catchUpBatch(jobCtx); err != nil {
 				x.caughtUp.Store(false)
 			}
 		})
@@ -66,23 +66,35 @@ func (x *sqliteEventIndex) run(ctx context.Context, log EventLog, checkpoint str
 }
 
 func (x *sqliteEventIndex) catchUp(ctx context.Context) error {
+	for {
+		more, err := x.catchUpBatch(ctx)
+		if err != nil || !more {
+			return err
+		}
+	}
+}
+
+func (x *sqliteEventIndex) catchUpBatch(ctx context.Context) (bool, error) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
 	if x.log == nil {
-		return errors.New("event index is not started")
+		return false, errors.New("event index is not started")
 	}
+	more := false
 	if incremental, ok := x.log.(*fileEventLog); ok {
-		if err := incremental.scanIncremental(ctx, x.cursor, func(event Event) error { return x.consume(ctx, event) }); err != nil {
-			return err
+		var err error
+		more, err = incremental.scanIncrementalBatch(ctx, x.cursor, func(event Event) error { return x.consume(ctx, event) })
+		if err != nil {
+			return false, err
 		}
 	} else if err := x.log.Scan(ctx, EventFilter{}, func(event Event) error { return x.consume(ctx, event) }); err != nil {
-		return err
+		return false, err
 	}
 	if err := writeLogCursor(x.checkpoint, x.cursor); err != nil {
-		return err
+		return false, err
 	}
-	x.caughtUp.Store(true)
-	return nil
+	x.caughtUp.Store(!more)
+	return more, nil
 }
 
 func loadLogCursor(path string) logCursor {

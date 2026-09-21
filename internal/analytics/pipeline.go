@@ -335,6 +335,7 @@ func (p *Pipeline) Run(ctx context.Context) {
 		p.processMu.Unlock()
 		go func() {
 			defer close(p.done)
+			var scanMore bool
 			scan := func(fn func(Event) error) error {
 				if p.opts.Gate != nil {
 					select {
@@ -345,8 +346,11 @@ func (p *Pipeline) Run(ctx context.Context) {
 					}
 				}
 				if log, ok := p.log.(*fileEventLog); ok {
-					return log.scanIncremental(ctx, cursor, fn)
+					var err error
+					scanMore, err = log.scanIncrementalBatch(ctx, cursor, fn)
+					return err
 				}
+				scanMore = false
 				return p.log.Scan(ctx, EventFilter{}, fn)
 			}
 			// New checkpoints resume directly at durable segment offsets. For a
@@ -381,7 +385,7 @@ func (p *Pipeline) Run(ctx context.Context) {
 				p.drainLocked(ctx)
 				p.writeCheckpoint(p.lastEventID)
 				p.processMu.Unlock()
-				p.caughtUp.Store(true)
+				p.caughtUp.Store(!scanMore)
 			}
 			ticker := time.NewTicker(time.Second)
 			defer ticker.Stop()
@@ -399,7 +403,7 @@ func (p *Pipeline) Run(ctx context.Context) {
 					p.drainLocked(ctx)
 					p.writeCheckpoint(p.lastEventID)
 					p.processMu.Unlock()
-					p.caughtUp.Store(true)
+					p.caughtUp.Store(!scanMore)
 				case <-p.stop:
 					return
 				case <-ctx.Done():

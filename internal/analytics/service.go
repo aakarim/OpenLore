@@ -529,8 +529,12 @@ func (s *Service) DashboardUsage(ctx context.Context, key string, compute func(c
 	if stale {
 		s.processor.enqueue(jobKey, true, func(jobCtx context.Context) {
 			if s.eventIndex != nil {
-				if catchUpErr := s.eventIndex.catchUp(jobCtx); catchUpErr != nil {
+				more, catchUpErr := s.eventIndex.catchUpBatch(jobCtx)
+				if catchUpErr != nil {
 					_, _ = store.db.ExecContext(context.WithoutCancel(jobCtx), `INSERT INTO dashboard_views(key,computed_at,error) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET error=excluded.error`, key, time.Now().UTC().UnixNano(), catchUpErr.Error())
+					return
+				}
+				if more {
 					return
 				}
 			}
@@ -597,8 +601,12 @@ func (s *Service) DashboardMaterialized(ctx context.Context, key string, compute
 		jobKey := "aggregation:" + key
 		s.processor.enqueue(jobKey, true, func(jobCtx context.Context) {
 			if s.eventIndex != nil {
-				if catchUpErr := s.eventIndex.catchUp(jobCtx); catchUpErr != nil {
+				more, catchUpErr := s.eventIndex.catchUpBatch(jobCtx)
+				if catchUpErr != nil {
 					_, _ = store.db.ExecContext(context.WithoutCancel(jobCtx), `INSERT INTO dashboard_views(key,computed_at,error) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET error=excluded.error`, key, time.Now().UTC().UnixNano(), catchUpErr.Error())
+					return
+				}
+				if more {
 					return
 				}
 			}

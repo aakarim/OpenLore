@@ -150,7 +150,7 @@ func (l *fileEventLog) Segments() []Segment {
 }
 func (l *fileEventLog) Scan(ctx context.Context, f EventFilter, fn func(Event) error) error {
 	l.mu.Lock()
-	segments, err := l.openSegmentsLocked(nil)
+	segments, _, err := l.openSegmentsLocked(nil, 0)
 	l.mu.Unlock()
 	if err != nil {
 		return err
@@ -158,13 +158,14 @@ func (l *fileEventLog) Scan(ctx context.Context, f EventFilter, fn func(Event) e
 	return scanOpenSegments(ctx, segments, f, fn)
 }
 
-func (l *fileEventLog) openSegmentsLocked(cursor logCursor) ([]openLogSegment, error) {
+func (l *fileEventLog) openSegmentsLocked(cursor logCursor, limit int) ([]openLogSegment, bool, error) {
 	if l.active != nil {
 		if err := l.active.Sync(); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	}
 	var opened []openLogSegment
+	more := false
 	for _, seg := range l.Segments() {
 		offset := int64(0)
 		if cursor != nil {
@@ -181,21 +182,25 @@ func (l *fileEventLog) openSegmentsLocked(cursor logCursor) ([]openLogSegment, e
 				continue
 			}
 		}
+		if limit > 0 && len(opened) >= limit {
+			more = true
+			continue
+		}
 		file, err := os.Open(seg.Path)
 		if err != nil {
 			closeOpenSegments(opened)
-			return nil, err
+			return nil, false, err
 		}
 		if offset > 0 {
 			if _, err := file.Seek(offset, io.SeekStart); err != nil {
 				file.Close()
 				closeOpenSegments(opened)
-				return nil, err
+				return nil, false, err
 			}
 		}
 		opened = append(opened, openLogSegment{segment: seg, file: file, offset: offset})
 	}
-	return opened, nil
+	return opened, more, nil
 }
 
 func closeOpenSegments(segments []openLogSegment) {
@@ -262,20 +267,32 @@ func scanOpenSegments(ctx context.Context, segments []openLogSegment, f EventFil
 // private optimization used by Pipeline; EventLog's stable interface remains
 // unchanged.
 func (l *fileEventLog) scanIncremental(ctx context.Context, cursor logCursor, fn func(Event) error) error {
-	l.mu.Lock()
-	segments, err := l.openSegmentsLocked(cursor)
-	l.mu.Unlock()
-	if err != nil {
-		return err
-	}
-	for i, opened := range segments {
-		if err := scanOpenSegments(ctx, []openLogSegment{opened}, EventFilter{}, fn); err != nil {
-			closeOpenSegments(segments[i+1:])
+	for {
+		more, err := l.scanIncrementalBatch(ctx, cursor, fn)
+		if err != nil || !more {
 			return err
 		}
-		cursor[opened.segment.Path] = opened.segment.Size
 	}
-	return nil
+}
+
+// scanIncrementalBatch processes at most one snapshotted segment so callers
+// sharing the expensive-work lane can yield between retained-log units.
+func (l *fileEventLog) scanIncrementalBatch(ctx context.Context, cursor logCursor, fn func(Event) error) (bool, error) {
+	l.mu.Lock()
+	segments, more, err := l.openSegmentsLocked(cursor, 1)
+	l.mu.Unlock()
+	if err != nil {
+		return false, err
+	}
+	if len(segments) == 0 {
+		return false, nil
+	}
+	opened := segments[0]
+	if err := scanOpenSegments(ctx, []openLogSegment{opened}, EventFilter{}, fn); err != nil {
+		return false, err
+	}
+	cursor[opened.segment.Path] = opened.segment.Size
+	return more, nil
 }
 func (l *fileEventLog) Seal(ctx context.Context, before time.Time) error {
 	l.mu.Lock()
