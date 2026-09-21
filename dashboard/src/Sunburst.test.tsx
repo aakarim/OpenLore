@@ -5,7 +5,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { vi } from "vitest";
+import { beforeEach, vi } from "vitest";
 import { Sunburst } from "./Sunburst";
 import type { ContextNode } from "./types";
 
@@ -35,6 +35,18 @@ const folder = (
 });
 
 const props = { contextWindow: 200, onSelect: vi.fn() };
+
+beforeEach(() => {
+  vi.mocked(matchMedia).mockImplementation(
+    (query) =>
+      ({
+        matches: false,
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }) as unknown as MediaQueryList,
+  );
+});
 
 test("uses additive rounded leaf estimates for the center and asymmetric arcs", async () => {
   const deep = folder("/deep", [
@@ -86,6 +98,39 @@ test("shows an accessible live path tooltip on hover, focus, and tap", () => {
   expect(tooltip).toHaveTextContent("/guide.md");
   fireEvent.pointerDown(segment);
   expect(tooltip).toHaveTextContent("/guide.md");
+});
+
+test("limits mobile charts to top-level segments while preserving exact totals", () => {
+  vi.mocked(matchMedia).mockImplementation(
+    (query) =>
+      ({
+        matches: query === "(max-width: 760px)",
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }) as unknown as MediaQueryList,
+  );
+  const branch = folder("/guide", [
+    file("/guide/one.md", 20),
+    file("/guide/two.md", 40),
+  ]);
+  render(
+    <Sunburst
+      node={folder("/", [branch, file("/root.md", 20)])}
+      ratio={4}
+      {...props}
+    />,
+  );
+
+  expect(
+    screen.getByRole("group", {
+      name: "Top-level context token distribution",
+    }),
+  ).toBeInTheDocument();
+  expect(screen.getByText("20")).toBeInTheDocument();
+  expect(screen.getAllByRole("button")).toHaveLength(2);
+  expect(screen.getByRole("button", { name: "/guide: 15 tokens" })).toBeVisible();
+  expect(screen.queryByRole("button", { name: /one\.md/ })).not.toBeInTheDocument();
 });
 
 test("renders file utilization and explicit empty-folder states safely", () => {
@@ -165,9 +210,15 @@ test("interpolates canonical-path geometry and cancels an unfinished transition"
 });
 
 test("honors reduced motion when changing folders", () => {
-  vi.mocked(matchMedia).mockReturnValue({
-    matches: true,
-  } as MediaQueryList);
+  vi.mocked(matchMedia).mockImplementation(
+    (query) =>
+      ({
+        matches: query === "(prefers-reduced-motion: reduce)",
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }) as unknown as MediaQueryList,
+  );
   const request = vi.spyOn(globalThis, "requestAnimationFrame");
   const child = file("/a/readme.md", 40);
   const branch = folder("/a", [child]);
