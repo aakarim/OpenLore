@@ -377,6 +377,7 @@ type Recorder struct {
 	log                      EventLog
 	queue                    chan Event
 	handoff                  chan<- Event
+	live                     Consumer
 	dropped, droppedShutdown atomic.Int64
 	mu                       sync.RWMutex
 	closed                   bool
@@ -391,7 +392,8 @@ func NewRecorder(log EventLog, buffer int) *Recorder {
 	}
 	return &Recorder{log: log, queue: make(chan Event, buffer), done: make(chan struct{})}
 }
-func (r *Recorder) SetHandoff(ch chan<- Event) { r.handoff = ch }
+func (r *Recorder) SetHandoff(ch chan<- Event)        { r.handoff = ch }
+func (r *Recorder) SetLiveConsumer(consumer Consumer) { r.live = consumer }
 func (r *Recorder) Start(ctx context.Context) {
 	r.start.Do(func() {
 		r.mu.Lock()
@@ -408,6 +410,9 @@ func (r *Recorder) Start(ctx context.Context) {
 				if err := r.log.Append(appendCtx, e); err != nil {
 					r.dropped.Add(1)
 					continue
+				}
+				if r.live != nil {
+					r.live.Consume(appendCtx, e)
 				}
 				if r.handoff != nil {
 					select {
@@ -498,7 +503,8 @@ key TEXT PRIMARY KEY, name TEXT NOT NULL, value BLOB NOT NULL
 ); CREATE INDEX IF NOT EXISTS materializations_name ON materializations(name);
 CREATE TABLE IF NOT EXISTS files (
 path TEXT PRIMARY KEY, size INTEGER NOT NULL, mtime_ns INTEGER NOT NULL,
-content_hash TEXT NOT NULL, computed_at INTEGER NOT NULL, owner TEXT NOT NULL DEFAULT ''
+content_hash TEXT NOT NULL, computed_at INTEGER NOT NULL, owner TEXT NOT NULL DEFAULT '',
+generation INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS file_scalars (
 path TEXT NOT NULL REFERENCES files(path) ON DELETE CASCADE,
@@ -509,6 +515,22 @@ CREATE TABLE IF NOT EXISTS directory_facts (
 path TEXT NOT NULL, owner TEXT NOT NULL, files INTEGER NOT NULL,
 bytes REAL NOT NULL, lines REAL NOT NULL, characters REAL NOT NULL, tokens REAL NOT NULL,
 computed_at INTEGER NOT NULL, PRIMARY KEY(path, owner)
+);
+CREATE TABLE IF NOT EXISTS facts_scan_state (
+id INTEGER PRIMARY KEY CHECK(id=1), generation INTEGER NOT NULL,
+state TEXT NOT NULL, started_at INTEGER NOT NULL, completed_at INTEGER NOT NULL DEFAULT 0,
+error TEXT NOT NULL DEFAULT '', scope_hash TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS facts_scan_queue (
+generation INTEGER NOT NULL, path TEXT NOT NULL, PRIMARY KEY(generation,path)
+);
+CREATE TABLE IF NOT EXISTS dashboard_fact_state (
+key TEXT PRIMARY KEY, generation INTEGER NOT NULL, cursor TEXT NOT NULL DEFAULT '',
+state TEXT NOT NULL, computed_at INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS dashboard_fact_paths (
+key TEXT NOT NULL REFERENCES dashboard_fact_state(key) ON DELETE CASCADE,
+path TEXT NOT NULL, PRIMARY KEY(key,path)
 );
 CREATE TABLE IF NOT EXISTS dashboard_views (
 key TEXT PRIMARY KEY, value BLOB, computed_at INTEGER NOT NULL, error TEXT NOT NULL DEFAULT ''
@@ -523,6 +545,10 @@ CREATE INDEX IF NOT EXISTS analytics_events_time ON analytics_events(time_ns);`)
 	// SQLite has no IF NOT EXISTS form for ADD COLUMN. Existing stores are
 	// upgraded in place; duplicate-column is the expected no-op on new stores.
 	if _, alterErr := db.Exec(`ALTER TABLE files ADD COLUMN owner TEXT NOT NULL DEFAULT ''`); alterErr != nil && !strings.Contains(alterErr.Error(), "duplicate column") {
+		db.Close()
+		return nil, alterErr
+	}
+	if _, alterErr := db.Exec(`ALTER TABLE files ADD COLUMN generation INTEGER NOT NULL DEFAULT 0`); alterErr != nil && !strings.Contains(alterErr.Error(), "duplicate column") {
 		db.Close()
 		return nil, alterErr
 	}

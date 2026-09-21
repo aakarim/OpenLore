@@ -86,3 +86,24 @@ func TestFactsIndexPrefixScanAndPrune(t *testing.T) {
 		t.Fatalf("pruned row hit=%v err=%v", hit, err)
 	}
 }
+
+func TestFactsScanQueueResumesSameScopeGeneration(t *testing.T) {
+	_, index := testFactsIndex(t)
+	ctx := context.Background()
+	scopes := []KnowledgeScope{{Name: "docs", Root: "/docs"}}
+	generation, err := index.StartScan(ctx, scopes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := index.CompleteScanPath(ctx, generation, "/docs", []string{"/docs/a.md", "/docs/b.md"}); err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := index.StartScan(ctx, scopes)
+	if err != nil || resumed != generation {
+		t.Fatalf("resumed generation=%d want=%d err=%v", resumed, generation, err)
+	}
+	paths, err := index.NextScanPaths(ctx, resumed, 10)
+	if err != nil || len(paths) != 2 {
+		t.Fatalf("durable queue=%v err=%v", paths, err)
+	}
+}

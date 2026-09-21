@@ -149,8 +149,8 @@ func TestServiceRebuildsFromRemoteAfterLocalLoss(t *testing.T) {
 	}
 	response := httptest.NewRecorder()
 	service.Aggregator().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/metrics", nil))
-	if !strings.Contains(response.Body.String(), `openlore_commands_total{command="stat",transport="mcp",exit_class="success"} 1`) {
-		t.Fatalf("rebuilt metrics missing remote command:\n%s", response.Body.String())
+	if strings.Contains(response.Body.String(), `openlore_commands_total{command="stat"`) {
+		t.Fatalf("durable replay contaminated restart-reset live metrics:\n%s", response.Body.String())
 	}
 	var restored int
 	if err := service.EventSource().Scan(context.Background(), EventFilter{Types: []string{"command.exec"}}, func(Event) error { restored++; return nil }); err != nil || restored != 1 {

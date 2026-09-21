@@ -68,6 +68,7 @@ type Service struct {
 	close       sync.Once
 	started     atomic.Bool
 	closeErr    error
+	expensive   chan struct{}
 }
 
 type KnowledgeScope struct {
@@ -134,7 +135,8 @@ func New(cfg config.AnalyticsConfig, deps Deps) (*Service, error) {
 	if sqliteStore, ok := store.(*SQLiteAggregationStore); ok {
 		index = newSQLiteFactsIndex(sqliteStore)
 	}
-	s := &Service{cfg: cfg, fs: deps.FS, log: log, store: store, index: index, providers: providers, processor: newWorkProcessor()}
+	expensive := make(chan struct{}, 1)
+	s := &Service{cfg: cfg, fs: deps.FS, log: log, store: store, index: index, providers: providers, processor: newWorkProcessor(expensive), expensive: expensive}
 	if sqliteStore, ok := store.(*SQLiteAggregationStore); ok {
 		s.eventIndex = &sqliteEventIndex{db: sqliteStore.db, done: make(chan struct{})}
 	}
@@ -164,15 +166,23 @@ func New(cfg config.AnalyticsConfig, deps Deps) (*Service, error) {
 	agg := NewAggregator(AggregatorOptions{})
 	ref := NewRefresher(reg, log, store, cfg.Aggregations.RefreshInterval)
 	rec := NewRecorder(log, cfg.Pipeline.Buffer)
+	rec.SetLiveConsumer(agg)
 	s.recorder = rec
 	s.shipper = NewShipper(log, remote, cfg.Ship.Interval)
 	s.remote = remote
 	s.registry = reg
 	s.aggregator = agg
 	s.refresher = ref
+	ref.SetScheduler(func(run func(context.Context)) { s.processor.enqueue("refresh", false, run) })
 	if cfg.PipelineEnabled() {
-		derivedSink := sinkFunc(func(ctx context.Context, event Event) { _ = log.Append(ctx, event) })
-		s.pipeline = NewPipeline(log, filepath.Join(dir, "pipeline.checkpoint"), PipelineOptions{Processors: deps.Processors, Consumers: []Consumer{agg}, Refresher: ref, Sink: derivedSink, Buffer: cfg.Pipeline.Buffer})
+		derivedSink := sinkFunc(func(ctx context.Context, event Event) {
+			if err := log.Append(ctx, event); err == nil {
+				// Derived scalar gauges may reconstruct present state during
+				// catch-up; source counters remain live-only via Recorder.
+				agg.Consume(ctx, event)
+			}
+		})
+		s.pipeline = NewPipeline(log, filepath.Join(dir, "pipeline.checkpoint"), PipelineOptions{Processors: deps.Processors, Refresher: ref, Sink: derivedSink, Buffer: cfg.Pipeline.Buffer, Gate: expensive})
 		rec.SetHandoff(s.pipeline.Handoff())
 	} else {
 		reg.SetPaused(true)
@@ -185,7 +195,7 @@ func (s *Service) Start(ctx context.Context) {
 	ctx, s.cancel = context.WithCancel(ctx)
 	go s.processor.run(ctx)
 	if s.indexer != nil && s.cfg.PipelineEnabled() {
-		s.indexer.enqueue("/")
+		s.indexer.resume()
 	}
 	s.recorder.Start(ctx)
 	if s.pipeline != nil {
@@ -193,7 +203,7 @@ func (s *Service) Start(ctx context.Context) {
 		s.refresher.Run(ctx)
 	}
 	if s.eventIndex != nil && s.cfg.PipelineEnabled() {
-		go s.eventIndex.run(ctx, s.log, filepath.Join(s.cfg.Dir, "event-index.checkpoint"))
+		go s.eventIndex.run(ctx, s.log, filepath.Join(s.cfg.Dir, "event-index.checkpoint"), s.processor)
 	}
 	go s.shipper.Run(ctx)
 }
@@ -275,7 +285,17 @@ func (s *Service) SetKnowledgeScopes(scopes []KnowledgeScope) {
 	s.scopesMu.Lock()
 	s.scopes = clean
 	s.scopesMu.Unlock()
-	s.EnqueueFacts("/")
+	if s.indexer != nil {
+		var err error
+		if s.cfg.PipelineEnabled() {
+			err = s.indexer.setScopes(clean)
+		} else {
+			err = s.indexer.stageScopes(clean)
+		}
+		if err != nil {
+			s.indexLog.Do(func() { log.Printf("analytics facts scan could not start: %v", err) })
+		}
+	}
 }
 
 func (s *Service) ownerForPath(p string) string {
@@ -299,22 +319,175 @@ func (s *Service) IndexedFacts(ctx context.Context, prefix string, limit int) ([
 	if err != nil {
 		return nil, SnapshotStatus{State: "failed", Error: err.Error()}, err
 	}
-	status := SnapshotStatus{State: "ready", Complete: true, Coverage: "indexed content docsets only"}
-	for _, row := range rows {
-		if row.ComputedAt.After(status.ComputedAt) {
-			status.ComputedAt = row.ComputedAt
-		}
+	state, stateErr := s.index.ScanState(ctx)
+	if stateErr != nil {
+		return nil, SnapshotStatus{State: "failed", Error: stateErr.Error()}, stateErr
 	}
-	status.Updating = s.processor.active("facts")
-	if len(rows) == 0 {
-		status.State, status.Complete = "cold", false
-	} else if status.Updating {
-		status.State = "updating"
+	status := SnapshotStatus{State: state.State, Complete: state.State == "ready", ComputedAt: state.CompletedAt, Error: state.Error, Coverage: "indexed content docsets only"}
+	status.Updating = state.State == "updating" || s.processor.active("facts")
+	if state.Generation == 0 {
+		status.State, status.Complete, status.Updating = "cold", false, false
+	} else if state.State == "failed" {
+		status.Complete, status.Updating = false, false
+		status.Coverage = "last attempted content scan failed; indexed rows may be partial"
+	} else if state.State == "updating" {
+		status.Complete = false
+		status.Coverage = "content scan in progress; indexed rows are partial"
 	}
 	if !s.cfg.PipelineEnabled() {
 		status.State, status.Updating = "disabled", false
 	}
 	return rows, status, nil
+}
+
+type DirectoryFacts struct {
+	Files                            int64
+	Bytes, Lines, Characters, Tokens int64
+}
+
+func (s *Service) IndexedFactsForOwners(ctx context.Context, prefix string, owners []string, limit int) ([]IndexedFacts, DirectoryFacts, SnapshotStatus, error) {
+	_, status, err := s.IndexedFacts(ctx, prefix, 1)
+	if err != nil {
+		return nil, DirectoryFacts{}, status, err
+	}
+	rows, err := s.index.PrefixScanOwners(ctx, prefix, owners, limit)
+	if err != nil {
+		status.State, status.Complete, status.Error = "failed", false, err.Error()
+		return nil, DirectoryFacts{}, status, err
+	}
+	totals, computed, err := s.index.DirectoryTotals(ctx, prefix, owners)
+	if err != nil {
+		status.State, status.Complete, status.Error = "failed", false, err.Error()
+		return nil, DirectoryFacts{}, status, err
+	}
+	if status.ComputedAt.IsZero() {
+		status.ComputedAt = computed
+	}
+	return rows, DirectoryFacts{Files: totals.files, Bytes: int64(totals.bytes), Lines: int64(totals.lines), Characters: int64(totals.characters), Tokens: int64(totals.tokens)}, status, nil
+}
+
+func (s *Service) AuthorizedIndexedFacts(ctx context.Context, key, prefix string, fullOwners, filteredOwners []string, limit int, readable func(string) bool) ([]IndexedFacts, DirectoryFacts, SnapshotStatus, error) {
+	rows, totals, status, err := s.IndexedFactsForOwners(ctx, prefix, fullOwners, limit)
+	if err != nil || len(filteredOwners) == 0 {
+		return rows, totals, status, err
+	}
+	store, ok := s.store.(*SQLiteAggregationStore)
+	if !ok {
+		status.Complete = false
+		status.Coverage = "path-sensitive grants omitted without sqlite filtering"
+		return rows, totals, status, nil
+	}
+	var generation int64
+	var cursor, filterState, filterError string
+	currentGeneration := statusGeneration(s.index, ctx)
+	err = store.db.QueryRowContext(ctx, `SELECT generation,cursor,state,error FROM dashboard_fact_state WHERE key=?`, key).Scan(&generation, &cursor, &filterState, &filterError)
+	if errors.Is(err, sql.ErrNoRows) || generation != currentGeneration {
+		generation = currentGeneration
+		tx, txErr := store.db.BeginTx(ctx, nil)
+		if txErr != nil {
+			return nil, DirectoryFacts{}, status, txErr
+		}
+		defer tx.Rollback()
+		if _, txErr = tx.ExecContext(ctx, `DELETE FROM dashboard_fact_paths WHERE key=?`, key); txErr == nil {
+			_, txErr = tx.ExecContext(ctx, `INSERT INTO dashboard_fact_state(key,generation,cursor,state,computed_at,error) VALUES(?,?,'','updating',0,'') ON CONFLICT(key) DO UPDATE SET generation=excluded.generation,cursor='',state='updating',computed_at=0,error=''`, key, generation)
+		}
+		if txErr != nil {
+			return nil, DirectoryFacts{}, status, txErr
+		}
+		if err = tx.Commit(); err != nil {
+			return nil, DirectoryFacts{}, status, err
+		}
+		cursor, filterState, filterError = "", "updating", ""
+	} else if err != nil {
+		return nil, DirectoryFacts{}, status, err
+	}
+	var allowedPaths []string
+	remainingLimit := limit - len(rows)
+	if remainingLimit < 0 {
+		remainingLimit = 0
+	}
+	pathRows, err := store.db.QueryContext(ctx, `SELECT path FROM dashboard_fact_paths WHERE key=? ORDER BY path LIMIT ?`, key, remainingLimit)
+	if err != nil {
+		return nil, DirectoryFacts{}, status, err
+	}
+	for pathRows.Next() {
+		var p string
+		if err := pathRows.Scan(&p); err != nil {
+			pathRows.Close()
+			return nil, DirectoryFacts{}, status, err
+		}
+		allowedPaths = append(allowedPaths, p)
+	}
+	if err := pathRows.Close(); err != nil {
+		return nil, DirectoryFacts{}, status, err
+	}
+	filtered, err := s.index.FactsForPaths(ctx, allowedPaths)
+	if err != nil {
+		return nil, DirectoryFacts{}, status, err
+	}
+	rows = append(rows, filtered...)
+	for _, fact := range filtered {
+		factTotals := totalsForFact(fact)
+		totals.Files++
+		totals.Bytes += int64(factTotals.bytes)
+		totals.Lines += int64(factTotals.lines)
+		totals.Characters += int64(factTotals.characters)
+		totals.Tokens += int64(factTotals.tokens)
+	}
+	if status.Complete && filterState != "ready" {
+		jobKey := "facts-filter:" + key
+		var run func(context.Context)
+		run = func(jobCtx context.Context) {
+			var jobCursor string
+			if err := store.db.QueryRowContext(jobCtx, `SELECT cursor FROM dashboard_fact_state WHERE key=? AND generation=?`, key, generation).Scan(&jobCursor); err != nil {
+				return
+			}
+			batch, scanErr := s.index.PrefixScanOwnersAfter(jobCtx, prefix, filteredOwners, jobCursor, factsBatchSize)
+			if scanErr != nil {
+				_, _ = store.db.ExecContext(context.WithoutCancel(jobCtx), `UPDATE dashboard_fact_state SET state='failed',error=? WHERE key=? AND generation=?`, scanErr.Error(), key, generation)
+				return
+			}
+			tx, txErr := store.db.BeginTx(jobCtx, nil)
+			if txErr != nil {
+				return
+			}
+			defer tx.Rollback()
+			for _, fact := range batch {
+				if readable(fact.Path) {
+					if _, txErr = tx.ExecContext(jobCtx, `INSERT OR IGNORE INTO dashboard_fact_paths(key,path) VALUES(?,?)`, key, fact.Path); txErr != nil {
+						return
+					}
+				}
+				jobCursor = fact.Path
+			}
+			nextState := "updating"
+			if len(batch) < factsBatchSize {
+				nextState = "ready"
+			}
+			if _, txErr = tx.ExecContext(jobCtx, `UPDATE dashboard_fact_state SET cursor=?,state=?,computed_at=?,error='' WHERE key=? AND generation=?`, jobCursor, nextState, time.Now().UTC().UnixNano(), key, generation); txErr != nil {
+				return
+			}
+			if txErr = tx.Commit(); txErr == nil && nextState != "ready" {
+				s.processor.enqueueFollowup(jobKey, false, run)
+			}
+		}
+		s.processor.enqueue(jobKey, true, run)
+	}
+	if filterState != "ready" {
+		status.Complete = false
+		status.Updating = filterState == "updating"
+		status.Coverage = "fully readable docsets plus committed path-filtered coverage; filtering continues"
+	}
+	if filterError != "" {
+		status.Error = filterError
+		status.Coverage = "path-sensitive coverage failed; fully readable docsets remain available"
+	}
+	return rows, totals, status, nil
+}
+
+func statusGeneration(index FactsIndex, ctx context.Context) int64 {
+	state, _ := index.ScanState(ctx)
+	return state.Generation
 }
 
 // DashboardUsage serves only a committed complete summary. Missing or stale
@@ -466,6 +639,10 @@ func (s *Service) NewContentFacts(fs vfs.FileSystem) ContentFacts {
 func (s *Service) HasFactsIndex() bool { return s.index != nil }
 
 func (s *Service) CurrentFacts(ctx context.Context, p string, info *vfs.FileInfo, read func() ([]byte, error)) (DocScalars, error) {
+	return s.currentFacts(ctx, p, info, read, 0)
+}
+
+func (s *Service) currentFacts(ctx context.Context, p string, info *vfs.FileInfo, read func() ([]byte, error), generation int64) (DocScalars, error) {
 	s.providersMu.RLock()
 	providers := append([]ContentScalarProvider(nil), s.providers...)
 	s.providersMu.RUnlock()
@@ -473,8 +650,11 @@ func (s *Service) CurrentFacts(ctx context.Context, p string, info *vfs.FileInfo
 		fact, hit, err := s.index.Lookup(ctx, p, info.Size(), info.ModTime().UnixNano(), sourceNames(providers))
 		if err == nil && hit {
 			owner := s.ownerForPath(p)
-			if fact.Owner != owner {
+			if fact.Owner != owner || generation != 0 && fact.Generation != generation {
 				fact.Owner = owner
+				if generation != 0 {
+					fact.Generation = generation
+				}
 				if err := s.index.Upsert(ctx, fact); err != nil {
 					return DocScalars{}, err
 				}
@@ -507,6 +687,7 @@ func (s *Service) CurrentFacts(ctx context.Context, p string, info *vfs.FileInfo
 	}
 	fact := indexedFacts(p, info, content, providers)
 	fact.Owner = s.ownerForPath(p)
+	fact.Generation = generation
 	if err := s.index.Upsert(ctx, fact); err != nil {
 		s.indexLog.Do(func() { log.Printf("analytics facts index unavailable; computing uncached: %v", err) })
 	}
@@ -528,6 +709,12 @@ func (s *Service) Facts() ContentFacts {
 func (s *Service) EventSource() EventSource { return s.log }
 func (s *Service) Aggregator() http.Handler { return http.HandlerFunc(s.aggregator.ServeHTTP) }
 func (s *Service) Refresh(ctx context.Context, names ...string) error {
+	select {
+	case s.expensive <- struct{}{}:
+		defer func() { <-s.expensive }()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	return s.refresher.Refresh(ctx, names...)
 }
 func (s *Service) Replay(ctx context.Context, from time.Time) error {
