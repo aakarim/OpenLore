@@ -2,6 +2,7 @@ package openlore
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/aakarim/go-openlore/internal/analytics"
 )
@@ -15,7 +16,7 @@ func (s *Server) DashboardEventSource(id Identity, prefix string) analytics.Even
 	if s == nil || s.analytics == nil {
 		return deniedAnalyticsSource{}
 	}
-	return &dashboardEventSource{server: s, identity: id, prefix: prefix, source: s.analytics.EventSource()}
+	return &dashboardEventSource{server: s, identity: id, prefix: prefix, source: s.analytics.IndexedEventSource()}
 }
 
 type deniedAnalyticsSource struct{}
@@ -30,6 +31,8 @@ type dashboardEventSource struct {
 	prefix   string
 	source   analytics.EventSource
 }
+
+const dashboardUsageEventLimit = 50000
 
 type analyticsAccess struct {
 	proved  bool
@@ -85,7 +88,13 @@ func (d *dashboardEventSource) Scan(ctx context.Context, filter analytics.EventF
 	byInvocation := map[string]analyticsAccess{}
 	var events []analytics.Event
 	var direct []analyticsAccess
-	if err := d.source.Scan(ctx, analytics.EventFilter{}, func(event analytics.Event) error {
+	// Read only the requested durable time window. All event types remain in
+	// scope here so command/session attribution can still be proved before the
+	// caller's type filter is applied below.
+	if err := d.source.Scan(ctx, analytics.EventFilter{From: filter.From, To: filter.To}, func(event analytics.Event) error {
+		if len(events) >= dashboardUsageEventLimit {
+			return fmt.Errorf("authorized usage window exceeds the %d event processing limit", dashboardUsageEventLimit)
+		}
 		events = append(events, event)
 		access := d.directAccess(event, prefix)
 		direct = append(direct, access)

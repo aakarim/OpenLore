@@ -23,22 +23,31 @@ filesystem as other transports. A grant on a parent docset does not cross into
 a separately governed nested docset. Policy is resolved again on each request;
 an open browser is not a new source of authority.
 
-With the default SQLite analytics store, per-file current facts are cached in
-`<analytics.dir>/aggregations.sqlite`. Identity filtering still happens before
-visible files are folded into folder totals, and facts are computed from raw
-on-disk bytes rather than display transforms. Cache hits compare file size and
-modification time and avoid rereading unchanged files. An external edit that
-preserves both size and modification time is therefore not detected until that
-file changes again. Selecting `analytics.aggregations.store: file` or disabling
-analytics keeps the uncached behavior.
+With the default SQLite analytics store, per-file facts and ownership-aware
+directory totals are durable in `<analytics.dir>/aggregations.sqlite`. Each file
+belongs to its most-specific configured docset, so a parent docset's own total
+does not absorb a nested docset. System mounts and synthetic session files are
+excluded unless explicitly rooted in a content docset. Identity filtering still
+happens before visible indexed files are folded into a response, and restricted
+docsets are reported only as omitted coverage—never as their counts or sizes.
+Facts are computed from raw on-disk bytes rather than display transforms.
+
+Dashboard requests do not walk document bodies or retained log files. They
+return the latest compatible committed view, enqueue or promote missing/stale
+work, and poll while it runs. Cold, stale/updating, disabled, failed, and partial
+coverage are distinct states. Activity keeps the last complete requested time
+window rather than publishing an arbitrary event prefix. Durable event indexing
+streams from the append-only event log with idempotent event keys and a durable
+checkpoint. The legacy `analytics.aggregations.store: file` keeps the older
+synchronous compatibility path and does not provide durable dashboard views.
 
 Analytics is shared among readers of a docset. `lore:analytics:view` is no longer
 required for these scoped views. Historical events must also satisfy current
 docset permissions and the selected path. Mixed-scope searches and ambiguous
 unscoped legacy commands are omitted rather than revealing another docset's
-queries, paths, or attribution. Scoped results bypass the instance-wide
-materialization cache, including JSON and CSV exports. Browser previews do not
-count as agent reads.
+queries, paths, or attribution. Scoped results are keyed by the caller's current
+policy and docset configuration, so policy changes make incompatible views
+immediately unreachable. Browser previews do not count as agent reads.
 
 The shell `analytics` command is an instance-wide operator interface, not a
 docset-scoped reader interface. All subcommands require the explicit
@@ -97,9 +106,9 @@ Human, agent, and unknown attribution are distinct. A delegated actor is counted
 as an agent, a named principal acting directly is counted as human, and activity
 without either attribution remains unknown.
 
-Refresh recomputes visible stats and exposes their computation time. Analytics
-is buffered telemetry, not an audit-proof record of every operation; delayed or
-dropped events and configured retention affect what can be observed.
+Refresh promotes visible stats and exposes their committed computation time.
+Analytics is buffered telemetry, not an audit-proof record of every operation;
+delayed or dropped events and configured retention affect what can be observed.
 
 ## File viewer and browser state
 

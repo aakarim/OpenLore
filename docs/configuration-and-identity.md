@@ -67,16 +67,24 @@ analytics:
   dir: analytics
   aggregations:
     store: sqlite # use file for the legacy materialization store (no facts cache)
-  index:
-    workers: 2
+  pipeline:
+    enabled: true
 ```
 
 `analytics.enabled: false` disables the complete analytics application,
-including the facts index. Index workers warm and reconcile raw filesystem
-facts in the background after startup and writes; requests remain read-through
-and compute exact values when a row is absent or the index is unavailable.
-Rows are considered current when size and modification time match. External
-edits that preserve both values are a known blind spot until a later change.
+including durable event logging. To retain events, metrics, and stored views
+while pausing analytics processing, leave analytics enabled and set
+`analytics.pipeline.enabled: false`. Re-enabling the pipeline catches the
+durable event index up from its checkpoint.
+
+One bounded processor handles both content-fact reconciliation and requested
+dashboard views. It executes one expensive unit at a time; dashboard demand is
+promoted ahead of routine warming without canceling in-flight work. SQLite
+stores file facts, ownership-aware directory totals, durable events, completed
+dashboard views, and checkpoints. Rows are considered current when size and
+modification time match. External edits that preserve both values remain a
+known filesystem-metadata blind spot until a later reconciliation-triggering
+change.
 
 Debug logging can also be enabled with `openlore --debug`. Unknown-command
 events include only the command name, not its arguments. Parser-failure events
