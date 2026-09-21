@@ -114,6 +114,26 @@ func TestSedSubstitutionCommandSeparator(t *testing.T) {
 	}
 }
 
+func TestSedSubstitutionsApplySequentially(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+		want    string
+	}{
+		{"separate expressions", "echo ab | sed -e 's/a/X/' -e 's/b/Y/'", "XY\n"},
+		{"command separator", "echo ab | sed 's/a/X/;s/b/Y/'", "XY\n"},
+		{"global then first match", "echo aa | sed 's/a/X/g;s/X/Z/'", "ZX\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, errOut, code := execCmd(t, testFS(), tt.command)
+			if code != 0 || out != tt.want {
+				t.Fatalf("code=%d stdout=%q stderr=%s, want %q", code, out, errOut, tt.want)
+			}
+		})
+	}
+}
+
 func TestSedPreservesSemicolonsInDelimitedValues(t *testing.T) {
 	tests := []struct {
 		name    string
