@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -135,6 +136,7 @@ type Pipeline struct {
 	once        sync.Once
 	processMu   sync.Mutex
 	lastEventID string
+	caughtUp    atomic.Bool
 }
 
 func NewPipeline(log EventLog, checkpoint string, opts PipelineOptions) *Pipeline {
@@ -369,6 +371,7 @@ func (p *Pipeline) Run(ctx context.Context) {
 			p.drainLocked(ctx)
 			p.writeCheckpoint(p.lastEventID)
 			p.processMu.Unlock()
+			p.caughtUp.Store(true)
 			ticker := time.NewTicker(time.Second)
 			defer ticker.Stop()
 			for {
@@ -462,6 +465,7 @@ func (p *Pipeline) Replay(ctx context.Context, from time.Time) error {
 	return nil
 }
 func (p *Pipeline) Lag() (int64, time.Time) { return int64(len(p.handoff)), time.Time{} }
+func (p *Pipeline) CaughtUp() bool          { return p.caughtUp.Load() }
 
 type Refresher struct {
 	registry *Registry

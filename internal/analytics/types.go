@@ -146,11 +146,12 @@ type Table struct {
 	Total   int      `json:"total,omitempty"`
 }
 type Materialized struct {
-	Status     Status    `json:"status"`
-	Table      Table     `json:"table"`
-	ComputedAt time.Time `json:"computed_at"`
-	Window     Params    `json:"window"`
-	Note       string    `json:"note,omitempty"`
+	Status     Status          `json:"status"`
+	Table      Table           `json:"table"`
+	ComputedAt time.Time       `json:"computed_at"`
+	Window     Params          `json:"window"`
+	Note       string          `json:"note,omitempty"`
+	Analytics  *SnapshotStatus `json:"analytics,omitempty"`
 }
 type Aggregation struct {
 	Name, Title, Description string

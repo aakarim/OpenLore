@@ -76,7 +76,7 @@ func newIndexedTestService(t *testing.T, fs vfs.FileSystem) *Service {
 	return service
 }
 
-func TestContentFactsTokenizerSwitchKeepsOldSource(t *testing.T) {
+func TestContentFactsTokenizerSwitchReplacesCompatibleProjection(t *testing.T) {
 	fsys := &countingFactsFS{testFS: testFS{"/a.md": []byte("abcd")}}
 	service := newIndexedTestService(t, fsys)
 	facts := func() DocScalars {
@@ -94,8 +94,8 @@ func TestContentFactsTokenizerSwitchKeepsOldSource(t *testing.T) {
 		t.Fatalf("switched facts=%#v reads=%d", got.Scalars, fsys.readCount())
 	}
 	service.SetTokenizer(ApproxTokenizer())
-	if got := facts(); got.Scalars["tokens"] != 1 || fsys.readCount() != 2 {
-		t.Fatalf("switch-back was not a hit: facts=%#v reads=%d", got.Scalars, fsys.readCount())
+	if got := facts(); got.Scalars["tokens"] != 1 || fsys.readCount() != 3 {
+		t.Fatalf("switch-back did not rebuild compatible facts: facts=%#v reads=%d", got.Scalars, fsys.readCount())
 	}
 }
 

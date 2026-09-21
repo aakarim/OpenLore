@@ -49,10 +49,6 @@ type fileEventLog struct {
 }
 
 type logCursor map[string]int64
-type logSnapshot struct {
-	segment Segment
-	data    []byte
-}
 
 func OpenEventLog(dir string, opts LogOptions) (EventLog, error) {
 	if opts.Rotate == 0 {
@@ -150,20 +146,11 @@ func (l *fileEventLog) Segments() []Segment {
 func (l *fileEventLog) Scan(ctx context.Context, f EventFilter, fn func(Event) error) error {
 	l.mu.Lock()
 	segments := l.Segments()
-	snapshots := make([]logSnapshot, 0, len(segments))
-	for _, seg := range segments {
-		data, err := os.ReadFile(seg.Path)
-		if err != nil {
-			l.mu.Unlock()
-			return err
-		}
-		snapshots = append(snapshots, logSnapshot{seg, data})
-	}
 	l.mu.Unlock()
-	return scanSnapshots(ctx, snapshots, f, fn)
+	return scanSegments(ctx, segments, f, fn)
 }
 
-func scanSnapshots(ctx context.Context, snapshots []logSnapshot, f EventFilter, fn func(Event) error) error {
+func scanSegments(ctx context.Context, segments []Segment, f EventFilter, fn func(Event) error) error {
 	types, principals := map[string]bool{}, map[string]bool{}
 	for _, v := range f.Types {
 		types[v] = true
@@ -171,17 +158,20 @@ func scanSnapshots(ctx context.Context, snapshots []logSnapshot, f EventFilter, 
 	for _, v := range f.Principals {
 		principals[v] = true
 	}
-	for _, snapshot := range snapshots {
-		seg := snapshot.segment
+	for _, seg := range segments {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		var reader io.Reader = strings.NewReader(string(snapshot.data))
+		file, err := os.Open(seg.Path)
+		if err != nil {
+			return err
+		}
+		var reader io.Reader = file
 		var decoder *zstd.Decoder
 		if seg.Compressed {
-			var err error
 			decoder, err = zstd.NewReader(reader)
 			if err != nil {
+				file.Close()
 				return err
 			}
 			reader = decoder
@@ -189,6 +179,13 @@ func scanSnapshots(ctx context.Context, snapshots []logSnapshot, f EventFilter, 
 		scan := bufio.NewScanner(reader)
 		scan.Buffer(make([]byte, 64*1024), 4*1024*1024)
 		for scan.Scan() {
+			if err := ctx.Err(); err != nil {
+				if decoder != nil {
+					decoder.Close()
+				}
+				file.Close()
+				return err
+			}
 			var e Event
 			if err := json.Unmarshal(scan.Bytes(), &e); err != nil {
 				return err
@@ -200,12 +197,13 @@ func scanSnapshots(ctx context.Context, snapshots []logSnapshot, f EventFilter, 
 				return err
 			}
 		}
-		err := scan.Err()
+		scanErr := scan.Err()
 		if decoder != nil {
 			decoder.Close()
 		}
-		if err != nil {
-			return err
+		file.Close()
+		if scanErr != nil {
+			return scanErr
 		}
 	}
 	return nil
@@ -215,9 +213,7 @@ func scanSnapshots(ctx context.Context, snapshots []logSnapshot, f EventFilter, 
 // private optimization used by Pipeline; EventLog's stable interface remains
 // unchanged.
 func (l *fileEventLog) scanIncremental(ctx context.Context, cursor logCursor, fn func(Event) error) error {
-	l.mu.Lock()
 	segments := l.Segments()
-	snapshots := make([]logSnapshot, 0, len(segments))
 	for _, seg := range segments {
 		offset := cursor[seg.Path]
 		logical := strings.TrimSuffix(seg.Path, ".zst")
@@ -233,26 +229,55 @@ func (l *fileEventLog) scanIncremental(ctx context.Context, cursor logCursor, fn
 		}
 		file, err := os.Open(seg.Path)
 		if err != nil {
-			l.mu.Unlock()
 			return err
 		}
 		if offset > 0 {
 			_, err = file.Seek(offset, io.SeekStart)
 		}
-		data, readErr := io.ReadAll(file)
-		file.Close()
-		if err != nil || readErr != nil {
-			l.mu.Unlock()
-			if err != nil {
-				return err
+		if err != nil {
+			file.Close()
+			return err
+		}
+		// Limit reads to the size snapshotted above. Concurrent appends remain for
+		// the next pass without retaining the unread tail in memory.
+		limited := io.LimitReader(file, seg.Size-offset)
+		reader := io.Reader(limited)
+		var decoder *zstd.Decoder
+		if seg.Compressed {
+			decoder, err = zstd.NewReader(reader)
+			if err == nil {
+				reader = decoder
 			}
-			return readErr
+		}
+		if err == nil {
+			scan := bufio.NewScanner(reader)
+			scan.Buffer(make([]byte, 64*1024), 4*1024*1024)
+			for scan.Scan() {
+				if err = ctx.Err(); err != nil {
+					break
+				}
+				var event Event
+				if err = json.Unmarshal(scan.Bytes(), &event); err != nil {
+					break
+				}
+				if err = fn(event); err != nil {
+					break
+				}
+			}
+			if err == nil {
+				err = scan.Err()
+			}
+		}
+		if decoder != nil {
+			decoder.Close()
+		}
+		file.Close()
+		if err != nil {
+			return err
 		}
 		cursor[seg.Path] = seg.Size
-		snapshots = append(snapshots, logSnapshot{seg, data})
 	}
-	l.mu.Unlock()
-	return scanSnapshots(ctx, snapshots, EventFilter{}, fn)
+	return nil
 }
 func (l *fileEventLog) Seal(ctx context.Context, before time.Time) error {
 	l.mu.Lock()
@@ -469,21 +494,39 @@ func OpenSQLiteAggregationStore(path string) (*SQLiteAggregationStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(8)
+	db.SetMaxOpenConns(2)
 	if _, err = db.Exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=10000; PRAGMA foreign_keys=ON; CREATE TABLE IF NOT EXISTS materializations (
 key TEXT PRIMARY KEY, name TEXT NOT NULL, value BLOB NOT NULL
 ); CREATE INDEX IF NOT EXISTS materializations_name ON materializations(name);
 CREATE TABLE IF NOT EXISTS files (
 path TEXT PRIMARY KEY, size INTEGER NOT NULL, mtime_ns INTEGER NOT NULL,
-content_hash TEXT NOT NULL, computed_at INTEGER NOT NULL
+content_hash TEXT NOT NULL, computed_at INTEGER NOT NULL, owner TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS file_scalars (
 path TEXT NOT NULL REFERENCES files(path) ON DELETE CASCADE,
 source TEXT NOT NULL, scalar TEXT NOT NULL, value REAL NOT NULL,
 PRIMARY KEY(path, source, scalar)
-)`); err != nil {
+) ;
+CREATE TABLE IF NOT EXISTS directory_facts (
+path TEXT NOT NULL, owner TEXT NOT NULL, files INTEGER NOT NULL,
+bytes REAL NOT NULL, lines REAL NOT NULL, characters REAL NOT NULL, tokens REAL NOT NULL,
+computed_at INTEGER NOT NULL, PRIMARY KEY(path, owner)
+);
+CREATE TABLE IF NOT EXISTS dashboard_views (
+key TEXT PRIMARY KEY, value BLOB, computed_at INTEGER NOT NULL, error TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS analytics_events (
+id TEXT PRIMARY KEY, time_ns INTEGER NOT NULL, type TEXT NOT NULL, principal TEXT NOT NULL, value BLOB NOT NULL
+);
+CREATE INDEX IF NOT EXISTS analytics_events_time ON analytics_events(time_ns);`); err != nil {
 		db.Close()
 		return nil, err
+	}
+	// SQLite has no IF NOT EXISTS form for ADD COLUMN. Existing stores are
+	// upgraded in place; duplicate-column is the expected no-op on new stores.
+	if _, alterErr := db.Exec(`ALTER TABLE files ADD COLUMN owner TEXT NOT NULL DEFAULT ''`); alterErr != nil && !strings.Contains(alterErr.Error(), "duplicate column") {
+		db.Close()
+		return nil, alterErr
 	}
 	return &SQLiteAggregationStore{db: db}, nil
 }

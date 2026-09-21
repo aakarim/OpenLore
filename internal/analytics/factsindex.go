@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"path"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -16,6 +17,7 @@ import (
 
 type IndexedFacts struct {
 	Path        string
+	Owner       string
 	Size        int64
 	MTimeNS     int64
 	ContentHash string
@@ -27,7 +29,7 @@ type FactsIndex interface {
 	Lookup(context.Context, string, int64, int64, []string) (IndexedFacts, bool, error)
 	Upsert(context.Context, IndexedFacts) error
 	Delete(context.Context, string) error
-	PrefixScan(context.Context, string) ([]IndexedFacts, error)
+	PrefixScan(context.Context, string, ...int) ([]IndexedFacts, error)
 	Prune(context.Context, map[string]struct{}) error
 	Close() error
 }
@@ -42,7 +44,7 @@ func (x *sqliteFactsIndex) Lookup(ctx context.Context, p string, size, mtimeNS i
 	p = vfs.CleanPath(p)
 	fact := IndexedFacts{Path: p, Sources: map[string]map[string]float64{}}
 	var computed int64
-	err := x.db.QueryRowContext(ctx, `SELECT size,mtime_ns,content_hash,computed_at FROM files WHERE path=?`, p).Scan(&fact.Size, &fact.MTimeNS, &fact.ContentHash, &computed)
+	err := x.db.QueryRowContext(ctx, `SELECT owner,size,mtime_ns,content_hash,computed_at FROM files WHERE path=?`, p).Scan(&fact.Owner, &fact.Size, &fact.MTimeNS, &fact.ContentHash, &computed)
 	if errors.Is(err, sql.ErrNoRows) {
 		return fact, false, nil
 	}
@@ -87,20 +89,29 @@ func (x *sqliteFactsIndex) Upsert(ctx context.Context, fact IndexedFacts) error 
 		return err
 	}
 	defer tx.Rollback()
-	var oldHash string
-	err = tx.QueryRowContext(ctx, `SELECT content_hash FROM files WHERE path=?`, fact.Path).Scan(&oldHash)
+	var oldOwner string
+	var oldTotals directoryTotals
+	err = tx.QueryRowContext(ctx, `SELECT owner,size FROM files WHERE path=?`, fact.Path).Scan(&oldOwner, &oldTotals.bytes)
+	hadOld := err == nil
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
+	}
+	if hadOld {
+		if err = loadDirectoryScalars(ctx, tx, fact.Path, &oldTotals); err != nil {
+			return err
+		}
 	}
 	if fact.ComputedAt.IsZero() {
 		fact.ComputedAt = time.Now().UTC()
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO files(path,size,mtime_ns,content_hash,computed_at) VALUES(?,?,?,?,?)
-ON CONFLICT(path) DO UPDATE SET size=excluded.size,mtime_ns=excluded.mtime_ns,content_hash=excluded.content_hash,computed_at=excluded.computed_at`, fact.Path, fact.Size, fact.MTimeNS, fact.ContentHash, fact.ComputedAt.UnixNano())
+	_, err = tx.ExecContext(ctx, `INSERT INTO files(path,owner,size,mtime_ns,content_hash,computed_at) VALUES(?,?,?,?,?,?)
+ON CONFLICT(path) DO UPDATE SET owner=excluded.owner,size=excluded.size,mtime_ns=excluded.mtime_ns,content_hash=excluded.content_hash,computed_at=excluded.computed_at`, fact.Path, fact.Owner, fact.Size, fact.MTimeNS, fact.ContentHash, fact.ComputedAt.UnixNano())
 	if err != nil {
 		return err
 	}
-	if oldHash != "" && oldHash != fact.ContentHash {
+	// file_scalars is the currently compatible fact projection. Replacing it
+	// avoids mixing values from old tokenizers/providers in durable totals.
+	if hadOld {
 		if _, err = tx.ExecContext(ctx, `DELETE FROM file_scalars WHERE path=?`, fact.Path); err != nil {
 			return err
 		}
@@ -113,15 +124,54 @@ ON CONFLICT(path,source,scalar) DO UPDATE SET value=excluded.value`, fact.Path, 
 			}
 		}
 	}
+	if hadOld && oldOwner != "" {
+		if err = applyDirectoryDelta(ctx, tx, fact.Path, oldOwner, oldTotals, -1); err != nil {
+			return err
+		}
+	}
+	if fact.Owner != "" {
+		if err = applyDirectoryDelta(ctx, tx, fact.Path, fact.Owner, totalsForFact(fact), 1); err != nil {
+			return err
+		}
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM directory_facts WHERE files<=0`); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
 func (x *sqliteFactsIndex) Delete(ctx context.Context, p string) error {
-	_, err := x.db.ExecContext(ctx, `DELETE FROM files WHERE path=?`, vfs.CleanPath(p))
-	return err
+	p = vfs.CleanPath(p)
+	tx, err := x.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var owner string
+	var totals directoryTotals
+	if err = tx.QueryRowContext(ctx, `SELECT owner,size FROM files WHERE path=?`, p).Scan(&owner, &totals.bytes); errors.Is(err, sql.ErrNoRows) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	if err = loadDirectoryScalars(ctx, tx, p, &totals); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM files WHERE path=?`, p); err != nil {
+		return err
+	}
+	if owner != "" {
+		if err = applyDirectoryDelta(ctx, tx, p, owner, totals, -1); err != nil {
+			return err
+		}
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM directory_facts WHERE files<=0`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
-func (x *sqliteFactsIndex) PrefixScan(ctx context.Context, prefix string) ([]IndexedFacts, error) {
+func (x *sqliteFactsIndex) PrefixScan(ctx context.Context, prefix string, limits ...int) ([]IndexedFacts, error) {
 	prefix = vfs.CleanPath(prefix)
 	start := prefix
 	if prefix != "/" {
@@ -130,7 +180,14 @@ func (x *sqliteFactsIndex) PrefixScan(ctx context.Context, prefix string) ([]Ind
 		start = "/"
 	}
 	end := start + "\U0010ffff"
-	rows, err := x.db.QueryContext(ctx, `SELECT path,size,mtime_ns,content_hash,computed_at FROM files WHERE path=? OR (path>=? AND path<?) ORDER BY path`, prefix, start, end)
+	limit := 0
+	if len(limits) > 0 {
+		limit = limits[0]
+	}
+	if limit <= 0 {
+		limit = 10001
+	}
+	rows, err := x.db.QueryContext(ctx, `SELECT path,owner,size,mtime_ns,content_hash,computed_at FROM files WHERE path=? OR (path>=? AND path<?) ORDER BY path LIMIT ?`, prefix, start, end, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -139,7 +196,7 @@ func (x *sqliteFactsIndex) PrefixScan(ctx context.Context, prefix string) ([]Ind
 	for rows.Next() {
 		var fact IndexedFacts
 		var computed int64
-		if err := rows.Scan(&fact.Path, &fact.Size, &fact.MTimeNS, &fact.ContentHash, &computed); err != nil {
+		if err := rows.Scan(&fact.Path, &fact.Owner, &fact.Size, &fact.MTimeNS, &fact.ContentHash, &computed); err != nil {
 			return nil, err
 		}
 		fact.ComputedAt = time.Unix(0, computed).UTC()
@@ -178,6 +235,43 @@ func (x *sqliteFactsIndex) PrefixScan(ctx context.Context, prefix string) ([]Ind
 		}
 	}
 	return facts, nil
+}
+
+type directoryTotals struct{ bytes, lines, characters, tokens float64 }
+
+func loadDirectoryScalars(ctx context.Context, tx *sql.Tx, filePath string, totals *directoryTotals) error {
+	return tx.QueryRowContext(ctx, `SELECT
+COALESCE(SUM(CASE WHEN scalar='lines' THEN value ELSE 0 END),0),
+COALESCE(SUM(CASE WHEN scalar='characters' THEN value ELSE 0 END),0),
+COALESCE(SUM(CASE WHEN scalar='tokens' THEN value ELSE 0 END),0)
+FROM file_scalars WHERE path=?`, filePath).Scan(&totals.lines, &totals.characters, &totals.tokens)
+}
+
+func totalsForFact(fact IndexedFacts) directoryTotals {
+	totals := directoryTotals{bytes: float64(fact.Size)}
+	for _, values := range fact.Sources {
+		totals.lines += values["lines"]
+		totals.characters += values["characters"]
+		totals.tokens += values["tokens"]
+	}
+	return totals
+}
+
+func applyDirectoryDelta(ctx context.Context, tx *sql.Tx, filePath, owner string, totals directoryTotals, sign float64) error {
+	for dir := path.Dir(vfs.CleanPath(filePath)); ; dir = path.Dir(dir) {
+		_, err := tx.ExecContext(ctx, `INSERT INTO directory_facts(path,owner,files,bytes,lines,characters,tokens,computed_at)
+VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(path,owner) DO UPDATE SET
+files=directory_facts.files+excluded.files,bytes=directory_facts.bytes+excluded.bytes,
+lines=directory_facts.lines+excluded.lines,characters=directory_facts.characters+excluded.characters,
+tokens=directory_facts.tokens+excluded.tokens,computed_at=excluded.computed_at`,
+			dir, owner, int(sign), sign*totals.bytes, sign*totals.lines, sign*totals.characters, sign*totals.tokens, time.Now().UTC().UnixNano())
+		if err != nil {
+			return err
+		}
+		if dir == "/" {
+			return nil
+		}
+	}
 }
 
 func (x *sqliteFactsIndex) Prune(ctx context.Context, seen map[string]struct{}) error {
