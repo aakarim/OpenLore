@@ -60,11 +60,17 @@ function visibleDepth(node: ContextNode, ratio: 4 | 6): number {
     : 1;
 }
 
-function layout(node: ContextNode, ratio: 4 | 6): Shape[] {
+function layout(
+  node: ContextNode,
+  ratio: 4 | 6,
+  maximumLevels = Number.POSITIVE_INFINITY,
+): Shape[] {
   const shapes: Shape[] = [];
   const rootTokens = estimatedTokens(node, ratio);
   if (!node.directory || rootTokens === 0) return shapes;
-  const levels = Math.max(1, visibleDepth(node, ratio) - 1);
+  const levels = Number.isFinite(maximumLevels)
+    ? Math.max(1, maximumLevels)
+    : Math.max(1, visibleDepth(node, ratio) - 1);
   const ringWidth = 122 / levels;
 
   const walk = (
@@ -85,6 +91,7 @@ function layout(node: ContextNode, ratio: 4 | 6): Shape[] {
       inner: 70 + (level - 1) * ringWidth,
       outer: 70 + level * ringWidth - 2,
     });
+    if (level >= levels) return;
     let angle = start;
     for (const child of current.children ?? []) {
       const childTokens = estimatedTokens(child, ratio);
@@ -104,6 +111,19 @@ function layout(node: ContextNode, ratio: 4 | 6): Shape[] {
     angle = next;
   });
   return shapes;
+}
+
+function useCompactLayout() {
+  const query = "(max-width: 760px)";
+  const [compact, setCompact] = useState(() => matchMedia(query).matches);
+  useEffect(() => {
+    const media = matchMedia(query);
+    const update = () => setCompact(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+  return compact;
 }
 
 function interpolate(from: Geometry, to: Geometry, progress: number): Geometry {
@@ -222,7 +242,11 @@ export function Sunburst({
   onSelect: (node: ContextNode) => void;
 }) {
   const title = useId();
-  const target = useMemo(() => layout(node, ratio), [node, ratio]);
+  const compact = useCompactLayout();
+  const target = useMemo(
+    () => layout(node, ratio, compact ? 1 : undefined),
+    [node, ratio, compact],
+  );
   const total = useMemo(() => estimatedTokens(node, ratio), [node, ratio]);
   const [shapes, setShapes] = useState(target);
   const [tooltip, setTooltip] = useState("");
@@ -292,7 +316,11 @@ export function Sunburst({
         role="group"
         aria-labelledby={title}
       >
-        <title id={title}>Full-depth context token distribution</title>
+        <title id={title}>
+          {compact
+            ? "Top-level context token distribution"
+            : "Full-depth context token distribution"}
+        </title>
         {shapes.map((shape) => (
           <path
             key={shape.node.path}
