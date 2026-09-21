@@ -190,19 +190,11 @@ func applySedCommands(cmds []sedCmd, lines []string, quiet bool, w io.Writer, on
 					if cmd.sFlags.global {
 						line = re.ReplaceAllString(line, replacement)
 					} else {
-						line = re.ReplaceAllStringFunc(line, func(match string) string {
-							result := re.ReplaceAllString(match, replacement)
-							return result
-						})
-						count := 0
-						line2 := re.ReplaceAllStringFunc(lines[lineNum], func(match string) string {
-							count++
-							if count == 1 {
-								return re.ReplaceAllString(match, replacement)
-							}
-							return match
-						})
-						line = line2
+						loc := re.FindStringSubmatchIndex(line)
+						if loc != nil {
+							expanded := re.ExpandString(nil, replacement, line, loc)
+							line = line[:loc[0]] + string(expanded) + line[loc[1]:]
+						}
 					}
 				}
 			}
