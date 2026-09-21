@@ -3,6 +3,7 @@ package analytics
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"net/http/httptest"
 	"os"
@@ -70,6 +71,13 @@ func (f testFS) ReadFile(p string) ([]byte, error) {
 		return nil, fs.ErrNotExist
 	}
 	return append([]byte(nil), b...), nil
+}
+func (f testFS) ReadFileBounded(p string, maxBytes int64) ([]byte, error) {
+	b, err := f.ReadFile(p)
+	if err == nil && int64(len(b)) > maxBytes {
+		return nil, errors.New("file exceeds read limit")
+	}
+	return b, err
 }
 func (f testFS) ReadDir(p string) ([]vfs.FileInfo, error) {
 	p = strings.TrimSuffix(vfs.CleanPath(p), "/") + "/"

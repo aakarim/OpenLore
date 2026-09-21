@@ -117,6 +117,7 @@ type PipelineOptions struct {
 	Refresher  *Refresher
 	Sink       Sink
 	Buffer     int
+	Gate       chan struct{}
 }
 type Pipeline struct {
 	log         EventLog
@@ -334,10 +335,22 @@ func (p *Pipeline) Run(ctx context.Context) {
 		p.processMu.Unlock()
 		go func() {
 			defer close(p.done)
+			var scanMore bool
 			scan := func(fn func(Event) error) error {
-				if log, ok := p.log.(*fileEventLog); ok {
-					return log.scanIncremental(ctx, cursor, fn)
+				if p.opts.Gate != nil {
+					select {
+					case p.opts.Gate <- struct{}{}:
+						defer func() { <-p.opts.Gate }()
+					case <-ctx.Done():
+						return ctx.Err()
+					}
 				}
+				if log, ok := p.log.(*fileEventLog); ok {
+					var err error
+					scanMore, err = log.scanIncrementalBatch(ctx, cursor, fn)
+					return err
+				}
+				scanMore = false
 				return p.log.Scan(ctx, EventFilter{}, fn)
 			}
 			// New checkpoints resume directly at durable segment offsets. For a
@@ -372,7 +385,7 @@ func (p *Pipeline) Run(ctx context.Context) {
 				p.drainLocked(ctx)
 				p.writeCheckpoint(p.lastEventID)
 				p.processMu.Unlock()
-				p.caughtUp.Store(true)
+				p.caughtUp.Store(!scanMore)
 			}
 			ticker := time.NewTicker(time.Second)
 			defer ticker.Stop()
@@ -390,7 +403,7 @@ func (p *Pipeline) Run(ctx context.Context) {
 					p.drainLocked(ctx)
 					p.writeCheckpoint(p.lastEventID)
 					p.processMu.Unlock()
-					p.caughtUp.Store(true)
+					p.caughtUp.Store(!scanMore)
 				case <-p.stop:
 					return
 				case <-ctx.Done():
@@ -483,11 +496,13 @@ type Refresher struct {
 	cancel   context.CancelFunc
 	done     chan struct{}
 	once     sync.Once
+	schedule func(func(context.Context))
 }
 
 func NewRefresher(reg *Registry, src EventSource, store AggregationStore, interval time.Duration) *Refresher {
 	return &Refresher{registry: reg, src: src, store: store, interval: interval, done: make(chan struct{})}
 }
+func (r *Refresher) SetScheduler(schedule func(func(context.Context))) { r.schedule = schedule }
 func (r *Refresher) Run(ctx context.Context) {
 	r.once.Do(func() {
 		ctx, r.cancel = context.WithCancel(ctx)
@@ -502,7 +517,11 @@ func (r *Refresher) Run(ctx context.Context) {
 			for {
 				select {
 				case <-t.C:
-					_ = r.Refresh(ctx)
+					if r.schedule != nil {
+						r.schedule(func(jobCtx context.Context) { _ = r.Refresh(jobCtx) })
+					} else {
+						_ = r.Refresh(ctx)
+					}
 				case <-ctx.Done():
 					return
 				}

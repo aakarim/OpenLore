@@ -3,6 +3,7 @@ package openlore
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -504,6 +505,59 @@ func TestDashboardContextFoldsSameIndexRowsPerIdentity(t *testing.T) {
 	restrictedTotal := readTotal(readerToken)
 	if restrictedTotal >= rootTotal {
 		t.Fatalf("restricted total=%d, root total=%d", restrictedTotal, rootTotal)
+	}
+}
+
+func TestDashboardRootLimitCountsOnlyAuthorizedOwners(t *testing.T) {
+	s, mux, token := newDashboardTestServer(t)
+	dir := t.TempDir()
+	service, err := analytics.New(config.AnalyticsConfig{Dir: dir, Log: config.AnalyticsLogConfig{Compress: "none"}}, analytics.Deps{FS: s.merge})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close(context.Background())
+	service.SetKnowledgeScopes([]analytics.KnowledgeScope{{Name: "public", Root: "/public"}, {Name: "private-child", Root: "/public/private"}})
+	service.Start(context.Background())
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		_, status, err := service.IndexedFacts(context.Background(), "/", 1)
+		if err == nil && status.Complete {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("facts did not warm: %+v err=%v", status, err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	db, err := sql.Open("sqlite", filepath.Join(dir, "aggregations.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	statement, err := tx.Prepare(`INSERT INTO files(path,owner,size,mtime_ns,content_hash,computed_at,generation) VALUES(?,?,?,?,?,?,?)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 10001; i++ {
+		if _, err := statement.Exec(fmt.Sprintf("/public/private/denied-%05d.md", i), "private-child", 1, 1, "x", time.Now().UnixNano(), 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	statement.Close()
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	s.analytics = service
+	w := dashboardRequest(mux, "GET", "/dashboard/api/context?path=/", token)
+	if w.Code != http.StatusOK {
+		t.Fatalf("denied rows consumed authorized node limit: %d %s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "denied-") || !strings.Contains(w.Body.String(), "restricted docsets omitted") {
+		t.Fatalf("response leaked or failed to label restricted coverage: %s", w.Body.String())
 	}
 }
 

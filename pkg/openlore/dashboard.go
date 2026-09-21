@@ -327,7 +327,7 @@ func (s *Server) dashboardContextNodeFromInfo(ctx context.Context, scoped vfs.Fi
 }
 
 func (s *Server) dashboardContext(w http.ResponseWriter, r *http.Request) {
-	_, scoped, target := s.dashboardPath(r)
+	id, scoped, target := s.dashboardPath(r)
 	info, err := scoped.Stat(target)
 	if err != nil {
 		dashboardError(w, http.StatusNotFound, "context unavailable")
@@ -350,7 +350,12 @@ func (s *Server) dashboardContext(w http.ResponseWriter, r *http.Request) {
 		dashboardJSON(w, node)
 		return
 	}
-	rows, status, err := s.analytics.IndexedFacts(r.Context(), target, 10001)
+	owners, filteredOwners, omitted := s.dashboardReadableFactOwners(id, target)
+	viewKey := "context:v1:" + s.analyticsPolicyKey(id) + ":" + target
+	rows, totals, status, err := s.analytics.AuthorizedIndexedFacts(r.Context(), viewKey, target, owners, filteredOwners, 10001, func(p string) bool {
+		_, err := scoped.Stat(p)
+		return err == nil
+	})
 	if err != nil {
 		dashboardError(w, http.StatusServiceUnavailable, "indexed context unavailable")
 		return
@@ -368,15 +373,7 @@ func (s *Server) dashboardContext(w http.ResponseWriter, r *http.Request) {
 	}
 	node := &dashboardNode{Path: target, Name: path.Base(target), Directory: info.Dir, Analytics: &status}
 	byPath := map[string]*dashboardNode{target: node}
-	omitted := false
 	for _, row := range rows {
-		if row.Owner == "" {
-			continue
-		}
-		if _, err := scoped.Stat(row.Path); err != nil {
-			omitted = true
-			continue
-		}
 		file := &dashboardNode{Path: row.Path, Name: path.Base(row.Path)}
 		for _, values := range row.Sources {
 			file.Bytes += int64(values["bytes"])
@@ -416,6 +413,11 @@ func (s *Server) dashboardContext(w http.ResponseWriter, r *http.Request) {
 			current = byPath[path.Dir(current.Path)]
 		}
 	}
+	if info.Dir {
+		// The root summary comes from the durable owner-separated directory
+		// view. File rows remain solely for the bounded drill-down tree.
+		node.Bytes, node.Lines, node.Characters, node.Tokens = totals.Bytes, totals.Lines, totals.Characters, totals.Tokens
+	}
 	if omitted {
 		node.Analytics.Complete = false
 		node.Analytics.Coverage = "readable indexed content only; restricted docsets omitted"
@@ -429,6 +431,54 @@ func (s *Server) dashboardContext(w http.ResponseWriter, r *http.Request) {
 	}
 	sortTree(node)
 	dashboardJSON(w, node)
+}
+
+func (s *Server) dashboardReadableFactOwners(id Identity, target string) ([]string, []string, bool) {
+	full := map[string]struct{}{}
+	filtered := map[string]struct{}{}
+	omitted := false
+	source := &dashboardEventSource{server: s, identity: id}
+	for name, docset := range s.currentAuth().Docsets {
+		relevant := false
+		allReadable := true
+		pathGrant := false
+		for _, mapping := range docset.Paths {
+			root := displayPath(mapping)
+			if !pathWithinRoot(target, root) && !pathWithinRoot(root, target) {
+				continue
+			}
+			relevant = true
+			if source.wholeDocsetGrant(root) {
+			} else {
+				allReadable = false
+				_, grants, granted := s.grantsForPath(id, root)
+				pathGrant = pathGrant || granted && len(grants) > 0
+			}
+		}
+		if !relevant {
+			continue
+		}
+		if allReadable {
+			full[name] = struct{}{}
+		} else if pathGrant {
+			filtered[name] = struct{}{}
+		} else {
+			// Path-sensitive grants cannot prove an entire owner's totals. Omit
+			// them fail-closed rather than disclosing unrestricted metadata.
+			omitted = true
+		}
+	}
+	owners := make([]string, 0, len(full))
+	for owner := range full {
+		owners = append(owners, owner)
+	}
+	sort.Strings(owners)
+	filteredList := make([]string, 0, len(filtered))
+	for owner := range filtered {
+		filteredList = append(filteredList, owner)
+	}
+	sort.Strings(filteredList)
+	return owners, filteredList, omitted
 }
 
 func dashboardReadFile(scoped vfs.FileSystem, target string) ([]byte, error) {

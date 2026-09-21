@@ -13,6 +13,7 @@ type workProcessor struct {
 	running map[string]struct{}
 	wake    chan struct{}
 	done    chan struct{}
+	gate    chan struct{}
 }
 
 type workItem struct {
@@ -21,8 +22,12 @@ type workItem struct {
 	run      func(context.Context)
 }
 
-func newWorkProcessor() *workProcessor {
-	return &workProcessor{pending: map[string]workItem{}, running: map[string]struct{}{}, wake: make(chan struct{}, 1), done: make(chan struct{})}
+func newWorkProcessor(gates ...chan struct{}) *workProcessor {
+	var gate chan struct{}
+	if len(gates) > 0 {
+		gate = gates[0]
+	}
+	return &workProcessor{pending: map[string]workItem{}, running: map[string]struct{}{}, wake: make(chan struct{}, 1), done: make(chan struct{}), gate: gate}
 }
 
 func (p *workProcessor) enqueue(key string, priority bool, run func(context.Context)) bool {
@@ -107,7 +112,17 @@ func (p *workProcessor) run(ctx context.Context) {
 				if !ok {
 					break
 				}
+				if p.gate != nil {
+					select {
+					case p.gate <- struct{}{}:
+					case <-ctx.Done():
+						return
+					}
+				}
 				item.run(ctx)
+				if p.gate != nil {
+					<-p.gate
+				}
 				p.finish(item.key)
 				if ctx.Err() != nil {
 					return
