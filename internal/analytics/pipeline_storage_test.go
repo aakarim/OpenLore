@@ -1,8 +1,11 @@
 package analytics
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -11,6 +14,40 @@ import (
 	"testing"
 	"time"
 )
+
+func TestEventLogLargeScanStreamsCompleteSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	file, err := os.Create(filepath.Join(dir, "events-2026-09-21.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := bufio.NewWriterSize(file, 64*1024)
+	payload := strings.Repeat("x", 2048)
+	encoder := json.NewEncoder(writer)
+	const total = 10000
+	for i := range total {
+		if err := encoder.Encode(Event{ID: fmt.Sprintf("event-%d", i), Time: time.Date(2026, 9, 21, 12, 0, 0, i, time.UTC), Type: "doc.read", Fields: map[string]any{"path": "/docs/a.md", "payload": payload}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	log, err := OpenEventLog(dir, LogOptions{Compress: "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	if err := log.Scan(context.Background(), EventFilter{}, func(Event) error { count++; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if count != total {
+		t.Fatalf("streamed events = %d, want %d", count, total)
+	}
+}
 
 type retryRemote struct {
 	mu      sync.Mutex
