@@ -2,6 +2,9 @@ package analytics
 
 import (
 	"context"
+	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -45,7 +48,7 @@ func TestDashboardUsageDeduplicatesAndPublishesOnlyCompleteResult(t *testing.T) 
 	}
 	service.Start(context.Background())
 	defer service.Close(context.Background())
-	for deadline := time.Now().Add(time.Second); !service.pipeline.CaughtUp(); {
+	for deadline := time.Now().Add(time.Second); !service.eventIndex.caughtUp.Load(); {
 		if time.Now().After(deadline) {
 			t.Fatal("pipeline did not finish initial event-index catch-up")
 		}
@@ -137,7 +140,7 @@ func TestDisabledProcessingKeepsEventLogAndReenableCatchesUpIdempotently(t *test
 		}
 		service.Start(context.Background())
 		deadline := time.Now().Add(2 * time.Second)
-		for !service.pipeline.CaughtUp() {
+		for !service.eventIndex.caughtUp.Load() {
 			if time.Now().After(deadline) {
 				t.Fatal("event index did not catch up")
 			}
@@ -169,4 +172,78 @@ func TestDisabledProcessingKeepsEventLogAndReenableCatchesUpIdempotently(t *test
 	third := openAndCatchUp()
 	defer third.Close(context.Background())
 	assertOne(third)
+}
+
+func TestEventIndexUsesIndependentCheckpointAndDoesNotAdvanceOnFailure(t *testing.T) {
+	dir := t.TempDir()
+	log, err := OpenEventLog(filepath.Join(dir, "events"), LogOptions{Compress: "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := log.Append(context.Background(), Event{ID: "historical", Time: time.Now().UTC(), Type: "doc.read"}); err != nil {
+		t.Fatal(err)
+	}
+	// An existing pipeline cursor must not suppress migration of retained events
+	// into a newly introduced projection.
+	if err := os.WriteFile(filepath.Join(dir, "pipeline.checkpoint"), []byte(`{"event_id":"historical"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := OpenSQLiteAggregationStore(filepath.Join(dir, "views.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	index := &sqliteEventIndex{db: store.db, done: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	go index.run(ctx, log, filepath.Join(dir, "event-index.checkpoint"))
+	deadline := time.Now().Add(time.Second)
+	for !index.caughtUp.Load() {
+		if time.Now().After(deadline) {
+			t.Fatal("independent event index did not catch up")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	<-index.done
+	var count int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM analytics_events WHERE id='historical'`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("historical projection count=%d err=%v", count, err)
+	}
+	store.Close()
+
+	failed := &sqliteEventIndex{db: store.db, done: make(chan struct{})}
+	failedCtx, failedCancel := context.WithCancel(context.Background())
+	failedCheckpoint := filepath.Join(dir, "failed.checkpoint")
+	go failed.run(failedCtx, log, failedCheckpoint)
+	time.Sleep(20 * time.Millisecond)
+	failedCancel()
+	<-failed.done
+	if failed.caughtUp.Load() {
+		t.Fatal("failed projection marked caught up")
+	}
+	if _, err := os.Stat(failedCheckpoint); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed projection advanced checkpoint: %v", err)
+	}
+}
+
+func TestWorkProcessorRetainsFollowupQueuedAsRunFinishes(t *testing.T) {
+	p := newWorkProcessor()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go p.run(ctx)
+	entered, release, completed := make(chan struct{}), make(chan struct{}), make(chan struct{}, 2)
+	p.enqueueFollowup("facts", false, func(context.Context) {
+		close(entered)
+		<-release
+		completed <- struct{}{}
+	})
+	<-entered
+	p.enqueueFollowup("facts", false, func(context.Context) { completed <- struct{}{} })
+	close(release)
+	for range 2 {
+		select {
+		case <-completed:
+		case <-time.After(time.Second):
+			t.Fatal("follow-up work was stranded")
+		}
+	}
 }

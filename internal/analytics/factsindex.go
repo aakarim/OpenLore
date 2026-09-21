@@ -180,12 +180,12 @@ func (x *sqliteFactsIndex) PrefixScan(ctx context.Context, prefix string, limits
 		start = "/"
 	}
 	end := start + "\U0010ffff"
-	limit := 0
+	limit := int(^uint(0) >> 1)
 	if len(limits) > 0 {
 		limit = limits[0]
 	}
 	if limit <= 0 {
-		limit = 10001
+		return nil, fmt.Errorf("facts scan limit must be positive")
 	}
 	rows, err := x.db.QueryContext(ctx, `SELECT path,owner,size,mtime_ns,content_hash,computed_at FROM files WHERE path=? OR (path>=? AND path<?) ORDER BY path LIMIT ?`, prefix, start, end, limit)
 	if err != nil {

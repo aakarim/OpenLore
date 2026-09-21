@@ -761,7 +761,9 @@ export function Analytics({
           request completes.
         </p>
       )}
-      {context.data?.analytics && context.data.analytics.state !== "ready" && (
+      {context.data?.analytics &&
+        (context.data.analytics.state !== "ready" ||
+          !context.data.analytics.complete) && (
         <p role="status" className="coverage-note" data-state={context.data.analytics.state}>
           Knowledge analytics: {context.data.analytics.state}.
           {context.data.analytics.coverage && ` ${context.data.analytics.coverage}.`}

@@ -61,7 +61,7 @@ const usage = {
   ],
 };
 export function mockAPI(
-  options: { contextError?: boolean; access?: boolean } = {},
+  options: { contextError?: boolean; access?: boolean; partialContext?: boolean } = {},
 ) {
   return vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
     const url = new URL(String(input), location.origin),
@@ -107,7 +107,17 @@ export function mockAPI(
                   name: file.name,
                   directory: false,
                 }
-              : context,
+              : options.partialContext
+                ? {
+                    ...context,
+                    analytics: {
+                      state: "ready",
+                      updating: false,
+                      complete: false,
+                      coverage: "readable indexed content only; restricted docsets omitted",
+                    },
+                  }
+                : context,
           );
     if (path.endsWith("/usage")) return json(usage);
     if (path.endsWith("/file"))

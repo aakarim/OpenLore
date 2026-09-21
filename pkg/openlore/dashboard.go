@@ -549,6 +549,17 @@ func (s *Server) dashboardUsage(w http.ResponseWriter, r *http.Request) {
 		dashboardError(w, http.StatusBadRequest, "ratio must be 4 or 6 characters per token")
 		return
 	}
+	if !s.analytics.HasDurableViews() {
+		now := time.Now().UTC()
+		params := analytics.Params{Since: now.Add(-time.Duration(days) * 24 * time.Hour), Until: now, Extra: map[string]string{"path": target}}
+		summary, err := analytics.UsageSummary(r.Context(), s.DashboardEventSource(id, target), params, ratio)
+		if err != nil {
+			dashboardError(w, http.StatusServiceUnavailable, "usage unavailable")
+			return
+		}
+		dashboardJSON(w, summary)
+		return
+	}
 	viewKey := fmt.Sprintf("v1:%s:%s:%d:%d", s.analyticsPolicyKey(id), target, days, ratio)
 	summary, err := s.analytics.DashboardUsage(r.Context(), viewKey, func(ctx context.Context) (analytics.Summary, error) {
 		jobNow := time.Now().UTC()

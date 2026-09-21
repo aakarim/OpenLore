@@ -49,6 +49,11 @@ type fileEventLog struct {
 }
 
 type logCursor map[string]int64
+type openLogSegment struct {
+	segment Segment
+	file    *os.File
+	offset  int64
+}
 
 func OpenEventLog(dir string, opts LogOptions) (EventLog, error) {
 	if opts.Rotate == 0 {
@@ -145,12 +150,62 @@ func (l *fileEventLog) Segments() []Segment {
 }
 func (l *fileEventLog) Scan(ctx context.Context, f EventFilter, fn func(Event) error) error {
 	l.mu.Lock()
-	segments := l.Segments()
+	segments, err := l.openSegmentsLocked(nil)
 	l.mu.Unlock()
-	return scanSegments(ctx, segments, f, fn)
+	if err != nil {
+		return err
+	}
+	return scanOpenSegments(ctx, segments, f, fn)
 }
 
-func scanSegments(ctx context.Context, segments []Segment, f EventFilter, fn func(Event) error) error {
+func (l *fileEventLog) openSegmentsLocked(cursor logCursor) ([]openLogSegment, error) {
+	if l.active != nil {
+		if err := l.active.Sync(); err != nil {
+			return nil, err
+		}
+	}
+	var opened []openLogSegment
+	for _, seg := range l.Segments() {
+		offset := int64(0)
+		if cursor != nil {
+			offset = cursor[seg.Path]
+			logical := strings.TrimSuffix(seg.Path, ".zst")
+			if seg.Compressed {
+				if _, sealedBefore := cursor[logical]; sealedBefore {
+					cursor[seg.Path] = seg.Size
+					continue
+				}
+				offset = 0
+			}
+			if offset >= seg.Size {
+				continue
+			}
+		}
+		file, err := os.Open(seg.Path)
+		if err != nil {
+			closeOpenSegments(opened)
+			return nil, err
+		}
+		if offset > 0 {
+			if _, err := file.Seek(offset, io.SeekStart); err != nil {
+				file.Close()
+				closeOpenSegments(opened)
+				return nil, err
+			}
+		}
+		opened = append(opened, openLogSegment{segment: seg, file: file, offset: offset})
+	}
+	return opened, nil
+}
+
+func closeOpenSegments(segments []openLogSegment) {
+	for _, segment := range segments {
+		_ = segment.file.Close()
+	}
+}
+
+func scanOpenSegments(ctx context.Context, segments []openLogSegment, f EventFilter, fn func(Event) error) error {
+	defer closeOpenSegments(segments)
 	types, principals := map[string]bool{}, map[string]bool{}
 	for _, v := range f.Types {
 		types[v] = true
@@ -158,50 +213,44 @@ func scanSegments(ctx context.Context, segments []Segment, f EventFilter, fn fun
 	for _, v := range f.Principals {
 		principals[v] = true
 	}
-	for _, seg := range segments {
+	for _, opened := range segments {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		file, err := os.Open(seg.Path)
-		if err != nil {
-			return err
-		}
-		var reader io.Reader = file
+		seg := opened.segment
+		var reader io.Reader = io.LimitReader(opened.file, seg.Size-opened.offset)
 		var decoder *zstd.Decoder
 		if seg.Compressed {
+			var err error
 			decoder, err = zstd.NewReader(reader)
 			if err != nil {
-				file.Close()
 				return err
 			}
 			reader = decoder
 		}
-		scan := bufio.NewScanner(reader)
-		scan.Buffer(make([]byte, 64*1024), 4*1024*1024)
-		for scan.Scan() {
-			if err := ctx.Err(); err != nil {
-				if decoder != nil {
-					decoder.Close()
+		scanErr := func() error {
+			if decoder != nil {
+				defer decoder.Close()
+			}
+			scan := bufio.NewScanner(reader)
+			scan.Buffer(make([]byte, 64*1024), 4*1024*1024)
+			for scan.Scan() {
+				if err := ctx.Err(); err != nil {
+					return err
 				}
-				file.Close()
-				return err
+				var e Event
+				if err := json.Unmarshal(scan.Bytes(), &e); err != nil {
+					return err
+				}
+				if !f.From.IsZero() && e.Time.Before(f.From) || !f.To.IsZero() && e.Time.After(f.To) || len(types) > 0 && !types[e.Type] || len(principals) > 0 && !principals[e.Principal] {
+					continue
+				}
+				if err := fn(e); err != nil {
+					return err
+				}
 			}
-			var e Event
-			if err := json.Unmarshal(scan.Bytes(), &e); err != nil {
-				return err
-			}
-			if !f.From.IsZero() && e.Time.Before(f.From) || !f.To.IsZero() && e.Time.After(f.To) || len(types) > 0 && !types[e.Type] || len(principals) > 0 && !principals[e.Principal] {
-				continue
-			}
-			if err := fn(e); err != nil {
-				return err
-			}
-		}
-		scanErr := scan.Err()
-		if decoder != nil {
-			decoder.Close()
-		}
-		file.Close()
+			return scan.Err()
+		}()
 		if scanErr != nil {
 			return scanErr
 		}
@@ -213,69 +262,18 @@ func scanSegments(ctx context.Context, segments []Segment, f EventFilter, fn fun
 // private optimization used by Pipeline; EventLog's stable interface remains
 // unchanged.
 func (l *fileEventLog) scanIncremental(ctx context.Context, cursor logCursor, fn func(Event) error) error {
-	segments := l.Segments()
-	for _, seg := range segments {
-		offset := cursor[seg.Path]
-		logical := strings.TrimSuffix(seg.Path, ".zst")
-		if seg.Compressed {
-			if _, sealedBefore := cursor[logical]; sealedBefore {
-				cursor[seg.Path] = seg.Size
-				continue
-			}
-			offset = 0
-		}
-		if offset >= seg.Size {
-			continue
-		}
-		file, err := os.Open(seg.Path)
-		if err != nil {
+	l.mu.Lock()
+	segments, err := l.openSegmentsLocked(cursor)
+	l.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	for i, opened := range segments {
+		if err := scanOpenSegments(ctx, []openLogSegment{opened}, EventFilter{}, fn); err != nil {
+			closeOpenSegments(segments[i+1:])
 			return err
 		}
-		if offset > 0 {
-			_, err = file.Seek(offset, io.SeekStart)
-		}
-		if err != nil {
-			file.Close()
-			return err
-		}
-		// Limit reads to the size snapshotted above. Concurrent appends remain for
-		// the next pass without retaining the unread tail in memory.
-		limited := io.LimitReader(file, seg.Size-offset)
-		reader := io.Reader(limited)
-		var decoder *zstd.Decoder
-		if seg.Compressed {
-			decoder, err = zstd.NewReader(reader)
-			if err == nil {
-				reader = decoder
-			}
-		}
-		if err == nil {
-			scan := bufio.NewScanner(reader)
-			scan.Buffer(make([]byte, 64*1024), 4*1024*1024)
-			for scan.Scan() {
-				if err = ctx.Err(); err != nil {
-					break
-				}
-				var event Event
-				if err = json.Unmarshal(scan.Bytes(), &event); err != nil {
-					break
-				}
-				if err = fn(event); err != nil {
-					break
-				}
-			}
-			if err == nil {
-				err = scan.Err()
-			}
-		}
-		if decoder != nil {
-			decoder.Close()
-		}
-		file.Close()
-		if err != nil {
-			return err
-		}
-		cursor[seg.Path] = seg.Size
+		cursor[opened.segment.Path] = opened.segment.Size
 	}
 	return nil
 }

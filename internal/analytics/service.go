@@ -94,6 +94,7 @@ func New(cfg config.AnalyticsConfig, deps Deps) (*Service, error) {
 	if dir == "" {
 		dir = "analytics"
 	}
+	cfg.Dir = dir
 	log, err := OpenEventLog(filepath.Join(dir, "events"), LogOptions{Rotate: cfg.Log.Rotate, Compress: cfg.Log.Compress, Retention: cfg.Log.Retention})
 	if err != nil {
 		return nil, err
@@ -135,7 +136,7 @@ func New(cfg config.AnalyticsConfig, deps Deps) (*Service, error) {
 	}
 	s := &Service{cfg: cfg, fs: deps.FS, log: log, store: store, index: index, providers: providers, processor: newWorkProcessor()}
 	if sqliteStore, ok := store.(*SQLiteAggregationStore); ok {
-		s.eventIndex = &sqliteEventIndex{db: sqliteStore.db}
+		s.eventIndex = &sqliteEventIndex{db: sqliteStore.db, done: make(chan struct{})}
 	}
 	s.facts = newIndexedContentFacts(deps.FS, deps.FS, index, &s.indexLog, providers)
 	if index != nil && deps.FS != nil {
@@ -171,11 +172,7 @@ func New(cfg config.AnalyticsConfig, deps Deps) (*Service, error) {
 	s.refresher = ref
 	if cfg.PipelineEnabled() {
 		derivedSink := sinkFunc(func(ctx context.Context, event Event) { _ = log.Append(ctx, event) })
-		consumers := []Consumer{agg}
-		if s.eventIndex != nil {
-			consumers = append(consumers, s.eventIndex)
-		}
-		s.pipeline = NewPipeline(log, filepath.Join(dir, "pipeline.checkpoint"), PipelineOptions{Processors: deps.Processors, Consumers: consumers, Refresher: ref, Sink: derivedSink, Buffer: cfg.Pipeline.Buffer})
+		s.pipeline = NewPipeline(log, filepath.Join(dir, "pipeline.checkpoint"), PipelineOptions{Processors: deps.Processors, Consumers: []Consumer{agg}, Refresher: ref, Sink: derivedSink, Buffer: cfg.Pipeline.Buffer})
 		rec.SetHandoff(s.pipeline.Handoff())
 	} else {
 		reg.SetPaused(true)
@@ -194,6 +191,9 @@ func (s *Service) Start(ctx context.Context) {
 	if s.pipeline != nil {
 		s.pipeline.Run(ctx)
 		s.refresher.Run(ctx)
+	}
+	if s.eventIndex != nil && s.cfg.PipelineEnabled() {
+		go s.eventIndex.run(ctx, s.log, filepath.Join(s.cfg.Dir, "event-index.checkpoint"))
 	}
 	go s.shipper.Run(ctx)
 }
@@ -248,9 +248,6 @@ func (s *Service) EnqueueFacts(p string) {
 
 func (s *Service) PromoteFacts(p string) {
 	if s.indexer == nil || !s.cfg.PipelineEnabled() {
-		return
-	}
-	if s.processor.active("facts") {
 		return
 	}
 	s.indexer.enqueue(p)
@@ -346,7 +343,7 @@ func (s *Service) DashboardUsage(ctx context.Context, key string, compute func(c
 		result.Analytics.State, result.Analytics.Updating = "disabled", false
 		return result, nil
 	}
-	if s.pipeline != nil && !s.pipeline.CaughtUp() {
+	if s.eventIndex != nil && !s.eventIndex.caughtUp.Load() {
 		result.Analytics.Updating = true
 		if found {
 			result.Analytics.State = "stale"
@@ -358,6 +355,12 @@ func (s *Service) DashboardUsage(ctx context.Context, key string, compute func(c
 	jobKey := "usage:" + key
 	if stale {
 		s.processor.enqueue(jobKey, true, func(jobCtx context.Context) {
+			if s.eventIndex != nil {
+				if catchUpErr := s.eventIndex.catchUp(jobCtx); catchUpErr != nil {
+					_, _ = store.db.ExecContext(context.WithoutCancel(jobCtx), `INSERT INTO dashboard_views(key,computed_at,error) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET error=excluded.error`, key, time.Now().UTC().UnixNano(), catchUpErr.Error())
+					return
+				}
+			}
 			summary, computeErr := compute(jobCtx)
 			if computeErr != nil {
 				_, _ = store.db.ExecContext(context.WithoutCancel(jobCtx), `INSERT INTO dashboard_views(key,computed_at,error) VALUES(?,?,?)
@@ -413,13 +416,19 @@ func (s *Service) DashboardMaterialized(ctx context.Context, key string, compute
 		state.State = "disabled"
 		return result, nil
 	}
-	if s.pipeline != nil && !s.pipeline.CaughtUp() {
+	if s.eventIndex != nil && !s.eventIndex.caughtUp.Load() {
 		state.State, state.Updating, state.Coverage = "updating", true, "durable event index is catching up"
 		return result, nil
 	}
 	if !found || time.Since(state.ComputedAt) > time.Minute {
 		jobKey := "aggregation:" + key
 		s.processor.enqueue(jobKey, true, func(jobCtx context.Context) {
+			if s.eventIndex != nil {
+				if catchUpErr := s.eventIndex.catchUp(jobCtx); catchUpErr != nil {
+					_, _ = store.db.ExecContext(context.WithoutCancel(jobCtx), `INSERT INTO dashboard_views(key,computed_at,error) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET error=excluded.error`, key, time.Now().UTC().UnixNano(), catchUpErr.Error())
+					return
+				}
+			}
 			view, computeErr := compute(jobCtx)
 			if computeErr != nil {
 				_, _ = store.db.ExecContext(context.WithoutCancel(jobCtx), `INSERT INTO dashboard_views(key,computed_at,error) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET error=excluded.error`, key, time.Now().UTC().UnixNano(), computeErr.Error())
@@ -598,12 +607,9 @@ func (s *Service) Close(ctx context.Context) error {
 		}
 		if s.cancel != nil {
 			s.cancel()
-			select {
-			case <-s.processor.done:
-			case <-ctx.Done():
-				if s.closeErr == nil {
-					s.closeErr = ctx.Err()
-				}
+			<-s.processor.done
+			if s.eventIndex != nil && s.cfg.PipelineEnabled() {
+				<-s.eventIndex.done
 			}
 		}
 		if err := s.log.Close(); err != nil && s.closeErr == nil {

@@ -26,9 +26,28 @@ func newWorkProcessor() *workProcessor {
 }
 
 func (p *workProcessor) enqueue(key string, priority bool, run func(context.Context)) bool {
+	return p.enqueueWithFollowup(key, priority, false, run)
+}
+
+func (p *workProcessor) enqueueFollowup(key string, priority bool, run func(context.Context)) bool {
+	return p.enqueueWithFollowup(key, priority, true, run)
+}
+
+func (p *workProcessor) enqueueWithFollowup(key string, priority, followup bool, run func(context.Context)) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if _, ok := p.running[key]; ok {
+		if !followup {
+			return false
+		}
+		// Keep one follow-up run. The active item may already have observed its
+		// source queue empty; dropping this enqueue would strand new work.
+		if old, pending := p.pending[key]; !pending {
+			p.pending[key] = workItem{key: key, priority: priority, run: run}
+		} else if priority && !old.priority {
+			old.priority = true
+			p.pending[key] = old
+		}
 		return false
 	}
 	if old, ok := p.pending[key]; ok {

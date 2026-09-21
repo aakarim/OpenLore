@@ -38,7 +38,7 @@ func (x *factsIndexer) enqueue(p string) {
 	if x.service == nil {
 		return
 	}
-	x.service.processor.enqueue("facts", false, x.run)
+	x.service.processor.enqueueFollowup("facts", false, x.run)
 }
 
 func (x *factsIndexer) pop() (string, bool) {
@@ -101,7 +101,7 @@ func (x *factsIndexer) reconcile(ctx context.Context, prefix string) {
 		_ = x.service.index.Prune(ctx, seen)
 		return
 	}
-	rows, err := x.service.index.PrefixScan(ctx, prefix, 0)
+	rows, err := x.service.index.PrefixScan(ctx, prefix)
 	if err != nil {
 		return
 	}

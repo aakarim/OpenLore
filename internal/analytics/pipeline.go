@@ -355,7 +355,7 @@ func (p *Pipeline) Run(ctx context.Context) {
 				})
 			}
 			pastLegacy := !legacy || !legacyFound
-			_ = scan(func(e Event) error {
+			initialErr := scan(func(e Event) error {
 				if !pastLegacy {
 					p.consumePersisted(ctx, e)
 					if e.ID == checkpointID {
@@ -366,12 +366,14 @@ func (p *Pipeline) Run(ctx context.Context) {
 				p.handle(ctx, e)
 				return nil
 			})
-			p.processMu.Lock()
-			p.cursor = cloneCursor(cursor)
-			p.drainLocked(ctx)
-			p.writeCheckpoint(p.lastEventID)
-			p.processMu.Unlock()
-			p.caughtUp.Store(true)
+			if initialErr == nil {
+				p.processMu.Lock()
+				p.cursor = cloneCursor(cursor)
+				p.drainLocked(ctx)
+				p.writeCheckpoint(p.lastEventID)
+				p.processMu.Unlock()
+				p.caughtUp.Store(true)
+			}
 			ticker := time.NewTicker(time.Second)
 			defer ticker.Stop()
 			for {
@@ -379,12 +381,16 @@ func (p *Pipeline) Run(ctx context.Context) {
 				case e := <-p.handoff:
 					p.handle(ctx, e)
 				case <-ticker.C:
-					_ = scan(func(e Event) error { p.handle(ctx, e); return nil })
+					if err := scan(func(e Event) error { p.handle(ctx, e); return nil }); err != nil {
+						p.caughtUp.Store(false)
+						continue
+					}
 					p.processMu.Lock()
 					p.cursor = cloneCursor(cursor)
 					p.drainLocked(ctx)
 					p.writeCheckpoint(p.lastEventID)
 					p.processMu.Unlock()
+					p.caughtUp.Store(true)
 				case <-p.stop:
 					return
 				case <-ctx.Done():
