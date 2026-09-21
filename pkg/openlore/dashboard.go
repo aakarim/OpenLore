@@ -3,6 +3,7 @@ package openlore
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -186,14 +187,15 @@ func (s *Server) dashboardPath(r *http.Request) (Identity, vfs.FileSystem, strin
 }
 
 type dashboardNode struct {
-	Path       string           `json:"path"`
-	Name       string           `json:"name"`
-	Directory  bool             `json:"directory"`
-	Bytes      int64            `json:"bytes"`
-	Lines      int64            `json:"lines"`
-	Characters int64            `json:"characters"`
-	Tokens     int64            `json:"tokens"`
-	Children   []*dashboardNode `json:"children,omitempty"`
+	Path       string                    `json:"path"`
+	Name       string                    `json:"name"`
+	Directory  bool                      `json:"directory"`
+	Bytes      int64                     `json:"bytes"`
+	Lines      int64                     `json:"lines"`
+	Characters int64                     `json:"characters"`
+	Tokens     int64                     `json:"tokens"`
+	Children   []*dashboardNode          `json:"children,omitempty"`
+	Analytics  *analytics.SnapshotStatus `json:"analytics,omitempty"`
 }
 
 func (s *Server) dashboardTree(w http.ResponseWriter, r *http.Request) {
@@ -326,16 +328,106 @@ func (s *Server) dashboardContextNodeFromInfo(ctx context.Context, scoped vfs.Fi
 
 func (s *Server) dashboardContext(w http.ResponseWriter, r *http.Request) {
 	_, scoped, target := s.dashboardPath(r)
-	nodes := 0
-	node, err := s.dashboardContextNode(r.Context(), scoped, target, 0, &nodes)
-	if errors.Is(err, errDashboardSize) {
-		dashboardError(w, http.StatusRequestEntityTooLarge, err.Error())
-		return
-	}
+	info, err := scoped.Stat(target)
 	if err != nil {
 		dashboardError(w, http.StatusNotFound, "context unavailable")
 		return
 	}
+	if s.analytics == nil || !s.analytics.HasFactsIndex() || !s.analytics.Started() {
+		// Keep the dashboard usable for embedders that deliberately supply the
+		// legacy file store. Normal server construction always uses SQLite and
+		// never takes this synchronous compatibility path.
+		nodes := 0
+		node, err := s.dashboardContextNode(r.Context(), scoped, target, 0, &nodes)
+		if errors.Is(err, errDashboardSize) {
+			dashboardError(w, http.StatusRequestEntityTooLarge, err.Error())
+			return
+		}
+		if err != nil {
+			dashboardError(w, http.StatusNotFound, "context unavailable")
+			return
+		}
+		dashboardJSON(w, node)
+		return
+	}
+	rows, status, err := s.analytics.IndexedFacts(r.Context(), target, 10001)
+	if err != nil {
+		dashboardError(w, http.StatusServiceUnavailable, "indexed context unavailable")
+		return
+	}
+	if len(rows) > 10000 {
+		dashboardError(w, http.StatusRequestEntityTooLarge, errDashboardSize.Error())
+		return
+	}
+	if s.analytics.ProcessingEnabled() && (status.State == "cold" || time.Since(status.ComputedAt) > time.Minute) {
+		s.analytics.PromoteFacts(target)
+		status.Updating = true
+		if status.State != "cold" {
+			status.State = "stale"
+		}
+	}
+	node := &dashboardNode{Path: target, Name: path.Base(target), Directory: info.Dir, Analytics: &status}
+	byPath := map[string]*dashboardNode{target: node}
+	omitted := false
+	for _, row := range rows {
+		if row.Owner == "" {
+			continue
+		}
+		if _, err := scoped.Stat(row.Path); err != nil {
+			omitted = true
+			continue
+		}
+		file := &dashboardNode{Path: row.Path, Name: path.Base(row.Path)}
+		for _, values := range row.Sources {
+			file.Bytes += int64(values["bytes"])
+			file.Lines += int64(values["lines"])
+			file.Characters += int64(values["characters"])
+			file.Tokens += int64(values["tokens"])
+		}
+		if row.Path == target {
+			node.Bytes, node.Lines, node.Characters, node.Tokens = file.Bytes, file.Lines, file.Characters, file.Tokens
+			continue
+		}
+		parentPath := path.Dir(row.Path)
+		var lineage []string
+		for current := parentPath; current != target && pathWithinRoot(target, current); current = path.Dir(current) {
+			lineage = append(lineage, current)
+		}
+		parent := node
+		for i := len(lineage) - 1; i >= 0; i-- {
+			current := lineage[i]
+			dir := byPath[current]
+			if dir == nil {
+				dir = &dashboardNode{Path: current, Name: path.Base(current), Directory: true}
+				byPath[current] = dir
+				parent.Children = append(parent.Children, dir)
+			}
+			parent = dir
+		}
+		parent.Children = append(parent.Children, file)
+		for current := parent; current != nil; {
+			current.Bytes += file.Bytes
+			current.Lines += file.Lines
+			current.Characters += file.Characters
+			current.Tokens += file.Tokens
+			if current.Path == target {
+				break
+			}
+			current = byPath[path.Dir(current.Path)]
+		}
+	}
+	if omitted {
+		node.Analytics.Complete = false
+		node.Analytics.Coverage = "readable indexed content only; restricted docsets omitted"
+	}
+	var sortTree func(*dashboardNode)
+	sortTree = func(current *dashboardNode) {
+		sort.Slice(current.Children, func(i, j int) bool { return current.Children[i].Path < current.Children[j].Path })
+		for _, child := range current.Children {
+			sortTree(child)
+		}
+	}
+	sortTree(node)
 	dashboardJSON(w, node)
 }
 
@@ -457,14 +549,33 @@ func (s *Server) dashboardUsage(w http.ResponseWriter, r *http.Request) {
 		dashboardError(w, http.StatusBadRequest, "ratio must be 4 or 6 characters per token")
 		return
 	}
-	now := time.Now().UTC()
-	params := analytics.Params{Since: now.Add(-time.Duration(days) * 24 * time.Hour), Until: now, Extra: map[string]string{"path": target}}
-	summary, err := analytics.UsageSummary(r.Context(), s.DashboardEventSource(id, target), params, ratio)
+	if !s.analytics.HasDurableViews() {
+		now := time.Now().UTC()
+		params := analytics.Params{Since: now.Add(-time.Duration(days) * 24 * time.Hour), Until: now, Extra: map[string]string{"path": target}}
+		summary, err := analytics.UsageSummary(r.Context(), s.DashboardEventSource(id, target), params, ratio)
+		if err != nil {
+			dashboardError(w, http.StatusServiceUnavailable, "usage unavailable")
+			return
+		}
+		dashboardJSON(w, summary)
+		return
+	}
+	viewKey := fmt.Sprintf("v1:%s:%s:%d:%d", s.analyticsPolicyKey(id), target, days, ratio)
+	summary, err := s.analytics.DashboardUsage(r.Context(), viewKey, func(ctx context.Context) (analytics.Summary, error) {
+		jobNow := time.Now().UTC()
+		jobParams := analytics.Params{Since: jobNow.Add(-time.Duration(days) * 24 * time.Hour), Until: jobNow, Extra: map[string]string{"path": target}}
+		return analytics.UsageSummary(ctx, s.DashboardEventSource(id, target), jobParams, ratio)
+	})
 	if err != nil {
 		dashboardError(w, http.StatusServiceUnavailable, "usage unavailable")
 		return
 	}
 	dashboardJSON(w, summary)
+}
+
+func (s *Server) analyticsPolicyKey(id Identity) string {
+	value := fmt.Sprintf("%#v|%#v", id.policySnapshot, s.currentAuth().Docsets)
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(value)))
 }
 
 type dashboardRole struct {

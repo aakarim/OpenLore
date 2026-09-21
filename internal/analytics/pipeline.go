@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -135,6 +136,7 @@ type Pipeline struct {
 	once        sync.Once
 	processMu   sync.Mutex
 	lastEventID string
+	caughtUp    atomic.Bool
 }
 
 func NewPipeline(log EventLog, checkpoint string, opts PipelineOptions) *Pipeline {
@@ -353,7 +355,7 @@ func (p *Pipeline) Run(ctx context.Context) {
 				})
 			}
 			pastLegacy := !legacy || !legacyFound
-			_ = scan(func(e Event) error {
+			initialErr := scan(func(e Event) error {
 				if !pastLegacy {
 					p.consumePersisted(ctx, e)
 					if e.ID == checkpointID {
@@ -364,11 +366,14 @@ func (p *Pipeline) Run(ctx context.Context) {
 				p.handle(ctx, e)
 				return nil
 			})
-			p.processMu.Lock()
-			p.cursor = cloneCursor(cursor)
-			p.drainLocked(ctx)
-			p.writeCheckpoint(p.lastEventID)
-			p.processMu.Unlock()
+			if initialErr == nil {
+				p.processMu.Lock()
+				p.cursor = cloneCursor(cursor)
+				p.drainLocked(ctx)
+				p.writeCheckpoint(p.lastEventID)
+				p.processMu.Unlock()
+				p.caughtUp.Store(true)
+			}
 			ticker := time.NewTicker(time.Second)
 			defer ticker.Stop()
 			for {
@@ -376,12 +381,16 @@ func (p *Pipeline) Run(ctx context.Context) {
 				case e := <-p.handoff:
 					p.handle(ctx, e)
 				case <-ticker.C:
-					_ = scan(func(e Event) error { p.handle(ctx, e); return nil })
+					if err := scan(func(e Event) error { p.handle(ctx, e); return nil }); err != nil {
+						p.caughtUp.Store(false)
+						continue
+					}
 					p.processMu.Lock()
 					p.cursor = cloneCursor(cursor)
 					p.drainLocked(ctx)
 					p.writeCheckpoint(p.lastEventID)
 					p.processMu.Unlock()
+					p.caughtUp.Store(true)
 				case <-p.stop:
 					return
 				case <-ctx.Done():
@@ -462,6 +471,7 @@ func (p *Pipeline) Replay(ctx context.Context, from time.Time) error {
 	return nil
 }
 func (p *Pipeline) Lag() (int64, time.Time) { return int64(len(p.handoff)), time.Time{} }
+func (p *Pipeline) CaughtUp() bool          { return p.caughtUp.Load() }
 
 type Refresher struct {
 	registry *Registry

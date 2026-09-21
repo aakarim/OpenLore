@@ -12,19 +12,13 @@ import (
 
 type factsIndexer struct {
 	service *Service
-	workers int
 
 	mu      sync.Mutex
 	pending map[string]struct{}
-	wake    chan struct{}
-	wg      sync.WaitGroup
 }
 
-func newFactsIndexer(service *Service, workers int) *factsIndexer {
-	if workers <= 0 {
-		workers = 2
-	}
-	return &factsIndexer{service: service, workers: workers, pending: map[string]struct{}{}, wake: make(chan struct{}, 1)}
+func newFactsIndexer(service *Service, _ ...int) *factsIndexer {
+	return &factsIndexer{service: service, pending: map[string]struct{}{}}
 }
 
 func (x *factsIndexer) enqueue(p string) {
@@ -41,10 +35,10 @@ func (x *factsIndexer) enqueue(p string) {
 	}
 	x.pending[p] = struct{}{}
 	x.mu.Unlock()
-	select {
-	case x.wake <- struct{}{}:
-	default:
+	if x.service == nil {
+		return
 	}
+	x.service.processor.enqueueFollowup("facts", false, x.run)
 }
 
 func (x *factsIndexer) pop() (string, bool) {
@@ -57,31 +51,18 @@ func (x *factsIndexer) pop() (string, bool) {
 	return "", false
 }
 
-func (x *factsIndexer) start(ctx context.Context) {
-	for range x.workers {
-		x.wg.Add(1)
-		go func() {
-			defer x.wg.Done()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-x.wake:
-					for {
-						p, ok := x.pop()
-						if !ok {
-							break
-						}
-						x.reconcile(ctx, p)
-					}
-				}
-			}
-		}()
+func (x *factsIndexer) run(ctx context.Context) {
+	for {
+		p, ok := x.pop()
+		if !ok {
+			return
+		}
+		x.reconcile(ctx, p)
+		if ctx.Err() != nil {
+			return
+		}
 	}
-	x.enqueue("/")
 }
-
-func (x *factsIndexer) wait() { x.wg.Wait() }
 
 func (x *factsIndexer) reconcile(ctx context.Context, prefix string) {
 	seen := map[string]struct{}{}

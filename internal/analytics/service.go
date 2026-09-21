@@ -2,6 +2,8 @@ package analytics
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -10,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -47,7 +50,9 @@ type Service struct {
 	refresher   *Refresher
 	store       AggregationStore
 	index       FactsIndex
+	eventIndex  *sqliteEventIndex
 	indexer     *factsIndexer
+	processor   *workProcessor
 	facts       ContentFacts
 	registry    *Registry
 	aggregator  *Aggregator
@@ -56,10 +61,32 @@ type Service struct {
 	emitted     sync.Map
 	providersMu sync.RWMutex
 	providers   []ContentScalarProvider
+	scopesMu    sync.RWMutex
+	scopes      []KnowledgeScope
 	indexLog    sync.Once
 	cancel      context.CancelFunc
 	close       sync.Once
+	started     atomic.Bool
 	closeErr    error
+}
+
+type KnowledgeScope struct {
+	Name string
+	Root string
+}
+
+type SnapshotStatus struct {
+	State      string    `json:"state"`
+	ComputedAt time.Time `json:"computed_at,omitempty"`
+	Updating   bool      `json:"updating"`
+	Complete   bool      `json:"complete"`
+	Coverage   string    `json:"coverage,omitempty"`
+	Error      string    `json:"error,omitempty"`
+}
+
+type UsageSnapshot struct {
+	Summary
+	Analytics SnapshotStatus `json:"analytics"`
 }
 
 func New(cfg config.AnalyticsConfig, deps Deps) (*Service, error) {
@@ -67,6 +94,7 @@ func New(cfg config.AnalyticsConfig, deps Deps) (*Service, error) {
 	if dir == "" {
 		dir = "analytics"
 	}
+	cfg.Dir = dir
 	log, err := OpenEventLog(filepath.Join(dir, "events"), LogOptions{Rotate: cfg.Log.Rotate, Compress: cfg.Log.Compress, Retention: cfg.Log.Retention})
 	if err != nil {
 		return nil, err
@@ -106,10 +134,13 @@ func New(cfg config.AnalyticsConfig, deps Deps) (*Service, error) {
 	if sqliteStore, ok := store.(*SQLiteAggregationStore); ok {
 		index = newSQLiteFactsIndex(sqliteStore)
 	}
-	s := &Service{cfg: cfg, fs: deps.FS, log: log, store: store, index: index, providers: providers}
+	s := &Service{cfg: cfg, fs: deps.FS, log: log, store: store, index: index, providers: providers, processor: newWorkProcessor()}
+	if sqliteStore, ok := store.(*SQLiteAggregationStore); ok {
+		s.eventIndex = &sqliteEventIndex{db: sqliteStore.db, done: make(chan struct{})}
+	}
 	s.facts = newIndexedContentFacts(deps.FS, deps.FS, index, &s.indexLog, providers)
 	if index != nil && deps.FS != nil {
-		s.indexer = newFactsIndexer(s, cfg.Index.Workers)
+		s.indexer = newFactsIndexer(s)
 	}
 	for _, processor := range deps.Processors {
 		if processor != nil && processor.Name() == "doc-scalars" {
@@ -150,14 +181,19 @@ func New(cfg config.AnalyticsConfig, deps Deps) (*Service, error) {
 	return s, nil
 }
 func (s *Service) Start(ctx context.Context) {
+	s.started.Store(true)
 	ctx, s.cancel = context.WithCancel(ctx)
-	if s.indexer != nil {
-		s.indexer.start(ctx)
+	go s.processor.run(ctx)
+	if s.indexer != nil && s.cfg.PipelineEnabled() {
+		s.indexer.enqueue("/")
 	}
 	s.recorder.Start(ctx)
 	if s.pipeline != nil {
 		s.pipeline.Run(ctx)
 		s.refresher.Run(ctx)
+	}
+	if s.eventIndex != nil && s.cfg.PipelineEnabled() {
+		go s.eventIndex.run(ctx, s.log, filepath.Join(s.cfg.Dir, "event-index.checkpoint"))
 	}
 	go s.shipper.Run(ctx)
 }
@@ -205,9 +241,217 @@ func (s *Service) SetTokenizer(tokenizer Tokenizer) {
 }
 
 func (s *Service) EnqueueFacts(p string) {
-	if s.indexer != nil {
+	if s.indexer != nil && s.cfg.PipelineEnabled() {
 		s.indexer.enqueue(p)
 	}
+}
+
+func (s *Service) PromoteFacts(p string) {
+	if s.indexer == nil || !s.cfg.PipelineEnabled() {
+		return
+	}
+	s.indexer.enqueue(p)
+	s.processor.enqueue("facts", true, s.indexer.run)
+}
+
+func (s *Service) ProcessingEnabled() bool { return s.cfg.PipelineEnabled() }
+func (s *Service) Started() bool           { return s.started.Load() }
+func (s *Service) HasDurableViews() bool   { return s.eventIndex != nil }
+func (s *Service) IndexedEventSource() EventSource {
+	if s.eventIndex != nil {
+		return s.eventIndex
+	}
+	return s.log
+}
+
+func (s *Service) SetKnowledgeScopes(scopes []KnowledgeScope) {
+	clean := make([]KnowledgeScope, 0, len(scopes))
+	for _, scope := range scopes {
+		if scope.Name != "" {
+			scope.Root = vfs.CleanPath(scope.Root)
+			clean = append(clean, scope)
+		}
+	}
+	s.scopesMu.Lock()
+	s.scopes = clean
+	s.scopesMu.Unlock()
+	s.EnqueueFacts("/")
+}
+
+func (s *Service) ownerForPath(p string) string {
+	p = vfs.CleanPath(p)
+	s.scopesMu.RLock()
+	defer s.scopesMu.RUnlock()
+	owner, longest := "", -1
+	for _, scope := range s.scopes {
+		if pathWithinPrefix(p, scope.Root) && len(scope.Root) > longest {
+			owner, longest = scope.Name, len(scope.Root)
+		}
+	}
+	return owner
+}
+
+func (s *Service) IndexedFacts(ctx context.Context, prefix string, limit int) ([]IndexedFacts, SnapshotStatus, error) {
+	if s.index == nil {
+		return nil, SnapshotStatus{State: "unavailable", Error: "durable facts require sqlite storage"}, nil
+	}
+	rows, err := s.index.PrefixScan(ctx, prefix, limit)
+	if err != nil {
+		return nil, SnapshotStatus{State: "failed", Error: err.Error()}, err
+	}
+	status := SnapshotStatus{State: "ready", Complete: true, Coverage: "indexed content docsets only"}
+	for _, row := range rows {
+		if row.ComputedAt.After(status.ComputedAt) {
+			status.ComputedAt = row.ComputedAt
+		}
+	}
+	status.Updating = s.processor.active("facts")
+	if len(rows) == 0 {
+		status.State, status.Complete = "cold", false
+	} else if status.Updating {
+		status.State = "updating"
+	}
+	if !s.cfg.PipelineEnabled() {
+		status.State, status.Updating = "disabled", false
+	}
+	return rows, status, nil
+}
+
+// DashboardUsage serves only a committed complete summary. Missing or stale
+// work is deduplicated onto the same bounded processor used by fact warming.
+func (s *Service) DashboardUsage(ctx context.Context, key string, compute func(context.Context) (Summary, error)) (UsageSnapshot, error) {
+	store, ok := s.store.(*SQLiteAggregationStore)
+	if !ok {
+		return UsageSnapshot{Analytics: SnapshotStatus{State: "unavailable", Error: "durable usage requires sqlite storage"}}, nil
+	}
+	var raw []byte
+	var computed int64
+	var lastError string
+	err := store.db.QueryRowContext(ctx, `SELECT value,computed_at,error FROM dashboard_views WHERE key=?`, key).Scan(&raw, &computed, &lastError)
+	found := err == nil && len(raw) > 0
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return UsageSnapshot{}, err
+	}
+	result := UsageSnapshot{Analytics: SnapshotStatus{State: "cold", Complete: false}}
+	if found {
+		if err := json.Unmarshal(raw, &result.Summary); err != nil {
+			return UsageSnapshot{}, err
+		}
+		result.Analytics = SnapshotStatus{State: "ready", Complete: true, ComputedAt: time.Unix(0, computed).UTC(), Coverage: "complete requested time window"}
+	}
+	if !s.cfg.PipelineEnabled() {
+		result.Analytics.State, result.Analytics.Updating = "disabled", false
+		return result, nil
+	}
+	if s.eventIndex != nil && !s.eventIndex.caughtUp.Load() {
+		result.Analytics.Updating = true
+		if found {
+			result.Analytics.State = "stale"
+		}
+		result.Analytics.Coverage = "durable event index is catching up"
+		return result, nil
+	}
+	stale := !found || time.Since(result.Analytics.ComputedAt) > time.Minute
+	jobKey := "usage:" + key
+	if stale {
+		s.processor.enqueue(jobKey, true, func(jobCtx context.Context) {
+			if s.eventIndex != nil {
+				if catchUpErr := s.eventIndex.catchUp(jobCtx); catchUpErr != nil {
+					_, _ = store.db.ExecContext(context.WithoutCancel(jobCtx), `INSERT INTO dashboard_views(key,computed_at,error) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET error=excluded.error`, key, time.Now().UTC().UnixNano(), catchUpErr.Error())
+					return
+				}
+			}
+			summary, computeErr := compute(jobCtx)
+			if computeErr != nil {
+				_, _ = store.db.ExecContext(context.WithoutCancel(jobCtx), `INSERT INTO dashboard_views(key,computed_at,error) VALUES(?,?,?)
+ON CONFLICT(key) DO UPDATE SET error=excluded.error`, key, time.Now().UTC().UnixNano(), computeErr.Error())
+				return
+			}
+			encoded, encodeErr := json.Marshal(summary)
+			if encodeErr == nil {
+				_, _ = store.db.ExecContext(context.WithoutCancel(jobCtx), `INSERT INTO dashboard_views(key,value,computed_at,error) VALUES(?,?,?,'')
+ON CONFLICT(key) DO UPDATE SET value=excluded.value,computed_at=excluded.computed_at,error=''`, key, encoded, summary.ComputedAt.UnixNano())
+			}
+		})
+		result.Analytics.Updating = true
+		if found {
+			result.Analytics.State = "stale"
+		}
+	}
+	if lastError != "" {
+		result.Analytics.Error = lastError
+		if !found {
+			result.Analytics.State = "failed"
+		}
+	}
+	return result, nil
+}
+
+func (s *Service) DashboardMaterialized(ctx context.Context, key string, compute func(context.Context) (Materialized, error)) (Materialized, error) {
+	store, ok := s.store.(*SQLiteAggregationStore)
+	if !ok {
+		return Materialized{Status: StatusPaused, Note: "durable analytics require sqlite storage"}, nil
+	}
+	key = "aggregation:" + key
+	var raw []byte
+	var computed int64
+	var lastError string
+	err := store.db.QueryRowContext(ctx, `SELECT value,computed_at,error FROM dashboard_views WHERE key=?`, key).Scan(&raw, &computed, &lastError)
+	found := err == nil && len(raw) > 0
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return Materialized{}, err
+	}
+	result := Materialized{Status: StatusPlanned, Note: "Cold build queued"}
+	if found {
+		if err := json.Unmarshal(raw, &result); err != nil {
+			return Materialized{}, err
+		}
+	}
+	state := &SnapshotStatus{State: "cold", Complete: false}
+	if found {
+		state = &SnapshotStatus{State: "ready", Complete: true, ComputedAt: time.Unix(0, computed).UTC(), Coverage: "complete requested time window"}
+	}
+	result.Analytics = state
+	if !s.cfg.PipelineEnabled() {
+		state.State = "disabled"
+		return result, nil
+	}
+	if s.eventIndex != nil && !s.eventIndex.caughtUp.Load() {
+		state.State, state.Updating, state.Coverage = "updating", true, "durable event index is catching up"
+		return result, nil
+	}
+	if !found || time.Since(state.ComputedAt) > time.Minute {
+		jobKey := "aggregation:" + key
+		s.processor.enqueue(jobKey, true, func(jobCtx context.Context) {
+			if s.eventIndex != nil {
+				if catchUpErr := s.eventIndex.catchUp(jobCtx); catchUpErr != nil {
+					_, _ = store.db.ExecContext(context.WithoutCancel(jobCtx), `INSERT INTO dashboard_views(key,computed_at,error) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET error=excluded.error`, key, time.Now().UTC().UnixNano(), catchUpErr.Error())
+					return
+				}
+			}
+			view, computeErr := compute(jobCtx)
+			if computeErr != nil {
+				_, _ = store.db.ExecContext(context.WithoutCancel(jobCtx), `INSERT INTO dashboard_views(key,computed_at,error) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET error=excluded.error`, key, time.Now().UTC().UnixNano(), computeErr.Error())
+				return
+			}
+			view.Analytics = nil
+			encoded, encodeErr := json.Marshal(view)
+			if encodeErr == nil {
+				_, _ = store.db.ExecContext(context.WithoutCancel(jobCtx), `INSERT INTO dashboard_views(key,value,computed_at,error) VALUES(?,?,?,'') ON CONFLICT(key) DO UPDATE SET value=excluded.value,computed_at=excluded.computed_at,error=''`, key, encoded, view.ComputedAt.UnixNano())
+			}
+		})
+		state.Updating = true
+		if found {
+			state.State = "stale"
+		}
+	}
+	if lastError != "" {
+		state.Error = lastError
+		if !found {
+			state.State, result.Note = "failed", "Analytics build failed"
+		}
+	}
+	return result, nil
 }
 func (s *Service) RegisterAggregations(aggregations []Aggregation) error {
 	return s.registry.RegisterAll(aggregations)
@@ -228,6 +472,13 @@ func (s *Service) CurrentFacts(ctx context.Context, p string, info *vfs.FileInfo
 	if s.index != nil {
 		fact, hit, err := s.index.Lookup(ctx, p, info.Size(), info.ModTime().UnixNano(), sourceNames(providers))
 		if err == nil && hit {
+			owner := s.ownerForPath(p)
+			if fact.Owner != owner {
+				fact.Owner = owner
+				if err := s.index.Upsert(ctx, fact); err != nil {
+					return DocScalars{}, err
+				}
+			}
 			return docScalarsFromIndexed(fact, providers)
 		}
 		if err != nil {
@@ -246,7 +497,16 @@ func (s *Service) CurrentFacts(ctx context.Context, p string, info *vfs.FileInfo
 		doc.Scalars["characters"] = float64(utf8.RuneCount(content))
 		return doc, nil
 	}
+	// Do not publish content under metadata observed before a concurrent write.
+	// The write hook (or periodic reconciliation) will retry this file.
+	if s.ownerForPath(p) != "" {
+		if current, statErr := s.fs.Stat(p); statErr == nil && (current.Size() != int64(len(content)) || current.ModTime().UnixNano() != info.ModTime().UnixNano()) {
+			s.EnqueueFacts(p)
+			return DocScalars{}, fmt.Errorf("%s changed during analytics indexing", p)
+		}
+	}
 	fact := indexedFacts(p, info, content, providers)
+	fact.Owner = s.ownerForPath(p)
 	if err := s.index.Upsert(ctx, fact); err != nil {
 		s.indexLog.Do(func() { log.Printf("analytics facts index unavailable; computing uncached: %v", err) })
 	}
@@ -347,9 +607,10 @@ func (s *Service) Close(ctx context.Context) error {
 		}
 		if s.cancel != nil {
 			s.cancel()
-		}
-		if s.indexer != nil {
-			s.indexer.wait()
+			<-s.processor.done
+			if s.eventIndex != nil && s.cfg.PipelineEnabled() {
+				<-s.eventIndex.done
+			}
 		}
 		if err := s.log.Close(); err != nil && s.closeErr == nil {
 			s.closeErr = err

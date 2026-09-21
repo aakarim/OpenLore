@@ -1,8 +1,11 @@
 package analytics
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -11,6 +14,75 @@ import (
 	"testing"
 	"time"
 )
+
+func TestEventLogLargeScanStreamsCompleteSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	file, err := os.Create(filepath.Join(dir, "events-2026-09-21.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := bufio.NewWriterSize(file, 64*1024)
+	payload := strings.Repeat("x", 2048)
+	encoder := json.NewEncoder(writer)
+	const total = 10000
+	for i := range total {
+		if err := encoder.Encode(Event{ID: fmt.Sprintf("event-%d", i), Time: time.Date(2026, 9, 21, 12, 0, 0, i, time.UTC), Type: "doc.read", Fields: map[string]any{"path": "/docs/a.md", "payload": payload}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	log, err := OpenEventLog(dir, LogOptions{Compress: "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	if err := log.Scan(context.Background(), EventFilter{}, func(Event) error { count++; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if count != total {
+		t.Fatalf("streamed events = %d, want %d", count, total)
+	}
+}
+
+func TestEventLogScanSurvivesConcurrentSegmentSeal(t *testing.T) {
+	dir := t.TempDir()
+	log, err := OpenEventLog(dir, LogOptions{Rotate: time.Hour, Compress: "zstd"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().UTC().Add(-3 * time.Hour).Truncate(time.Hour)
+	for _, id := range []string{"one", "two"} {
+		if err := log.Append(context.Background(), Event{ID: id, Time: old, Type: "doc.read"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entered, release := make(chan struct{}), make(chan struct{})
+	result := make(chan error, 1)
+	count := 0
+	go func() {
+		result <- log.Scan(context.Background(), EventFilter{}, func(Event) error {
+			count++
+			if count == 1 {
+				close(entered)
+				<-release
+			}
+			return nil
+		})
+	}()
+	<-entered
+	if err := log.Seal(context.Background(), time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	if err := <-result; err != nil || count != 2 {
+		t.Fatalf("scan after seal count=%d err=%v", count, err)
+	}
+}
 
 type retryRemote struct {
 	mu      sync.Mutex

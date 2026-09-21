@@ -74,6 +74,19 @@ test("overview renders full-depth interactive sunburst and attribution series", 
   expect(screen.getAllByText("Unknown").length).toBeGreaterThan(0);
 });
 
+test("ready but incomplete knowledge totals show their coverage", async () => {
+  history.replaceState(
+    null,
+    "",
+    "/dashboard/?view=analytics&path=/&tab=overview",
+  );
+  mockAPI({ partialContext: true });
+  render(<App />);
+  expect(
+    await screen.findByText(/restricted docsets omitted/),
+  ).toBeVisible();
+});
+
 test("mobile uses category and details sheets instead of horizontal analytics tabs", async () => {
   history.replaceState(
     null,

@@ -15,6 +15,15 @@ export type ContextNode = {
   characters: number;
   tokens: number;
   children?: ContextNode[];
+  analytics?: AnalyticsStatus;
+};
+export type AnalyticsStatus = {
+  state: "ready" | "cold" | "updating" | "stale" | "disabled" | "failed" | "unavailable";
+  computed_at?: string;
+  updating: boolean;
+  complete: boolean;
+  coverage?: string;
+  error?: string;
 };
 export type Facts = Pick<
   ContextNode,
@@ -62,6 +71,7 @@ export type Usage = {
   activity: UsagePoint[];
   computed_at: string;
   note?: string;
+  analytics?: AnalyticsStatus;
 };
 export type Materialized = {
   status: string;
@@ -69,6 +79,7 @@ export type Materialized = {
   computed_at: string;
   window: unknown;
   note?: string;
+  analytics?: AnalyticsStatus;
 };
 export type Access = {
   path: string;

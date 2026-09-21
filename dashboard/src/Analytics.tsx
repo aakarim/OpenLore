@@ -325,14 +325,27 @@ function Aggregation({
   title: string;
   onFile?: (path: string) => void;
 }) {
+  const [revision, setRevision] = useState(0);
   const state = useAsync(
     (signal) => api.aggregation(name, path, days, signal),
-    [name, path, days],
+    [name, path, days, revision],
   );
+  useEffect(() => {
+    if (!state.data?.analytics?.updating) return;
+    const timer = window.setTimeout(() => setRevision((value) => value + 1), 1000);
+    return () => window.clearTimeout(timer);
+  }, [state.data?.analytics]);
   return (
     <section className="card table-card">
       <h2>{title}</h2>
       <State loading={state.loading} error={state.error}>
+        {state.data?.analytics && state.data.analytics.state !== "ready" && (
+          <p className="coverage-note" data-state={state.data.analytics.state}>
+            {state.data.analytics.state}.
+            {state.data.analytics.complete && " Last complete result remains visible."}
+            {state.data.analytics.error && ` ${state.data.analytics.error}`}
+          </p>
+        )}
         {state.data?.status !== "ok" ? (
           <p className="empty">
             {state.data?.note ||
@@ -532,6 +545,7 @@ export function Analytics({
   const [visitedTabs, setVisitedTabs] = useState<Set<AnalyticsTab>>(
     () => new Set([tab]),
   );
+  const [analyticsRevision, setAnalyticsRevision] = useState(0);
   useEffect(() => {
     setVisitedTabs((visited) => {
       if (visited.has(tab)) return visited;
@@ -545,16 +559,26 @@ export function Analytics({
   );
   const context = useAsync(
     (signal) => api.context(path, signal),
-    [path],
+    [path, analyticsRevision],
     true,
     true,
   );
   const usage = useAsync(
     (signal) => api.usage(path, days, ratio, signal),
-    [path, days, ratio],
+    [path, days, ratio, analyticsRevision],
     needsUsage,
     true,
   );
+  useEffect(() => {
+    const statuses = [context.data?.analytics, usage.data?.analytics];
+    if (!statuses.some((status) => status?.updating || status?.state === "cold"))
+      return;
+    const timer = window.setTimeout(
+      () => setAnalyticsRevision((value) => value + 1),
+      1000,
+    );
+    return () => window.clearTimeout(timer);
+  }, [context.data?.analytics, usage.data?.analytics]);
   const folder = useAsync((signal) => api.tree(path, signal), [path]);
   useEffect(() => {
     if (usage.data?.computed_at) onComputed(usage.data.computed_at);
@@ -735,6 +759,24 @@ export function Analytics({
         <p role="status" className="coverage-note">
           Updating selected scope… Previous results remain visible until the
           request completes.
+        </p>
+      )}
+      {context.data?.analytics &&
+        (context.data.analytics.state !== "ready" ||
+          !context.data.analytics.complete) && (
+        <p role="status" className="coverage-note" data-state={context.data.analytics.state}>
+          Knowledge analytics: {context.data.analytics.state}.
+          {context.data.analytics.coverage && ` ${context.data.analytics.coverage}.`}
+          {context.data.analytics.error && ` ${context.data.analytics.error}`}
+        </p>
+      )}
+      {usage.data?.analytics && usage.data.analytics.state !== "ready" && (
+        <p role="status" className="coverage-note" data-state={usage.data.analytics.state}>
+          Activity analytics: {usage.data.analytics.state}.
+          {usage.data.analytics.complete
+            ? " Last complete result remains visible."
+            : " No complete result is available yet."}
+          {usage.data.analytics.error && ` ${usage.data.analytics.error}`}
         </p>
       )}
       <State

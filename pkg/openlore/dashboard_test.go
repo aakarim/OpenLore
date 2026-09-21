@@ -771,10 +771,21 @@ func TestDashboardAnalyticsAliasUsesCanonicalScopedFacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	register(mux)
-	w := dashboardRequest(mux, "GET", "/analytics/aggregations/tree-size?path=/docs", token)
 	var result analytics.Materialized
-	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
-		t.Fatal(err)
+	var w *httptest.ResponseRecorder
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		w = dashboardRequest(mux, "GET", "/analytics/aggregations/tree-size?path=/docs", token)
+		if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		if result.Status == analytics.StatusOK {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("materialized alias facts did not finish: %d %s", w.Code, w.Body.String())
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	if w.Code != 200 || len(result.Table.Rows) != 3 || result.Table.Rows[0][0] != "/public/other.md" || result.Table.Rows[1][0] != "/public/payload.html" || result.Table.Rows[2][0] != "/public/read me.md" {
 		t.Fatalf("alias facts must include three readable files, not the private child: %d %s", w.Code, w.Body.String())

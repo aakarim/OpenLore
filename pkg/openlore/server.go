@@ -321,6 +321,13 @@ func newServerWithRoot(rootDir string, rootFS, lowerFS vfs.FileSystem, opts ...c
 		if analyticsErr != nil {
 			return nil, fmt.Errorf("configuring analytics: %w", analyticsErr)
 		}
+		var knowledgeScopes []analytics.KnowledgeScope
+		for name, docset := range s.currentAuth().Docsets {
+			for _, mapping := range docset.Paths {
+				knowledgeScopes = append(knowledgeScopes, analytics.KnowledgeScope{Name: name, Root: displayPath(mapping)})
+			}
+		}
+		service.SetKnowledgeScopes(knowledgeScopes)
 		s.analytics = service
 		if err := s.registerPlugin(&analyticsPlugin{service: service, server: s}); err != nil {
 			return nil, err
@@ -2047,6 +2054,6 @@ func (s *Server) openLoreMetadata(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"version": assets.Version(),
 		"ssh":     ssh,
-		"routes": routes,
+		"routes":  routes,
 	})
 }

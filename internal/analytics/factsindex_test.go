@@ -49,7 +49,7 @@ func TestFactsIndexChangedHashDropsInactiveScalars(t *testing.T) {
 	}
 }
 
-func TestFactsIndexKeepsInactiveScalarsWhenHashUnchanged(t *testing.T) {
+func TestFactsIndexReplacesInactiveScalarsWhenHashUnchanged(t *testing.T) {
 	_, index := testFactsIndex(t)
 	ctx := context.Background()
 	first := IndexedFacts{Path: "/a.md", Size: 3, MTimeNS: 1, ContentHash: "same", Sources: map[string]map[string]float64{"old": {"tokens": 1}}}
@@ -61,9 +61,9 @@ func TestFactsIndexKeepsInactiveScalarsWhenHashUnchanged(t *testing.T) {
 	if err := index.Upsert(ctx, first); err != nil {
 		t.Fatal(err)
 	}
-	got, hit, err := index.Lookup(ctx, "/a.md", 3, 2, []string{"old", "new"})
-	if err != nil || !hit || got.Sources["old"]["tokens"] != 1 || got.Sources["new"]["tokens"] != 2 {
-		t.Fatalf("inactive scalar not preserved: %#v hit=%v err=%v", got.Sources, hit, err)
+	got, hit, err := index.Lookup(ctx, "/a.md", 3, 2, []string{"new"})
+	if err != nil || !hit || len(got.Sources["old"]) != 0 || got.Sources["new"]["tokens"] != 2 {
+		t.Fatalf("inactive scalar was retained: %#v hit=%v err=%v", got.Sources, hit, err)
 	}
 }
 
