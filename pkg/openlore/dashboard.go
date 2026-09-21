@@ -440,8 +440,8 @@ func (s *Server) dashboardReadableFactOwners(id Identity, target string) ([]stri
 	source := &dashboardEventSource{server: s, identity: id}
 	for name, docset := range s.currentAuth().Docsets {
 		relevant := false
-		readable := false
-		pathReadable := false
+		allReadable := true
+		pathGrant := false
 		for _, mapping := range docset.Paths {
 			root := displayPath(mapping)
 			if !pathWithinRoot(target, root) && !pathWithinRoot(root, target) {
@@ -449,18 +449,18 @@ func (s *Server) dashboardReadableFactOwners(id Identity, target string) ([]stri
 			}
 			relevant = true
 			if source.wholeDocsetGrant(root) {
-				readable = true
 			} else {
+				allReadable = false
 				_, grants, granted := s.grantsForPath(id, root)
-				pathReadable = pathReadable || granted && len(grants) > 0
+				pathGrant = pathGrant || granted && len(grants) > 0
 			}
 		}
 		if !relevant {
 			continue
 		}
-		if readable {
+		if allReadable {
 			full[name] = struct{}{}
-		} else if pathReadable {
+		} else if pathGrant {
 			filtered[name] = struct{}{}
 		} else {
 			// Path-sensitive grants cannot prove an entire owner's totals. Omit

@@ -48,6 +48,14 @@ func (f *controlledFactsFS) ReadFile(p string) ([]byte, error) {
 	return f.testFS.ReadFile(p)
 }
 
+func (f *controlledFactsFS) ReadFileBounded(p string, maxBytes int64) ([]byte, error) {
+	b, err := f.ReadFile(p)
+	if err == nil && int64(len(b)) > maxBytes {
+		return nil, errors.New("file exceeds read limit")
+	}
+	return b, err
+}
+
 func (f *controlledFactsFS) readCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()

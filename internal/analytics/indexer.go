@@ -16,6 +16,10 @@ const (
 	maxIndexedFileBytes = 64 << 20
 )
 
+type boundedFactsReader interface {
+	ReadFileBounded(string, int64) ([]byte, error)
+}
+
 // factsIndexer persists its traversal queue in SQLite and processes only one
 // bounded batch per processor turn. Requested dashboard work can therefore
 // overtake warming without a second expensive worker competing for memory.
@@ -171,8 +175,12 @@ func (x *factsIndexer) scanPath(ctx context.Context, generation int64, p string)
 	if info.Size() > maxIndexedFileBytes {
 		return fmt.Errorf("index %s: file exceeds %d byte analytics limit", p, maxIndexedFileBytes)
 	}
+	reader, ok := x.service.fs.(boundedFactsReader)
+	if !ok {
+		return fmt.Errorf("index %s: filesystem does not support bounded analytics reads", p)
+	}
 	_, err = x.service.currentFacts(ctx, p, info, func() ([]byte, error) {
-		content, err := x.service.fs.ReadFile(p)
+		content, err := reader.ReadFileBounded(p, maxIndexedFileBytes)
 		if err == nil && int64(len(content)) > maxIndexedFileBytes {
 			return nil, fmt.Errorf("file exceeds %d byte analytics limit", maxIndexedFileBytes)
 		}
