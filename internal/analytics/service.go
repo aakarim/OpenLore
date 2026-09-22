@@ -540,6 +540,11 @@ func (s *Service) DashboardUsage(ctx context.Context, key string, compute func(c
 		}
 		result.Analytics = SnapshotStatus{State: "ready", Complete: true, ComputedAt: time.Unix(0, computed).UTC(), Coverage: "complete requested time window"}
 	}
+	// Keep the JSON collection contract in cold/disabled/error states and
+	// when reading older materializations containing a null activity slice.
+	if result.Activity == nil {
+		result.Activity = []SummaryActivity{}
+	}
 	if !s.cfg.PipelineEnabled() {
 		result.Analytics.State, result.Analytics.Updating = "disabled", false
 		return result, nil

@@ -82,8 +82,78 @@ test("ready but incomplete knowledge totals show their coverage", async () => {
   );
   mockAPI({ partialContext: true });
   render(<App />);
+  expect(await screen.findByText(/restricted docsets omitted/)).toBeVisible();
+});
+
+test.each(["cold", "failed", "disabled"])(
+  "%s usage with null activity stays usable until a complete result arrives",
+  async (state) => {
+    history.replaceState(
+      null,
+      "",
+      "/dashboard/?view=analytics&path=/&tab=overview",
+    );
+    const fetch = mockAPI();
+    const original = fetch.getMockImplementation()!;
+    let complete = false;
+    fetch.mockImplementation((input, init) =>
+      !complete && String(input).includes("/api/usage?")
+        ? Promise.resolve(
+            new Response(
+              JSON.stringify({
+                reads: 0,
+                activity: null,
+                analytics: {
+                  state,
+                  complete: false,
+                  updating: state === "cold",
+                },
+              }),
+            ),
+          )
+        : original(input, init),
+    );
+    render(<App />);
+    expect(
+      await screen.findByText(/Activity totals will appear/),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("heading", { name: "Activity" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("No activity in this time range."),
+    ).not.toBeInTheDocument();
+
+    complete = true;
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Refresh analytics" }));
+    expect(
+      await screen.findByRole("img", {
+        name: "Daily activity stacked by attribution",
+      }),
+    ).toBeVisible();
+  },
+);
+
+test("legacy completed usage with null activity renders without crashing", async () => {
+  history.replaceState(
+    null,
+    "",
+    "/dashboard/?view=analytics&path=/&tab=overview",
+  );
+  const fetch = mockAPI();
+  const original = fetch.getMockImplementation()!;
+  fetch.mockImplementation(async (input, init) => {
+    const response = await original(input, init);
+    if (!String(input).includes("/api/usage?")) return response;
+    return new Response(
+      JSON.stringify({ ...(await response.json()), activity: null }),
+    );
+  });
+  render(<App />);
   expect(
-    await screen.findByText(/restricted docsets omitted/),
+    await screen.findByText("No activity in this time range."),
   ).toBeVisible();
 });
 
@@ -161,8 +231,12 @@ test("file-scoped usage requests both current-hash line rankings", async () => {
   ).toBeVisible();
   await waitFor(() => {
     const requests = fetch.mock.calls.map(([input]) => String(input));
-    expect(requests.some((url) => url.includes("/most-used-lines?"))).toBe(true);
-    expect(requests.some((url) => url.includes("/least-used-lines?"))).toBe(true);
+    expect(requests.some((url) => url.includes("/most-used-lines?"))).toBe(
+      true,
+    );
+    expect(requests.some((url) => url.includes("/least-used-lines?"))).toBe(
+      true,
+    );
   });
 });
 
