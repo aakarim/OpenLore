@@ -68,7 +68,10 @@ func analyticsInternalRoots(fsys vfs.FileSystem, directories ...string) ([]strin
 			if err != nil {
 				return err
 			}
-			if pathWithinRoot(filepath.ToSlash(internal), filepath.ToSlash(root)) {
+			// A published root can live beneath the data directory without
+			// being internal storage itself. Only exclude an entire backend
+			// for this ancestor case when it is an explicit storage mount.
+			if prefix != "/" && pathWithinRoot(filepath.ToSlash(internal), filepath.ToSlash(root)) {
 				excluded = append(excluded, prefix)
 			} else if pathWithinRoot(filepath.ToSlash(root), filepath.ToSlash(internal)) {
 				relative, err := filepath.Rel(root, internal)

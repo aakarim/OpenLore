@@ -149,6 +149,30 @@ func TestAnalyticsInternalRootsFollowHostStorage(t *testing.T) {
 	if err != nil || len(excluded) != 0 {
 		t.Fatalf("separate storage excluded real content: %v err=%v", excluded, err)
 	}
+	excluded, err = analyticsInternalRoots(NewDirFS(root, config.FilesConfig{}), root)
+	if err != nil || !reflect.DeepEqual(excluded, []string{"/"}) {
+		t.Fatalf("directly published storage was not excluded: %v err=%v", excluded, err)
+	}
+}
+
+func TestAnalyticsInternalRootsPreservePublishedSubdirectory(t *testing.T) {
+	for _, overlay := range []bool{false, true} {
+		t.Run(fmt.Sprintf("overlay=%v", overlay), func(t *testing.T) {
+			dataDir := t.TempDir()
+			root := filepath.Join(dataDir, "docs")
+			var backend vfs.FileSystem = NewDirFS(root, config.FilesConfig{})
+			if overlay {
+				backend = NewOverlayFS(NewDirFS(t.TempDir(), config.FilesConfig{}), backend)
+			}
+			merge := NewMergeFS()
+			merge.SetRoot(backend)
+			merge.Mount("journal", NewDirFS(filepath.Join(dataDir, "history"), config.FilesConfig{}))
+			excluded, err := analyticsInternalRoots(merge, dataDir, filepath.Join(root, "analytics"))
+			if err != nil || !reflect.DeepEqual(excluded, []string{"/analytics", "/journal"}) {
+				t.Fatalf("ancestor storage excluded published content: %v err=%v", excluded, err)
+			}
+		})
+	}
 }
 
 func TestServerExcludesInternalContentButReplaysHistory(t *testing.T) {
