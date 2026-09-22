@@ -29,6 +29,8 @@ func CmdHelp(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 	fmt.Fprintln(w, "  uniq [-c|-d|-i|-u]                       Filter duplicate lines")
 	fmt.Fprintln(w, "  cut [-d DEL|-f FIELDS|-c CHARS|-s]       Cut sections from lines")
 	fmt.Fprintln(w, "  sed [-n|-e EXPR] 's/pat/repl/flags'      Stream editor")
+	fmt.Fprintln(w, "    Replacement escapes: \\n newline, \\t tab, \\\\ backslash")
+	fmt.Fprintln(w, "    Escape delimiters with a backslash; backslash-newline inserts a newline")
 	fmt.Fprintln(w, "  sed '/pat/a text' <file>                  Append text after matching lines")
 	fmt.Fprintln(w, "  sed '/pat/a\\<text>' <file>              Append text, preserving leading whitespace")
 	fmt.Fprintln(w, "  awk [-F SEP|-v VAR=VAL] 'program'        Pattern scanning")

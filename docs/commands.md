@@ -38,7 +38,7 @@ Directories retain a trailing `/`, hidden entries appear only after an explicit
 | `sort` | Sort lines (`-r`, `-n`, `-u`, `-f`, `-k N`, `-t SEP`) |
 | `uniq` | Filter duplicate lines (`-c`, `-d`, `-i`, `-u`) |
 | `cut` | Select fields or characters (`-d DEL`, `-f FIELDS`, `-c CHARS`, `-s`) |
-| `sed` | Stream editor (`-n`, `-e`, `s/pat/repl/flags`, `-i`) |
+| `sed` | Stream editor (`-n`, `-e`, `s/pat/repl/flags`, `-i`); replacement text supports `\n` (newline), `\t` (tab), `\\` (backslash), escaped delimiters, and backslash-newline continuations |
 | `awk` | Pattern scanning (`-F SEP`, `-v VAR=VAL`) |
 | `tr` | Translate characters (`-d`, `-s`, `-c`) |
 | `rev` / `tac` | Reverse characters per line / reverse line order |

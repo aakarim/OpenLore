@@ -180,7 +180,7 @@ func applySedCommands(cmds []sedCmd, lines []string, quiet bool, w io.Writer, on
 			case 's':
 				var re *regexp.Regexp
 				pattern := basicRegexpToRE2(cmd.pattern)
-				replacement := sedReplacementToRE2(cmd.replacement)
+				replacement := sedReplacementToRE2(cmd.replacement, cmd.delimiter)
 				if cmd.sFlags.caseInsensitive {
 					re, _ = regexp.Compile("(?i)" + pattern)
 				} else {
@@ -224,6 +224,7 @@ type sedCmd struct {
 	command      byte
 	pattern      string
 	replacement  string
+	delimiter    byte
 	text         string
 	sFlags       struct {
 		global          bool
@@ -433,6 +434,7 @@ func parseSedExpr(expr string) sedCmd {
 		cmd.command = 's'
 		if i+1 < len(expr) {
 			delim := expr[i+1]
+			cmd.delimiter = delim
 			parts := splitSedSubst(expr[i+2:], delim)
 			if len(parts) >= 2 {
 				cmd.pattern = parts[0]
@@ -486,7 +488,7 @@ func splitSedSubst(s string, delim byte) []string {
 	return parts
 }
 
-func sedReplacementToRE2(replacement string) string {
+func sedReplacementToRE2(replacement string, delimiter byte) string {
 	var translated strings.Builder
 	for i := 0; i < len(replacement); i++ {
 		switch replacement[i] {
@@ -500,7 +502,13 @@ func sedReplacementToRE2(replacement string) string {
 			case next >= '1' && next <= '9':
 				fmt.Fprintf(&translated, "${%c}", next)
 				i++
-			case next == '&' || next == '\\':
+			case next == 'n' || next == '\n':
+				translated.WriteByte('\n')
+				i++
+			case next == 't':
+				translated.WriteByte('\t')
+				i++
+			case next == '&' || next == '\\' || next == '/' || next == delimiter:
 				translated.WriteByte(next)
 				i++
 			default:
