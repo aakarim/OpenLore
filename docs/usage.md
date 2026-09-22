@@ -154,6 +154,12 @@ text content contain stdout followed by stderr for compatibility, without a
 synthetic exit-code line. MCP `isError` is reserved for failures of the tool
 invocation itself rather than command exit status.
 
+For Streamable HTTP connections, the shell's `OPENLORE_SESSION_ID` environment
+variable is the MCP server session ID. It remains stable across tool calls, so
+session-scoped files or command logs can be addressed from the shell, for
+example with `cat /sessions/$OPENLORE_SESSION_ID/history` when such a history
+mount is configured.
+
 The plain JSON `POST /api/shell` endpoint and persistent-session
 `POST /api/sessions/{id}/shell` endpoint use the same result contract and
 return HTTP 200 for completed commands:
