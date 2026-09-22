@@ -100,7 +100,7 @@ test("shows an accessible live path tooltip on hover, focus, and tap", () => {
   expect(tooltip).toHaveTextContent("/guide.md");
 });
 
-test("limits mobile charts to top-level segments while preserving exact totals", () => {
+test("bounds mobile charts and aggregates excess top-level scopes", () => {
   vi.mocked(matchMedia).mockImplementation(
     (query) =>
       ({
@@ -114,9 +114,12 @@ test("limits mobile charts to top-level segments while preserving exact totals",
     file("/guide/one.md", 20),
     file("/guide/two.md", 40),
   ]);
+  const rootFiles = Array.from({ length: 30 }, (_, index) =>
+    file(`/root-${index}.md`, 20),
+  );
   render(
     <Sunburst
-      node={folder("/", [branch, file("/root.md", 20)])}
+      node={folder("/", [branch, ...rootFiles])}
       ratio={4}
       {...props}
     />,
@@ -127,10 +130,13 @@ test("limits mobile charts to top-level segments while preserving exact totals",
       name: "Top-level context token distribution",
     }),
   ).toBeInTheDocument();
-  expect(screen.getByText("20")).toBeInTheDocument();
-  expect(screen.getAllByRole("button")).toHaveLength(2);
+  expect(screen.getByText("165")).toBeInTheDocument();
+  expect(screen.getAllByRole("button")).toHaveLength(23);
   expect(screen.getByRole("button", { name: "/guide: 15 tokens" })).toBeVisible();
   expect(screen.queryByRole("button", { name: /one\.md/ })).not.toBeInTheDocument();
+  expect(
+    screen.getByRole("img", { name: "Other (8 items): 40 tokens" }),
+  ).toBeVisible();
 });
 
 test("renders file utilization and explicit empty-folder states safely", () => {
