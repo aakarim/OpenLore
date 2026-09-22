@@ -154,9 +154,12 @@ func (x *factsIndexer) scanPath(ctx context.Context, generation int64, p string)
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if x.service.excludedContent(p) {
+		return x.service.index.CompleteScanPath(ctx, generation, p, nil, false)
+	}
 	info, err := x.service.fs.Stat(p)
 	if errors.Is(err, fs.ErrNotExist) {
-		return x.service.index.CompleteScanPath(ctx, generation, p, nil)
+		return x.service.index.CompleteScanPath(ctx, generation, p, nil, false)
 	}
 	if err != nil {
 		return fmt.Errorf("stat %s: %w", p, err)
@@ -170,10 +173,15 @@ func (x *factsIndexer) scanPath(ctx context.Context, generation int64, p string)
 		for i := range entries {
 			children = append(children, path.Join(p, entries[i].Name()))
 		}
-		return x.service.index.CompleteScanPath(ctx, generation, p, children)
+		return x.service.index.CompleteScanPath(ctx, generation, p, children, false)
 	}
 	if info.Size() > maxIndexedFileBytes {
-		return fmt.Errorf("index %s: file exceeds %d byte analytics limit", p, maxIndexedFileBytes)
+		// Large logs and other non-indexable content must not strand the whole
+		// workspace scan. Remove any old facts rather than showing stale totals.
+		if err := x.service.index.Delete(ctx, p); err != nil {
+			return err
+		}
+		return x.service.index.CompleteScanPath(ctx, generation, p, nil, true)
 	}
 	reader, ok := x.service.fs.(boundedFactsReader)
 	if !ok {
@@ -189,5 +197,5 @@ func (x *factsIndexer) scanPath(ctx context.Context, generation int64, p string)
 	if err != nil {
 		return fmt.Errorf("index %s: %w", p, err)
 	}
-	return x.service.index.CompleteScanPath(ctx, generation, p, nil)
+	return x.service.index.CompleteScanPath(ctx, generation, p, nil, false)
 }

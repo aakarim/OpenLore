@@ -297,6 +297,46 @@ func TestDisabledProcessingKeepsEventLogAndReenableCatchesUpIdempotently(t *test
 	assertOne(third)
 }
 
+func TestEventIndexProgressAndImmediateBatchFollowup(t *testing.T) {
+	service := newIndexedTestService(t, testFS{})
+	ctx, cancel := context.WithCancel(context.Background())
+	for i, id := range []string{"first", "second", "third"} {
+		if err := service.log.Append(ctx, Event{ID: id, Time: time.Date(2026, 9, 1+i, 0, 0, 0, 0, time.UTC), Type: "doc.read"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	index := service.eventIndex
+	go index.run(ctx, service.log, filepath.Join(t.TempDir(), "cursor"), service.processor)
+	defer func() { cancel(); <-index.done }()
+	select {
+	case <-service.processor.wake:
+	case <-time.After(time.Second):
+		t.Fatal("initial catch-up was not scheduled")
+	}
+	compute := func(context.Context) (Summary, error) {
+		t.Fatal("usage must wait for catch-up")
+		return Summary{}, nil
+	}
+	for i := int64(1); i <= 3; i++ {
+		item, ok := service.processor.pop()
+		if !ok || item.key != "event-index" {
+			t.Fatalf("batch %d was not queued immediately: %+v", i, item)
+		}
+		item.run(ctx)
+		service.processor.finish(item.key)
+		if index.processed.Load() != i || index.caughtUp.Load() != (i == 3) {
+			t.Fatalf("batch %d: processed=%d caughtUp=%v", i, index.processed.Load(), index.caughtUp.Load())
+		}
+		if i < 3 {
+			result, err := service.DashboardUsage(ctx, "progress", compute)
+			progress := result.Analytics.Progress
+			if err != nil || !result.Analytics.Updating || result.Analytics.Complete || progress == nil || progress.Phase != "history" || progress.Processed != i || progress.Unit != "events" {
+				t.Fatalf("catch-up result=%+v progress=%+v err=%v", result.Analytics, progress, err)
+			}
+		}
+	}
+}
+
 func TestEventIndexUsesIndependentCheckpointAndDoesNotAdvanceOnFailure(t *testing.T) {
 	dir := t.TempDir()
 	log, err := OpenEventLog(filepath.Join(dir, "events"), LogOptions{Compress: "none"})
@@ -342,6 +382,9 @@ func TestEventIndexUsesIndependentCheckpointAndDoesNotAdvanceOnFailure(t *testin
 	<-failed.done
 	if failed.caughtUp.Load() {
 		t.Fatal("failed projection marked caught up")
+	}
+	if message := failed.lastError.Load(); message == nil || !strings.Contains(*message, "closed") {
+		t.Fatalf("failed projection did not expose its error: %v", message)
 	}
 	if _, err := os.Stat(failedCheckpoint); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("failed projection advanced checkpoint: %v", err)

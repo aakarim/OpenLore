@@ -18,12 +18,21 @@ export type ContextNode = {
   analytics?: AnalyticsStatus;
 };
 export type AnalyticsStatus = {
-  state: "ready" | "cold" | "updating" | "stale" | "disabled" | "failed" | "unavailable";
+  state:
+    | "ready"
+    | "cold"
+    | "updating"
+    | "stale"
+    | "disabled"
+    | "failed"
+    | "unavailable";
   computed_at?: string;
   updating: boolean;
   complete: boolean;
   coverage?: string;
   error?: string;
+  warning?: string;
+  progress?: { phase: "content" | "history"; processed: number; unit: string };
 };
 export type Facts = Pick<
   ContextNode,
@@ -93,9 +102,4 @@ export type Access = {
   notes: string[];
 };
 export type AnalyticsTab =
-  | "overview"
-  | "knowledge"
-  | "usage"
-  | "gaps"
-  | "commands"
-  | "access";
+  "overview" | "knowledge" | "usage" | "gaps" | "commands" | "access";

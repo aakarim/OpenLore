@@ -4,6 +4,7 @@ import { useAsync } from "./hooks";
 import { Sunburst, estimatedTokens } from "./Sunburst";
 import type {
   Access,
+  AnalyticsStatus,
   AnalyticsTab,
   ContextNode,
   Materialized,
@@ -19,6 +20,68 @@ const tabs: { id: AnalyticsTab; label: string; glyph: string }[] = [
   { id: "access", label: "Access", glyph: "◇" },
 ];
 const n = (value: number | undefined) => (value || 0).toLocaleString("en-GB");
+function AnalyticsProgress({
+  label,
+  status,
+  loading,
+  error,
+}: {
+  label: string;
+  status?: AnalyticsStatus;
+  loading: boolean;
+  error?: Error;
+}) {
+  const busy = status?.updating || loading;
+  const state = status?.state || (error ? "failed" : "ready");
+  const ready = !busy && state === "ready";
+  const progress = status?.progress;
+  const detail = busy
+    ? progress?.phase === "history"
+      ? "Processing historical activity"
+      : progress?.phase === "content"
+        ? "Scanning workspace content"
+        : "Preparing analytics"
+    : ready
+      ? "Up to date"
+      : state === "failed"
+        ? "Processing stopped"
+        : status?.state === "disabled"
+          ? "Processing paused"
+          : "Not available yet";
+  return (
+    <div className="analytics-progress" data-state={busy ? "updating" : state}>
+      <div className="analytics-progress-heading" role="status">
+        <strong>{label}</strong>
+        <span>
+          {detail}
+          {busy && progress
+            ? ` · ${n(progress.processed)} ${progress.unit} processed${progress.phase === "history" ? " this session" : ""}`
+            : ""}
+        </span>
+      </div>
+      <div
+        className="analytics-progress-track"
+        role="progressbar"
+        aria-label={`${label} progress`}
+        aria-valuetext={detail}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={busy ? undefined : ready ? 100 : 0}
+      >
+        <span />
+      </div>
+      {status?.coverage && !busy && (!ready || !status.complete) && (
+        <p className="coverage-note">{status.coverage}</p>
+      )}
+      {status?.warning && <p className="coverage-note">{status.warning}</p>}
+      {status?.error && (
+        <p className="coverage-note" role="alert">
+          {status.error}
+        </p>
+      )}
+    </div>
+  );
+}
 function State({
   loading,
   error,
@@ -333,7 +396,10 @@ function Aggregation({
   );
   useEffect(() => {
     if (!state.data?.analytics?.updating) return;
-    const timer = window.setTimeout(() => setRevision((value) => value + 1), 1000);
+    const timer = window.setTimeout(
+      () => setRevision((value) => value + 1),
+      1000,
+    );
     return () => window.clearTimeout(timer);
   }, [state.data?.analytics]);
   return (
@@ -343,7 +409,8 @@ function Aggregation({
         {state.data?.analytics && state.data.analytics.state !== "ready" && (
           <p className="coverage-note" data-state={state.data.analytics.state}>
             {state.data.analytics.state}.
-            {state.data.analytics.complete && " Last complete result remains visible."}
+            {state.data.analytics.complete &&
+              " Last complete result remains visible."}
             {state.data.analytics.error && ` ${state.data.analytics.error}`}
           </p>
         )}
@@ -571,15 +638,23 @@ export function Analytics({
     true,
   );
   useEffect(() => {
+    if (context.loading || usage.loading) return;
     const statuses = [context.data?.analytics, usage.data?.analytics];
-    if (!statuses.some((status) => status?.updating || status?.state === "cold"))
+    if (
+      !statuses.some((status) => status?.updating || status?.state === "cold")
+    )
       return;
     const timer = window.setTimeout(
       () => setAnalyticsRevision((value) => value + 1),
       1000,
     );
     return () => window.clearTimeout(timer);
-  }, [context.data?.analytics, usage.data?.analytics]);
+  }, [
+    context.data?.analytics,
+    usage.data?.analytics,
+    context.loading,
+    usage.loading,
+  ]);
   const folder = useAsync((signal) => api.tree(path, signal), [path]);
   useEffect(() => {
     if (usage.data?.computed_at) onComputed(usage.data.computed_at);
@@ -767,28 +842,28 @@ export function Analytics({
           </small>
         </div>
       )}
-      {(context.loading || usage.loading) && context.data && usage.data && (
-        <p role="status" className="coverage-note">
-          Updating selected scope… Previous results remain visible until the
-          request completes.
-        </p>
-      )}
-      {context.data?.analytics &&
-        (context.data.analytics.state !== "ready" ||
-          !context.data.analytics.complete) && (
-        <p role="status" className="coverage-note" data-state={context.data.analytics.state}>
-          Knowledge analytics: {context.data.analytics.state}.
-          {context.data.analytics.coverage && ` ${context.data.analytics.coverage}.`}
-          {context.data.analytics.error && ` ${context.data.analytics.error}`}
-        </p>
-      )}
-      {usage.data?.analytics && usage.data.analytics.state !== "ready" && (
-        <p role="status" className="coverage-note" data-state={usage.data.analytics.state}>
-          Activity analytics: {usage.data.analytics.state}.
-          {usage.data.analytics.complete
-            ? " Last complete result remains visible."
-            : " No complete result is available yet."}
-          {usage.data.analytics.error && ` ${usage.data.analytics.error}`}
+      <section
+        className="analytics-processing"
+        aria-label="Background analytics"
+      >
+        <AnalyticsProgress
+          label="Knowledge analytics"
+          status={context.data?.analytics}
+          loading={context.loading && !context.data}
+          error={!context.data ? context.error : undefined}
+        />
+        {needsUsage && (
+          <AnalyticsProgress
+            label="Activity analytics"
+            status={usage.data?.analytics}
+            loading={usage.loading && !usage.data}
+            error={!usage.data ? usage.error : undefined}
+          />
+        )}
+      </section>
+      {((context.error && context.data) || (usage.error && usage.data)) && (
+        <p role="alert" className="coverage-note">
+          Could not refresh analytics. Previous results remain visible.
         </p>
       )}
       <State
@@ -798,7 +873,8 @@ export function Analytics({
         }
         error={
           ["overview", "knowledge", "usage"].includes(tab)
-            ? context.error || usage.error
+            ? (!context.data ? context.error : undefined) ||
+              (!usage.data ? usage.error : undefined)
             : undefined
         }
       >

@@ -16,6 +16,8 @@ import (
 type sqliteEventIndex struct {
 	db         *sql.DB
 	caughtUp   atomic.Bool
+	processed  atomic.Int64
+	lastError  atomic.Pointer[string]
 	done       chan struct{}
 	mu         sync.Mutex
 	cursor     logCursor
@@ -31,6 +33,9 @@ func (x *sqliteEventIndex) consume(ctx context.Context, event Event) error {
 	_, err = x.db.ExecContext(ctx, `INSERT INTO analytics_events(id,time_ns,type,principal,value) VALUES(?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET time_ns=excluded.time_ns,type=excluded.type,principal=excluded.principal,value=excluded.value`,
 		event.ID, event.Time.UTC().UnixNano(), event.Type, event.Principal, data)
+	if err == nil {
+		x.processed.Add(1)
+	}
 	return err
 }
 
@@ -39,6 +44,14 @@ func (x *sqliteEventIndex) run(ctx context.Context, log EventLog, checkpoint str
 	x.mu.Lock()
 	x.cursor, x.log, x.checkpoint = loadLogCursor(checkpoint), log, checkpoint
 	x.mu.Unlock()
+	var runBatch func(context.Context)
+	runBatch = func(jobCtx context.Context) {
+		more, err := x.catchUpBatch(jobCtx)
+		if err == nil && more {
+			// Yield the lane between segments, not a full polling interval.
+			processor.enqueueFollowup("event-index", false, runBatch)
+		}
+	}
 	schedule := func() {
 		if processor == nil {
 			if err := x.catchUp(ctx); err != nil {
@@ -46,11 +59,7 @@ func (x *sqliteEventIndex) run(ctx context.Context, log EventLog, checkpoint str
 			}
 			return
 		}
-		processor.enqueue("event-index", false, func(jobCtx context.Context) {
-			if _, err := x.catchUpBatch(jobCtx); err != nil {
-				x.caughtUp.Store(false)
-			}
-		})
+		processor.enqueue("event-index", false, runBatch)
 	}
 	schedule()
 	ticker := time.NewTicker(time.Second)
@@ -74,15 +83,22 @@ func (x *sqliteEventIndex) catchUp(ctx context.Context) error {
 	}
 }
 
-func (x *sqliteEventIndex) catchUpBatch(ctx context.Context) (bool, error) {
+func (x *sqliteEventIndex) catchUpBatch(ctx context.Context) (more bool, err error) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
+	defer func() {
+		if err != nil {
+			message := err.Error()
+			x.lastError.Store(&message)
+			x.caughtUp.Store(false)
+		} else {
+			x.lastError.Store(nil)
+		}
+	}()
 	if x.log == nil {
 		return false, errors.New("event index is not started")
 	}
-	more := false
 	if incremental, ok := x.log.(*fileEventLog); ok {
-		var err error
 		more, err = incremental.scanIncrementalBatch(ctx, x.cursor, func(event Event) error { return x.consume(ctx, event) })
 		if err != nil {
 			return false, err

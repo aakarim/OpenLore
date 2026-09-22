@@ -364,7 +364,10 @@ func (s *Server) dashboardContext(w http.ResponseWriter, r *http.Request) {
 		dashboardError(w, http.StatusRequestEntityTooLarge, errDashboardSize.Error())
 		return
 	}
-	if s.analytics.ProcessingEnabled() && (status.State == "cold" || time.Since(status.ComputedAt) > time.Minute) {
+	// Polling observes active/failed work; it must not requeue the scope on
+	// every request or erase a failure by relabelling it as stale.
+	if s.analytics.ProcessingEnabled() && !status.Updating &&
+		(status.State == "cold" || status.State == "ready" && time.Since(status.ComputedAt) > time.Minute) {
 		s.analytics.PromoteFacts(target)
 		status.Updating = true
 		if status.State != "cold" {

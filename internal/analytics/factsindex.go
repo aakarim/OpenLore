@@ -39,7 +39,7 @@ type FactsIndex interface {
 	ScanState(context.Context) (FactsScanState, error)
 	NextScanPaths(context.Context, int64, int) ([]string, error)
 	QueueScanPath(context.Context, int64, string) error
-	CompleteScanPath(context.Context, int64, string, []string) error
+	CompleteScanPath(context.Context, int64, string, []string, bool) error
 	FailScan(context.Context, int64, error) error
 	FinishScan(context.Context, int64) (bool, error)
 	PrefixScanOwners(context.Context, string, []string, int) ([]IndexedFacts, error)
@@ -56,6 +56,8 @@ type FactsScanState struct {
 	CompletedAt         time.Time
 	Error               string
 	OwnershipCompatible bool
+	Processed           int64
+	Skipped             int64
 }
 
 type sqliteFactsIndex struct{ db *sql.DB }
@@ -378,7 +380,7 @@ func (x *sqliteFactsIndex) StartScan(ctx context.Context, scopes []KnowledgeScop
 	generation++
 	now := time.Now().UTC().UnixNano()
 	if _, err = tx.ExecContext(ctx, `INSERT INTO facts_scan_state(id,generation,state,started_at,completed_at,error,scope_hash,completed_scope_hash)
-VALUES(1,?,'updating',?,0,'',?,'') ON CONFLICT(id) DO UPDATE SET generation=excluded.generation,state='updating',started_at=excluded.started_at,error='',scope_hash=excluded.scope_hash`, generation, now, scopeHash); err != nil {
+VALUES(1,?,'updating',?,0,'',?,'') ON CONFLICT(id) DO UPDATE SET generation=excluded.generation,state='updating',started_at=excluded.started_at,error='',scope_hash=excluded.scope_hash,processed=0,skipped=0`, generation, now, scopeHash); err != nil {
 		return 0, err
 	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM facts_scan_queue`); err != nil {
@@ -402,7 +404,7 @@ func (x *sqliteFactsIndex) ScanState(ctx context.Context) (FactsScanState, error
 	var state FactsScanState
 	var started, completed int64
 	var compatible int
-	err := x.db.QueryRowContext(ctx, `SELECT generation,state,started_at,completed_at,error,scope_hash=completed_scope_hash FROM facts_scan_state WHERE id=1`).Scan(&state.Generation, &state.State, &started, &completed, &state.Error, &compatible)
+	err := x.db.QueryRowContext(ctx, `SELECT generation,state,started_at,completed_at,error,scope_hash=completed_scope_hash,processed,skipped FROM facts_scan_state WHERE id=1`).Scan(&state.Generation, &state.State, &started, &completed, &state.Error, &compatible, &state.Processed, &state.Skipped)
 	if errors.Is(err, sql.ErrNoRows) {
 		return state, nil
 	}
@@ -449,7 +451,7 @@ func (x *sqliteFactsIndex) QueueScanPath(ctx context.Context, generation int64, 
 	return tx.Commit()
 }
 
-func (x *sqliteFactsIndex) CompleteScanPath(ctx context.Context, generation int64, p string, children []string) error {
+func (x *sqliteFactsIndex) CompleteScanPath(ctx context.Context, generation int64, p string, children []string, skipped bool) error {
 	tx, err := x.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -461,6 +463,9 @@ func (x *sqliteFactsIndex) CompleteScanPath(ctx context.Context, generation int6
 	}
 	if changed, _ := result.RowsAffected(); changed == 0 {
 		return tx.Commit()
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE facts_scan_state SET processed=processed+1,skipped=skipped+? WHERE id=1 AND generation=?`, skipped, generation); err != nil {
+		return err
 	}
 	for _, child := range children {
 		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO facts_scan_queue(generation,path) VALUES(?,?)`, generation, vfs.CleanPath(child)); err != nil {

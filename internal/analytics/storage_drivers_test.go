@@ -44,8 +44,11 @@ INSERT INTO facts_scan_state VALUES(1,3,?,1,2,'','original')`, scanState)
 			if err != nil || state.OwnershipCompatible != (scanState == "ready") {
 				t.Fatalf("migrated %s: %+v err=%v", scanState, state, err)
 			}
+			if state.Processed != 0 || state.Skipped != 0 {
+				t.Fatalf("legacy progress did not default to zero: %+v", state)
+			}
 			// A subsequent open must not backfill again and bless a new hash.
-			if _, err := store.db.Exec(`UPDATE facts_scan_state SET scope_hash='changed',state='ready'`); err != nil {
+			if _, err := store.db.Exec(`UPDATE facts_scan_state SET scope_hash='changed',state='ready',processed=17,skipped=2`); err != nil {
 				t.Fatal(err)
 			}
 			if err := store.Close(); err != nil {
@@ -59,6 +62,9 @@ INSERT INTO facts_scan_state VALUES(1,3,?,1,2,'','original')`, scanState)
 			state, err = newSQLiteFactsIndex(store).ScanState(context.Background())
 			if err != nil || state.OwnershipCompatible {
 				t.Fatalf("reopen blessed incompatible ownership: %+v err=%v", state, err)
+			}
+			if state.Processed != 17 || state.Skipped != 2 {
+				t.Fatalf("reopen lost durable progress: %+v", state)
 			}
 		})
 	}

@@ -9,6 +9,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -21,6 +24,65 @@ import (
 type analyticsPlugin struct {
 	service *analytics.Service
 	server  *Server
+}
+
+// analyticsInternalRoots maps configured host storage to content paths. Do not
+// ignore a directory merely because it is named "data" or "history": it may
+// contain real knowledge. Journal replay reads host storage directly and does
+// not use these content exclusions.
+func analyticsInternalRoots(fsys vfs.FileSystem, directories ...string) ([]string, error) {
+	var excluded []string
+	var visit func(vfs.FileSystem, string) error
+	visit = func(fsys vfs.FileSystem, prefix string) error {
+		switch f := fsys.(type) {
+		case *MergeFS:
+			if err := visit(f.root, prefix); err != nil {
+				return err
+			}
+			for name, mount := range f.mounts {
+				if err := visit(mount, path.Join(prefix, name)); err != nil {
+					return err
+				}
+			}
+			return nil
+		case *OverlayFS:
+			if err := visit(f.lower, prefix); err != nil {
+				return err
+			}
+			return visit(f.upper, prefix)
+		}
+		mapper, ok := fsys.(interface{ HostDir(string) (string, bool) })
+		if !ok {
+			return nil
+		}
+		host, ok := mapper.HostDir("/")
+		if !ok {
+			return nil
+		}
+		root, err := filepath.Abs(host)
+		if err != nil {
+			return err
+		}
+		for _, directory := range directories {
+			internal, err := filepath.Abs(directory)
+			if err != nil {
+				return err
+			}
+			if pathWithinRoot(filepath.ToSlash(internal), filepath.ToSlash(root)) {
+				excluded = append(excluded, prefix)
+			} else if pathWithinRoot(filepath.ToSlash(root), filepath.ToSlash(internal)) {
+				relative, err := filepath.Rel(root, internal)
+				if err != nil {
+					return err
+				}
+				excluded = append(excluded, path.Join(prefix, filepath.ToSlash(relative)))
+			}
+		}
+		return nil
+	}
+	err := visit(fsys, "/")
+	sort.Strings(excluded)
+	return excluded, err
 }
 
 func (p *analyticsPlugin) PostCommitMiddleware() []PostCommitMiddleware {

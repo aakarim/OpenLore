@@ -8,9 +8,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/aakarim/go-openlore/internal/analytics"
@@ -130,6 +132,89 @@ func (*phase4Plugin) Aggregations() []AnalyticsAggregation {
 				return AnalyticsTable{}, nil
 			},
 		},
+	}
+}
+
+func TestAnalyticsInternalRootsFollowHostStorage(t *testing.T) {
+	root := t.TempDir()
+	merge := NewMergeFS()
+	merge.SetRoot(NewDirFS(root, config.FilesConfig{}))
+	merge.Mount("journal", NewDirFS(filepath.Join(root, "state", "history"), config.FilesConfig{}))
+	merge.Mount("docs", NewDirFS(t.TempDir(), config.FilesConfig{}))
+	excluded, err := analyticsInternalRoots(merge, filepath.Join(root, "state"), filepath.Join(root, "index"))
+	if err != nil || !reflect.DeepEqual(excluded, []string{"/index", "/journal", "/state"}) {
+		t.Fatalf("mapped storage roots=%v err=%v", excluded, err)
+	}
+	excluded, err = analyticsInternalRoots(merge, root+"-separate")
+	if err != nil || len(excluded) != 0 {
+		t.Fatalf("separate storage excluded real content: %v err=%v", excluded, err)
+	}
+}
+
+func TestServerExcludesInternalContentButReplaysHistory(t *testing.T) {
+	for _, overlay := range []bool{false, true} {
+		t.Run(fmt.Sprintf("overlay=%v", overlay), func(t *testing.T) {
+			ctx := context.Background()
+			root := t.TempDir()
+			dataDir := filepath.Join(root, "system-state")
+			if err := os.MkdirAll(dataDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			for name, body := range map[string]string{"guide.md": "public", "system-state/small.json": "internal"} {
+				if err := os.WriteFile(filepath.Join(root, name), []byte(body), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			opts := []config.Option{WithReadonly(false), config.WithDataDir(dataDir), func(cfg *config.Config) error {
+				cfg.Analytics.Dir = filepath.Join(root, "index-cache")
+				return nil
+			}}
+			var server *Server
+			var err error
+			wantFiles, wantBytes := int64(1), int64(6)
+			if overlay {
+				server, err = NewServerWithLowerFS(fstest.MapFS{"lower.md": {Data: []byte("lower")}}, append(opts, WithWritableDir(root))...)
+				wantFiles, wantBytes = 2, 11
+			} else {
+				server, err = NewServer(root, opts...)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = server.Shutdown(ctx) })
+			// No doc.write event: only historical replay can emit these scalars.
+			record := scalarRecord("past", "/old.md", false)
+			record.Time = time.Now().UTC()
+			if err := appendCommitRecord(server.historyPath, record); err != nil {
+				t.Fatal(err)
+			}
+			server.analytics.Start(ctx)
+			deadline := time.Now().Add(3 * time.Second)
+			for {
+				rows, totals, status, err := server.analytics.IndexedFactsForOwners(ctx, "/", []string{"public"}, 100)
+				var replayed []analytics.Event
+				scanErr := server.analytics.EventSource().Scan(ctx, analytics.EventFilter{Types: []string{"doc.scalars"}}, func(event analytics.Event) error {
+					replayed = append(replayed, event)
+					return nil
+				})
+				if err != nil || scanErr != nil {
+					t.Fatalf("facts=%v events=%v", err, scanErr)
+				}
+				if status.Complete && len(replayed) == 1 {
+					if totals.Files != wantFiles || totals.Bytes != wantBytes || status.Warning != "" {
+						t.Fatalf("internal storage counted as knowledge: rows=%+v totals=%+v status=%+v", rows, totals, status)
+					}
+					if replayed[0].Fields["path"] != "/old.md" || replayed[0].Fields["after"].(map[string]any)["bytes"] != float64(4) {
+						t.Fatalf("incorrect historical scalars: %+v", replayed)
+					}
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("scan or replay did not finish: status=%+v events=%+v", status, replayed)
+				}
+				time.Sleep(time.Millisecond)
+			}
+		})
 	}
 }
 

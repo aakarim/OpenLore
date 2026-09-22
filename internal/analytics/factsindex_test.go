@@ -2,6 +2,7 @@ package analytics
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -95,7 +96,7 @@ func TestFactsScanQueueResumesSameScopeGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := index.CompleteScanPath(ctx, generation, "/docs", []string{"/docs/a.md", "/docs/b.md"}); err != nil {
+	if err := index.CompleteScanPath(ctx, generation, "/docs", []string{"/docs/a.md", "/docs/b.md"}, false); err != nil {
 		t.Fatal(err)
 	}
 	resumed, err := index.StartScan(ctx, scopes)
@@ -105,5 +106,28 @@ func TestFactsScanQueueResumesSameScopeGeneration(t *testing.T) {
 	paths, err := index.NextScanPaths(ctx, resumed, 10)
 	if err != nil || len(paths) != 2 {
 		t.Fatalf("durable queue=%v err=%v", paths, err)
+	}
+	// Replayed completions must not inflate the durable progress counters.
+	for range 2 {
+		if err := index.CompleteScanPath(ctx, generation, "/docs/a.md", nil, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := index.FailScan(ctx, generation, errors.New("interrupted")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := index.StartScan(ctx, scopes); err != nil {
+		t.Fatal(err)
+	}
+	state, err := index.ScanState(ctx)
+	if err != nil || state.Processed != 2 || state.Skipped != 1 {
+		t.Fatalf("resumed progress=%+v err=%v", state, err)
+	}
+	if _, err := index.StartScan(ctx, []KnowledgeScope{{Name: "other", Root: "/other"}}); err != nil {
+		t.Fatal(err)
+	}
+	state, err = index.ScanState(ctx)
+	if err != nil || state.Processed != 0 || state.Skipped != 0 {
+		t.Fatalf("new scan did not reset progress=%+v err=%v", state, err)
 	}
 }
