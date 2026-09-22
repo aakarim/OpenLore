@@ -28,7 +28,12 @@ type Shape = Geometry & {
   node: ContextNode;
   tokens: number;
   color: string;
+  key: string;
+  label: string;
+  selectable: boolean;
 };
+
+const mobileShapeLimit = 24;
 
 const point = (radius: number, angle: number) =>
   `${200 + radius * Math.sin(angle)},${200 - radius * Math.cos(angle)}`;
@@ -60,11 +65,18 @@ function visibleDepth(node: ContextNode, ratio: 4 | 6): number {
     : 1;
 }
 
-function layout(node: ContextNode, ratio: 4 | 6): Shape[] {
+function layout(
+  node: ContextNode,
+  ratio: 4 | 6,
+  maximumLevels = Number.POSITIVE_INFINITY,
+  maximumShapes = Number.POSITIVE_INFINITY,
+): Shape[] {
   const shapes: Shape[] = [];
   const rootTokens = estimatedTokens(node, ratio);
   if (!node.directory || rootTokens === 0) return shapes;
-  const levels = Math.max(1, visibleDepth(node, ratio) - 1);
+  const levels = Number.isFinite(maximumLevels)
+    ? Math.max(1, maximumLevels)
+    : Math.max(1, visibleDepth(node, ratio) - 1);
   const ringWidth = 122 / levels;
 
   const walk = (
@@ -73,18 +85,25 @@ function layout(node: ContextNode, ratio: 4 | 6): Shape[] {
     end: number,
     level: number,
     color: string,
+    tokens = estimatedTokens(current, ratio),
+    key = current.path,
+    label = current.path,
+    selectable = true,
   ) => {
-    const tokens = estimatedTokens(current, ratio);
     if (tokens === 0 || end <= start) return;
     shapes.push({
       node: current,
       tokens,
       color,
+      key,
+      label,
+      selectable,
       start,
       end,
       inner: 70 + (level - 1) * ringWidth,
       outer: 70 + level * ringWidth - 2,
     });
+    if (level >= levels) return;
     let angle = start;
     for (const child of current.children ?? []) {
       const childTokens = estimatedTokens(child, ratio);
@@ -95,15 +114,53 @@ function layout(node: ContextNode, ratio: 4 | 6): Shape[] {
     }
   };
 
+  const children = (node.children ?? [])
+    .map((child) => ({ child, tokens: estimatedTokens(child, ratio) }))
+    .filter(({ tokens }) => tokens > 0);
+  const retained = Number.isFinite(maximumShapes) && children.length > maximumShapes
+    ? [...children]
+        .sort(
+          (a, b) =>
+            b.tokens - a.tokens || a.child.path.localeCompare(b.child.path),
+        )
+        .slice(0, maximumShapes - 1)
+    : children;
+  const retainedPaths = new Set(retained.map(({ child }) => child.path));
+  const omitted = children.filter(({ child }) => !retainedPaths.has(child.path));
   let angle = 0;
-  (node.children ?? []).forEach((child, index) => {
-    const tokens = estimatedTokens(child, ratio);
-    if (tokens === 0) return;
+  retained.forEach(({ child, tokens }, index) => {
     const next = angle + (Math.PI * 2 * tokens) / rootTokens;
     walk(child, angle, next, 1, colors[index % colors.length]);
     angle = next;
   });
+  if (omitted.length > 0) {
+    const tokens = omitted.reduce((total, child) => total + child.tokens, 0);
+    walk(
+      node,
+      angle,
+      Math.PI * 2,
+      1,
+      "#87909e",
+      tokens,
+      `${node.path}#other`,
+      `Other (${omitted.length} items)`,
+      false,
+    );
+  }
   return shapes;
+}
+
+function useCompactLayout() {
+  const query = "(max-width: 760px)";
+  const [compact, setCompact] = useState(() => matchMedia(query).matches);
+  useEffect(() => {
+    const media = matchMedia(query);
+    const update = () => setCompact(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+  return compact;
 }
 
 function interpolate(from: Geometry, to: Geometry, progress: number): Geometry {
@@ -222,7 +279,17 @@ export function Sunburst({
   onSelect: (node: ContextNode) => void;
 }) {
   const title = useId();
-  const target = useMemo(() => layout(node, ratio), [node, ratio]);
+  const compact = useCompactLayout();
+  const target = useMemo(
+    () =>
+      layout(
+        node,
+        ratio,
+        compact ? 1 : undefined,
+        compact ? mobileShapeLimit : undefined,
+      ),
+    [node, ratio, compact],
+  );
   const total = useMemo(() => estimatedTokens(node, ratio), [node, ratio]);
   const [shapes, setShapes] = useState(target);
   const [tooltip, setTooltip] = useState("");
@@ -231,7 +298,7 @@ export function Sunburst({
 
   useEffect(() => {
     const old = new Map(
-      previous.current.map((shape) => [shape.node.path, shape]),
+      previous.current.map((shape) => [shape.key, shape]),
     );
     const folderChanged = previousPath.current !== node.path;
     previousPath.current = node.path;
@@ -244,7 +311,7 @@ export function Sunburst({
     }
 
     const starts = target.map((shape) => {
-      const existing = old.get(shape.node.path);
+      const existing = old.get(shape.key);
       return {
         ...shape,
         ...(existing ? geometry(existing) : fallbackGeometry(shape, old)),
@@ -281,7 +348,7 @@ export function Sunburst({
 
   const inspect = (shape: Shape) =>
     setTooltip(
-      `${shape.node.path}: ${shape.tokens.toLocaleString()} tokens (${((shape.tokens / total) * 100).toFixed(1)}%)`,
+      `${shape.label}: ${shape.tokens.toLocaleString()} tokens (${((shape.tokens / total) * 100).toFixed(1)}%)`,
     );
 
   return (
@@ -292,29 +359,36 @@ export function Sunburst({
         role="group"
         aria-labelledby={title}
       >
-        <title id={title}>Full-depth context token distribution</title>
+        <title id={title}>
+          {compact
+            ? "Top-level context token distribution"
+            : "Full-depth context token distribution"}
+        </title>
         {shapes.map((shape) => (
           <path
-            key={shape.node.path}
+            key={shape.key}
             className="sunburst-segment"
             style={{ animation: "none" } as CSSProperties}
             d={arc(shape)}
             fill={shape.color}
             opacity={Math.max(0.52, 1 - ((shape.inner - 70) / 122 + 1) * 0.07)}
-            role="button"
-            tabIndex={0}
-            data-path={shape.node.path}
+            role={shape.selectable ? "button" : "img"}
+            tabIndex={shape.selectable ? 0 : undefined}
+            data-path={shape.key}
             data-start={shape.start}
             data-end={shape.end}
             data-inner={shape.inner}
             data-outer={shape.outer}
-            aria-label={`${shape.node.path}: ${shape.tokens.toLocaleString()} tokens`}
+            aria-label={`${shape.label}: ${shape.tokens.toLocaleString()} tokens`}
             onMouseEnter={() => inspect(shape)}
             onFocus={() => inspect(shape)}
             onPointerDown={() => inspect(shape)}
-            onClick={() => onSelect(shape.node)}
+            onClick={shape.selectable ? () => onSelect(shape.node) : undefined}
             onKeyDown={(event) => {
-              if (event.key === "Enter" || event.key === " ") {
+              if (
+                shape.selectable &&
+                (event.key === "Enter" || event.key === " ")
+              ) {
                 event.preventDefault();
                 inspect(shape);
                 onSelect(shape.node);
