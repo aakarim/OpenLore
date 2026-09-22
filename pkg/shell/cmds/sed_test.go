@@ -86,6 +86,46 @@ func TestSedBasicRegexpAnchorsAndReplacementReferences(t *testing.T) {
 	}
 }
 
+func TestSedSubstitutionReplacementEscapes(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+		want    string
+	}{
+		{"newline escape", `echo a | sed 's/a/x\ny/'`, "x\ny\n"},
+		{"tab escape", `echo a | sed 's/a/x\ty/'`, "x\ty\n"},
+		{"backslash escape", `echo a | sed 's/a/x\\y/'`, "x\\y\n"},
+		{"escaped slash with alternate delimiter", `echo a/b | sed 's#a/b#c\/d#'`, "c/d\n"},
+		{"escaped delimiter", `echo a | sed 's#a#x\#y#'`, "x#y\n"},
+		{"backslash newline continuation", "echo a | sed 's/a/x\\\ny/'", "x\ny\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, errOut, code := execCmd(t, testFS(), tt.command)
+			if code != 0 || out != tt.want {
+				t.Fatalf("code=%d stdout=%q stderr=%s, want %q", code, out, errOut, tt.want)
+			}
+		})
+	}
+}
+
+func TestSedSubstitutionReplacementNewlineInPlace(t *testing.T) {
+	fs := testFS()
+	fs.AddFile("/docs/escape.md", "a\n")
+
+	_, errOut, code := execCmd(t, fs, `sed -i 's/a/x\ny/' /docs/escape.md`)
+	if code != 0 {
+		t.Fatalf("sed replacement failed: code=%d stderr=%s", code, errOut)
+	}
+	content, err := fs.ReadFile("/docs/escape.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "x\ny\n"; string(content) != want {
+		t.Fatalf("content = %q, want %q", content, want)
+	}
+}
+
 func TestSedSubstitutionPreservesSemicolonsInReplacement(t *testing.T) {
 	fs := testFS()
 	command := "sed -i '3s/.*/- **Status:** artifacts drafted; Glama submitted; remaining publishes blocked/' /docs/readme.md"
@@ -185,6 +225,9 @@ func TestHelpDocumentsSedAppendForms(t *testing.T) {
 		if !strings.Contains(out, form) {
 			t.Errorf("help does not document %q", form)
 		}
+	}
+	if !strings.Contains(out, `Replacement escapes: \n newline, \t tab, \\ backslash`) {
+		t.Error("help does not document sed replacement escapes")
 	}
 }
 
