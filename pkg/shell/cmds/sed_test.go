@@ -229,6 +229,9 @@ func TestHelpDocumentsSedAppendForms(t *testing.T) {
 	if !strings.Contains(out, `Replacement escapes: \n newline, \t tab, \\ backslash`) {
 		t.Error("help does not document sed replacement escapes")
 	}
+	if !strings.Contains(out, "Escape delimiters with a backslash; backslash-newline inserts a newline") {
+		t.Error("help does not document sed replacement delimiter and continuation escapes")
+	}
 }
 
 func TestSedAppendMultilineInPlace(t *testing.T) {
