@@ -71,7 +71,7 @@ export function loginURL(value = "/passkey/login") {
 }
 
 export function App() {
-  const session = useAsync((signal) => api.session(signal), []);
+  const session = useAsync((signal) => api.session(signal), [], true, true);
   useEffect(() => {
     const refresh = () => session.refresh();
     const visible = () => {
@@ -107,7 +107,7 @@ export function App() {
         )}
       </main>
     );
-  if (session.loading || !session.data)
+  if (!session.data)
     return (
       <main className="startup" role="status">
         Loading your workspace…
@@ -186,7 +186,7 @@ function Workspace({ session }: { session: Session }) {
       setReady(true);
     })();
     return () => controller.abort();
-  }, [session]);
+  }, [session.identity, session.lore_path]);
   useEffect(() => {
     if (ready && prefsKey) writePreferences(prefsKey, prefs);
   }, [ready, prefsKey, prefs]);
@@ -210,7 +210,7 @@ function Workspace({ session }: { session: Session }) {
         expandedPaths: [...new Set([...p.expandedPaths, ...ancestors(path)])],
       }));
     },
-    [route.tab, session],
+    [route.tab, session.lore_path],
   );
   const openFile = useCallback(
     (path: string) => {
@@ -268,7 +268,7 @@ function Workspace({ session }: { session: Session }) {
       controller?.abort();
       removeEventListener("popstate", pop);
     };
-  }, [session]);
+  }, [session.lore_path]);
   const copy = async (value: string) => {
     try {
       await navigator.clipboard.writeText(value);

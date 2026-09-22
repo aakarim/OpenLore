@@ -430,6 +430,52 @@ test("expired session clears the previously rendered document", async () => {
   ).not.toBeInTheDocument();
 });
 
+test("returning to the browser tab preserves workspace state during session refresh", async () => {
+  history.replaceState(null, "", "/lore/guide/start.md");
+  const fetch = mockAPI();
+  const original = fetch.getMockImplementation()!;
+  render(<App />);
+  const user = userEvent.setup();
+  await screen.findByRole("heading", { name: "Start" });
+  await user.click(screen.getByRole("button", { name: "Source" }));
+  expect(screen.getByRole("button", { name: "Source" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+
+  let finishRefresh!: (response: Response) => void;
+  fetch.mockImplementation((input, init) =>
+    String(input).endsWith("/dashboard/api/session")
+      ? new Promise<Response>((resolve) => {
+          finishRefresh = resolve;
+        })
+      : original(input, init),
+  );
+  fireEvent.focus(window);
+
+  expect(screen.getByRole("button", { name: "Source" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  expect(screen.queryByText("Loading your workspace…")).not.toBeInTheDocument();
+
+  await act(async () => {
+    finishRefresh(
+      new Response(
+        JSON.stringify({
+          identity: "private@example.test",
+          lore_path: "/lore",
+          access: false,
+        }),
+      ),
+    );
+  });
+  expect(screen.getByRole("button", { name: "Source" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+});
+
 test("an aggregation-only refresh recovers an expired session", async () => {
   history.replaceState(null, "", "/dashboard/?view=analytics&path=/&tab=gaps");
   const fetch = mockAPI();
