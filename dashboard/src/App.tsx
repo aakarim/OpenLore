@@ -186,7 +186,7 @@ function Workspace({ session }: { session: Session }) {
       setReady(true);
     })();
     return () => controller.abort();
-  }, [session.identity, session.lore_path]);
+  }, [session]);
   useEffect(() => {
     if (ready && prefsKey) writePreferences(prefsKey, prefs);
   }, [ready, prefsKey, prefs]);
