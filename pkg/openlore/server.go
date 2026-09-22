@@ -317,6 +317,10 @@ func newServerWithRoot(rootDir string, rootFS, lowerFS vfs.FileSystem, opts ...c
 		if !filepath.IsAbs(analyticsCfg.Dir) {
 			analyticsCfg.Dir = filepath.Join(dataDir, analyticsCfg.Dir)
 		}
+		excluded, err := analyticsInternalRoots(s.merge, dataDir, analyticsCfg.Dir)
+		if err != nil {
+			return nil, fmt.Errorf("resolving analytics content exclusions: %w", err)
+		}
 		service, analyticsErr := analytics.New(analyticsCfg, analytics.Deps{FS: s.merge})
 		if analyticsErr != nil {
 			return nil, fmt.Errorf("configuring analytics: %w", analyticsErr)
@@ -324,7 +328,7 @@ func newServerWithRoot(rootDir string, rootFS, lowerFS vfs.FileSystem, opts ...c
 		var knowledgeScopes []analytics.KnowledgeScope
 		for name, docset := range s.currentAuth().Docsets {
 			for _, mapping := range docset.Paths {
-				knowledgeScopes = append(knowledgeScopes, analytics.KnowledgeScope{Name: name, Root: displayPath(mapping)})
+				knowledgeScopes = append(knowledgeScopes, analytics.KnowledgeScope{Name: name, Root: displayPath(mapping), Exclude: excluded})
 			}
 		}
 		service.SetKnowledgeScopes(knowledgeScopes)

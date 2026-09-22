@@ -19,13 +19,19 @@ export function useAsync<T>(
     setState((previous) => ({
       loading: true,
       data: retainWhileLoading ? previous.data : undefined,
+      error: retainWhileLoading ? previous.error : undefined,
     }));
     load(controller.signal).then(
       (data) => {
         if (!controller.signal.aborted) setState({ data, loading: false });
       },
       (error) => {
-        if (!controller.signal.aborted) setState({ error, loading: false });
+        if (!controller.signal.aborted)
+          setState((previous) => ({
+            error,
+            loading: false,
+            data: retainWhileLoading ? previous.data : undefined,
+          }));
       },
     );
     return () => controller.abort();

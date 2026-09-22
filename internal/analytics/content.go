@@ -124,6 +124,7 @@ type contentFacts struct {
 	index     FactsIndex
 	providers []ContentScalarProvider
 	indexLog  *sync.Once
+	exclude   func(string) bool
 }
 
 func NewContentFacts(fs vfs.FileSystem, providers ...ContentScalarProvider) ContentFacts {
@@ -133,8 +134,8 @@ func NewContentFacts(fs vfs.FileSystem, providers ...ContentScalarProvider) Cont
 	return &contentFacts{fs: fs, raw: fs, providers: providers, indexLog: &sync.Once{}}
 }
 
-func newIndexedContentFacts(scoped, raw vfs.FileSystem, index FactsIndex, indexLog *sync.Once, providers []ContentScalarProvider) ContentFacts {
-	return &contentFacts{fs: scoped, raw: raw, index: index, providers: providers, indexLog: indexLog}
+func newIndexedContentFacts(scoped, raw vfs.FileSystem, index FactsIndex, indexLog *sync.Once, providers []ContentScalarProvider, exclude func(string) bool) ContentFacts {
+	return &contentFacts{fs: scoped, raw: raw, index: index, providers: providers, indexLog: indexLog, exclude: exclude}
 }
 
 func (f *contentFacts) file(ctx context.Context, p string, info *vfs.FileInfo) (DocScalars, error) {
@@ -164,6 +165,9 @@ func (f *contentFacts) file(ctx context.Context, p string, info *vfs.FileInfo) (
 	return docScalarsFromIndexed(fact, f.providers)
 }
 func (f *contentFacts) Stat(ctx context.Context, p string) (DocScalars, error) {
+	if f.exclude != nil && f.exclude(p) {
+		return DocScalars{}, fs.ErrNotExist
+	}
 	info, err := f.fs.Stat(vfs.CleanPath(p))
 	if err != nil {
 		return DocScalars{}, err
@@ -188,6 +192,9 @@ func (f *contentFacts) Walk(ctx context.Context, prefix string, opts WalkOptions
 	walk = func(p string, depth int) error {
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		if f.exclude != nil && f.exclude(p) {
+			return nil
 		}
 		info, err := f.fs.Stat(p)
 		if err != nil {

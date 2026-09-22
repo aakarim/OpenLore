@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -289,6 +290,9 @@ func TestFactsWarmingIsPartialBoundedAndYieldsToPriorityWork(t *testing.T) {
 	if err != nil || status.Complete || status.State != "updating" || len(rows) == 0 {
 		t.Fatalf("mid-build rows=%d status=%+v err=%v", len(rows), status, err)
 	}
+	if status.Progress == nil || status.Progress.Phase != "content" || status.Progress.Processed != 2 || status.Progress.Unit != "paths" {
+		t.Fatalf("mid-build progress=%+v", status.Progress)
+	}
 	priorityRan := make(chan struct{})
 	service.processor.enqueue("requested-view", true, func(context.Context) { close(priorityRan) })
 	close(fsys.release)
@@ -313,33 +317,46 @@ func TestFactsWarmingIsPartialBoundedAndYieldsToPriorityWork(t *testing.T) {
 	}
 }
 
-func TestFactsScanReportsUnreadableAndOversizedFiles(t *testing.T) {
+func TestFactsScanReportsUnreadableAndSkipsOversizedFiles(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		configure func(*controlledFactsFS)
 		want      string
 	}{
 		{name: "unreadable", configure: func(f *controlledFactsFS) { f.failPath = "/docs/bad.md" }, want: "permission denied"},
-		{name: "oversized", configure: func(f *controlledFactsFS) { f.large = "/docs/bad.md" }, want: "exceeds"},
+		{name: "oversized", configure: func(f *controlledFactsFS) { f.large = "/docs/bad.md" }, want: "Files over 64 MiB omitted from workspace knowledge totals: 1."},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			fsys := &controlledFactsFS{testFS: testFS{"/docs/bad.md": []byte("data")}}
+			fsys := &controlledFactsFS{testFS: testFS{"/docs/bad.md": []byte("data"), "/docs/later.md": []byte("valid")}}
 			tc.configure(fsys)
 			service := newIndexedTestService(t, fsys)
 			service.SetKnowledgeScopes([]KnowledgeScope{{Name: "docs", Root: "/docs"}})
+			if err := service.index.Upsert(context.Background(), IndexedFacts{Path: "/docs/bad.md", Owner: "docs", Size: 4, Sources: map[string]map[string]float64{"size": {"bytes": 4}}}); err != nil {
+				t.Fatal(err)
+			}
 			service.Start(context.Background())
 			deadline := time.Now().Add(2 * time.Second)
 			for {
-				_, status, err := service.IndexedFacts(context.Background(), "/docs", 10)
+				rows, status, err := service.IndexedFacts(context.Background(), "/docs", 10)
 				if err != nil {
 					t.Fatal(err)
 				}
-				if status.State == "failed" {
+				if tc.name == "oversized" && status.State == "ready" {
+					if !status.Complete || status.Error != "" || !strings.Contains(status.Warning, tc.want) || len(rows) != 1 || rows[0].Path != "/docs/later.md" {
+						t.Fatalf("oversized file blocked scan or retained old facts: rows=%+v status=%+v", rows, status)
+					}
+					if fsys.readCount() != 1 {
+						t.Fatal("oversized file was read into memory")
+					}
+					_, totals, _, err := service.IndexedFactsForOwners(context.Background(), "/docs", []string{"docs"}, 10)
+					if err != nil || totals.Files != 1 || totals.Bytes != 5 {
+						t.Fatalf("stale oversized totals retained: %+v err=%v", totals, err)
+					}
+					break
+				}
+				if tc.name == "unreadable" && status.State == "failed" {
 					if status.Complete || !strings.Contains(status.Error, tc.want) {
 						t.Fatalf("failed status=%+v", status)
-					}
-					if tc.name == "oversized" && fsys.readCount() != 0 {
-						t.Fatal("oversized file was read into memory")
 					}
 					break
 				}
@@ -349,6 +366,79 @@ func TestFactsScanReportsUnreadableAndOversizedFiles(t *testing.T) {
 				time.Sleep(time.Millisecond)
 			}
 		})
+	}
+}
+
+func TestInternalContentExclusionsInvalidateOldFactsAndPendingWork(t *testing.T) {
+	ctx := context.Background()
+	fsys := &controlledFactsFS{testFS: testFS{
+		"/data/history/commits.jsonl": []byte("internal journal"),
+		"/data/small.json":            []byte("internal metadata"),
+		"/data-guide/note.md":         []byte("keep"),
+		"/history/guide.md":           []byte("history docs"),
+	}}
+	service := newIndexedTestService(t, fsys)
+	service.SetKnowledgeScopes([]KnowledgeScope{{Name: "workspace", Root: "/"}})
+	info, _ := fsys.Stat("/data/history/commits.jsonl")
+	if _, err := service.CurrentFacts(ctx, info.FilePath, info, func() ([]byte, error) { return fsys.ReadFile(info.FilePath) }); err != nil {
+		t.Fatal(err)
+	}
+	old, _ := service.index.ScanState(ctx)
+	if err := service.index.QueueScanPath(ctx, old.Generation, "/data/history/commits.jsonl"); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.index.FailScan(ctx, old.Generation, errors.New("oversized journal")); err != nil {
+		t.Fatal(err)
+	}
+	// This is a content-policy change, even though docset ownership is unchanged.
+	service.SetKnowledgeScopes([]KnowledgeScope{{Name: "workspace", Root: "/", Exclude: []string{"/data"}}})
+	state, _ := service.index.ScanState(ctx)
+	if state.Generation <= old.Generation || state.OwnershipCompatible {
+		t.Fatalf("exclusions reused incompatible cached work: %+v", state)
+	}
+	rows, totals, status, err := service.IndexedFactsForOwners(ctx, "/", []string{"workspace"}, 10)
+	if err != nil || len(rows) != 0 || totals.Files != 0 || status.Complete {
+		t.Fatalf("internal cached totals remained visible: rows=%v totals=%+v status=%+v err=%v", rows, totals, status, err)
+	}
+	fsys.large, fsys.failPath = "/data/history/commits.jsonl", "/data/small.json"
+	reads := fsys.readCount()
+	for i := 0; i < 10; i++ {
+		service.indexer.run(ctx)
+		rows, totals, status, err = service.IndexedFactsForOwners(ctx, "/", []string{"workspace"}, 10)
+		if err == nil && status.Complete {
+			break
+		}
+	}
+	if err != nil || !status.Complete || status.Warning != "" || len(rows) != 2 || totals.Files != 2 || totals.Bytes != 16 || fsys.readCount()-reads != 2 {
+		t.Fatalf("internal files were scanned or real content omitted: rows=%v totals=%+v status=%+v reads=%d err=%v", rows, totals, status, fsys.readCount()-reads, err)
+	}
+	if stale, err := service.index.PrefixScan(ctx, "/data"); err != nil || len(stale) != 0 {
+		t.Fatalf("internal facts were not pruned: %v err=%v", stale, err)
+	}
+	service.EnqueueFacts("/data/history/commits.jsonl")
+	service.PromoteFacts("/data")
+	if after, err := service.index.ScanState(ctx); err != nil || after.Generation != state.Generation || after.State != "ready" {
+		t.Fatalf("internal content scheduled another scan: %+v err=%v", after, err)
+	}
+	if _, err := service.CurrentFacts(ctx, info.FilePath, info, func() ([]byte, error) {
+		t.Fatal("excluded preview invoked its content reader")
+		return nil, nil
+	}); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("excluded preview: %v", err)
+	}
+	for _, facts := range []ContentFacts{service.Facts(), service.NewContentFacts(fsys)} {
+		if _, err := facts.Stat(ctx, "/data/small.json"); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("excluded stat: %v", err)
+		}
+		var paths []string
+		err := facts.Walk(ctx, "/", WalkOptions{StatOnly: true}, func(doc DocScalars) error {
+			paths = append(paths, doc.Path)
+			return nil
+		})
+		sort.Strings(paths)
+		if err != nil || len(paths) != 2 || paths[0] != "/data-guide/note.md" || paths[1] != "/history/guide.md" {
+			t.Fatalf("content walk=%v err=%v", paths, err)
+		}
 	}
 }
 

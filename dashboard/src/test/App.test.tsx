@@ -1,4 +1,5 @@
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -6,6 +7,7 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { vi } from "vitest";
 import { App, loginURL } from "../App";
 import { mockAPI } from "./fixtures";
 
@@ -136,6 +138,122 @@ test.each(["cold", "failed", "disabled"])(
   },
 );
 
+test("background progress and completed results stay mounted through slow polls and errors", async () => {
+  history.replaceState(
+    null,
+    "",
+    "/dashboard/?view=analytics&path=/&tab=overview",
+  );
+  const fetch = mockAPI();
+  const original = fetch.getMockImplementation()!;
+  let calls = 0;
+  let finishPoll!: (response: Response) => void;
+  fetch.mockImplementation(async (input, init) => {
+    const response = await original(input, init);
+    if (!String(input).includes("/api/usage?")) return response;
+    calls++;
+    if (calls === 2)
+      return new Promise<Response>((resolve) => {
+        finishPoll = resolve;
+      });
+    return new Response(
+      JSON.stringify({
+        ...(await response.json()),
+        analytics:
+          calls === 1
+            ? {
+                state: "stale",
+                complete: true,
+                updating: true,
+                progress: { phase: "history", processed: 731, unit: "events" },
+              }
+            : { state: "ready", complete: true, updating: false },
+      }),
+    );
+  });
+  render(<App />);
+  const progress = await screen.findByRole("progressbar", {
+    name: "Activity analytics progress",
+  });
+  await screen.findByText(/731 events processed/);
+  const chart = screen.getByRole("img", {
+    name: "Daily activity stacked by attribution",
+  });
+  expect(progress).not.toHaveAttribute("aria-valuenow");
+  await waitFor(() => expect(calls).toBe(2), { timeout: 2000 });
+
+  vi.useFakeTimers();
+  try {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    expect(calls).toBe(2); // Do not abort a slow poll with another poll.
+    expect(
+      screen.getByRole("progressbar", { name: "Activity analytics progress" }),
+    ).toBe(progress);
+    expect(
+      screen.getByRole("img", {
+        name: "Daily activity stacked by attribution",
+      }),
+    ).toBe(chart);
+    expect(
+      screen.queryByText(/Updating selected scope/),
+    ).not.toBeInTheDocument();
+    await act(async () => {
+      finishPoll(new Response("Unavailable", { status: 503 }));
+    });
+    expect(screen.getByText(/Could not refresh analytics/)).toBeVisible();
+    expect(chart).toBeVisible();
+    expect(progress).not.toHaveAttribute("aria-valuenow");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(progress).toHaveAttribute("aria-valuenow", "100");
+    expect(chart).toBeVisible();
+    expect(
+      screen.queryByText(/Could not refresh analytics/),
+    ).not.toBeInTheDocument();
+    const completedCalls = calls;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+    expect(calls).toBe(completedCalls);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("completed scans retain oversized-file warnings", async () => {
+  history.replaceState(
+    null,
+    "",
+    "/dashboard/?view=analytics&path=/&tab=overview",
+  );
+  const fetch = mockAPI();
+  const original = fetch.getMockImplementation()!;
+  fetch.mockImplementation(async (input, init) => {
+    const response = await original(input, init);
+    if (!String(input).includes("/api/context?")) return response;
+    return new Response(
+      JSON.stringify({
+        ...(await response.json()),
+        analytics: {
+          state: "ready",
+          complete: true,
+          updating: false,
+          warning:
+            "Files over 64 MiB omitted from workspace knowledge totals: 1.",
+        },
+      }),
+    );
+  });
+  render(<App />);
+  expect(await screen.findByText(/Files over 64 MiB omitted/)).toBeVisible();
+  expect(
+    screen.getByRole("progressbar", { name: "Knowledge analytics progress" }),
+  ).toHaveAttribute("aria-valuenow", "100");
+});
+
 test("legacy completed usage with null activity renders without crashing", async () => {
   history.replaceState(
     null,
@@ -205,6 +323,10 @@ test("shows honest oversized-context error and hides Access without permission",
   mockAPI({ contextError: true });
   render(<App />);
   expect(await screen.findByRole("alert")).toHaveTextContent("too large");
+  expect(
+    screen.getByRole("progressbar", { name: "Knowledge analytics progress" }),
+  ).toHaveAttribute("aria-valuenow", "0");
+  expect(screen.getByText("Processing stopped")).toBeVisible();
   expect(screen.queryByRole("tab", { name: "Access" })).not.toBeInTheDocument();
 });
 

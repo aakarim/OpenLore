@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -74,15 +75,29 @@ type Service struct {
 type KnowledgeScope struct {
 	Name string
 	Root string
+	// Exclude contains internal-storage subtrees, not knowledge documents.
+	// It participates in the durable scan fingerprint so older facts and
+	// pending work cannot survive a change to the content boundary.
+	Exclude []string `json:",omitempty"`
 }
 
 type SnapshotStatus struct {
-	State      string    `json:"state"`
-	ComputedAt time.Time `json:"computed_at,omitempty"`
-	Updating   bool      `json:"updating"`
-	Complete   bool      `json:"complete"`
-	Coverage   string    `json:"coverage,omitempty"`
-	Error      string    `json:"error,omitempty"`
+	State      string            `json:"state"`
+	ComputedAt time.Time         `json:"computed_at,omitempty"`
+	Updating   bool              `json:"updating"`
+	Complete   bool              `json:"complete"`
+	Coverage   string            `json:"coverage,omitempty"`
+	Error      string            `json:"error,omitempty"`
+	Warning    string            `json:"warning,omitempty"`
+	Progress   *SnapshotProgress `json:"progress,omitempty"`
+}
+
+// Totals are not known during discovery/replay. Report real work done rather
+// than a percentage that can move backwards as more work is discovered.
+type SnapshotProgress struct {
+	Phase     string `json:"phase"`
+	Processed int64  `json:"processed"`
+	Unit      string `json:"unit"`
 }
 
 type UsageSnapshot struct {
@@ -140,7 +155,7 @@ func New(cfg config.AnalyticsConfig, deps Deps) (*Service, error) {
 	if sqliteStore, ok := store.(*SQLiteAggregationStore); ok {
 		s.eventIndex = &sqliteEventIndex{db: sqliteStore.db, done: make(chan struct{})}
 	}
-	s.facts = newIndexedContentFacts(deps.FS, deps.FS, index, &s.indexLog, providers)
+	s.facts = newIndexedContentFacts(deps.FS, deps.FS, index, &s.indexLog, providers, s.excludedContent)
 	if index != nil && deps.FS != nil {
 		s.indexer = newFactsIndexer(s)
 	}
@@ -227,7 +242,7 @@ func (s *Service) AddContentScalarProvider(provider ContentScalarProvider) {
 	}
 	s.providersMu.Lock()
 	s.providers = append(s.providers, provider)
-	s.facts = newIndexedContentFacts(s.fs, s.fs, s.index, &s.indexLog, s.providers)
+	s.facts = newIndexedContentFacts(s.fs, s.fs, s.index, &s.indexLog, s.providers, s.excludedContent)
 	s.registry.Bind(s.log, s.facts)
 	s.providersMu.Unlock()
 	s.EnqueueFacts("/")
@@ -244,20 +259,20 @@ func (s *Service) SetTokenizer(tokenizer Tokenizer) {
 		}
 	}
 	s.providers = append(providers, tokenProvider{tokenizer})
-	s.facts = newIndexedContentFacts(s.fs, s.fs, s.index, &s.indexLog, s.providers)
+	s.facts = newIndexedContentFacts(s.fs, s.fs, s.index, &s.indexLog, s.providers, s.excludedContent)
 	s.registry.Bind(s.log, s.facts)
 	s.providersMu.Unlock()
 	s.EnqueueFacts("/")
 }
 
 func (s *Service) EnqueueFacts(p string) {
-	if s.indexer != nil && s.cfg.PipelineEnabled() {
+	if s.indexer != nil && s.cfg.PipelineEnabled() && !s.excludedContent(p) {
 		s.indexer.enqueue(p)
 	}
 }
 
 func (s *Service) PromoteFacts(p string) {
-	if s.indexer == nil || !s.cfg.PipelineEnabled() {
+	if s.indexer == nil || !s.cfg.PipelineEnabled() || s.excludedContent(p) {
 		return
 	}
 	s.indexer.enqueue(p)
@@ -279,6 +294,11 @@ func (s *Service) SetKnowledgeScopes(scopes []KnowledgeScope) {
 	for _, scope := range scopes {
 		if scope.Name != "" {
 			scope.Root = vfs.CleanPath(scope.Root)
+			scope.Exclude = append([]string(nil), scope.Exclude...)
+			for i := range scope.Exclude {
+				scope.Exclude[i] = vfs.CleanPath(scope.Exclude[i])
+			}
+			sort.Strings(scope.Exclude)
 			clean = append(clean, scope)
 		}
 	}
@@ -296,6 +316,20 @@ func (s *Service) SetKnowledgeScopes(scopes []KnowledgeScope) {
 			s.indexLog.Do(func() { log.Printf("analytics facts scan could not start: %v", err) })
 		}
 	}
+}
+
+func (s *Service) excludedContent(p string) bool {
+	p = vfs.CleanPath(p)
+	s.scopesMu.RLock()
+	defer s.scopesMu.RUnlock()
+	for _, scope := range s.scopes {
+		for _, root := range scope.Exclude {
+			if pathWithinPrefix(p, root) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (s *Service) ownerForPath(p string) string {
@@ -333,6 +367,10 @@ func (s *Service) IndexedFacts(ctx context.Context, prefix string, limit int) ([
 	} else if state.State == "updating" {
 		status.Complete = false
 		status.Coverage = "content scan in progress; indexed rows are partial"
+		status.Progress = &SnapshotProgress{Phase: "content", Processed: state.Processed, Unit: "paths"}
+	}
+	if state.Skipped > 0 {
+		status.Warning = fmt.Sprintf("Files over 64 MiB omitted from workspace knowledge totals: %d.", state.Skipped)
 	}
 	if state.Generation > 0 && !state.OwnershipCompatible {
 		status.Complete = false
@@ -347,6 +385,7 @@ func (s *Service) IndexedFacts(ctx context.Context, prefix string, limit int) ([
 	}
 	if !s.cfg.PipelineEnabled() {
 		status.State, status.Updating = "disabled", false
+		status.Progress = nil
 	}
 	return rows, status, nil
 }
@@ -555,6 +594,10 @@ func (s *Service) DashboardUsage(ctx context.Context, key string, compute func(c
 			result.Analytics.State = "stale"
 		}
 		result.Analytics.Coverage = "durable event index is catching up"
+		result.Analytics.Progress = &SnapshotProgress{Phase: "history", Processed: s.eventIndex.processed.Load(), Unit: "events"}
+		if message := s.eventIndex.lastError.Load(); message != nil {
+			result.Analytics.Error = *message
+		}
 		return result, nil
 	}
 	stale := !found || time.Since(result.Analytics.ComputedAt) > time.Minute
@@ -628,6 +671,10 @@ func (s *Service) DashboardMaterialized(ctx context.Context, key string, compute
 	}
 	if s.eventIndex != nil && !s.eventIndex.caughtUp.Load() {
 		state.State, state.Updating, state.Coverage = "updating", true, "durable event index is catching up"
+		state.Progress = &SnapshotProgress{Phase: "history", Processed: s.eventIndex.processed.Load(), Unit: "events"}
+		if message := s.eventIndex.lastError.Load(); message != nil {
+			state.Error = *message
+		}
 		return result, nil
 	}
 	if !found || time.Since(state.ComputedAt) > time.Minute {
@@ -674,7 +721,7 @@ func (s *Service) NewContentFacts(fs vfs.FileSystem) ContentFacts {
 	s.providersMu.RLock()
 	providers := append([]ContentScalarProvider(nil), s.providers...)
 	s.providersMu.RUnlock()
-	return newIndexedContentFacts(fs, s.fs, s.index, &s.indexLog, providers)
+	return newIndexedContentFacts(fs, s.fs, s.index, &s.indexLog, providers, s.excludedContent)
 }
 
 func (s *Service) HasFactsIndex() bool { return s.index != nil }
@@ -684,6 +731,9 @@ func (s *Service) CurrentFacts(ctx context.Context, p string, info *vfs.FileInfo
 }
 
 func (s *Service) currentFacts(ctx context.Context, p string, info *vfs.FileInfo, read func() ([]byte, error), generation int64) (DocScalars, error) {
+	if s.excludedContent(p) {
+		return DocScalars{}, fs.ErrNotExist
+	}
 	s.providersMu.RLock()
 	providers := append([]ContentScalarProvider(nil), s.providers...)
 	s.providersMu.RUnlock()

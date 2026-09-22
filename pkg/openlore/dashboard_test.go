@@ -561,6 +561,45 @@ func TestDashboardRootLimitCountsOnlyAuthorizedOwners(t *testing.T) {
 	}
 }
 
+func TestDashboardPollingPreservesFailedScan(t *testing.T) {
+	s, mux, token := newDashboardTestServer(t)
+	// Stat succeeds, but reading this file fails during the background scan.
+	fsys := &countingDashboardFS{FileSystem: disappearingDashboardFS{FileSystem: s.merge, vanished: "/public/other.md"}}
+	service, err := analytics.New(config.AnalyticsConfig{Dir: t.TempDir(), Log: config.AnalyticsLogConfig{Compress: "none"}}, analytics.Deps{FS: fsys})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close(context.Background())
+	service.SetKnowledgeScopes([]analytics.KnowledgeScope{{Name: "public", Root: "/public"}})
+	service.Start(context.Background())
+	s.analytics = service
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		_, status, err := service.IndexedFacts(context.Background(), "/public", 1)
+		if err == nil && status.State == "failed" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("scan did not fail: %+v err=%v", status, err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	reads := fsys.count()
+	for range 4 {
+		w := dashboardRequest(mux, "GET", "/dashboard/api/context?path=/public", token)
+		var node dashboardNode
+		if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &node) != nil || node.Analytics == nil {
+			t.Fatalf("context response: %d %s", w.Code, w.Body.String())
+		}
+		if node.Analytics.State != "failed" || node.Analytics.Updating || node.Analytics.Error == "" {
+			t.Fatalf("poll erased failure or restarted scan: %+v", node.Analytics)
+		}
+	}
+	if fsys.count() != reads {
+		t.Fatal("polling retried the failed file")
+	}
+}
+
 func TestDashboardHidesStaleOwnersImmediatelyAfterDocsetTopologyChange(t *testing.T) {
 	s, mux, token := newDashboardTestServer(t)
 	dir := t.TempDir()

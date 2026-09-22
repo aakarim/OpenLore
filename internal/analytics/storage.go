@@ -537,7 +537,8 @@ CREATE TABLE IF NOT EXISTS facts_scan_state (
 id INTEGER PRIMARY KEY CHECK(id=1), generation INTEGER NOT NULL,
 state TEXT NOT NULL, started_at INTEGER NOT NULL, completed_at INTEGER NOT NULL DEFAULT 0,
 error TEXT NOT NULL DEFAULT '', scope_hash TEXT NOT NULL,
-completed_scope_hash TEXT NOT NULL DEFAULT ''
+completed_scope_hash TEXT NOT NULL DEFAULT '',
+processed INTEGER NOT NULL DEFAULT 0, skipped INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS facts_scan_queue (
 generation INTEGER NOT NULL, path TEXT NOT NULL, PRIMARY KEY(generation,path)
@@ -562,6 +563,12 @@ CREATE INDEX IF NOT EXISTS analytics_events_time ON analytics_events(time_ns);`)
 	}
 	// SQLite has no IF NOT EXISTS form for ADD COLUMN. Existing stores are
 	// upgraded in place; duplicate-column is the expected no-op on new stores.
+	for _, column := range []string{"processed", "skipped"} {
+		if _, alterErr := db.Exec(`ALTER TABLE facts_scan_state ADD COLUMN ` + column + ` INTEGER NOT NULL DEFAULT 0`); alterErr != nil && !strings.Contains(alterErr.Error(), "duplicate column") {
+			db.Close()
+			return nil, alterErr
+		}
+	}
 	if _, alterErr := db.Exec(`ALTER TABLE files ADD COLUMN owner TEXT NOT NULL DEFAULT ''`); alterErr != nil && !strings.Contains(alterErr.Error(), "duplicate column") {
 		db.Close()
 		return nil, alterErr
