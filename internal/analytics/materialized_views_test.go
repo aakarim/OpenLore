@@ -2,6 +2,7 @@ package analytics
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -87,6 +88,39 @@ func TestLiveMetricsIgnoreAnalyticsProcessingAndDurableReplay(t *testing.T) {
 	}
 	if strings.Contains(metric(second), `command="cat"`) {
 		t.Fatalf("restart replay contaminated resettable metrics:\n%s", metric(second))
+	}
+}
+
+func TestDashboardUsageAlwaysSerializesActivityAsArray(t *testing.T) {
+	for _, state := range []string{"cold", "failed", "disabled", "ready"} {
+		t.Run(state, func(t *testing.T) {
+			enabled := state != "disabled"
+			service, err := New(config.AnalyticsConfig{Dir: t.TempDir(), Pipeline: config.AnalyticsPipelineConfig{Enabled: &enabled}}, Deps{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer service.Close(context.Background())
+			service.eventIndex.caughtUp.Store(true)
+			store := service.store.(*SQLiteAggregationStore)
+			if state == "ready" || state == "failed" {
+				var value any
+				lastError := "failed build"
+				if state == "ready" {
+					value, lastError = `{"activity":null,"reads":7}`, ""
+				}
+				if _, err := store.db.Exec(`INSERT INTO dashboard_views(key,value,computed_at,error) VALUES('test',?,?,?)`, value, time.Now().UnixNano(), lastError); err != nil {
+					t.Fatal(err)
+				}
+			}
+			result, err := service.DashboardUsage(context.Background(), "test", nil)
+			if err != nil || result.Analytics.State != state || result.Analytics.Complete != (state == "ready") {
+				t.Fatalf("result=%+v err=%v", result, err)
+			}
+			body, err := json.Marshal(result)
+			if err != nil || !strings.Contains(string(body), `"activity":[]`) {
+				t.Fatalf("activity must be an array: %s err=%v", body, err)
+			}
+		})
 	}
 }
 

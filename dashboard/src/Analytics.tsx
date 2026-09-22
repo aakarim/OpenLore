@@ -84,13 +84,14 @@ function formatBytes(bytes: number) {
   return bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KB`;
 }
 function Activity({ usage }: { usage: Usage }) {
+  const activity = usage.activity ?? [];
   const max = Math.max(
       1,
-      ...usage.activity.map((day) => day.human + day.agent + day.unknown),
+      ...activity.map((day) => day.human + day.agent + day.unknown),
     ),
     width = 440,
     height = 135,
-    step = width / Math.max(1, usage.activity.length);
+    step = width / Math.max(1, activity.length);
   return (
     <section className="card activity-card">
       <span className="eyebrow">ACTIVITY · SELECTED RANGE</span>
@@ -109,14 +110,14 @@ function Activity({ usage }: { usage: Usage }) {
           Reads<strong>{n(usage.reads)}</strong>
         </span>
       </div>
-      {usage.activity.length ? (
+      {activity.length ? (
         <svg
           className="activity-chart"
           viewBox={`0 0 ${width} ${height + 24}`}
           aria-label="Daily activity stacked by attribution"
           role="img"
         >
-          {usage.activity.map((day, index) => {
+          {activity.map((day, index) => {
             const x = index * step + 2,
               values = [day.human, day.agent, day.unknown],
               colors = ["#71b6b0", "#9e8cd0", "#87909e"];
@@ -145,7 +146,7 @@ function Activity({ usage }: { usage: Usage }) {
             );
           })}
           <text x="0" y={height + 20}>
-            {usage.activity[0]?.date}
+            {activity[0]?.date}
           </text>
           <text x={width} y={height + 20} textAnchor="end">
             Today
@@ -585,6 +586,17 @@ export function Analytics({
   }, [usage.data?.computed_at, onComputed]);
   const visibleTabs = tabs.filter((item) => item.id !== "access" || canAccess);
   const body = (selectedTab: AnalyticsTab) => {
+    if (
+      ["overview", "knowledge", "usage"].includes(selectedTab) &&
+      usage.data?.analytics &&
+      !usage.data.analytics.complete
+    ) {
+      return (
+        <p className="empty" role="status">
+          Activity totals will appear when a complete result is available.
+        </p>
+      );
+    }
     switch (selectedTab) {
       case "overview":
         return (
