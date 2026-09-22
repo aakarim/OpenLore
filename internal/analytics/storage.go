@@ -570,9 +570,27 @@ CREATE INDEX IF NOT EXISTS analytics_events_time ON analytics_events(time_ns);`)
 		db.Close()
 		return nil, alterErr
 	}
-	if _, alterErr := db.Exec(`ALTER TABLE facts_scan_state ADD COLUMN completed_scope_hash TEXT NOT NULL DEFAULT ''`); alterErr != nil && !strings.Contains(alterErr.Error(), "duplicate column") {
+	tx, err := db.Begin()
+	if err != nil {
 		db.Close()
-		return nil, alterErr
+		return nil, err
+	}
+	_, alterErr := tx.Exec(`ALTER TABLE facts_scan_state ADD COLUMN completed_scope_hash TEXT NOT NULL DEFAULT ''`)
+	if alterErr == nil {
+		// Only a completed legacy scan proves compatible ownership. Backfill
+		// once, atomically with adding the column, never on later opens.
+		_, err = tx.Exec(`UPDATE facts_scan_state SET completed_scope_hash=scope_hash WHERE state='ready'`)
+	} else if !strings.Contains(alterErr.Error(), "duplicate column") {
+		err = alterErr
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		db.Close()
+		return nil, err
+	}
+	if err = tx.Commit(); err != nil {
+		db.Close()
+		return nil, err
 	}
 	return &SQLiteAggregationStore{db: db}, nil
 }

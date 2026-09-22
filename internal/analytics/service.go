@@ -394,6 +394,16 @@ func (s *Service) AuthorizedIndexedFacts(ctx context.Context, key, prefix string
 		status.Coverage = "analytics processing disabled; path-sensitive filtering is paused"
 		return rows, totals, status, nil
 	}
+	scanState, err := s.index.ScanState(ctx)
+	if err != nil {
+		return nil, DirectoryFacts{}, status, err
+	}
+	if !scanState.OwnershipCompatible {
+		// Neither previously filtered paths nor new filter work may bypass
+		// the ownership compatibility boundary used by whole-docset views.
+		status.Complete = false
+		return nil, DirectoryFacts{}, status, nil
+	}
 	store, ok := s.store.(*SQLiteAggregationStore)
 	if !ok {
 		status.Complete = false
@@ -402,7 +412,7 @@ func (s *Service) AuthorizedIndexedFacts(ctx context.Context, key, prefix string
 	}
 	var generation int64
 	var cursor, filterState, filterError string
-	currentGeneration := statusGeneration(s.index, ctx)
+	currentGeneration := scanState.Generation
 	err = store.db.QueryRowContext(ctx, `SELECT generation,cursor,state,error FROM dashboard_fact_state WHERE key=?`, key).Scan(&generation, &cursor, &filterState, &filterError)
 	if errors.Is(err, sql.ErrNoRows) || generation != currentGeneration {
 		generation = currentGeneration
@@ -506,11 +516,6 @@ func (s *Service) AuthorizedIndexedFacts(ctx context.Context, key, prefix string
 		status.Coverage = "path-sensitive coverage failed; fully readable docsets remain available"
 	}
 	return rows, totals, status, nil
-}
-
-func statusGeneration(index FactsIndex, ctx context.Context) int64 {
-	state, _ := index.ScanState(ctx)
-	return state.Generation
 }
 
 // DashboardUsage serves only a committed complete summary. Missing or stale

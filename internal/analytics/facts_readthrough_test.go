@@ -470,6 +470,40 @@ func TestFactsScanDoesNotPublishAfterUpsertFailureAndRecovers(t *testing.T) {
 	}
 }
 
+func TestIncompatibleOwnershipDoesNotServeOrScheduleFilteredFacts(t *testing.T) {
+	ctx := context.Background()
+	service := newIndexedTestService(t, testFS{})
+	service.SetKnowledgeScopes([]KnowledgeScope{{Name: "docs", Root: "/docs"}})
+	store := service.store.(*SQLiteAggregationStore)
+	state, err := service.index.ScanState(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.index.Upsert(ctx, IndexedFacts{Path: "/docs/private.md", Owner: "docs", Size: 7, Generation: state.Generation - 1, Sources: map[string]map[string]float64{"size": {"bytes": 7}}}); err != nil {
+		t.Fatal(err)
+	}
+	// Seed an existing filter result as well as testing a brand-new view.
+	if _, err := store.db.Exec(`INSERT INTO dashboard_fact_state(key,generation,state) VALUES('cached',?,'ready'); INSERT INTO dashboard_fact_paths(key,path) VALUES('cached','/docs/private.md')`, state.Generation); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"cached", "new"} {
+		rows, totals, status, err := service.AuthorizedIndexedFacts(ctx, key, "/docs", nil, []string{"docs"}, 10, func(string) bool {
+			t.Error("incompatible ownership must not be filtered")
+			return true
+		})
+		if err != nil || len(rows) != 0 || totals.Files != 0 || totals.Bytes != 0 || status.Complete {
+			t.Fatalf("%s: rows=%+v totals=%+v status=%+v err=%v", key, rows, totals, status, err)
+		}
+		if service.processor.active("facts-filter:" + key) {
+			t.Fatalf("%s: queued incompatible filter work", key)
+		}
+	}
+	var count int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM dashboard_fact_state`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("initialized incompatible filter: count=%d err=%v", count, err)
+	}
+}
+
 func TestDisabledAnalyticsDoesNotInitializePathFilterWork(t *testing.T) {
 	disabled := false
 	service, err := New(config.AnalyticsConfig{Dir: t.TempDir(), Log: config.AnalyticsLogConfig{Compress: "none"}, Pipeline: config.AnalyticsPipelineConfig{Enabled: &disabled}}, Deps{FS: testFS{"/docs/a.md": []byte("a")}})

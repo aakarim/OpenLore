@@ -3,6 +3,7 @@ package analytics
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -15,6 +16,53 @@ import (
 	"github.com/aakarim/go-openlore/internal/config"
 	"github.com/klauspost/compress/zstd"
 )
+
+func TestSQLiteLegacyOwnershipMigration(t *testing.T) {
+	for _, scanState := range []string{"ready", "updating", "failed"} {
+		t.Run(scanState, func(t *testing.T) {
+			path := t.TempDir() + "/legacy.db"
+			db, err := sql.Open("sqlite", path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = db.Exec(`CREATE TABLE facts_scan_state (
+id INTEGER PRIMARY KEY, generation INTEGER NOT NULL, state TEXT NOT NULL,
+started_at INTEGER NOT NULL, completed_at INTEGER NOT NULL DEFAULT 0,
+error TEXT NOT NULL DEFAULT '', scope_hash TEXT NOT NULL);
+INSERT INTO facts_scan_state VALUES(1,3,?,1,2,'','original')`, scanState)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			store, err := OpenSQLiteAggregationStore(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			state, err := newSQLiteFactsIndex(store).ScanState(context.Background())
+			if err != nil || state.OwnershipCompatible != (scanState == "ready") {
+				t.Fatalf("migrated %s: %+v err=%v", scanState, state, err)
+			}
+			// A subsequent open must not backfill again and bless a new hash.
+			if _, err := store.db.Exec(`UPDATE facts_scan_state SET scope_hash='changed',state='ready'`); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Close(); err != nil {
+				t.Fatal(err)
+			}
+			store, err = OpenSQLiteAggregationStore(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			state, err = newSQLiteFactsIndex(store).ScanState(context.Background())
+			if err != nil || state.OwnershipCompatible {
+				t.Fatalf("reopen blessed incompatible ownership: %+v err=%v", state, err)
+			}
+		})
+	}
+}
 
 func TestSQLiteAggregationStoreConcurrentAndPersistent(t *testing.T) {
 	path := t.TempDir() + "/materializations.db"
