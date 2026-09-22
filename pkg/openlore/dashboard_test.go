@@ -561,6 +561,58 @@ func TestDashboardRootLimitCountsOnlyAuthorizedOwners(t *testing.T) {
 	}
 }
 
+func TestDashboardHidesStaleOwnersImmediatelyAfterDocsetTopologyChange(t *testing.T) {
+	s, mux, token := newDashboardTestServer(t)
+	dir := t.TempDir()
+	first, err := analytics.New(config.AnalyticsConfig{Dir: dir, Log: config.AnalyticsLogConfig{Compress: "none"}}, analytics.Deps{FS: s.merge})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.SetKnowledgeScopes([]analytics.KnowledgeScope{{Name: "public", Root: "/public"}})
+	first.Start(context.Background())
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		rows, status, err := first.IndexedFacts(context.Background(), "/public/private", 10)
+		if err == nil && status.Complete {
+			if len(rows) != 1 || rows[0].Owner != "public" {
+				t.Fatalf("precondition stale-owner row=%+v", rows)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("initial ownership did not complete: %+v err=%v", status, err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err := first.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	disabled := false
+	second, err := analytics.New(config.AnalyticsConfig{Dir: dir, Log: config.AnalyticsLogConfig{Compress: "none"}, Pipeline: config.AnalyticsPipelineConfig{Enabled: &disabled}}, analytics.Deps{FS: s.merge})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close(context.Background())
+	second.SetKnowledgeScopes([]analytics.KnowledgeScope{{Name: "public", Root: "/public"}, {Name: "private-child", Root: "/public/private"}})
+	second.Start(context.Background())
+	s.analytics = second
+	w := dashboardRequest(mux, "GET", "/dashboard/api/context?path=/", token)
+	if w.Code != http.StatusOK {
+		t.Fatalf("context during incompatible rebuild: %d %s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), `"path":"/public/private`) || strings.Contains(w.Body.String(), "SENSITIVE") {
+		t.Fatalf("stale parent ownership disclosed nested private content: %s", w.Body.String())
+	}
+	var node dashboardNode
+	if err := json.Unmarshal(w.Body.Bytes(), &node); err != nil {
+		t.Fatal(err)
+	}
+	if node.Analytics == nil || node.Analytics.State != "disabled" || node.Analytics.Complete || node.Analytics.Updating {
+		t.Fatalf("incompatible disabled status=%+v", node.Analytics)
+	}
+}
+
 func TestDashboardNodeLimitAppliesWithWarmIndex(t *testing.T) {
 	s := &Server{merge: NewMergeFS()}
 	s.merge.SetRoot(NewFSAdapter(fstest.MapFS{"a.md": {Data: []byte("a")}}))

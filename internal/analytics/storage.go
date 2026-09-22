@@ -536,7 +536,8 @@ computed_at INTEGER NOT NULL, PRIMARY KEY(path, owner)
 CREATE TABLE IF NOT EXISTS facts_scan_state (
 id INTEGER PRIMARY KEY CHECK(id=1), generation INTEGER NOT NULL,
 state TEXT NOT NULL, started_at INTEGER NOT NULL, completed_at INTEGER NOT NULL DEFAULT 0,
-error TEXT NOT NULL DEFAULT '', scope_hash TEXT NOT NULL
+error TEXT NOT NULL DEFAULT '', scope_hash TEXT NOT NULL,
+completed_scope_hash TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS facts_scan_queue (
 generation INTEGER NOT NULL, path TEXT NOT NULL, PRIMARY KEY(generation,path)
@@ -568,6 +569,28 @@ CREATE INDEX IF NOT EXISTS analytics_events_time ON analytics_events(time_ns);`)
 	if _, alterErr := db.Exec(`ALTER TABLE files ADD COLUMN generation INTEGER NOT NULL DEFAULT 0`); alterErr != nil && !strings.Contains(alterErr.Error(), "duplicate column") {
 		db.Close()
 		return nil, alterErr
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	_, alterErr := tx.Exec(`ALTER TABLE facts_scan_state ADD COLUMN completed_scope_hash TEXT NOT NULL DEFAULT ''`)
+	if alterErr == nil {
+		// Only a completed legacy scan proves compatible ownership. Backfill
+		// once, atomically with adding the column, never on later opens.
+		_, err = tx.Exec(`UPDATE facts_scan_state SET completed_scope_hash=scope_hash WHERE state='ready'`)
+	} else if !strings.Contains(alterErr.Error(), "duplicate column") {
+		err = alterErr
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		db.Close()
+		return nil, err
+	}
+	if err = tx.Commit(); err != nil {
+		db.Close()
+		return nil, err
 	}
 	return &SQLiteAggregationStore{db: db}, nil
 }
