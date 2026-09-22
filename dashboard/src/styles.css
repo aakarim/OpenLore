@@ -570,6 +570,7 @@ select:focus-visible,
   height: calc(100vh - 164px);
   display: grid;
   grid-template-columns: minmax(0, 1fr) 280px;
+  grid-template-rows: minmax(0, 1fr);
   border: 1px solid var(--border);
   border-radius: 10px;
   overflow: hidden;
