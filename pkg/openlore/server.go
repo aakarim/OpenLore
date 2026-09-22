@@ -1319,6 +1319,9 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 	if id.Attribution.ClientAuth != "" {
 		sh.SetEnv("OPENLORE_CLIENT_AUTH", string(id.Attribution.ClientAuth))
 	}
+	if id.SessionID != "" {
+		sh.SetEnv("OPENLORE_SESSION_ID", id.SessionID)
+	}
 	// $HOME points at the identity's home docset (enables ~ expansion and
 	// `cd` with no arguments).
 	if id.HomeDir != "" {

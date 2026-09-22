@@ -2,6 +2,8 @@ package openlore
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/aakarim/go-openlore/internal/config"
@@ -67,5 +69,27 @@ func TestIdentityFromContext_NoAuthIsFull(t *testing.T) {
 	got := s.identityFromContext(context.Background())
 	if len(got.Scopes) != 1 || got.Scopes[0] != ScopeFull {
 		t.Fatalf("no-auth caller should hold full scope, got %v", got.Scopes)
+	}
+}
+
+func TestMCPTransportUsesMCPServerSessionID(t *testing.T) {
+	s := &Server{merge: NewMergeFS(), auth: &config.AuthConfig{Docsets: map[string]config.DocsetSpec{}}}
+	const sessionID = "mcp-session-123"
+	var got Identity
+	handler := s.transportMiddleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		got = s.identityFromContext(r.Context())
+	}), "mcp")
+	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	req = req.WithContext(contextWithIdentity(req.Context(), Identity{IdentityName: "agent"}))
+	req.Header.Set("Mcp-Session-Id", sessionID)
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+
+	if got.SessionID != sessionID || got.ClientSessionID != sessionID {
+		t.Fatalf("session IDs = (%q, %q), want MCP session ID %q", got.SessionID, got.ClientSessionID, sessionID)
+	}
+
+	sh := s.buildSessionShell(got)
+	if envSessionID := sh.GetEnv("OPENLORE_SESSION_ID"); envSessionID != sessionID {
+		t.Fatalf("OPENLORE_SESSION_ID = %q, want %q", envSessionID, sessionID)
 	}
 }

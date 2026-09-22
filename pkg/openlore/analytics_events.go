@@ -30,7 +30,13 @@ func (s *Server) transportMiddleware(next http.Handler, transport string) http.H
 		id.SessionID = generateSessionID()
 		id.ClientSessionID = ""
 		if transport == "mcp" {
-			id.ClientSessionID = r.Header.Get("Mcp-Session-Id")
+			if sessionID := r.Header.Get("Mcp-Session-Id"); sessionID != "" {
+				// Streamable HTTP assigns this ID when the MCP session is
+				// initialized. Reuse it throughout the shell so commands and
+				// writes from one MCP conversation share a stable session ID.
+				id.SessionID = sessionID
+				id.ClientSessionID = sessionID
+			}
 		} else if strings.Contains(r.URL.Path, "/sessions/") {
 			parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 			for i, part := range parts {
