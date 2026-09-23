@@ -469,9 +469,7 @@ func (s *Shell) execCallInner(call *parser.CallExpr, w io.Writer, errW io.Writer
 	args := make([]string, 0, len(call.Args))
 	for _, word := range call.Args {
 		expanded := s.expandWord(word)
-		// Only glob-expand unquoted words that have a directory component
-		// (e.g. /docs/*.md but not *.md alone, which is likely a find pattern)
-		if !isQuotedWord(word) && strings.ContainsAny(expanded, "*?") && strings.Contains(expanded, "/") {
+		if !isQuotedWord(word) && strings.ContainsAny(expanded, "*?") {
 			matches := s.globExpand(expanded)
 			if len(matches) > 0 {
 				args = append(args, matches...)

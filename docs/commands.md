@@ -193,6 +193,7 @@ canonical path in `TARGET`.
 | Variables | `FOO=bar; echo $FOO` |
 | Expansion | `${VAR:-default}`, `${VAR:+alt}`, `${#VAR}`, `$(cmd)` |
 | Quoting | Single quotes are literal; double quotes allow expansion |
+| Globbing | Unquoted `*` and `?` patterns expand; bare relative patterns use the current directory, and absolute and `./` forms are supported. Quote patterns to pass them literally |
 | Negation | `! false` returns 0 |
 
 ## Intentionally unsupported

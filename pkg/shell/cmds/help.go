@@ -106,6 +106,7 @@ func CmdHelp(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 	fmt.Fprintln(w, "  source <file> / eval <cmd>               Execute commands")
 	fmt.Fprintln(w, "  help                                     Show this help")
 	fmt.Fprintln(w, "  exit / quit                              Close session")
+	fmt.Fprintln(w, "  Unquoted * and ? globs expand; bare patterns use the current directory")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "AGENT SKILLS")
 	fmt.Fprintln(w, "  skills                                   Show Agent Skills usage and installed instructions")

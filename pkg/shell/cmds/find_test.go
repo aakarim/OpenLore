@@ -32,6 +32,16 @@ func TestGlobExpansion(t *testing.T) {
 		}
 	})
 
+	t.Run("bare relative glob", func(t *testing.T) {
+		out, errOut, code := execCmd(t, fs, "cd /docs && echo *.md")
+		if code != 0 {
+			t.Fatalf("bare relative glob failed: code=%d stderr=%q", code, errOut)
+		}
+		if out != "/docs/readme.md\n" {
+			t.Errorf("bare relative glob should expand against cwd, got %q", out)
+		}
+	})
+
 	t.Run("glob does not expand in quotes", func(t *testing.T) {
 		// find -name '*.md' - the *.md should NOT be expanded
 		out, _, code := execCmd(t, fs, "find /docs -name '*.md'")

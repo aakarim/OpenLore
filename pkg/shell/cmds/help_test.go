@@ -16,6 +16,9 @@ func TestHelp(t *testing.T) {
 	if !strings.Contains(out, "skills") {
 		t.Error("help should list skills")
 	}
+	if !strings.Contains(out, "globs expand; bare patterns use the current directory") {
+		t.Error("help should document glob expansion")
+	}
 	for _, command := range []string{"mkdir", "mv", "rm"} {
 		if !strings.Contains(out, command) {
 			t.Errorf("help should list %s", command)
