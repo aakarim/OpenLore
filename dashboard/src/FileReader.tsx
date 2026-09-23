@@ -62,6 +62,16 @@ function Markdown({
   useEffect(() => {
     const root = ref.current;
     if (!root) return;
+    root.querySelectorAll<HTMLTableElement>("table").forEach((table) => {
+      if (table.parentElement?.classList.contains("markdown-table")) return;
+      const wrapper = document.createElement("div");
+      wrapper.className = "markdown-table";
+      wrapper.tabIndex = 0;
+      wrapper.setAttribute("role", "region");
+      wrapper.setAttribute("aria-label", "Scrollable table");
+      table.before(wrapper);
+      wrapper.append(table);
+    });
     root.querySelectorAll<HTMLAnchorElement>("a[href]").forEach((anchor) => {
       const raw = anchor.getAttribute("href") || "";
       if (raw.startsWith("#")) return;

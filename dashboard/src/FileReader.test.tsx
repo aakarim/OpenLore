@@ -93,6 +93,22 @@ test("canonicalizes internal links once, preserves modified clicks, and protects
   expect(resolveLorePath("a%20b.md", "/docs/current.md")).toBe("/docs/a b.md");
 });
 
+test("wraps markdown tables in a keyboard-scrollable region", async () => {
+  const file: FileResponse = {
+    ...baseFile,
+    path: "/docs/events.md",
+    html: `<table><thead><tr><th>Event</th><th>Date</th></tr></thead>
+      <tbody><tr><td>OpenLore Summit</td><td>23 Sep 2026</td></tr></tbody></table>`,
+  };
+  vi.spyOn(api, "file").mockResolvedValue(file);
+  const view = render(<FileReader {...readerProps} path={file.path} />);
+
+  const region = await screen.findByRole("region", { name: "Scrollable table" });
+  expect(region).toHaveAttribute("tabindex", "0");
+  expect(region).toHaveClass("markdown-table");
+  expect(region).toContainElement(view.container.querySelector("table"));
+});
+
 test("restores and tracks window scroll on mobile while desktop uses document scroll", async () => {
   vi.spyOn(api, "file").mockResolvedValue(baseFile);
   let scrollY = 456;
