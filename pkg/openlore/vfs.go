@@ -1379,7 +1379,7 @@ func (a *FSAdapter) Stat(p string) (*vfs.FileInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	if a.files != nil && ((!info.IsDir() && !isAllowed(info.Name(), *a.files)) || (info.IsDir() && isIgnored(p, *a.files))) {
+	if a.files != nil && (isIgnored(p, *a.files) || (!info.IsDir() && !isAllowed(info.Name(), *a.files))) {
 		return nil, fmt.Errorf("access denied: /%s", p)
 	}
 	return &vfs.FileInfo{
@@ -1407,11 +1407,7 @@ func (a *FSAdapter) ReadDir(p string) ([]vfs.FileInfo, error) {
 	for _, e := range entries {
 		childPath := path.Join(p, e.Name())
 		if a.files != nil {
-			if e.IsDir() {
-				if isIgnored(childPath, *a.files) {
-					continue
-				}
-			} else if !isAllowed(e.Name(), *a.files) {
+			if isIgnored(childPath, *a.files) || (!e.IsDir() && !isAllowed(e.Name(), *a.files)) {
 				continue
 			}
 		}
@@ -1435,7 +1431,7 @@ func (a *FSAdapter) ReadFile(p string) ([]byte, error) {
 	if p == "" {
 		p = "."
 	}
-	if a.files != nil && !isAllowed(path.Base(p), *a.files) {
+	if a.files != nil && (isIgnored(p, *a.files) || !isAllowed(path.Base(p), *a.files)) {
 		return nil, fmt.Errorf("access denied: /%s", p)
 	}
 	return fs.ReadFile(a.fsys, p)
@@ -1446,7 +1442,7 @@ func (a *FSAdapter) ReadFileBounded(p string, maxBytes int64) ([]byte, error) {
 	if p == "" {
 		p = "."
 	}
-	if a.files != nil && !isAllowed(path.Base(p), *a.files) {
+	if a.files != nil && (isIgnored(p, *a.files) || !isAllowed(path.Base(p), *a.files)) {
 		return nil, fmt.Errorf("access denied: /%s", p)
 	}
 	file, err := a.fsys.Open(p)

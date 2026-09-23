@@ -61,6 +61,30 @@ func TestOverlayFSReadsUpperAndLowerAndMergesDirectories(t *testing.T) {
 	}
 }
 
+func TestFSAdapterAppliesConfiguredFilePolicy(t *testing.T) {
+	adapter := NewFSAdapter(fstest.MapFS{
+		"visible.md": &fstest.MapFile{Data: []byte("visible")},
+		"denied.md":  &fstest.MapFile{Data: []byte("denied")},
+		".env":       &fstest.MapFile{Data: []byte("secret")},
+	}, config.FilesConfig{Allowed: []string{"*"}, Denied: []string{"denied.*"}, Ignore: []string{".env"}})
+
+	entries, err := adapter.ReadDir("/")
+	if err != nil || len(entries) != 1 || entries[0].FileName != "visible.md" {
+		t.Fatalf("filtered entries = %+v, %v", entries, err)
+	}
+	for _, target := range []string{"/denied.md", "/.env"} {
+		if _, err := adapter.Stat(target); err == nil {
+			t.Errorf("Stat(%q) exposed filtered file", target)
+		}
+		if _, err := adapter.ReadFile(target); err == nil {
+			t.Errorf("ReadFile(%q) exposed filtered file", target)
+		}
+		if _, err := adapter.ReadFileBounded(target, 1024); err == nil {
+			t.Errorf("ReadFileBounded(%q) exposed filtered file", target)
+		}
+	}
+}
+
 func TestOverlayFSWritesAgainstVisibleLowerCAS(t *testing.T) {
 	overlay, upperDir := newTestOverlay(t)
 	sum := sha256.Sum256([]byte("lower"))
