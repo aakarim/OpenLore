@@ -430,6 +430,84 @@ test("expired session clears the previously rendered document", async () => {
   ).not.toBeInTheDocument();
 });
 
+test("returning to the browser tab preserves workspace state during session refresh", async () => {
+  history.replaceState(null, "", "/lore/guide/start.md");
+  const fetch = mockAPI();
+  const original = fetch.getMockImplementation()!;
+  render(<App />);
+  const user = userEvent.setup();
+  await screen.findByRole("heading", { name: "Start" });
+  await user.click(screen.getByRole("button", { name: "Source" }));
+  expect(screen.getByRole("button", { name: "Source" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  const fileRequests = () =>
+    fetch.mock.calls.filter(([input]) =>
+      String(input).includes("/dashboard/api/file?"),
+    ).length;
+  const initialFileRequests = fileRequests();
+
+  let finishRefresh!: (response: Response) => void;
+  fetch.mockImplementation((input, init) =>
+    String(input).endsWith("/dashboard/api/session")
+      ? new Promise<Response>((resolve) => {
+          finishRefresh = resolve;
+        })
+      : original(input, init),
+  );
+  fireEvent.focus(window);
+
+  expect(screen.getByRole("button", { name: "Source" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  expect(screen.queryByText("Loading your workspace…")).not.toBeInTheDocument();
+
+  await act(async () => {
+    finishRefresh(
+      new Response(
+        JSON.stringify({
+          identity: "private@example.test",
+          lore_path: "/lore",
+          access: false,
+        }),
+      ),
+    );
+  });
+  await waitFor(() => expect(fileRequests()).toBeGreaterThan(initialFileRequests));
+  expect(screen.getByRole("button", { name: "Source" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+});
+
+test("session refresh removes a document whose access was revoked", async () => {
+  history.replaceState(null, "", "/lore/guide/start.md");
+  const fetch = mockAPI();
+  const original = fetch.getMockImplementation()!;
+  let fileAccess = true;
+  fetch.mockImplementation((input, init) =>
+    !fileAccess && String(input).includes("/dashboard/api/file?")
+      ? Promise.resolve(
+          new Response(JSON.stringify({ error: "not found" }), { status: 404 }),
+        )
+      : original(input, init),
+  );
+  render(<App />);
+  await screen.findByRole("heading", { name: "Start" });
+
+  fileAccess = false;
+  fireEvent.focus(window);
+
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "This path is unavailable or no longer readable.",
+  );
+  expect(
+    screen.queryByRole("heading", { name: "Start" }),
+  ).not.toBeInTheDocument();
+});
+
 test("an aggregation-only refresh recovers an expired session", async () => {
   history.replaceState(null, "", "/dashboard/?view=analytics&path=/&tab=gaps");
   const fetch = mockAPI();
