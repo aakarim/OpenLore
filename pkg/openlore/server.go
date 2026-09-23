@@ -161,14 +161,14 @@ func NewServerWithRootFS(root vfs.FileSystem, opts ...config.Option) (*Server, e
 // When writable_dir is configured, its disk tree is layered over lower at the
 // same virtual root and receives all writes.
 func NewServerWithLowerFS(lower fs.FS, opts ...config.Option) (*Server, error) {
-	return newServerWithRoot("", nil, NewFSAdapter(lower), opts...)
+	return newServerWithRoot("", nil, lower, opts...)
 }
 
 // newServerWithRoot is the shared constructor. When rootFS is non-nil it becomes
 // the merge root (rootDir is ignored); otherwise rootDir (if non-empty) is served
 // via a DirFS. The root is installed before the writable block so the write log's
 // substrate is live at construction.
-func newServerWithRoot(rootDir string, rootFS, lowerFS vfs.FileSystem, opts ...config.Option) (*Server, error) {
+func newServerWithRoot(rootDir string, rootFS vfs.FileSystem, lowerFS fs.FS, opts ...config.Option) (*Server, error) {
 	cfg, err := config.New(opts...)
 	if err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
@@ -304,12 +304,12 @@ func newServerWithRoot(rootDir string, rootFS, lowerFS vfs.FileSystem, opts ...c
 		}
 		upper := NewDirFS(cfg.WritableDir, cfg.Files).WithDocsetRoots(docsetRoots)
 		if lowerFS != nil {
-			s.merge.SetRoot(NewOverlayFS(upper, lowerFS))
+			s.merge.SetRoot(NewOverlayFS(upper, NewFSAdapter(lowerFS, cfg.Files)))
 		} else {
 			s.merge.SetRoot(upper)
 		}
 	} else if lowerFS != nil {
-		s.merge.SetRoot(lowerFS)
+		s.merge.SetRoot(NewFSAdapter(lowerFS, cfg.Files))
 	}
 
 	if cfg.Analytics.IsEnabled() {
@@ -524,12 +524,12 @@ func (s *Server) Mount(name string, fs vfs.FileSystem) {
 
 // MountFS adds a named filesystem mount point using a standard fs.FS.
 func (s *Server) MountFS(name string, fsys fs.FS) {
-	s.merge.Mount(name, NewFSAdapter(fsys))
+	s.merge.Mount(name, NewFSAdapter(fsys, s.config.Files))
 }
 
 // SetRootFS sets the root filesystem using a standard fs.FS.
 func (s *Server) SetRootFS(fsys fs.FS) {
-	s.merge.SetRoot(NewFSAdapter(fsys))
+	s.merge.SetRoot(NewFSAdapter(fsys, s.config.Files))
 }
 
 // SetRootBashFS sets the root filesystem using a vfs.FileSystem. Paths

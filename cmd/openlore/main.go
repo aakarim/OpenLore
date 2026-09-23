@@ -431,7 +431,7 @@ func main() {
 				}
 				vfs = openlore.NewDirFS(absDir, files)
 			} else if loreFS := assets.Lore(); loreFS != nil {
-				lower := openlore.NewFSAdapter(loreFS)
+				lower := openlore.NewFSAdapter(loreFS, files)
 				if resolvedCfg.WritableDir != "" {
 					upper := openlore.NewDirFS(resolvedCfg.WritableDir, files)
 					vfs = openlore.NewOverlayFS(upper, lower)
