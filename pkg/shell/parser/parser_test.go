@@ -37,6 +37,8 @@ func expandPart(part parser.WordPart, env map[string]string) string {
 	switch p := part.(type) {
 	case *parser.Lit:
 		return p.Value
+	case *parser.Escaped:
+		return p.Value
 	case *parser.SglQuoted:
 		return p.Value
 	case *parser.DblQuoted:

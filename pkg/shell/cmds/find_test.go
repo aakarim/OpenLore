@@ -21,6 +21,7 @@ func TestFindTypeDir(t *testing.T) {
 
 func TestGlobExpansion(t *testing.T) {
 	fs := testFS()
+	fs.AddFile("/docs/.hidden.md", "hidden\n")
 
 	t.Run("ls with glob", func(t *testing.T) {
 		out, _, code := execCmd(t, fs, "ls /docs/*.md")
@@ -29,6 +30,36 @@ func TestGlobExpansion(t *testing.T) {
 		}
 		if !strings.Contains(out, "readme.md") {
 			t.Errorf("glob /docs/*.md should match readme.md, got:\n%s", out)
+		}
+	})
+
+	t.Run("bare relative glob", func(t *testing.T) {
+		out, errOut, code := execCmd(t, fs, "cd /docs && echo *.md")
+		if code != 0 {
+			t.Fatalf("bare relative glob failed: code=%d stderr=%q", code, errOut)
+		}
+		if out != "/docs/readme.md\n" {
+			t.Errorf("bare relative glob should expand against cwd, got %q", out)
+		}
+	})
+
+	t.Run("unquoted wildcard after quoted prefix", func(t *testing.T) {
+		out, errOut, code := execCmd(t, fs, `DIR=/docs; echo "$DIR"/*.md`)
+		if code != 0 {
+			t.Fatalf("mixed quoted glob failed: code=%d stderr=%q", code, errOut)
+		}
+		if out != "/docs/readme.md\n" {
+			t.Errorf("unquoted wildcard should expand after a quoted prefix, got %q", out)
+		}
+	})
+
+	t.Run("escaped wildcard stays literal", func(t *testing.T) {
+		out, errOut, code := execCmd(t, fs, "cd /docs && echo \\*.md")
+		if code != 0 {
+			t.Fatalf("escaped wildcard failed: code=%d stderr=%q", code, errOut)
+		}
+		if out != "*.md\n" {
+			t.Errorf("escaped wildcard should remain literal, got %q", out)
 		}
 	})
 
