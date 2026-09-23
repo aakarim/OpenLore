@@ -468,9 +468,9 @@ func (s *Shell) execCallInner(call *parser.CallExpr, w io.Writer, errW io.Writer
 
 	args := make([]string, 0, len(call.Args))
 	for _, word := range call.Args {
-		expanded := s.expandWord(word)
-		if !isQuotedWord(word) && strings.ContainsAny(expanded, "*?") {
-			matches := s.globExpand(expanded)
+		expanded, globPattern, hasGlob := s.expandGlobWord(word)
+		if hasGlob {
+			matches := s.globExpand(globPattern)
 			if len(matches) > 0 {
 				args = append(args, matches...)
 				continue
@@ -693,6 +693,43 @@ func (s *Shell) expandWord(word *parser.Word) string {
 	return sb.String()
 }
 
+// expandGlobWord expands a word while retaining which wildcard characters
+// came from unquoted, unescaped parts and are therefore eligible for globbing.
+func (s *Shell) expandGlobWord(word *parser.Word) (expanded, pattern string, hasGlob bool) {
+	if word == nil {
+		return "", "", false
+	}
+
+	var expandedBuilder, patternBuilder strings.Builder
+	for i, part := range word.Parts {
+		str := s.expandPart(part)
+		if i == 0 {
+			if _, ok := part.(*parser.Lit); ok {
+				str = s.expandTilde(str)
+			}
+		}
+		expandedBuilder.WriteString(str)
+
+		switch part.(type) {
+		case *parser.SglQuoted, *parser.DblQuoted, *parser.Escaped:
+			patternBuilder.WriteString(escapeGlobPattern(str))
+		default:
+			patternBuilder.WriteString(str)
+			hasGlob = hasGlob || strings.ContainsAny(str, "*?")
+		}
+	}
+	return expandedBuilder.String(), patternBuilder.String(), hasGlob
+}
+
+func escapeGlobPattern(value string) string {
+	return strings.NewReplacer(
+		`\`, `\\`,
+		`*`, `\*`,
+		`?`, `\?`,
+		`[`, `\[`,
+	).Replace(value)
+}
+
 // expandTilde replaces a leading ~ (as `~` or `~/…`) with $HOME. If HOME is
 // unset the tilde is left untouched, matching bash.
 func (s *Shell) expandTilde(v string) string {
@@ -712,6 +749,9 @@ func (s *Shell) expandTilde(v string) string {
 func (s *Shell) expandPart(part parser.WordPart) string {
 	switch p := part.(type) {
 	case *parser.Lit:
+		return p.Value
+
+	case *parser.Escaped:
 		return p.Value
 
 	case *parser.SglQuoted:
@@ -798,20 +838,6 @@ func (s *Shell) expandParam(pe *parser.ParamExp) string {
 	return val
 }
 
-// isQuotedWord returns true if the word is wrapped in quotes (single or double).
-func isQuotedWord(word *parser.Word) bool {
-	if word == nil || len(word.Parts) == 0 {
-		return false
-	}
-	for _, part := range word.Parts {
-		switch part.(type) {
-		case *parser.SglQuoted, *parser.DblQuoted:
-			return true
-		}
-	}
-	return false
-}
-
 // globExpand expands a glob pattern against the virtual filesystem.
 func (s *Shell) globExpand(pattern string) []string {
 	dir := path.Dir(s.Resolve(pattern))
@@ -824,6 +850,9 @@ func (s *Shell) globExpand(pattern string) []string {
 
 	var matches []string
 	for _, entry := range entries {
+		if strings.HasPrefix(entry.FileName, ".") && !strings.HasPrefix(base, ".") {
+			continue
+		}
 		matched, _ := path.Match(base, entry.FileName)
 		if matched {
 			matches = append(matches, path.Join(dir, entry.FileName))

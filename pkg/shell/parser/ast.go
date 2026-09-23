@@ -165,6 +165,11 @@ type Lit struct{ Value string }
 
 func (*Lit) isWordPart() {}
 
+// Escaped is a backslash-escaped character. Its value excludes the backslash.
+type Escaped struct{ Value string }
+
+func (*Escaped) isWordPart() {}
+
 // SglQuoted is a single-quoted string.
 type SglQuoted struct{ Value string }
 
