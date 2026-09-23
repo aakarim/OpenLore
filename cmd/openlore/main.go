@@ -393,15 +393,6 @@ func main() {
 			}
 			mcpCmd.Parse(os.Args[2:])
 
-			// Build filesystem
-			var files config.FilesConfig
-			if *mcpAllowed != "" {
-				files.Allowed = splitAndTrim(*mcpAllowed)
-			}
-			if *mcpIgnore != "" {
-				files.Ignore = splitAndTrim(*mcpIgnore)
-			}
-
 			// Try loading config file for file filters. A loaded file replaces the
 			// embedded config; the embedded config is used only when no file exists.
 			embeddedCfg, _ := assets.EmbeddedConfig()
@@ -410,15 +401,17 @@ func main() {
 				config.WithEmbeddedConfig(embeddedCfg, ""),
 			}
 			var resolvedCfg config.Config
+			var files config.FilesConfig
 			if cfg, err := config.New(cfgOpts...); err == nil {
 				resolvedCfg = cfg
+				files = cfg.Files
 				fmt.Fprintf(os.Stderr, "config: %s\n", cfg.Source())
-				if len(files.Allowed) == 0 {
-					files.Allowed = cfg.Files.Allowed
-				}
-				if len(files.Ignore) == 0 {
-					files.Ignore = cfg.Files.Ignore
-				}
+			}
+			if *mcpAllowed != "" {
+				files.Allowed = splitAndTrim(*mcpAllowed)
+			}
+			if *mcpIgnore != "" {
+				files.Ignore = splitAndTrim(*mcpIgnore)
 			}
 
 			var vfs openlore.FileSystem
@@ -431,7 +424,7 @@ func main() {
 				}
 				vfs = openlore.NewDirFS(absDir, files)
 			} else if loreFS := assets.Lore(); loreFS != nil {
-				lower := openlore.NewFSAdapter(loreFS)
+				lower := openlore.NewFSAdapter(loreFS, files)
 				if resolvedCfg.WritableDir != "" {
 					upper := openlore.NewDirFS(resolvedCfg.WritableDir, files)
 					vfs = openlore.NewOverlayFS(upper, lower)

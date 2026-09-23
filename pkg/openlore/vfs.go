@@ -1354,12 +1354,20 @@ func isIgnored(p string, files config.FilesConfig) bool {
 
 // FSAdapter adapts a standard fs.FS to the vfs.FileSystem interface.
 type FSAdapter struct {
-	fsys fs.FS
+	fsys  fs.FS
+	files *config.FilesConfig
 }
 
 // NewFSAdapter creates a new FSAdapter.
-func NewFSAdapter(fsys fs.FS) *FSAdapter {
-	return &FSAdapter{fsys: fsys}
+// When files is supplied, the adapter applies the same visibility policy as
+// disk-backed and embedded OpenLore filesystems.
+func NewFSAdapter(fsys fs.FS, files ...config.FilesConfig) *FSAdapter {
+	adapter := &FSAdapter{fsys: fsys}
+	if len(files) > 0 {
+		configured := files[0]
+		adapter.files = &configured
+	}
+	return adapter
 }
 
 func (a *FSAdapter) Stat(p string) (*vfs.FileInfo, error) {
@@ -1370,6 +1378,9 @@ func (a *FSAdapter) Stat(p string) (*vfs.FileInfo, error) {
 	info, err := fs.Stat(a.fsys, p)
 	if err != nil {
 		return nil, err
+	}
+	if a.files != nil && (isIgnored(p, *a.files) || (!info.IsDir() && !isAllowed(info.Name(), *a.files))) {
+		return nil, fmt.Errorf("access denied: /%s", p)
 	}
 	return &vfs.FileInfo{
 		FileName:    info.Name(),
@@ -1385,19 +1396,28 @@ func (a *FSAdapter) ReadDir(p string) ([]vfs.FileInfo, error) {
 	if p == "" {
 		p = "."
 	}
+	if a.files != nil && isIgnored(p, *a.files) {
+		return nil, fmt.Errorf("access denied: /%s", p)
+	}
 	entries, err := fs.ReadDir(a.fsys, p)
 	if err != nil {
 		return nil, err
 	}
 	var result []vfs.FileInfo
 	for _, e := range entries {
+		childPath := path.Join(p, e.Name())
+		if a.files != nil {
+			if isIgnored(childPath, *a.files) || (!e.IsDir() && !isAllowed(e.Name(), *a.files)) {
+				continue
+			}
+		}
 		info, err := e.Info()
 		if err != nil {
 			continue
 		}
 		result = append(result, vfs.FileInfo{
 			FileName:    e.Name(),
-			FilePath:    vfs.CleanPath("/" + path.Join(p, e.Name())),
+			FilePath:    vfs.CleanPath("/" + childPath),
 			FileSize:    info.Size(),
 			FileModTime: info.ModTime(),
 			Dir:         e.IsDir(),
@@ -1411,6 +1431,9 @@ func (a *FSAdapter) ReadFile(p string) ([]byte, error) {
 	if p == "" {
 		p = "."
 	}
+	if a.files != nil && (isIgnored(p, *a.files) || !isAllowed(path.Base(p), *a.files)) {
+		return nil, fmt.Errorf("access denied: /%s", p)
+	}
 	return fs.ReadFile(a.fsys, p)
 }
 
@@ -1418,6 +1441,9 @@ func (a *FSAdapter) ReadFileBounded(p string, maxBytes int64) ([]byte, error) {
 	p = strings.TrimPrefix(path.Clean("/"+p), "/")
 	if p == "" {
 		p = "."
+	}
+	if a.files != nil && (isIgnored(p, *a.files) || !isAllowed(path.Base(p), *a.files)) {
+		return nil, fmt.Errorf("access denied: /%s", p)
 	}
 	file, err := a.fsys.Open(p)
 	if err != nil {

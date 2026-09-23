@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/aakarim/go-openlore/internal/config"
 	"github.com/aakarim/go-openlore/pkg/vfs"
@@ -60,6 +61,30 @@ func TestOverlayFSReadsUpperAndLowerAndMergesDirectories(t *testing.T) {
 	}
 }
 
+func TestFSAdapterAppliesConfiguredFilePolicy(t *testing.T) {
+	adapter := NewFSAdapter(fstest.MapFS{
+		"visible.md": &fstest.MapFile{Data: []byte("visible")},
+		"denied.md":  &fstest.MapFile{Data: []byte("denied")},
+		".env":       &fstest.MapFile{Data: []byte("secret")},
+	}, config.FilesConfig{Allowed: []string{"*"}, Denied: []string{"denied.*"}, Ignore: []string{".env"}})
+
+	entries, err := adapter.ReadDir("/")
+	if err != nil || len(entries) != 1 || entries[0].FileName != "visible.md" {
+		t.Fatalf("filtered entries = %+v, %v", entries, err)
+	}
+	for _, target := range []string{"/denied.md", "/.env"} {
+		if _, err := adapter.Stat(target); err == nil {
+			t.Errorf("Stat(%q) exposed filtered file", target)
+		}
+		if _, err := adapter.ReadFile(target); err == nil {
+			t.Errorf("ReadFile(%q) exposed filtered file", target)
+		}
+		if _, err := adapter.ReadFileBounded(target, 1024); err == nil {
+			t.Errorf("ReadFileBounded(%q) exposed filtered file", target)
+		}
+	}
+}
+
 func TestOverlayFSWritesAgainstVisibleLowerCAS(t *testing.T) {
 	overlay, upperDir := newTestOverlay(t)
 	sum := sha256.Sum256([]byte("lower"))
@@ -96,7 +121,10 @@ func TestOverlayFSRejectsLowerBackedRemoval(t *testing.T) {
 
 func TestNewServerWithLowerFSUsesWritableDirAtRoot(t *testing.T) {
 	upperDir := t.TempDir()
-	lower := fstest.MapFS{"embedded.md": &fstest.MapFile{Data: []byte("embedded")}}
+	lower := fstest.MapFS{
+		"embedded.md": &fstest.MapFile{Data: []byte("embedded")},
+		"generate.go": &fstest.MapFile{Data: []byte("package docs")},
+	}
 	s, err := NewServerWithLowerFS(lower, WithWritableDir(upperDir), WithReadonly(false), config.WithDataDir(t.TempDir()))
 	if err != nil {
 		t.Fatalf("NewServerWithLowerFS: %v", err)
@@ -107,6 +135,35 @@ func TestNewServerWithLowerFSUsesWritableDirAtRoot(t *testing.T) {
 	}
 	if got, err := s.merge.ReadFile("/embedded.md"); err != nil || string(got) != "embedded" {
 		t.Fatalf("embedded read = %q, %v", got, err)
+	}
+	entries, err := s.merge.ReadDir("/")
+	if err != nil {
+		t.Fatalf("list embedded root: %v", err)
+	}
+	seen := map[string]bool{}
+	for _, entry := range entries {
+		seen[entry.FileName] = true
+	}
+	if !seen["embedded.md"] || seen["generate.go"] {
+		t.Fatalf("filtered embedded entries = %+v", entries)
+	}
+	if _, err := s.merge.ReadFileBounded("/generate.go", 1024); err == nil {
+		t.Fatal("disallowed embedded file must not be readable")
+	}
+	s.analytics.Start(context.Background())
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		rows, status, err := s.analytics.IndexedFacts(context.Background(), "/", 10)
+		if err == nil && status.Complete {
+			if len(rows) != 1 || rows[0].Path != "/embedded.md" {
+				t.Fatalf("indexed embedded facts = %+v", rows)
+			}
+			break
+		}
+		if status.State == "failed" || time.Now().After(deadline) {
+			t.Fatalf("embedded analytics did not complete: status=%+v err=%v", status, err)
+		}
+		time.Sleep(time.Millisecond)
 	}
 	if _, err := s.merge.WriteFileAtomic("/agent/jared/note.md", []byte("hi"), vfs.WriteOpts{}); err != nil {
 		t.Fatalf("overlay write: %v", err)
