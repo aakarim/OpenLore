@@ -710,6 +710,72 @@ select:focus-visible,
 .markdown a {
   color: #9c4b2f;
 }
+.markdown-table {
+  width: 100%;
+  margin: 1.5rem 0;
+  overflow-x: auto;
+  border: 1px solid #ded9d4;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(32 29 33 / 6%);
+  scrollbar-color: #b8b1ad #f3f0ee;
+  -webkit-overflow-scrolling: touch;
+}
+.markdown-table:focus-visible {
+  outline: 2px solid #9c4b2f;
+  outline-offset: 2px;
+}
+.markdown-table table {
+  width: max-content;
+  min-width: 100%;
+  margin: 0;
+  border-spacing: 0;
+  border-collapse: separate;
+  font-family: Inter, system-ui, sans-serif;
+  font-size: 0.875em;
+  line-height: 1.45;
+}
+.markdown-table th,
+.markdown-table td {
+  min-width: 8rem;
+  max-width: 24rem;
+  padding: 10px 14px;
+  border-right: 1px solid #e7e3df;
+  border-bottom: 1px solid #e7e3df;
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+.markdown-table th:first-child,
+.markdown-table td:first-child {
+  width: 14rem;
+  min-width: 12rem;
+  max-width: 14rem;
+}
+.markdown-table th:last-child,
+.markdown-table td:last-child {
+  border-right: 0;
+}
+.markdown-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+.markdown-table th {
+  background: #f4f1ef;
+  color: #4a4140;
+  font-size: 0.8em;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.markdown-table tbody tr:nth-child(even) td {
+  background: #fbfaf9;
+}
+.markdown-table caption {
+  padding: 10px 14px;
+  color: #625956;
+  font-weight: 600;
+  text-align: left;
+}
 .source {
   max-width: 900px;
   margin: 0 auto;
@@ -1096,6 +1162,20 @@ select:focus-visible,
     padding: 25px 19px;
     border-radius: 2px;
     font-size: 15px;
+  }
+  .markdown-table {
+    margin: 1.25rem 0;
+  }
+  .markdown-table th,
+  .markdown-table td {
+    min-width: 7rem;
+    padding: 9px 12px;
+  }
+  .markdown-table th:first-child,
+  .markdown-table td:first-child {
+    width: 11rem;
+    min-width: 11rem;
+    max-width: 11rem;
   }
   .folder-browser {
     height: auto;
