@@ -21,6 +21,39 @@ func TestTailPipe(t *testing.T) {
 	}
 }
 
+func TestTailLines(t *testing.T) {
+	tests := []struct {
+		name string
+		cmd  string
+		want string
+	}{
+		{name: "trailing newline", cmd: "printf 'a\\nb\\nc\\n' | tail -2", want: "b\nc\n"},
+		{name: "no trailing newline", cmd: "printf 'a\\nb\\nc' | tail -2", want: "b\nc\n"},
+		{name: "single line", cmd: "printf 'a\\nb\\nc\\n' | tail -1", want: "c\n"},
+		{name: "from line with option", cmd: "printf 'a\\nb\\nc\\n' | tail -n +2", want: "b\nc\n"},
+		{name: "from line shorthand", cmd: "printf 'a\\nb\\nc\\n' | tail +2", want: "b\nc\n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, errOut, code := execCmd(t, testFS(), tt.cmd)
+			if code != 0 || errOut != "" || out != tt.want {
+				t.Errorf("code=%d stdout=%q stderr=%q, want code=0 stdout=%q stderr empty", code, out, errOut, tt.want)
+			}
+		})
+	}
+}
+
+func TestTailFileShorterThanDefaultCount(t *testing.T) {
+	fs := testFS()
+	fs.AddFile("/docs/short.txt", "a\nb\nc\n")
+
+	out, errOut, code := execCmd(t, fs, "tail /docs/short.txt")
+	if code != 0 || errOut != "" || out != "a\nb\nc\n" {
+		t.Errorf("code=%d stdout=%q stderr=%q, want code=0 stdout=%q stderr empty", code, out, errOut, "a\nb\nc\n")
+	}
+}
+
 func TestTailBytes(t *testing.T) {
 	tests := []struct {
 		name string

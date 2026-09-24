@@ -128,7 +128,7 @@ func TestContentCommandsEmitBestEffortLineRanges(t *testing.T) {
 	}{
 		{"cat /docs/readme.md", 1, 5},
 		{"head -n 2 /docs/readme.md", 1, 2},
-		{"tail -n 2 /docs/readme.md", 5, 5},
+		{"tail -n 2 /docs/readme.md", 4, 5},
 		{"sed -n '2,3p' /docs/readme.md", 2, 3},
 	}
 	for _, test := range tests {
