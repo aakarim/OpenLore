@@ -126,7 +126,7 @@ does not expose those namespace operations.
 
 ### Reading
 
-Trajectories are ordinary docset files, so any authorized session can inspect
+Trajectories are ordinary docset files, so any authorised session can inspect
 them:
 
 ```bash

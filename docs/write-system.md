@@ -8,7 +8,8 @@ OpenLore started life as a read-only SSH file server for documentation. The
 write system layers controlled, auditable mutation on top of that substrate
 **without** giving anyone a real shell, a real process, or unscoped disk access.
 Every write is a whole-object, atomic swap that flows through the same narrow
-seam, so concurrency, scoping, approval, and notification all compose cleanly.
+seam, so concurrency, scoping, admission policy, and notification all compose
+cleanly.
 
 > TL;DR: a write is `WriteFileAtomic(path, bytes, precondition)`. There is no
 > streaming, no partial write, no offset, no `open()`/`fsync()`/`close()` for
@@ -26,7 +27,8 @@ seam, so concurrency, scoping, approval, and notification all compose cleanly.
 2. **One write seam.** Every content-writing verb (`>`, `>>`, `tee`, `sed -i`,
    `patch`, `mv`, `publish`, and the async `spawn` write-back) funnels through one helper
    (`cmds.WriteFile` / `cmds.WriteFileCAS`). Concurrency control, scoping, and
-   approval are enforced once, at that seam — not re-implemented per command.
+   admission policy are enforced once, at that seam — not re-implemented per
+   command.
 3. **Read-only by default.** The substrate boots read-only. Writes require an
    explicit, stateful flip (`SetWriteable`). Embedded (`embed.FS`) builds can
    never be made writable — the capability is physically absent.
@@ -84,7 +86,7 @@ backend over a real directory. `WriteFileAtomic`:
    `vfs.PreconditionError`.
 5. Commits via `atomicWrite`: write to a temp file in the destination dir,
    `fsync`, `chmod 0644`, then `os.Rename` into place (POSIX atomic swap).
-6. Publishes a `post_write` event on the eventbus (if wired).
+6. Emits a `post_write` event and runs post-commit middleware.
 
 `Mkdir` uses plain mkdir semantics (parent must exist) but **refuses to create a
 docset root or anything at/above one** — you can only create folders strictly
@@ -96,7 +98,7 @@ docset root or anything at/above one** — you can only create folders strictly
 routes `WriteFileAtomic`/`Mkdir` to the backend owning the resolved path, and
 fans `SetWriteable`/`SetReadonly` out to every writable-capable backend. It also
 hosts **system mounts** (`MountSystem`) for the computed control-plane
-filesystems `/requests` and `/jobs`, which survive a session's `FilteredView`.
+filesystem `/jobs`, which survives a session's `FilteredView`.
 
 ---
 
@@ -153,7 +155,7 @@ of the target:
 - **read tracked** → `IfMatch = <last-read hash>`. The write commits only if the
   file still matches what the session last saw, otherwise `PreconditionError`.
   This is the "cat then write, and it fails if it changed underneath you"
-  behavior — across the whole session, not just one command.
+  behaviour — across the whole session, not just one command.
 - **not tracked** → fall back to the content read at command time (narrow window),
   or create-only (`IfNoneMatch`) if the file doesn't exist.
 
@@ -190,7 +192,7 @@ write: [`write`/`tee`/redirects](../pkg/shell/cmds/write.go),
 
 `mv` supports files only. It writes the destination through `WriteFile`, then
 deletes the source with a snapshot precondition so a concurrent source edit is
-never removed. These are two independently scoped and approval-gated changes;
+never removed. These are two independently scoped and admitted changes;
 if source deletion is held or denied after the destination commits, both files
 remain and the command reports that outcome. Directory moves are rejected
 because the VFS has no atomic tree-write primitive.
@@ -210,10 +212,13 @@ travels:
   scopedWriteFS   ── is the target inside THIS identity's docset roots?  ──no──▶ ErrReadOnly
         │ yes
         ▼
-  approvalFS      ── does the target match a requires_approval rule?     ──yes─▶ record changeset (write or delete),
-        │ no                                                                     return PendingApprovalError
+  admission chain ── plugin write middleware: allow, defer, or reject      ──defer──▶ return PendingChangeError
+        │ allow                                                             ──reject─▶ return the middleware's error
         ▼
-  DirFS substrate ── precondition check + atomic temp-write/rename-aside ──▶ post_write / post_delete event
+  middlewareFS    ── submit the ChangeSet to the single serialised write log
+        │
+        ▼
+  DirFS substrate ── precondition check + atomic temp-write/rename-aside ──▶ post-commit middleware, post_write / post_delete event
 ```
 
 - **`scopedWriteFS`** ([`scoped_write_fs.go`](../pkg/openlore/scoped_write_fs.go))
@@ -223,16 +228,18 @@ travels:
   `ErrReadOnly`. This is how two agents that can both *see* a shared docset are
   still prevented from writing each other's private docsets. It also implements
   `vfs.WriteScopeFS.CanWrite` for fail-fast checks (used by `spawn`).
-- **`approvalFS`** ([`approval_fs.go`](../pkg/openlore/approval_fs.go)) sits
-  *inside* the scope gate, so an out-of-scope mutation is denied before it could
-  ever become a changeset. For a gated **write** it honors the caller's original
-  precondition first (a stale write fails immediately — no doomed request is
-  parked), captures the proposal-time base, and records a write changeset. For a
-  gated **delete** (`rm` / `rm -r`) it captures an exact subtree snapshot and
-  records a delete changeset (the union of every gated descendant's capability).
-  `mkdir` is never gated and applies straight through. In every gated case it
-  fires `approval_pending` and returns `vfs.PendingApprovalError` (which callers
-  report informationally, not as a failure).
+- **The admission chain** ([`middleware.go`](../pkg/openlore/middleware.go))
+  sits *inside* the scope gate, so an out-of-scope mutation is denied before any
+  plugin sees it. Each write middleware receives an immutable `WriteOp` (the
+  `ChangeSet` plus attribution) and must inspect every leaf. It either calls the
+  next handler (allow), returns `op.Pending(ref)` (defer), or returns an error
+  (reject). Folder rules and the shellexec `pre_commit` commands are
+  middleware; see [Plugins](plugins.md) for the interfaces.
+- **`middlewareFS`** ([`middleware_fs.go`](../pkg/openlore/middleware_fs.go)) is
+  the innermost writable wrapper. Every admitted mutation becomes a log entry in
+  the single global write log ([`writelog.go`](../pkg/openlore/writelog.go)),
+  so writes, directory creation and removals are globally ordered and never
+  touch the substrate directly.
 
 ---
 
@@ -244,80 +251,62 @@ Commands are classified by `Action` in
 | Action | Verbs | Granted to |
 |--------|-------|------------|
 | `read` | `ls`, `cat`, `grep`, … (default) | everyone |
-| `write` | `write`, `patch`, `tee`, `>`/`>>`, `sed -i`, `mkdir`, `mv`, `rm` | recognized identities |
-| `publish` | `publish` | recognized identities |
-| `approve` | `approve`, `reject` | identities holding any approval capability |
+| `write` | `write`, `patch`, `tee`, `>`/`>>`, `sed -i`, `mkdir`, `mv`, `rm` | recognised identities |
+| `publish` | `publish` | recognised identities |
 | `spawn` | `spawn` | identities holding the explicit `spawn` capability |
 | `admin` | server reconfiguration | reserved |
 
 A session is given an allowed set (`shell.SetAllowedActions`). A command whose
-action isn't allowed is treated as if it **doesn't exist** — an unauthorized
+action isn't allowed is treated as if it **doesn't exist** — an unauthorised
 session can't even discover the write/publish/spawn surface. Anonymous /
-unrecognized identities get the read-only set. `sed` is special-cased: only
+unrecognised identities get the read-only set. `sed` is special-cased: only
 `sed -i` is reclassified as a `write` (see `InvocationAction`).
 
 ---
 
-## 7. Human-in-the-loop approvals: changesets (`/requests`)
+## 7. Deferred writes
 
-A docset can declare `requires_approval` rules (path glob → required
-capability). When a gated file operation hits a matching path, `approvalFS`
-records a **changeset** — an `ApprovalRequest` in a `RequestStore` — instead of
-committing. The changeset is the single approval primitive for every gated
-mutation; its `Action` discriminates the payload:
+A write middleware can park a mutation instead of committing or rejecting it by
+returning `op.Pending(ref)`. The seam surfaces this to the caller as
+`*vfs.PendingChangeError`, and the write verbs report it informationally (exit
+code 0) as:
 
-- **Write changesets** (`write`, `patch`, `tee`, `>`/`>>`, `sed -i`, and the
-  destination side of `mv`) carry a
-  `WriteApprovalPayload`: the base hash + proposed bytes, stored alongside the
-  metadata for the diff and for CAS replay at approval time. The caller's own
-  precondition is honored first, so a stale write fails immediately rather than
-  parking a doomed request.
-- **Delete changesets** (`rm`, `rm -r`, and the source side of `mv`) carry a
-  `DeleteApprovalPayload`: an
-  **exact subtree snapshot** captured at proposal time. The snapshot is both the
-  reviewable manifest and the compare-and-swap base. Delete changesets are
-  manifest-only — no bytes are copied aside — so the target files stay **live**
-  for review until the delete is approved. A recursive delete whose subtree spans
-  several gated rules requires the **union** of their capabilities, and the
-  approver must hold *all* of them.
+```text
+<cmd>: <path> change pending as <ref>
+```
 
-`mkdir` / `mkdir -p` are never gated: directory creation carries no content to
-review, so it applies directly (still scope- and read-only-checked).
-
-- **`/requests`** is a read-only computed FS (`NewRequestsFS`, mounted via
-  `MountSystem`). `ls /requests` lists pending changesets; `cat /requests/<id>`
-  shows the metadata and either the proposed diff (write) or the delete manifest.
-- **`approve <id>` / `reject <id>`** ([`approve.go`](../pkg/shell/cmds/approve.go))
-  are gated by `ActionApprove`. The approval backend re-checks that the approver
-  holds every required capability, then replays the change through the raw
-  substrate against the captured base — a write via CAS on the base hash, a
-  delete via `RemoveAll` with the exact snapshot as the expected precondition
-  (strict staleness: any drift anywhere in the subtree marks the changeset
-  `STALE` and deletes nothing). Reject discards the changeset.
+The `ref` is owned by the plugin that deferred the write; OpenLore core does not
+store or replay pending changes. This is the seam a review or approval plugin
+builds on. The core write log records only committed writes.
 
 ---
 
-## 8. Events & hooks
+## 8. Events and external commands
 
-[`pkg/openlore/eventbus`](../pkg/openlore/eventbus/bus.go) is an in-process bus.
-Event kinds: `on_startup`, `pre_read` (debounced per path), `post_write`,
-`post_delete` (after a committed `rm` / `rm -r`), `approval_pending`,
-`topic_refreshed`.
+[`events.go`](../pkg/openlore/events.go) defines the storage events:
+`on_startup`, `pre_read`, `post_write`, `post_delete` (after a committed `rm` /
+`rm -r`) and `topic_refreshed`. Consumers should ignore unknown kinds.
 
-[`pkg/openlore/hooks`](../pkg/openlore/hooks/hooks.go) subscribes external
-commands to these events (configured under `hooks:` in `openlore.yml`). A hook is
-an external program invoked with an env-var protocol (`OPENLORE_EVENT`,
-`OPENLORE_PATH`, `OPENLORE_BYTES`, `OPENLORE_AGENT`, …). This is how a write can,
-e.g., trigger a notification or a downstream refresh without OpenLore knowing
-anything about the target system.
+The built-in **shellexec** plugin ([`shellexec.go`](../pkg/openlore/shellexec.go))
+runs external commands as middleware, configured under `shellexec:` in
+`openlore.yml`:
+
+- `pre_read` runs before a read reaches storage and may abort it (debounced per
+  path, 2s by default).
+- `pre_commit` runs before a write commits and may reject it.
+- `post_write` runs after a durable commit and never halts the log.
+
+Commands run via `sh -c` with the `OPENLORE_*` environment protocol
+(`OPENLORE_PATH`, `OPENLORE_AGENT`, `OPENLORE_DATA_DIR`, …), synchronously by
+default with a 30s timeout and `fail_on_error: true`. See the
+[openlore.yml reference](openlore-yml.md#shellexec) for every key.
 
 ---
 
 ## 9. Async external work: `spawn` + `/jobs`
 
-The newest layer (Part D) lets a trusted identity kick off slow external work and
-write its result back into the lore **for everyone**, without blocking the caller
-and without bolting an auth server onto OpenLore.
+`spawn` lets a trusted identity kick off slow external work and write its
+result back into the lore **for everyone**, without blocking the caller.
 
 - **`spawn --writes <path> [--append] -- <cmd…>`**
   ([`spawn.go`](../pkg/shell/cmds/spawn.go)) is gated by `ActionSpawn` (explicit
@@ -327,15 +316,15 @@ and without bolting an auth server onto OpenLore.
   resolved write-conflict policy — and returns a `job_<id>` + `/jobs/<id>` handle
   immediately.
 - **`JobManager`** ([`jobs.go`](../pkg/openlore/jobs.go)) runs the command on a
-  bounded worker pool (`max_jobs`) via the `hooks.Runner` (`sh -c`), then commits
+  bounded worker pool (`max_jobs`) via the `Runner` (`sh -c`), then commits
   its stdout back through the **same** `cmds.WriteFile` seam on the frozen
-  context — so CAS, per-docset policy, scoping, and the approval gate **all apply
-  uniformly** to the background write. The captured scoped FS *is* the
+  context — so CAS, per-docset policy, scoping, and admission middleware **all
+  apply uniformly** to the background write. The captured scoped FS *is* the
   capability: no callback token, no external write endpoint, no durable queue.
 - **`/jobs`** is a read-only computed FS (`NewJobsFS`, mounted via `MountSystem`):
   `ls /jobs` lists jobs; `cat /jobs/<id>` shows `running` / `done` / `failed`,
   target, command, timestamps, and the terminal detail (bytes written, pending
-  request id, or error).
+  change ref, or error).
 
 **The trade we accept:** jobs are in-memory, so a server restart loses in-flight
 work. Shutdown drains for a few seconds first to shrink the loss window. Anything
@@ -351,12 +340,11 @@ In `openlore.yml` (global) and per docset in `lore.json`:
 |---------|-------|---------|
 | `readonly` | global / per-docset | Global is a hard physical lock (default `true`). A per-docset `readonly: false` cannot loosen a global lock; a per-docset `readonly: true` excludes that docset from writes. |
 | `write_conflict_policy` | global / per-docset | `hash` (CAS, default) or `last_write_wins`. Per-docset overrides global. |
-| `requires_approval` | per-docset | List of `{ path, capability }` rules that gate matching writes and deletes behind `approve` (as changesets). |
 | `rules` | global (`lore.json` top level) / per-docset | Folder rules evaluated as a write middleware and by `lore validate`; unified with `.lore/config.yaml` files in the content tree. See [Folder rules](folder-rules.md). |
 | `config` | per-docset | `config.edit`: roles that may write or delete `.lore/config.yaml` under the docset and run `lore size baseline reset`. |
 | `rules.growth` | global (`openlore.yml`) | Default multiplier for `max: initial` size rules (default `1.25`). |
 | `max_jobs` | global | Max concurrent async `spawn` jobs (default `8`). |
-| `hooks` | global | External commands subscribed to `on_startup`/`pre_read`/`post_write`/`post_delete`/`approval_pending`. |
+| `shellexec` | global (`openlore.yml`) | External commands run as `pre_read`, `pre_commit` and `post_write` middleware. See the [openlore.yml reference](openlore-yml.md#shellexec). |
 
 The substrate is read-only unless `readonly: false` is set globally (or
 `--readonly=false` on the CLI). To enable per-agent writes, give each identity
@@ -373,10 +361,11 @@ The substrate is read-only unless `readonly: false` is set globally (or
 | The write seam (CAS / append / policy) | [`pkg/shell/cmds/write.go`](../pkg/shell/cmds/write.go) |
 | Session read-tracking (auto CAS base) | [`pkg/openlore/read_tracking_fs.go`](../pkg/openlore/read_tracking_fs.go) |
 | Per-identity scope gate | [`pkg/openlore/scoped_write_fs.go`](../pkg/openlore/scoped_write_fs.go) |
-| Approval gate | [`pkg/openlore/approval_fs.go`](../pkg/openlore/approval_fs.go) |
-| Requests store + `/requests` + approve/reject | [`pkg/openlore/approval.go`](../pkg/openlore/approval.go), [`pkg/shell/cmds/approve.go`](../pkg/shell/cmds/approve.go) |
+| Admission chain and `WriteOp` | [`pkg/openlore/middleware.go`](../pkg/openlore/middleware.go), [`pkg/openlore/middleware_fs.go`](../pkg/openlore/middleware_fs.go) |
+| Serialised write log | [`pkg/openlore/writelog.go`](../pkg/openlore/writelog.go) |
+| Read middleware chain | [`pkg/openlore/read_chain_fs.go`](../pkg/openlore/read_chain_fs.go) |
 | Capability classes | [`pkg/shell/cmds/actions.go`](../pkg/shell/cmds/actions.go) |
-| Events / hooks | [`pkg/openlore/eventbus/bus.go`](../pkg/openlore/eventbus/bus.go), [`pkg/openlore/hooks/hooks.go`](../pkg/openlore/hooks/hooks.go) |
+| Events / external commands | [`pkg/openlore/events.go`](../pkg/openlore/events.go), [`pkg/openlore/shellexec.go`](../pkg/openlore/shellexec.go) |
 | Async jobs (`spawn`) + `/jobs` | [`pkg/shell/cmds/spawn.go`](../pkg/shell/cmds/spawn.go), [`pkg/openlore/jobs.go`](../pkg/openlore/jobs.go) |
 | Per-session FS composition & gating | [`pkg/openlore/server.go`](../pkg/openlore/server.go) |
 | Config fields | [`internal/config/config.go`](../internal/config/config.go) |

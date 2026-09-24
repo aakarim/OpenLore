@@ -5,9 +5,9 @@
 
 Sponsored by <a href="https://oiya.ai/?utm_source=github&amp;utm_medium=referral&amp;utm_campaign=openlore&amp;utm_content=sponsor_logo"><img src="assets/oiya-logo.svg" alt="Oiya" height="24" align="absmiddle"></a>
 
-**Serve your docs to AI agents over SSH.**
+**Serve your docs to AI agents over SSH and MCP.**
 
-OpenLore is a minimal, extensible, agent-native knowledge base that keeps shared context current and inspectable.
+OpenLore is a minimal, customisable, agent-native knowledge base that keeps your context current and inspectable.
 
 ---
 
@@ -19,7 +19,7 @@ Keeping docs inside each repo works until that knowledge gets copied, duplicated
 
 OpenLore gives your agents one shared place for documentation, runbooks, skills and project knowledge. Connect every agent to the same source, update it once, and make the latest version immediately available wherever it is needed.
 
-Your knowledge stays as ordinary Markdown. OpenLore serves it as an agent-native virtual filesystem with identity-scoped access, controlled writes, validation and human approval when you need them. There is no ingestion pipeline, vector database or LLM required.
+Your knowledge stays as ordinary Markdown. OpenLore serves it as an agent-native virtual filesystem with identity-scoped access, controlled writes and validation when you need them. There is no ingestion pipeline, vector database or LLM required.
 
 Agents can access the same knowledge through MCP or use familiar commands such as `ls`, `cat`, `grep` and `find` over SSH.
 
@@ -53,8 +53,12 @@ go install github.com/aakarim/go-openlore/cmd/openlore@latest
 openlore ./docs
 
 ssh -p 2222 localhost
-ssh -p 2222 localhost "grep -r 'authentication' /docs"
+ssh -p 2222 localhost "grep -r 'authentication' /"
 ```
+
+The contents of `./docs` appear at `/`. New here? Start with
+[What is OpenLore](docs/introduction.md), then connect
+[Claude Code](docs/start-claude-code.md) or [any agent over SSH](docs/start-ssh.md).
 
 By default this starts:
 
@@ -72,8 +76,8 @@ See [Installation](#installation) for more ways to install and package OpenLore.
   filesystem over SSH, SFTP/SSHFS (including direct VS Code browsing and
   editing), MCP, and a human-friendly web view.
 - **Live, governed knowledge** — Keep content read-only, allow scoped publishing,
-  or enable full writes per docset. Writes are atomic, conflict-aware, and can
-  require human approval.
+  or enable full writes per docset. Writes are atomic, conflict-aware and
+  validated before they commit.
 - **Identity-scoped views** — Give each person or agent only the docsets it
   needs, with role-based `ro`, `publish`, and `rw` grants, path aliases, and
   private home directories.
@@ -102,20 +106,20 @@ See [Installation](#installation) for more ways to install and package OpenLore.
   context across sessions.
 - **Public docs site** - add any files to your public docset, enable public access and it will be shown to any agent that stumbles across your site. Improves AEO/GEO with no need to edit your existing docs. 
 - **Skills sharing** — Publish Agent Skills into shared collections so every
-  authorized agent can discover and use the same governed procedures.
+  authorised agent can discover and use the same governed procedures.
 - **Agent Plugins repository** — Version-pin [Agent Plugins](https://agent-plugins.org) repos from GitHub and serve them to your team's agents. Skills packaged in the open standard stay current automatically.
 - **Governed knowledge contribution** — Let contributors publish into inboxes
-  while reserving sensitive paths for approvers and preventing accidental
+  while reserving existing documents for maintainers and preventing accidental
   overwrites.
 - **Artifact repository** — Store and expose reports, logs, screenshots, and
   generated files through the browser or SSH without building a custom artifact
   viewer or granting access to the agent's machine.
 - **Identity-specific workspaces** — Mount a private home for each agent plus
-  shared team knowledge, all through one server and one authorization model.
+  shared team knowledge, all through one server and one authorisation model.
 - **Portable customer or project knowledge** — Ship a versioned executable with
   the relevant docs embedded, or distribute the same knowledge as an MCPB
   desktop extension.
-- **Validated knowledge catalogs** — Enforce frontmatter and bundle conventions,
+- **Validated knowledge catalogues** — Enforce frontmatter and bundle conventions,
   inspect metadata cheaply, and stop malformed knowledge at admission time.
 
 ## How It Works
@@ -128,8 +132,8 @@ transport. A connection is handled entirely against a virtual filesystem:
 2. **Compose a view** — mount only the docsets and paths granted to that identity.
 3. **Explore** — run shell commands implemented as pure Go functions over that
    view, or use the equivalent MCP `shell` tool.
-4. **Contribute safely** — if writing is enabled, authorize and validate a
-   whole-file change before committing it atomically or routing it for approval.
+4. **Contribute safely** — if writing is enabled, authorise and validate a
+   whole-file change before committing it atomically.
 
 OAuth clients use delegated identities, so durable write provenance distinguishes
 direct work by `adil` from work performed as `adil/claude@claude.ai`. Delegates
@@ -147,17 +151,17 @@ identities can be granted narrowly scoped asynchronous processing through the
 
 OpenLore is read-only by default. Writable deployments keep a single,
 policy-controlled write path for redirects, append, `tee`, `patch`, `sed -i`,
-file moves, publishing, and approved external jobs.
+file moves, publishing, and trusted external jobs.
 
 ```bash
-echo "# Research" | publish backend findings.md
+echo "# Research" | publish /backend/findings.md
 cat change.diff | patch /backend/api.md
 sed -i 's/old/new/g' /backend/runbook.md
 ```
 
 Writes are whole-object atomic swaps. Compare-and-swap protection rejects stale
-edits by default, docset grants constrain the target, and selected paths can
-produce reviewable changesets under `/requests` instead of committing directly.
+edits by default, docset grants constrain the target, and plugins can validate
+or defer a write before it commits.
 
 See [Writing and publishing](docs/writing.md) for user-facing setup and
 [Write system internals](docs/write-system.md) for the implementation model.
@@ -207,7 +211,7 @@ Produce cross-platform binaries with your docs embedded:
 See [Ways to use OpenLore](docs/usage.md) for direct VS Code editing, MCP stdio,
 MCPB desktop packaging, SSHFS, and Go library usage.
 
-### Create a customized deployment
+### Create a customised deployment
 
 Use the bundled `setup` skill to create `<team>-lore`, a small customer-owned
 repository containing `openlore.yml`, a thin `Containerfile` pinned to an
@@ -220,7 +224,7 @@ ssh openlore.sh setup | amp
 ```
 
 The generated repository keeps initial `lore.json` policy and SSH-visible files
-under gitignored `.local/`. The first deployment initializes an empty persistent
+under gitignored `.local/`. The first deployment initialises an empty persistent
 volume from that state. Root `openlore.yml` remains the Git/IaC authority and is
 deployed separately to `/var/lib/openlore/config/openlore.yml`; it is not baked
 into the image. Later `lore.json` and filesystem edits on the server are
@@ -268,17 +272,22 @@ The container workflow publishes `latest` from `main`; releases also publish
 
 | Guide | Contents |
 |---|---|
+| [What is OpenLore](docs/introduction.md) | Serve, connect, scope, govern and observe in one page |
+| [Claude Code with OpenLore](docs/start-claude-code.md) | Connect Claude Code over MCP and scope what it sees |
+| [Any agent with OpenLore over SSH](docs/start-ssh.md) | Connect a coding agent or CI job over SSH and give it an identity |
+| [Let an agent publish into an inbox](docs/publish-to-inbox.md) | Accept contributions from an agent without letting it edit anything else |
 | [Ways to use OpenLore](docs/usage.md) | SSH, MCP, web, SSHFS, embedded binaries, GitHub Action, MCPB, and library usage |
 | [Editing OpenLore files](docs/editors.md) | Direct VS Code and SFTP editor setup without a local project mirror |
 | [Command reference](docs/commands.md) | Complete shell, introspection, publishing, syntax, CLI command, and flag reference |
 | [Configuration and identity](docs/configuration-and-identity.md) | `openlore.yml`, authentication, roles, docsets, aliases, homes, and host verification |
+| [openlore.yml reference](docs/openlore-yml.md) | Generated reference for every key `openlore.yml` accepts |
 | [HTTP inbox uploads](docs/inbox.md) | Upload documents with bearer or HMAC credentials |
 | [Workload identity federation](docs/workload-identity-federation.md) | Authenticate CI and agents with short-lived external identity tokens |
 | [Writing and publishing](docs/writing.md) | Write modes, inboxes, conflict handling, approvals, and jobs |
 | [Plugins and knowledge formats](docs/plugins.md) | Plugin installation, interfaces, OKF validation, `lore validate`, and `lore meta` |
 | [Folder rules](docs/folder-rules.md) | `.lore/config.yaml` and `lore.json` rules, layering, permissions, rejection messages, and growth limits |
 | [Rules standard library](docs/rules-stdlib.md) | Generated reference for compiled-in rule members and their parameters |
-| [Write system internals](docs/write-system.md) | Filesystem layering, write seam, changesets, hooks, and async jobs |
+| [Write system internals](docs/write-system.md) | Filesystem layering, write seam, admission middleware, and async jobs |
 | [Security evaluation](SECURITY.md) | Threat model and security properties |
 
 ## Security
@@ -296,8 +305,8 @@ See [SECURITY.md](SECURITY.md) for the full security evaluation.
 
 [Apache License 2.0](LICENSE) — Copyright © 2026 Adil Karim
 
-OpenLore bundles third-party open-source components. Their licenses and required
+OpenLore bundles third-party open-source components. Their licences and required
 notices are listed in
 [assets/legal/THIRD_PARTY_NOTICES.md](assets/legal/THIRD_PARTY_NOTICES.md), with
-full license texts in [assets/legal/licenses/](assets/legal/licenses/). These are
+full licence texts in [assets/legal/licenses/](assets/legal/licenses/). These are
 embedded in the binary and served by the running service at `/legal`.

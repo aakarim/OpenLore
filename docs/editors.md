@@ -2,7 +2,7 @@
 
 OpenLore exposes its virtual filesystem through SFTP, so a compatible editor
 can browse the remote directory tree and save individual files without cloning
-or synchronizing the whole tree into a local project folder. An editor may
+or synchronising the whole tree into a local project folder. An editor may
 cache files while they are open, but OpenLore remains the source of truth.
 
 OpenLore is read-only by default. To save from an editor, the server must run
@@ -67,14 +67,14 @@ The second slash before `docs` selects an absolute remote path.
 Except for the documented VS Code workflow, these clients are not tested by
 the OpenLore project. Some editors implement a “safe save” by uploading a
 temporary file and renaming it over the destination. OpenLore does not currently
-support SFTP rename, so disable atomic/safe-save behavior if the editor offers
+support SFTP rename, so disable atomic/safe-save behaviour if the editor offers
 that setting. A client that cannot save directly to the final path will not yet
 work.
 
-## Save behavior and limitations
+## Save behaviour and limitations
 
 An SFTP save is staged privately and submitted when the file handle closes as
-one governed whole-file write. The same authorization, validation, approval,
+one governed whole-file write. The same authorisation, validation,
 size-limit, ordered-write, and conflict checks used by shell writes still
 apply. An interrupted transfer is discarded. If a file changed after the
 editor opened it, the save fails rather than overwriting newer content; reload
@@ -91,9 +91,16 @@ governed namespace changes.
   authentication is enforced, a named identity with an `rw` grant for the
   target docset.
 - **Save fails after uploading:** the file may have changed concurrently or a
-  validation/approval rule may have rejected or deferred the write. Re-open the
-  file and inspect the server logs or pending requests.
+  validation rule may have rejected or deferred the write. Re-open the
+  file and inspect the server logs.
 - **The editor can browse but not save:** check whether it uses a temporary
   remote file followed by rename. Select direct overwrite or disable safe save.
 - **Remote - SSH tries to install VS Code Server:** use an SFTP filesystem
   extension instead.
+
+## Next steps
+
+- [Writing and editing](writing.md) explains the write model editors rely on,
+  including compare-and-swap and deferred writes.
+- [Ways to use OpenLore](usage.md#mount-with-sshfs) covers SSHFS mounts when
+  you want a whole docset in your local filesystem.

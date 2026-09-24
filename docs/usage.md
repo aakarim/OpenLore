@@ -36,7 +36,7 @@ ssh -p 2222 localhost agents >> AGENTS.md
 You can also give the agent a direct tool instruction:
 
 ```markdown
-## Documentation Access
+## Documentation access
 
 Connect to the docs server for project documentation:
 
@@ -46,24 +46,18 @@ Use `ls`, `cat`, `grep`, `find`, and pipes to explore. Run `help` for the full
 command list.
 ```
 
-OpenLore skills output instructions to stdout rather than appearing in the
-filesystem. `setup` creates and locally verifies a team deployment project;
-`onboarding` adds initial identities and folders; `deploy` provisions and
-verifies one authoritative server; and `upgrade` prepares a pinned image
-version change. Provider deployment guides cover Fly.io, Railway, AWS, Google
-Cloud, Azure, and DigitalOcean. `teach` covers general OpenLore setup and
-`agents` emits an `AGENTS.md` snippet. Commands named `agents-<type>` emit
-instructions for specific agent types: `openlore-skill` emits a portable
-Agent Skills `SKILL.md` for installation into any harness's skills directory
-(Amp, Claude Code, headlong, …), while `agents-shellm` and
-`agents-shellm-housekeeping` emit
-[headlong/shellm](https://github.com/laude-institute/headlong)-format
-`SKILL.md` files for accessing and maintaining the server (install with
-`ssh <server> agents-shellm > .skills/openlore/SKILL.md`;
-see [shellm.md](shellm.md) for Docker caveats and trajectory sharing).
-Run `skills` for Agent Skills management
-instructions and a list of built-in and configured runtime instruction
-commands.
+An OpenLore server can also serve instruction commands for agents. They print
+to stdout rather than appearing in the filesystem, so you pipe them straight
+into an agent or save them as a `SKILL.md`:
+
+```bash
+ssh <server> agents > AGENTS.md
+ssh <server> agents-shellm > .skills/openlore/SKILL.md
+```
+
+Run `skills` on the server for the full list of built-in and configured
+instruction commands. See [shellm.md](shellm.md) for Docker caveats and
+trajectory sharing.
 
 Pipe an instruction command from a public OpenLore server into your coding
 agent, for example:
@@ -75,7 +69,7 @@ ssh openlore.sh setup | amp
 The generated `<team>-lore` repository tracks `openlore.yml`, a thin
 `Containerfile` based on a stable OpenLore release, and provider artifacts under
 `deploy/`. Initial policy and filesystem state live in gitignored `.local/`
-until the first verified deployment initializes its persistent volume. The
+until the first verified deployment initialises its persistent volume. The
 deployment copies tracked `openlore.yml` separately into the volume (or projects
 it through a facility such as a Kubernetes ConfigMap); it is not baked into the
 container image.
@@ -212,10 +206,10 @@ directory. Pass `--docs-dir ./docs` to bundle one during packaging.
 ## Browse and edit with VS Code
 
 An SFTP filesystem extension can open OpenLore's directory tree directly in VS
-Code without cloning, mounting, or synchronizing it into a local project
+Code without cloning, mounting, or synchronising it into a local project
 folder. Saving an editor writes the individual file back through OpenLore's
 governed write path. See [Editing OpenLore Files](editors.md) for VS Code setup,
-other compatible editors, save behavior, and limitations.
+other compatible editors, save behaviour, and limitations.
 
 ## Mount with SSHFS
 
@@ -285,3 +279,11 @@ srv := openlore.NewMCPServer(fs,
 	openlore.WithMCPInstructions("Use grep and cat to explore the docs."),
 )
 ```
+
+## Next steps
+
+- [Claude Code with OpenLore](start-claude-code.md) walks through the MCP
+  connection end to end.
+- [Configuration and identity](configuration-and-identity.md) explains how to
+  give each connection its own identity and grants.
+- [Commands](commands.md) lists every command an agent can run once connected.

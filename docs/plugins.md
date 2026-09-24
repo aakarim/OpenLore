@@ -128,14 +128,26 @@ scan as valid.
 or path and emits parseable YAML frontmatter as one JSON object per line. Bodies
 remain out of the response, keeping discovery cheap:
 
+List every document's frontmatter under the current directory:
+
 ```bash
-cd backend
 lore meta
+```
+
+Each line is one document. Pipe the stream into `jq` to answer a question, for
+example which document types exist:
+
+```bash
 lore meta | jq -r .type | sort -u
+```
+
+Or to read every document of one type:
+
+```bash
 lore meta | jq -r 'select(.type=="Metric").path' | xargs cat
 ```
 
-The walk uses the session filesystem, so it cannot reveal documents outside the
+The walk uses the session filesystem, so it only reaches documents inside the
 identity's read scope.
 
 When OKF applies to a document, the plugin enriches its metadata record:
@@ -168,13 +180,13 @@ manages skills needs the named `rw` grant on its destination docset. A home
 docset is implicitly `rw` for its owner.
 
 Docsets do not need a static `agent_skills` setting. After installation, an
-authorized user enables a directory as a collection with `skills enable`; the
+authorised user enables a directory as a collection with `skills enable`; the
 marker is portable with the directory and can be changed without restarting the
 server.
 
 Each immediate child directory is then a skill and must contain an exactly named
 `SKILL.md` with valid frontmatter. Writes are checked at admission and again
-before serialized commit. Set `metadata.agent_skill: disable` to treat a
+before serialised commit. Set `metadata.agent_skill: disable` to treat a
 parseable `SKILL.md` as ordinary documentation.
 
 Agents discover skills the same way they query OKF metadata. The `skills`
@@ -183,8 +195,21 @@ filter scopes `lore meta` to Agent Skills collections and returns only valid
 
 ```bash
 lore meta --filter skills
+```
+
+Search the names and descriptions to find a skill for a task:
+
+```bash
 lore meta --filter skills | jq -r 'select((.name + " " + .description) | test("pdf"; "i")) | .path'
 ```
 
 Run bare `skills` for collection management, importing and tracking remote
 skills, status checks, updates, and unlinking.
+
+## Next steps
+
+- [Write system internals](write-system.md) describes the admission chain that
+  plugin middleware hooks into.
+- [Folder rules](folder-rules.md) covers per-folder validation without writing
+  any Go.
+- [Commands](commands.md) lists the `lore` subcommands used above.

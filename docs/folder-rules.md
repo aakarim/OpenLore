@@ -118,13 +118,11 @@ pattern matches and no `exclude` pattern does.
   `.lore/config.yaml`.
 - `config.edit` lists the roles that may create, edit or delete
   `.lore/config.yaml` files under the docset (see [Permissions](#permissions)).
-- The existing per-docset `okf` block keeps working. It desugars to four rules
-  so that one switch governs the whole OKF family: `okf` (file scope, the
-  block's `patterns` as `**/<pattern>`, its `enforce`), `okf/bundle`,
-  `link/resolves` and `link/alias` (bundle scope, `**/*.md`; `link/alias` is
-  always a warning). Writes are still checked by `okf` alone and
-  `lore validate` still reports the rest, so existing deployments see no
-  change.
+- The existing per-docset `okf` block keeps working. It is shorthand for four
+  rules: `okf` (file scope, the block's `patterns` as `**/<pattern>`, its
+  `enforce`), `okf/bundle`, `link/resolves` and `link/alias` (bundle scope,
+  `**/*.md`; `link/alias` is always a warning). Writes are checked by `okf`
+  alone; `lore validate` reports the other three.
 
 ## `openlore.yml`
 
@@ -348,3 +346,12 @@ Check the result without writing anything:
 ```bash
 lore validate /docs/backend/decisions
 ```
+
+## Next steps
+
+- [Rules standard library](rules-stdlib.md) lists every built-in rule you can
+  reference from `.lore/config.yaml`.
+- [Writing and editing](writing.md) shows what a rejected write looks like from
+  the agent's side.
+- [Plugins](plugins.md) covers Open Knowledge Format validation, which runs
+  alongside folder rules.
