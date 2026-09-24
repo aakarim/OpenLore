@@ -5,7 +5,8 @@ and docset policy (`lore.json`).
 
 ## Server configuration
 
-Create `openlore.yml` in the project root or pass `--config`:
+Create `openlore.yml` in the directory you run `openlore` from, or pass
+`--config`. Every key is listed in the [openlore.yml reference](openlore-yml.md).
 
 An explicitly loaded config file takes precedence over an embedded
 `openlore.yml` and replaces it rather than merging with it. If no file is
@@ -22,8 +23,7 @@ debug: false
 port: 2222
 metrics_port: 3000
 http_port: 8080
-host_key: .ssh/openlore_ed25519
-allow_keyless: true
+host_key_path: .ssh/openlore_ed25519
 default_cwd: /docs
 
 mcp:
@@ -58,7 +58,7 @@ rules:
 # tls_key: ./key.pem
 ```
 
-Analytics uses SQLite by default for both aggregation materializations and the
+Analytics uses SQLite by default for both aggregation materialisations and the
 per-file current-facts cache:
 
 ```yaml
@@ -66,7 +66,7 @@ analytics:
   enabled: true
   dir: analytics
   aggregations:
-    store: sqlite # use file for the legacy materialization store (no facts cache)
+    store: sqlite # use file for the legacy materialisation store (no facts cache)
   pipeline:
     enabled: true
 ```
@@ -81,10 +81,9 @@ One bounded processor handles both content-fact reconciliation and requested
 dashboard views. It executes one expensive unit at a time; dashboard demand is
 promoted ahead of routine warming without canceling in-flight work. SQLite
 stores file facts, ownership-aware directory totals, durable events, completed
-dashboard views, and checkpoints. Rows are considered current when size and
-modification time match. External edits that preserve both values remain a
-known filesystem-metadata blind spot until a later reconciliation-triggering
-change.
+dashboard views, and checkpoints. OpenLore detects external edits by comparing file size and
+modification time. An edit that changes neither is picked up at the next full
+reconciliation.
 
 Debug logging can also be enabled with `openlore --debug`. Unknown-command
 events include only the command name, not its arguments. Parser-failure events
@@ -93,7 +92,7 @@ include a syntax sample capped at 512 bytes and the parser error.
 ## Authentication posture
 
 Keyless SSH is enabled by default. Set `allow_keyless: false` to require a
-recognized key or another configured authentication method.
+recognised key or another configured authentication method.
 
 Unknown SSH keys are controlled in `lore.json`:
 
@@ -234,7 +233,7 @@ corresponding source path or map a source path to a different display path:
 ]
 ```
 
-Authorization is evaluated against the owning docset. Nested docsets create
+Authorisation is evaluated against the owning docset. Nested docsets create
 independent policy boundaries rather than inheriting their parent's grants.
 
 ## Path aliases
@@ -253,10 +252,10 @@ Aliases expose alternate virtual roots for a docset's first canonical path:
 ```
 
 `/agent/jared/notes.md` and `/jared/notes.md` address the same file. Navigation
-preserves the spelling used by the caller, but authorization, approvals,
-changesets, hooks, events, inboxes, and `$HOME` use the canonical path.
+preserves the spelling used by the caller, but authorisation, the write log,
+plugin middleware, events, inboxes, and `$HOME` use the canonical path.
 
-Aliases must be absolute and normalized. They cannot overlap another alias,
+Aliases must be absolute and normalised. They cannot overlap another alias,
 mount, or canonical path at or beneath the alias.
 
 ## Identity home directories

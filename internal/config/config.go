@@ -574,7 +574,7 @@ type fileConfig struct {
 	Experimental        []string               `yaml:"experimental"`
 	Analytics           analyticsYAML          `yaml:"analytics"`
 	Port                int                    `yaml:"port"`
-	MetricsPort         int                    `yaml:"metrics_port"`
+	MetricsPort         *int                   `yaml:"metrics_port"`
 	HostKeyPath         string                 `yaml:"host_key_path"`
 	MOTD                string                 `yaml:"motd"`
 	MOTDFile            string                 `yaml:"motd_file"`
@@ -582,7 +582,7 @@ type fileConfig struct {
 	SkillsDir           string                 `yaml:"skills_dir"`
 	WritableDir         string                 `yaml:"writable_dir"`
 	DataDir             string                 `yaml:"data_dir"`
-	HTTPPort            int                    `yaml:"http_port"`
+	HTTPPort            *int                   `yaml:"http_port"`
 	ExternalSSHPort     int                    `yaml:"external_ssh_port"`
 	MCP                 *mcpYAML               `yaml:"mcp"`
 	API                 *apiYAML               `yaml:"api"`
@@ -616,9 +616,12 @@ type analyticsYAML struct {
 		Enabled *bool `yaml:"enabled"`
 		Buffer  int   `yaml:"buffer"`
 	} `yaml:"pipeline"`
-	ShutdownTimeout string                                  `yaml:"shutdown_timeout"`
-	Aggregations    struct{ RefreshInterval, Store string } `yaml:"aggregations"`
-	Index           struct {
+	ShutdownTimeout string `yaml:"shutdown_timeout"`
+	Aggregations    struct {
+		RefreshInterval string `yaml:"refresh_interval"`
+		Store           string `yaml:"store"`
+	} `yaml:"aggregations"`
+	Index struct {
 		Workers int `yaml:"workers"`
 	} `yaml:"index"`
 	History struct {
@@ -867,8 +870,8 @@ func WithConfigFile(path string) Option {
 		if fc.Port != 0 {
 			cfg.Port = fc.Port
 		}
-		if fc.MetricsPort != 0 {
-			cfg.MetricsPort = fc.MetricsPort
+		if fc.MetricsPort != nil {
+			cfg.MetricsPort = *fc.MetricsPort
 		}
 		if fc.HostKeyPath != "" {
 			cfg.HostKeyPath = fc.HostKeyPath
@@ -894,8 +897,8 @@ func WithConfigFile(path string) Option {
 		if fc.DataDir != "" {
 			cfg.DataDir = fc.DataDir
 		}
-		if fc.HTTPPort != 0 {
-			cfg.HTTPPort = fc.HTTPPort
+		if fc.HTTPPort != nil {
+			cfg.HTTPPort = *fc.HTTPPort
 		}
 		if fc.ExternalSSHPort != 0 {
 			cfg.ExternalSSHPort = fc.ExternalSSHPort
@@ -996,8 +999,8 @@ func WithEmbeddedConfig(data []byte, motdFallback string) Option {
 			if fc.Port != 0 {
 				cfg.Port = fc.Port
 			}
-			if fc.MetricsPort != 0 {
-				cfg.MetricsPort = fc.MetricsPort
+			if fc.MetricsPort != nil {
+				cfg.MetricsPort = *fc.MetricsPort
 			}
 			if fc.HostKeyPath != "" {
 				cfg.HostKeyPath = fc.HostKeyPath
@@ -1023,8 +1026,8 @@ func WithEmbeddedConfig(data []byte, motdFallback string) Option {
 			if fc.DataDir != "" {
 				cfg.DataDir = fc.DataDir
 			}
-			if fc.HTTPPort != 0 {
-				cfg.HTTPPort = fc.HTTPPort
+			if fc.HTTPPort != nil {
+				cfg.HTTPPort = *fc.HTTPPort
 			}
 			if fc.ExternalSSHPort != 0 {
 				cfg.ExternalSSHPort = fc.ExternalSSHPort

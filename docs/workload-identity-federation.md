@@ -1,11 +1,5 @@
 # Workload Identity Federation
 
-> **Status: shipped.** The `jwt-bearer` grant is live: configure
-> `oidc_issuers` (below) and OpenLore verifies external IdP assertions against
-> each issuer's JWKS and exchanges them for OpenLore tokens. Bearer tokens
-> issued without WIF carry the `full` scope and keep working unchanged — WIF is
-> purely additive.
-
 Workload Identity Federation lets CI runners, agents, and services authenticate
 to OpenLore's `/mcp` and `/api` endpoints **without any long-lived secret**.
 Instead of minting and distributing an OpenLore token (or an SSH key) to every
@@ -81,8 +75,9 @@ match.
 
 WIF rules live alongside the exact-`sub` rules used for human/passkey logins. A
 rule matches on the assertion's claims and resolves to a named **identity** that
-must already exist in `lore.json` (see `cat /auth.md`). Rules narrow — never
-widen — the identity's authority via `scope`.
+must already exist in `lore.json` (see
+[configuration and identity](configuration-and-identity.md#roles-docsets-and-identities)).
+Rules narrow — never widen — the identity's authority via `scope`.
 
 ```yaml
   rules:
@@ -118,7 +113,7 @@ than the identity already has.
   resolves to). Reserved; a WIF rule normally uses a *narrowing* scope instead.
 - A narrowing scope (e.g. `read`) intersects with the identity's authority:
   effective authority = `identity_authority ∩ scope`.
-- **Missing / empty / unrecognized scope → denied** (fail-closed) — never full.
+- **Missing / empty / unrecognised scope → denied** (fail-closed) — never full.
 
 This is what lets one `lore.json` identity back several WIF rules at different
 privilege levels (read-only for PR builds, publish for `main`, etc.).
@@ -199,7 +194,7 @@ curl -X POST https://openlore.example/mcp \
 curl -X POST https://openlore.example/api/shell \
   -H "Authorization: Bearer $OL_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"command": "publish knowledge report.md < out.md"}'
+  -d '{"command": "publish /knowledge/report.md < out.md"}'
 ```
 
 Every call runs with the resolved identity's lore, capabilities, and home —
@@ -215,5 +210,7 @@ When `mcp.require_auth` is true, both `/mcp` and `/api` require a token.
   issuer, one identity resolver, one token format.
 - **SSH access** is federated separately via short-lived SSH certificates
   (Teleport / native OIDC-over-SSH). WIF here covers the HTTP/MCP transports.
-- See `cat /auth.md` for the `lore.json` identity/docset/lore model these rules
-  resolve into, and `cat /mcp.md` for the MCP and JSON API endpoints.
+- See [configuration and identity](configuration-and-identity.md) for the
+  `lore.json` identity/docset model these rules resolve into, and
+  [ways to use OpenLore](usage.md#mcp-over-http) for the MCP and JSON API
+  endpoints.

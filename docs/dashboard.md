@@ -8,11 +8,11 @@ for the source-only frontend build and backend-only Go builds.
 ## Authentication and authority
 
 The HTML/JavaScript shell contains no document or analytics data and can be
-loaded publicly. All dashboard data requires configured authentication and a
-valid passkey session or bearer token. An authless instance does **not** expose
-dashboard data, even when its shell/API otherwise allows anonymous access.
-The dashboard has dedicated GET endpoints, not a wrapper around `/api/shell`.
-It cannot write files, change permissions, or restore revisions.
+loaded publicly. Every dashboard data endpoint requires configured
+authentication and a valid passkey session or bearer token, including on
+instances whose shell and API allow anonymous access. The dashboard reads
+through dedicated GET endpoints and is read-only: it shows files, permissions
+and revisions and changes none of them.
 
 On authenticated instances, missing or invalid credentials return 401 from
 dashboard and analytics data endpoints so the UI can recover expired sessions.
@@ -73,8 +73,8 @@ roles they designate as administrators:
 }
 ```
 
-This is a fragment to merge into `lore.json`, not a complete configuration.
-There is no built-in administrator role. Capability denials win, and the
+Merge this fragment into your `lore.json`; there is no built-in administrator
+role. Capability denials win, and the
 capability never grants access to another docset. A read-scoped token retaining
 this capability can inspect Access but still cannot mutate anything.
 
@@ -107,8 +107,10 @@ as an agent, a named principal acting directly is counted as human, and activity
 without either attribution remains unknown.
 
 Refresh promotes visible stats and exposes their committed computation time.
-Analytics is buffered telemetry, not an audit-proof record of every operation;
-delayed or dropped events and configured retention affect what can be observed.
+
+> **Note:** Analytics is best-effort telemetry. Events are buffered and flushed
+> periodically, so a crash can drop the most recent batch and retention limits
+> how far back you can look. Use the write log when you need a complete record.
 
 ## File viewer and browser state
 
@@ -134,3 +136,12 @@ workspace may contain more than 64 MiB in total and still receive exact root
 analytics. If a selected scope exceeds a structural limit, choose a narrower
 folder; a truncated total is never presented as a complete one. File
 previews/downloads also have a 64 MiB per-file limit.
+
+## Next steps
+
+- [openlore.yml reference](openlore-yml.md#passkeys) documents the
+  `passkeys` and `analytics` keys the dashboard depends on.
+- [Building the dashboard](dashboard-build.md) explains how the web assets are
+  built and embedded.
+- [Write system internals](write-system.md) describes the write log that the
+  activity view reads from.

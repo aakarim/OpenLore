@@ -1,8 +1,12 @@
-# Writing and Publishing
+# Writing and publishing
 
-OpenLore is read-only by default. Set `readonly: false` to enable its writable
-substrate; identity and docset policy still determine which paths each session
-can change. Embedded-docs binaries cannot be made writable.
+Let agents write back into the knowledge base with atomic, attributed,
+conflict-checked writes.
+
+OpenLore is read-only by default. Set `readonly: false` in `openlore.yml` to
+enable writes; [identity and docset policy](configuration-and-identity.md) still
+determine which paths each session can change. Embedded-docs binaries cannot be
+made writable.
 
 ## Write operations
 
@@ -28,10 +32,12 @@ destination and move files explicitly.
 inside its inbox:
 
 ```bash
-echo "# API Notes" | publish backend api-notes.md
-echo "# Research" | ssh -p 2222 server publish backend research/findings.md
-ssh -p 2222 server publish  # list available inboxes
+echo "# API Notes" | publish /backend/api-notes.md
 ```
+
+The path is the docset name followed by the file name; the server routes it
+into the docset's inbox. Run `publish` with no arguments to list the docsets you
+can publish to.
 
 Configure an inbox and grant `publish`:
 
@@ -54,7 +60,8 @@ Configure an inbox and grant `publish`:
 ```
 
 The write lands under `/docs/backend/inbox`. A `publish` grant never permits
-deletion; use `rw` for unrestricted writes within the docset.
+deletion; use `rw` for unrestricted writes within the docset. For a worked
+example, see [Let an agent publish into an inbox](publish-to-inbox.md).
 
 ## Conflict handling
 
@@ -80,27 +87,18 @@ Override the policy for a specific docset in `lore.json`:
 }
 ```
 
-## Human approval
+## Deferred writes
 
-Selected paths can route writes and deletes into pending changesets instead of
-committing immediately:
+A write plugin can hold a write instead of committing or rejecting it. The
+command then reports the write as pending rather than done:
 
-```json
-{
-  "docsets": {
-    "ops": {
-      "paths": ["/ops"],
-      "requires_approval": [
-        { "path": "/ops/policy.md", "capability": "approve@oncall" }
-      ]
-    }
-  }
-}
+```text
+tee: /ops/policy.md change pending as <ref>
 ```
 
-Pending changes appear under `/requests`. An identity with the required
-capability reviews and commits them with `approve`. A pending delete preserves
-an exact subtree snapshot for review.
+OpenLore core does not ship a review queue; the plugin that deferred the write
+owns the reference and decides when, or whether, the write is committed. See
+[Write system internals](write-system.md#7-deferred-writes) for the seam.
 
 ## Asynchronous jobs
 
@@ -114,15 +112,22 @@ max_jobs: 8
 ```
 
 Jobs appear under `/jobs`. Their write-back goes through the same path scope,
-compare-and-swap checks, validation, and approval policy as an interactive
-write. A normal session without this explicit capability cannot execute host
+compare-and-swap checks, and validation as an interactive write. A normal session without this explicit capability cannot execute host
 processes.
 
-## Validation and hooks
+## Validation
 
 All write verbs converge on one write seam. Plugins can reject content before
 commit, require knowledge-format conformance, enrich metadata, or react after a
-successful commit without creating alternate mutation paths.
+successful commit without creating alternate mutation paths. [Folder
+rules](folder-rules.md) cap file size and enforce structure through the same
+seam.
 
-See [Plugins and knowledge formats](plugins.md) for policy extensions and
-[Write system internals](write-system.md) for the filesystem and commit model.
+## Next steps
+
+- [Let an agent publish into an inbox](publish-to-inbox.md) for a worked example
+  of a `publish` grant.
+- Learn how [folder rules](folder-rules.md) reject oversized or malformed
+  writes.
+- Read [Write system internals](write-system.md) for the filesystem and commit
+  model, and [Plugins and knowledge formats](plugins.md) for policy extensions.
