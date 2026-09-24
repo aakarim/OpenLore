@@ -11,11 +11,13 @@ import (
 
 func CmdTail(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.Reader) int {
 	n := 10
+	fromStart := false
 	byteCount := -1
 	var files []string
 	for i := 0; i < len(args); i++ {
 		if args[i] == "-n" && i+1 < len(args) {
-			fmt.Sscanf(args[i+1], "%d", &n)
+			fromStart = strings.HasPrefix(args[i+1], "+")
+			fmt.Sscanf(strings.TrimPrefix(args[i+1], "+"), "%d", &n)
 			byteCount = -1
 			i++
 		} else if args[i] == "-c" {
@@ -39,6 +41,11 @@ func CmdTail(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 			byteCount = count
 		} else if strings.HasPrefix(args[i], "-") && len(args[i]) > 1 {
 			fmt.Sscanf(args[i][1:], "%d", &n)
+			fromStart = false
+			byteCount = -1
+		} else if strings.HasPrefix(args[i], "+") && len(args[i]) > 1 {
+			fmt.Sscanf(args[i][1:], "%d", &n)
+			fromStart = true
 			byteCount = -1
 		} else {
 			files = append(files, args[i])
@@ -54,11 +61,10 @@ func CmdTail(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 			_, _ = w.Write(data[start:])
 			return 0
 		}
-		lines := strings.Split(string(data), "\n")
-		if len(lines) > n {
-			lines = lines[len(lines)-n:]
+		lines, _ := tailLineSelection(data, n, fromStart)
+		if len(lines) > 0 {
+			fmt.Fprintln(w, strings.Join(lines, "\n"))
 		}
-		fmt.Fprintln(w, strings.Join(lines, "\n"))
 		return 0
 	}
 	if len(files) == 0 {
@@ -83,19 +89,13 @@ func CmdTail(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 			}
 			continue
 		}
-		lines := strings.Split(string(content), "\n")
-		startLine := 1
-		if len(lines) > n {
-			startLine = len(lines) - n + 1
-			lines = lines[len(lines)-n:]
+		lines, startLine := tailLineSelection(content, n, fromStart)
+		if len(lines) > 0 {
+			fmt.Fprintln(w, strings.Join(lines, "\n"))
 		}
-		fmt.Fprintln(w, strings.Join(lines, "\n"))
 		endLine := contentLineCount(content)
-		if startLine > endLine {
-			startLine = endLine
-		}
 		var unit *analytics.LineRange
-		if n > 0 && endLine > 0 {
+		if len(lines) > 0 {
 			unit = &analytics.LineRange{Start: startLine, End: endLine}
 		}
 		if unit != nil {
@@ -103,4 +103,19 @@ func CmdTail(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 		}
 	}
 	return 0
+}
+
+func tailLineSelection(content []byte, n int, fromStart bool) ([]string, int) {
+	lines := contentLines(content)
+	start := len(lines) - n
+	if fromStart {
+		start = n - 1
+	}
+	if start < 0 {
+		start = 0
+	}
+	if start > len(lines) {
+		start = len(lines)
+	}
+	return lines[start:], start + 1
 }
