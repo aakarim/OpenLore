@@ -15,3 +15,10 @@ curl -H 'Authorization: Bearer olin_ID_SECRET' -H 'Content-Type: text/markdown' 
 only for `POST/GET /inbox/tokens` and `DELETE /inbox/tokens/{id}`; inbox
 credentials are separate and revocable. See
 [Configuration and identity](configuration-and-identity.md#http-inbox-credentials).
+
+## Next steps
+
+- [Let an agent publish into an inbox](publish-to-inbox.md) is the step-by-step
+  version of this page for a single agent over SSH.
+- [Workload identity federation](workload-identity-federation.md) shows how CI
+  jobs obtain the credentials the HTTP inbox accepts.

@@ -38,5 +38,5 @@ OpenLore binary with those files embedded. CI release binaries, containers, and
 the GitHub Action use this same ordering. Node and npm are build-time tools only;
 the resulting binary and container have no Node runtime dependency.
 
-For authentication, permissions, telemetry coverage, and viewer behavior, see
+For authentication, permissions, telemetry coverage, and viewer behaviour, see
 [Dashboard](dashboard.md).

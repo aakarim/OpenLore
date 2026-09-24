@@ -42,7 +42,7 @@ Publish content to a writable docset:
 publish
 
 # Publish a file
-echo "# My Research Notes" | publish <docset> research/notes.md
+echo "# My Research Notes" | publish /<docset>/research/notes.md
 ```
 
 ### Available Commands

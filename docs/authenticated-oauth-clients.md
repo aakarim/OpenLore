@@ -63,3 +63,11 @@ session. For clients authenticated with `private_key_jwt`, a later stale retry i
 rejected without revoking the current refresh token, which lets another authenticated
 client worker continue using the valid session. Public-client reuse still revokes
 the full refresh chain as required for rotation-based replay detection.
+
+## Next steps
+
+- [Workload identity federation](workload-identity-federation.md) covers
+  identity for CI jobs and cloud workloads that cannot hold a client secret.
+- [Configuration and identity](configuration-and-identity.md) explains the
+  identities these clients resolve into.
+- [openlore.yml reference](openlore-yml.md) documents every OAuth key.

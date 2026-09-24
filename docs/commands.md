@@ -17,7 +17,7 @@ Directories retain a trailing `/`, hidden entries appear only after an explicit
 | `cat` | Display file contents (`-n`, `-A`) |
 | `head` | First N lines or bytes (`-n N`, `-c N`) |
 | `tail` | Last N lines or bytes (`-n N`, `-c N`, `+N`) |
-| `tree` | Directory tree visualization (`-L depth`, `-a`, `-d`, `-f`) |
+| `tree` | Directory tree visualisation (`-L depth`, `-a`, `-d`, `-f`) |
 | `stat` | File metadata |
 | `wc` | Count lines, words, bytes (`-l`, `-w`, `-c`, `-m`) |
 | `du` | Estimate file space usage (`-a`, `-h`, `-s`, `-c`) |
@@ -103,21 +103,61 @@ them.
 | `mv` | Move a file |
 | `rm` | Remove a file or tree (`-r`) |
 | `publish` | Publish stdin into a docset inbox |
-| `approve` | Approve a pending changeset when authorized |
 | `spawn` | Run configured external work asynchronously when explicitly trusted |
 
 ## Introspection
 
-| Command | Description |
-|---|---|
-| `lore` | Introspection dispatcher |
-| `lore docsets` | List accessible docsets, grants, paths, and attributes |
-| `lore meta [path]` | Emit document frontmatter as NDJSON, scoped to the current directory or path |
-| `lore meta --filter skills [path]` | Discover Agent Skills collections without scanning unrelated docs |
-| `lore package list` / `lore package doc <path>` | List compiled-in rule members or show a member's parameters and example |
-| `lore validate [dir]` | Run folder rules over a docset or folder: file rules per file, bundle rules (OKF bundle structure, local links, alias portability) once at the root |
-| `lore size baseline <path>` | Show a file's size-baseline history and current cap under `max: initial` rules |
-| `lore size baseline reset <path> [--note <text>]` | Append a new baseline from the file's current content; needs a write grant on the path and a `config.edit` role |
+`lore` is the dispatcher for the commands below. Run it with no arguments to list them.
+
+### `lore docsets`
+
+List the docsets you can access with their grants, paths and attributes.
+
+```bash
+lore docsets
+```
+
+### `lore meta [path]`
+
+Emit document frontmatter as NDJSON, scoped to the current directory or the given path. Pipe it into `jq` to query it.
+
+```bash
+lore meta /docs/backend | jq -r 'select(.type == "Metric") | .path'
+```
+
+Add `--filter skills` to list Agent Skills collections without scanning unrelated documents.
+
+### `lore package list` and `lore package doc <path>`
+
+List the compiled-in rule members, or show one member's parameters and example. The same content is in the [rules standard library](rules-stdlib.md).
+
+```bash
+lore package doc size/kilobytes
+```
+
+### `lore validate [dir]`
+
+Run folder rules over a docset or folder without writing anything. File rules run per file; bundle rules such as OKF bundle structure, local links and alias portability run once at the root.
+
+```bash
+lore validate /docs/backend/decisions
+```
+
+### `lore size baseline <path>`
+
+Show a file's size-baseline history and its current cap under `max: initial` rules.
+
+```bash
+lore size baseline /docs/backend/decisions/adr-001.md
+```
+
+### `lore size baseline reset <path> [--note <text>]`
+
+Append a new baseline from the file's current content. Needs a write grant on the path and a role listed in the docset's `config.edit`.
+
+```bash
+lore size baseline reset /docs/backend/decisions/adr-001.md --note "split into two ADRs"
+```
 
 See [Folder rules](folder-rules.md) for the rules model. `lore validate` refuses
 to run from a directory above docsets that declare bundle rules
@@ -148,8 +188,8 @@ require a named `rw` grant on the destination docset.
 | Command | Description |
 |---|---|
 | `skills status [folder]` | Report collection state and linked remote skills as NDJSON |
-| `skills enable [folder]` | Enable recursive Skills collection behavior |
-| `skills disable [folder]` | Disable collection behavior without deleting skills |
+| `skills enable [folder]` | Enable recursive Skills collection behaviour |
+| `skills disable [folder]` | Disable collection behaviour without deleting skills |
 | `skills validate [scope]` | Validate accessible Skills collections |
 | `skills import <github-spec> [parent-dir]` | Import and link a public GitHub skill |
 | `skills update [skill-folder]` | Force an imported skill to check and apply its remote |
@@ -216,8 +256,10 @@ Commands:
   identity add      Add an identity or public key to lore.json
   identity role     Add or remove an identity's role membership
   role              Manage roles, docset grants, denies, and capabilities
+  oauth keys rotate Rotate the ES256 token signing key
   token mint        Mint an access token for an identity
   token verify      Verify an access token and print its claims
+  inbox token       Create, list, or revoke HTTP inbox upload credentials
 
 Flags:
   -p, --port           SSH server port (default 2222)
