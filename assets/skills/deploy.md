@@ -20,6 +20,15 @@ For a first deployment, require `.local` and rerun the local acceptance checks
 from `setup`. For an existing deployment, remote state is authoritative and
 `.local` may legitimately be absent.
 
+The project carries a setup record: docset `infrastructure` at
+`/channel/infrastructure` with `index.md`, `openlore-server.md`, and `log.md`
+in the Open Knowledge Format (OKF: markdown with a small YAML header). It says
+who set the server up, with which agent, and where it runs; this skill fills in
+its `# Deployment` section. On a first deployment of a project that predates
+the record, create the docset and files in `.local` exactly as `setup`
+describes under “Record the setup” (`ssh openlore.sh setup`) before bootstrap,
+so the record ships with the initial filesystem.
+
 ## Select deployment guidance
 
 Ask where the user wants to deploy. Fetch and follow the matching instruction
@@ -156,6 +165,38 @@ Return exact HTTPS/MCP, OpenLore SSH, and administrative reconnect commands,
 resource identifiers, image digest, persistence evidence, and pending optional
 ingress. Recommend provider snapshots/backups, but do not require them.
 
+## Record the deployment
+
+Once every required check passes, complete the setup record on the deployed
+server — it is authoritative now, so write through OpenLore SSH as the
+principal identity, not by editing `.local`:
+
+```bash
+ssh <domain> 'cat /channel/infrastructure/openlore-server.md' > /tmp/openlore-server.md
+# edit the copy, then
+cat /tmp/openlore-server.md | ssh <domain> 'cat > /channel/infrastructure/openlore-server.md'
+ssh <domain> 'lore validate /channel/infrastructure'
+```
+
+In `openlore-server.md`:
+
+- replace `# Deployment` with a table: provider (or `custom: <system>`),
+  region, resource identifiers (app, machine/service, volume), image reference
+  and immutable digest, HTTPS origin and MCP endpoint, OpenLore SSH endpoint
+  (`ssh <domain>` or the `-p` form), administrative shell command, standard-port
+  ingress status, and the `deploy/<provider>/` path holding the scripts;
+- write `# Verification` as “Production acceptance passed on <YYYY-MM-DD> as
+  <agent name>/<model or version>” and list anything reported as pending;
+- update `# Summary` so it names where the server now runs;
+- set `status: stable`, add `verified: { by: <agent name>/<model or version>,
+  at: <UTC now> }`, refresh `generated.at`, and add `deployed` and the provider
+  name to `tags`.
+
+Append `**Update** — deploy verified the server on <provider> …` under today's
+date in `log.md` the same way. Never record credentials, tokens, private-key
+paths, or key material. Mirror the same edit into `.local/filesystem` when it
+exists so the recovery copy matches; never copy `.local` back to the server.
+
 Only after every required check passes, ask whether to delete `.local`
 entirely. Explain that the server is now authoritative and deletion removes the
 bootstrap/recovery copy. Default to keeping it. Never delete it without an
@@ -199,3 +240,13 @@ Registration needs the `passkeys:` block with the public HTTPS RP ID and origin
 configuration first. Close the onboarding journey with a short ✅ plain-language
 summary of everything that now works: the deployed server, who can connect, and
 where to browse.
+
+Then open the completed setup record for them and say so. With a passkey, open
+the rendered page on the server; otherwise open the local copy when `.local`
+was kept, or give the SSH command to read it:
+
+```bash
+open "https://<domain>/lore/channel/infrastructure/openlore-server.md"   # passkey registered (xdg-open on Linux)
+open .local/filesystem/channel/infrastructure/openlore-server.md        # no passkey, .local kept
+ssh <domain> 'cat /channel/infrastructure/openlore-server.md'          # otherwise
+```
