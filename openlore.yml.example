@@ -257,35 +257,53 @@ files:
 # Embedded skills in assets/skills/ are always loaded.
 # skills_dir: ./skills
 
-# ── Storage Substrate Hooks ───────────────────────────
+# ── Shellexec (external commands around reads and writes) ──
 #
-# Hooks are external shell commands that run on storage events.
-# Three event kinds:
-#   on_startup  — fires once when the server boots
-#   pre_read    — fires before a virtual path is read (debounced per path)
-#   post_write  — fires after bytes hit disk
+# The built-in shellexec plugin runs shell commands as middleware on the
+# read and write paths. Three event kinds:
+#   pre_read    — runs before a path is read (debounced per path); a failure
+#                 aborts the read
+#   pre_commit  — runs before a write commits; a failure rejects the write
+#   post_write  — runs after a durable commit; never halts the write
 #
-# Each hook receives these env vars:
-#   OPENLORE_DATA_DIR   server data root (from `data_dir` below)
-#   OPENLORE_PATH       virtual path the event refers to
-#   OPENLORE_AGENT      publishing agent ID (or empty)
-#   OPENLORE_PARTITION  partition slug (or empty)
-#   OPENLORE_EVENT      event kind
-#   OPENLORE_BYTES      byte count (post_write only)
+# Each command runs with `sh -c` and receives these env vars:
+#   OPENLORE_DATA_DIR      server data root (from `data_dir`)
+#   OPENLORE_EVENT         pre_read | pre_commit | post_write
+#   OPENLORE_PATH          virtual path (empty for a multi-file batch)
+#   OPENLORE_AGENT         full attribution string (or empty)
+#   OPENLORE_IDENTITY      signed-in identity (or empty)
+#   OPENLORE_ACTOR         acting agent, if different from the identity
+#   OPENLORE_CLIENT_AUTH   how the client authenticated
+#   OPENLORE_EXTRA_<KEY>   one variable per extra attribution field
+#   OPENLORE_READ_KIND     pre_read only: the kind of read
+#   OPENLORE_ACTION        pre_commit/post_write: write | delete | … | batch
+#   OPENLORE_CHANGES_JSON  pre_commit/post_write: JSON list of
+#                          {target, action, bytes} for every changed file
+#   OPENLORE_CHANGE_COUNT  pre_commit/post_write: number of changed files
+#   OPENLORE_BYTES         pre_commit/post_write: bytes written (total for a batch)
+#   OPENLORE_HASH          post_write only: commit hash
 #
-# Errors are non-fatal by default — set `fail_on_error: true` to flip.
+# Per-command options (all optional):
+#   timeout        wall-clock limit, default 30s; a timeout counts as a failure
+#   fail_on_error  default TRUE: a non-zero exit aborts the read / rejects the
+#                  write. Set false to log and continue. Ignored for post_write.
+#   debounce       pre_read only, default 2s: repeated reads of the same path
+#                  within the window run the command once
+#   async          default false: run in the background. An async pre_read or
+#                  pre_commit cannot abort the operation.
 #
 # data_dir: /var/lib/openlore
-# hooks:
-#   on_startup:
-#     - cmd: "/usr/local/bin/openlore-restore"
-#       timeout: 30s
+# shellexec:
 #   pre_read:
 #     - cmd: "/usr/local/bin/openlore-pull"
 #       debounce: 2s
+#       fail_on_error: false
+#   pre_commit:
+#     - cmd: "/usr/local/bin/openlore-lint"
+#       timeout: 10s
 #   post_write:
-#     - cmd: "/usr/local/bin/openlore-version"
-#       fail_on_error: true
+#     - cmd: "/usr/local/bin/openlore-push"
+#       async: true
 
 # ── OKF Validator Plugin ──────────────────────────────
 #
