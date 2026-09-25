@@ -19,19 +19,29 @@ func CmdFind(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "-name":
-			if i+1 < len(args) {
-				namePattern = args[i+1]
-				i++
+			if i+1 >= len(args) {
+				fmt.Fprintln(errW, "find: option requires an argument -- 'name'")
+				return 1
 			}
+			namePattern = args[i+1]
+			i++
 		case "-type":
-			if i+1 < len(args) {
-				typeFilter = args[i+1]
-				i++
+			if i+1 >= len(args) {
+				fmt.Fprintln(errW, "find: option requires an argument -- 'type'")
+				return 1
 			}
+			typeFilter = args[i+1]
+			if typeFilter != "f" && typeFilter != "d" {
+				fmt.Fprintf(errW, "find: unsupported type '%s'. This shell supports -type f|d.\n", typeFilter)
+				return 1
+			}
+			i++
 		default:
-			if !strings.HasPrefix(args[i], "-") {
-				root = ctx.Resolve(args[i])
+			if strings.HasPrefix(args[i], "-") {
+				fmt.Fprintf(errW, "find: unsupported flag '%s'. This shell supports [path] [-name pat] [-type f|d]. To limit depth, use 'tree -L <n>'.\n", args[i])
+				return 1
 			}
+			root = ctx.Resolve(args[i])
 		}
 	}
 
