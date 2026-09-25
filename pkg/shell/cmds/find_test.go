@@ -19,6 +19,26 @@ func TestFindTypeDir(t *testing.T) {
 	}
 }
 
+func TestFindRejectsUnsupportedFlag(t *testing.T) {
+	for _, flag := range []string{"-maxdepth", "-mindepth", "-exec"} {
+		t.Run(flag, func(t *testing.T) {
+			out, errOut, code := execCmd(t, testFS(), "find /docs "+flag+" 1 -type f")
+			if code != 1 {
+				t.Errorf("exit code = %d, want 1", code)
+			}
+			if out != "" {
+				t.Errorf("stdout = %q, want empty", out)
+			}
+			if !strings.Contains(errOut, "unsupported flag '"+flag+"'") {
+				t.Errorf("stderr = %q, want unsupported flag name", errOut)
+			}
+			if !strings.Contains(errOut, "tree -L <n>") {
+				t.Errorf("stderr = %q, want supported depth-limiting alternative", errOut)
+			}
+		})
+	}
+}
+
 func TestGlobExpansion(t *testing.T) {
 	fs := testFS()
 	fs.AddFile("/docs/.hidden.md", "hidden\n")

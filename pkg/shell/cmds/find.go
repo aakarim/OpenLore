@@ -29,9 +29,11 @@ func CmdFind(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 				i++
 			}
 		default:
-			if !strings.HasPrefix(args[i], "-") {
-				root = ctx.Resolve(args[i])
+			if strings.HasPrefix(args[i], "-") {
+				fmt.Fprintf(errW, "find: unsupported flag '%s'. This shell supports [path] [-name pat] [-type f|d]. To limit depth, use 'tree -L <n>'.\n", args[i])
+				return 1
 			}
+			root = ctx.Resolve(args[i])
 		}
 	}
 
