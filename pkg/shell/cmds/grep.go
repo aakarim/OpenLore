@@ -25,7 +25,11 @@ func CmdGrep(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 
 	for i := 0; i < len(args); i++ {
 		a := args[i]
-		if strings.HasPrefix(a, "-") && len(a) > 1 && !strings.HasPrefix(a, "--") {
+		if strings.HasPrefix(a, "--") {
+			fmt.Fprintf(errW, "grep: unsupported option %q (supported: -E -F -i -n -r -R -o -h -c -v -l; use -E 'a|b' for multiple patterns)\n", a)
+			return 2
+		}
+		if strings.HasPrefix(a, "-") && len(a) > 1 {
 			for _, ch := range a[1:] {
 				switch ch {
 				case 'i':
@@ -50,6 +54,9 @@ func CmdGrep(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 				case 'F':
 					fixedStrings = true
 					extendedRegexp = false
+				default:
+					fmt.Fprintf(errW, "grep: unsupported option %q (supported: -E -F -i -n -r -R -o -h -c -v -l; use -E 'a|b' for multiple patterns)\n", "-"+string(ch))
+					return 2
 				}
 			}
 		} else if pattern == "" {

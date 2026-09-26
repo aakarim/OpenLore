@@ -20,6 +20,37 @@ func TestGrepLineNumbers(t *testing.T) {
 	}
 }
 
+func TestGrepRejectsUnsupportedOptions(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+		option  string
+	}{
+		{name: "short", command: "grep -Q apple /docs/notes.txt", option: "-Q"},
+		{name: "grouped short", command: "grep -iQ apple /docs/notes.txt", option: "-Q"},
+		{name: "long", command: "grep --help", option: "--help"},
+		{name: "multiple pattern flag", command: "printf 'apple\\nbanana\\n' | grep -e apple -e banana", option: "-e"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, stderr, code := execCmd(t, testFS(), tt.command)
+			if code != 2 {
+				t.Errorf("grep exit code = %d, want 2 for an unsupported option", code)
+			}
+			if out != "" {
+				t.Errorf("grep wrote stdout for an unsupported option: %q", out)
+			}
+			if !strings.Contains(stderr, "unsupported option \""+tt.option+"\"") {
+				t.Errorf("grep error does not name %q: %q", tt.option, stderr)
+			}
+			if !strings.Contains(stderr, "use -E 'a|b' for multiple patterns") {
+				t.Errorf("grep error does not explain the supported alternative: %q", stderr)
+			}
+		})
+	}
+}
+
 func TestGrepOnlyMatching(t *testing.T) {
 	fs := testFS()
 
