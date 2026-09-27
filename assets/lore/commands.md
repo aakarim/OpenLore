@@ -12,7 +12,7 @@
 - `diff` — Compare two files
 
 ## Search
-- `grep` — Search for patterns (supports -r, -i, -n, -v, -c, -l, -o)
+- `grep` — Search for patterns (`-E`, `-F`, `-i`, `-n`, `-r`, `-R`, `-o`, `-h`, `-c`, `-v`, `-l`); use `-E 'a|b'` for multiple patterns
 
 ## Text Processing
 - `sort`, `uniq`, `cut`, `sed`, `awk`, `tr`
