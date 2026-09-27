@@ -170,6 +170,9 @@ func (c *frozenContext) AllEnv() map[string]string { return c.env }
 func (c *frozenContext) Exec(string, io.Writer, io.Writer, io.Reader) int {
 	return 1
 }
+func (c *frozenContext) ExecArgs([]string, io.Writer, io.Writer, io.Reader) int {
+	return 1
+}
 func (c *frozenContext) ExecPipeline(string, io.Writer, io.Writer, io.Reader) int {
 	return 1
 }

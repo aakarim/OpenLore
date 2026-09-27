@@ -266,6 +266,12 @@ func (s *Shell) Exec(cmdLine string, w io.Writer, errW io.Writer, stdin io.Reade
 	return s.execLine(cmdLine, w, errW, stdin)
 }
 
+// ExecArgs executes an already-tokenized command without parsing its arguments
+// as shell source.
+func (s *Shell) ExecArgs(args []string, w io.Writer, errW io.Writer, stdin io.Reader) int {
+	return s.execArgs(args, w, errW, stdin)
+}
+
 // ExecPipeline parses a shell line and executes the resulting AST.
 // stdin is optional — pass nil if no external stdin is available.
 func (s *Shell) ExecPipeline(line string, w io.Writer, errW io.Writer, stdin io.Reader) int {
@@ -479,9 +485,6 @@ func (s *Shell) execCallInner(call *parser.CallExpr, w io.Writer, errW io.Writer
 		args = append(args, expanded)
 	}
 
-	cmdName := args[0]
-	cmdArgs := args[1:]
-
 	// A heredoc on the command replaces stdin with the heredoc body. We
 	// concatenate multiple heredoc bodies in declaration order to match bash.
 	if len(call.Heredocs) > 0 {
@@ -496,7 +499,15 @@ func (s *Shell) execCallInner(call *parser.CallExpr, w io.Writer, errW io.Writer
 	if call.MergeStderr {
 		errW = w
 	}
+	return s.execArgs(args, w, errW, stdin)
+}
 
+func (s *Shell) execArgs(args []string, w io.Writer, errW io.Writer, stdin io.Reader) int {
+	if len(args) == 0 {
+		return 0
+	}
+	cmdName := args[0]
+	cmdArgs := args[1:]
 	if cmdName == "pwd" {
 		fmt.Fprintln(w, s.cwd)
 		return 0

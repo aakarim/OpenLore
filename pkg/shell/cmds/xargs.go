@@ -53,6 +53,8 @@ func CmdXargs(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin 
 		items = strings.Split(input, "\x00")
 	} else if delimiter != "" {
 		items = strings.Split(input, delimiter)
+	} else if replaceStr != "" {
+		items = strings.Split(input, "\n")
 	} else {
 		items = strings.Fields(input)
 	}
@@ -71,11 +73,11 @@ func CmdXargs(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin 
 
 	if replaceStr != "" {
 		for _, item := range items {
-			var cmdLine []string
+			cmdArgs := make([]string, 0, len(cmdParts))
 			for _, p := range cmdParts {
-				cmdLine = append(cmdLine, strings.ReplaceAll(p, replaceStr, item))
+				cmdArgs = append(cmdArgs, strings.ReplaceAll(p, replaceStr, item))
 			}
-			lastExit = ctx.Exec(strings.Join(cmdLine, " "), w, errW, nil)
+			lastExit = ctx.ExecArgs(cmdArgs, w, errW, nil)
 		}
 		return lastExit
 	}
@@ -86,12 +88,12 @@ func CmdXargs(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin 
 			if end > len(items) {
 				end = len(items)
 			}
-			cmdLine := strings.Join(cmdParts, " ") + " " + strings.Join(items[i:end], " ")
-			lastExit = ctx.Exec(cmdLine, w, errW, nil)
+			cmdArgs := append(append([]string(nil), cmdParts...), items[i:end]...)
+			lastExit = ctx.ExecArgs(cmdArgs, w, errW, nil)
 		}
 		return lastExit
 	}
 
-	cmdLine := strings.Join(cmdParts, " ") + " " + strings.Join(items, " ")
-	return ctx.Exec(cmdLine, w, errW, nil)
+	cmdArgs := append(append([]string(nil), cmdParts...), items...)
+	return ctx.ExecArgs(cmdArgs, w, errW, nil)
 }
