@@ -64,7 +64,9 @@ test("canonicalizes internal links once, preserves modified clicks, and protects
   render(<FileReader {...readerProps} path={file.path} onFile={onFile} />);
 
   const relative = (await screen.findByText("Relative")) as HTMLAnchorElement;
-  expect(relative.href).toBe(`${location.origin}/lore/docs/a%20b.md#part`);
+  await waitFor(() =>
+    expect(relative.href).toBe(`${location.origin}/lore/docs/a%20b.md#part`),
+  );
   expect(relative.href).not.toContain("%2520");
   fireEvent.click(relative);
   expect(onFile).toHaveBeenCalledWith("/docs/a b.md");
