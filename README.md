@@ -1,6 +1,6 @@
 # 📜 OpenLore
 
-[![Release](https://img.shields.io/github/v/release/aakarim/go-openlore)](https://github.com/aakarim/go-openlore/releases/latest)
+[![Release](https://img.shields.io/github/v/release/aakarim/OpenLore)](https://github.com/aakarim/OpenLore/releases/latest)
 [![Go Reference](https://pkg.go.dev/badge/github.com/aakarim/go-openlore.svg)](https://pkg.go.dev/github.com/aakarim/go-openlore)
 
 Sponsored by <a href="https://oiya.ai/?utm_source=github&amp;utm_medium=referral&amp;utm_campaign=openlore&amp;utm_content=sponsor_logo"><img src="assets/oiya-logo.svg" alt="Oiya" height="24" align="absmiddle"></a>
@@ -163,6 +163,37 @@ See [Writing and publishing](docs/writing.md) for user-facing setup and
 [Write system internals](docs/write-system.md) for the implementation model.
 
 ## Installation
+
+### Install with Homebrew
+
+Homebrew is supported on macOS and Linux:
+
+```bash
+brew install --cask aakarim/tap/openlore
+```
+
+### Install a Linux release
+
+Download and install the latest x86-64 release:
+
+```bash
+curl -L https://github.com/aakarim/OpenLore/releases/latest/download/openlore_linux_amd64.tar.gz | tar xz
+sudo install openlore /usr/local/bin/openlore
+```
+
+Arm64 archives are published as `openlore_linux_arm64.tar.gz`.
+
+### Install a Windows release
+
+Download and extract the latest 64-bit Windows release from PowerShell:
+
+```powershell
+Invoke-WebRequest `
+  -Uri https://github.com/aakarim/OpenLore/releases/latest/download/openlore_windows_amd64.zip `
+  -OutFile openlore.zip
+Expand-Archive openlore.zip -DestinationPath .
+.\openlore.exe version
+```
 
 ### Install with Go
 
