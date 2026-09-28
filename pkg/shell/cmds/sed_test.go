@@ -30,6 +30,26 @@ func TestSedSubstitutionWithSpaces(t *testing.T) {
 	}
 }
 
+func TestSedRejectsUnsupportedOptionBeforeProcessing(t *testing.T) {
+	fs := testFS()
+	original, err := fs.ReadFile("/docs/readme.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out, errOut, code := execCmd(t, fs, "sed -E -i 's/Hello/Goodbye/' /docs/readme.md")
+	if code == 0 || out != "" || !strings.Contains(errOut, `sed: unknown option "-E"`) {
+		t.Fatalf("code=%d stdout=%q stderr=%q, want named option error", code, out, errOut)
+	}
+	content, err := fs.ReadFile("/docs/readme.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != string(original) {
+		t.Fatalf("unsupported option modified file: got %q, want %q", content, original)
+	}
+}
+
 func TestSedSubstitutionGlobal(t *testing.T) {
 	fs := testFS()
 	out, _, code := execCmd(t, fs, "cat /docs/notes.txt | sed 's/apple/APPLE/g'")

@@ -27,6 +27,10 @@ func CmdSed(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io
 				i++
 			}
 		default:
+			if len(args[i]) > 1 && strings.HasPrefix(args[i], "-") {
+				fmt.Fprintf(errW, "sed: unknown option %q\n", args[i])
+				return 1
+			}
 			if len(expressions) == 0 && !strings.HasPrefix(args[i], "-") && len(files) == 0 {
 				expressions = append(expressions, args[i])
 			} else {
