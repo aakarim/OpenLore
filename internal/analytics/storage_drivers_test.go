@@ -41,7 +41,7 @@ INSERT INTO facts_scan_state VALUES(1,3,?,1,2,'','original')`, scanState)
 				t.Fatal(err)
 			}
 			state, err := newSQLiteFactsIndex(store).ScanState(context.Background())
-			if err != nil || state.OwnershipCompatible != (scanState == "ready") {
+			if err != nil || state.ScopeCompatible != (scanState == "ready") {
 				t.Fatalf("migrated %s: %+v err=%v", scanState, state, err)
 			}
 			if state.Processed != 0 || state.Skipped != 0 {
@@ -60,8 +60,8 @@ INSERT INTO facts_scan_state VALUES(1,3,?,1,2,'','original')`, scanState)
 			}
 			defer store.Close()
 			state, err = newSQLiteFactsIndex(store).ScanState(context.Background())
-			if err != nil || state.OwnershipCompatible {
-				t.Fatalf("reopen blessed incompatible ownership: %+v err=%v", state, err)
+			if err != nil || state.ScopeCompatible {
+				t.Fatalf("reopen blessed incompatible scope: %+v err=%v", state, err)
 			}
 			if state.Processed != 17 || state.Skipped != 2 {
 				t.Fatalf("reopen lost durable progress: %+v", state)

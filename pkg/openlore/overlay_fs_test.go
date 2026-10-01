@@ -73,14 +73,14 @@ func TestFSAdapterAppliesConfiguredFilePolicy(t *testing.T) {
 		t.Fatalf("filtered entries = %+v, %v", entries, err)
 	}
 	for _, target := range []string{"/denied.md", "/.env"} {
-		if _, err := adapter.Stat(target); err == nil {
-			t.Errorf("Stat(%q) exposed filtered file", target)
+		if _, err := adapter.Stat(target); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("Stat(%q) error = %v, want not found", target, err)
 		}
-		if _, err := adapter.ReadFile(target); err == nil {
-			t.Errorf("ReadFile(%q) exposed filtered file", target)
+		if _, err := adapter.ReadFile(target); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("ReadFile(%q) error = %v, want not found", target, err)
 		}
-		if _, err := adapter.ReadFileBounded(target, 1024); err == nil {
-			t.Errorf("ReadFileBounded(%q) exposed filtered file", target)
+		if _, err := adapter.ReadFileBounded(target, 1024); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("ReadFileBounded(%q) error = %v, want not found", target, err)
 		}
 	}
 }

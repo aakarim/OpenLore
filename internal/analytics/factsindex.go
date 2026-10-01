@@ -17,6 +17,8 @@ import (
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
 
+const factsScanContractVersion = 1
+
 type IndexedFacts struct {
 	Path        string
 	Owner       string
@@ -50,14 +52,14 @@ type FactsIndex interface {
 }
 
 type FactsScanState struct {
-	Generation          int64
-	State               string
-	StartedAt           time.Time
-	CompletedAt         time.Time
-	Error               string
-	OwnershipCompatible bool
-	Processed           int64
-	Skipped             int64
+	Generation      int64
+	State           string
+	StartedAt       time.Time
+	CompletedAt     time.Time
+	Error           string
+	ScopeCompatible bool
+	Processed       int64
+	Skipped         int64
 }
 
 type sqliteFactsIndex struct{ db *sql.DB }
@@ -357,7 +359,10 @@ func (x *sqliteFactsIndex) StartScan(ctx context.Context, scopes []KnowledgeScop
 		}
 		return clean[i].Root < clean[j].Root
 	})
-	encoded, _ := json.Marshal(clean)
+	encoded, _ := json.Marshal(struct {
+		Version int              `json:"version"`
+		Scopes  []KnowledgeScope `json:"scopes"`
+	}{Version: factsScanContractVersion, Scopes: clean})
 	hash := sha256.Sum256(encoded)
 	tx, err := x.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -415,7 +420,7 @@ func (x *sqliteFactsIndex) ScanState(ctx context.Context) (FactsScanState, error
 	if completed > 0 {
 		state.CompletedAt = time.Unix(0, completed).UTC()
 	}
-	state.OwnershipCompatible = compatible != 0
+	state.ScopeCompatible = compatible != 0
 	return state, nil
 }
 

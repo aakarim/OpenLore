@@ -393,7 +393,7 @@ func TestInternalContentExclusionsInvalidateOldFactsAndPendingWork(t *testing.T)
 	// This is a content-policy change, even though docset ownership is unchanged.
 	service.SetKnowledgeScopes([]KnowledgeScope{{Name: "workspace", Root: "/", Exclude: []string{"/data"}}})
 	state, _ := service.index.ScanState(ctx)
-	if state.Generation <= old.Generation || state.OwnershipCompatible {
+	if state.Generation <= old.Generation || state.ScopeCompatible {
 		t.Fatalf("exclusions reused incompatible cached work: %+v", state)
 	}
 	rows, totals, status, err := service.IndexedFactsForOwners(ctx, "/", []string{"workspace"}, 10)
@@ -560,7 +560,7 @@ func TestFactsScanDoesNotPublishAfterUpsertFailureAndRecovers(t *testing.T) {
 	}
 }
 
-func TestIncompatibleOwnershipDoesNotServeOrScheduleFilteredFacts(t *testing.T) {
+func TestIncompatibleScopeDoesNotServeOrScheduleFilteredFacts(t *testing.T) {
 	ctx := context.Background()
 	service := newIndexedTestService(t, testFS{})
 	service.SetKnowledgeScopes([]KnowledgeScope{{Name: "docs", Root: "/docs"}})
@@ -578,7 +578,7 @@ func TestIncompatibleOwnershipDoesNotServeOrScheduleFilteredFacts(t *testing.T) 
 	}
 	for _, key := range []string{"cached", "new"} {
 		rows, totals, status, err := service.AuthorizedIndexedFacts(ctx, key, "/docs", nil, []string{"docs"}, 10, func(string) bool {
-			t.Error("incompatible ownership must not be filtered")
+			t.Error("incompatible scope must not be filtered")
 			return true
 		})
 		if err != nil || len(rows) != 0 || totals.Files != 0 || totals.Bytes != 0 || status.Complete {
