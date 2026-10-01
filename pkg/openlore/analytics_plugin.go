@@ -31,13 +31,22 @@ type analyticsPlugin struct {
 	server  *Server
 }
 
+func canonicalFilePatterns(patterns []string) []string {
+	patterns = append([]string{}, patterns...)
+	sort.Strings(patterns)
+	canonical := patterns[:0]
+	for _, pattern := range patterns {
+		if len(canonical) == 0 || canonical[len(canonical)-1] != pattern {
+			canonical = append(canonical, pattern)
+		}
+	}
+	return canonical
+}
+
 func analyticsContentBoundary(files config.FilesConfig) string {
-	files.Allowed = append([]string{}, files.Allowed...)
-	files.Denied = append([]string{}, files.Denied...)
-	files.Ignore = append([]string{}, files.Ignore...)
-	sort.Strings(files.Allowed)
-	sort.Strings(files.Denied)
-	sort.Strings(files.Ignore)
+	files.Allowed = canonicalFilePatterns(files.Allowed)
+	files.Denied = canonicalFilePatterns(files.Denied)
+	files.Ignore = canonicalFilePatterns(files.Ignore)
 	encoded, _ := json.Marshal(struct {
 		Version int                `json:"version"`
 		Files   config.FilesConfig `json:"files"`

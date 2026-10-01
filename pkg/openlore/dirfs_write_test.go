@@ -300,6 +300,30 @@ func TestEmbedFS_NotWritable_FailFast(t *testing.T) {
 	}
 }
 
+func TestEmbedFSPolicyHiddenFilesAreNotFound(t *testing.T) {
+	for name, files := range map[string]config.FilesConfig{
+		"not allowed": {Allowed: []string{"*.txt"}},
+		"ignored":     {Allowed: []string{"*"}, Ignore: []string{"readme.md"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := NewEmbedFS(embedFixture, "testdata_embed", files)
+			entries, err := e.ReadDir("/")
+			if err != nil || len(entries) != 0 {
+				t.Fatalf("ReadDir = %+v, %v; want empty", entries, err)
+			}
+			for operation, read := range map[string]func() error{
+				"Stat":            func() error { _, err := e.Stat("/readme.md"); return err },
+				"ReadFile":        func() error { _, err := e.ReadFile("/readme.md"); return err },
+				"ReadFileBounded": func() error { _, err := e.ReadFileBounded("/readme.md", 1024); return err },
+			} {
+				if err := read(); !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("%s error = %v, want not found", operation, err)
+				}
+			}
+		})
+	}
+}
+
 func TestMergeFS_RoutesWrites_AndBlocksDocsetCreation(t *testing.T) {
 	dir := t.TempDir()
 	mountDir := filepath.Join(dir, "chan")

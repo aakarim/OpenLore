@@ -32,9 +32,12 @@ type phase4Consumer struct {
 
 func TestAnalyticsContentBoundaryIsCanonicalAndPolicySensitive(t *testing.T) {
 	first := config.FilesConfig{Allowed: []string{"*.md", "*.txt"}, Denied: []string{"private.*"}, Ignore: []string{".git", "tmp"}}
-	reordered := config.FilesConfig{Allowed: []string{"*.txt", "*.md"}, Denied: []string{"private.*"}, Ignore: []string{"tmp", ".git"}}
+	reordered := config.FilesConfig{Allowed: []string{"*.txt", "*.md", "*.md"}, Denied: []string{"private.*", "private.*"}, Ignore: []string{"tmp", ".git", "tmp"}}
 	if analyticsContentBoundary(first) != analyticsContentBoundary(reordered) {
 		t.Fatal("equivalent file policies produced different content boundaries")
+	}
+	if analyticsContentBoundary(config.FilesConfig{}) != analyticsContentBoundary(config.FilesConfig{Allowed: []string{}, Denied: []string{}, Ignore: []string{}}) {
+		t.Fatal("nil and empty file policies produced different content boundaries")
 	}
 	changes := []config.FilesConfig{
 		{Allowed: []string{"*.md", "*.txt", "*.json"}, Denied: []string{"private.*"}, Ignore: []string{".git", "tmp"}},
