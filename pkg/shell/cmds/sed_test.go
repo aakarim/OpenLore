@@ -50,6 +50,25 @@ func TestSedRejectsUnsupportedOptionBeforeProcessing(t *testing.T) {
 	}
 }
 
+func TestSedOptionTerminator(t *testing.T) {
+	fs := testFS()
+	fs.AddFile("/-input", "foo\n")
+
+	t.Run("filename beginning with dash", func(t *testing.T) {
+		out, errOut, code := execCmd(t, fs, "sed -- 's/foo/bar/' -input")
+		if code != 0 || out != "bar\n" || errOut != "" {
+			t.Fatalf("code=%d stdout=%q stderr=%q", code, out, errOut)
+		}
+	})
+
+	t.Run("option-like expression", func(t *testing.T) {
+		out, errOut, code := execCmd(t, fs, "echo foo | sed -- -n")
+		if code != 0 || out != "foo\n" || errOut != "" {
+			t.Fatalf("code=%d stdout=%q stderr=%q", code, out, errOut)
+		}
+	})
+}
+
 func TestSedSubstitutionGlobal(t *testing.T) {
 	fs := testFS()
 	out, _, code := execCmd(t, fs, "cat /docs/notes.txt | sed 's/apple/APPLE/g'")
