@@ -303,6 +303,7 @@ The container workflow publishes `latest` from `main`; releases also publish
 
 | Guide | Contents |
 |---|---|
+| [Changelog](docs/changelog.md) | Current version, release notes, compatibility notes, and versioned docs |
 | [What is OpenLore](docs/introduction.md) | Serve, connect, scope, govern and observe in one page |
 | [Claude Code with OpenLore](docs/start-claude-code.md) | Connect Claude Code over MCP and scope what it sees |
 | [Any agent with OpenLore over SSH](docs/start-ssh.md) | Connect a coding agent or CI job over SSH and give it an identity |
