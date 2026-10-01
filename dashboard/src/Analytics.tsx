@@ -655,7 +655,6 @@ export function Analytics({
     context.loading,
     usage.loading,
   ]);
-  const folder = useAsync((signal) => api.tree(path, signal), [path]);
   useEffect(() => {
     if (usage.data?.computed_at) onComputed(usage.data.computed_at);
   }, [usage.data?.computed_at, onComputed]);
@@ -761,29 +760,16 @@ export function Analytics({
   };
   return (
     <>
-      <div className="scope-explorer">
-        {folder.data ? (
-          <>
-            <p className="scope-line">
-              Includes this folder and its readable descendants
-            </p>
-            <div className="scope-children">
-              {folder.data.entries.map((entry) => (
-                <button key={entry.path} onClick={() => onScope(entry.path)}>
-                  {entry.directory ? "▱" : "≡"} {entry.name}
-                </button>
-              ))}
-            </div>
-          </>
-        ) : context.data && !context.data.directory ? (
+      {context.data && !context.data.directory && (
+        <div className="scope-explorer">
           <div className="file-scope">
             <span>Single-file analytics</span>
             <button className="primary" onClick={() => onFile(path)}>
               View ↗
             </button>
           </div>
-        ) : null}
-      </div>
+        </div>
+      )}
       <div
         className="analytics-tabs"
         role="tablist"

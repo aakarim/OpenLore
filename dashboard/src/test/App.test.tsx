@@ -314,6 +314,34 @@ test("mobile folder tree stays open while unfurling folders", async () => {
   ).toBeVisible();
 });
 
+test("uses the knowledge tree as the only folder browser", async () => {
+  history.replaceState(null, "", "/dashboard/?view=files&path=/");
+  mockAPI();
+  render(<App />);
+  const user = userEvent.setup();
+  const tree = await screen.findByRole("complementary", {
+    name: "Knowledge tree",
+  });
+
+  expect(document.querySelector(".folder-browser")).not.toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Open a file" })).toBeVisible();
+  expect(within(tree).getByRole("button", { name: /guide/ })).toBeVisible();
+
+  await user.click(screen.getByRole("button", { name: "Browse files" }));
+  expect(screen.getByRole("dialog", { name: "Folders" })).toBeVisible();
+  fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+  await waitFor(() =>
+    expect(
+      screen.queryByRole("dialog", { name: "Folders" }),
+    ).not.toBeInTheDocument(),
+  );
+
+  await user.click(screen.getByRole("button", { name: "Analytics" }));
+  await screen.findByText("Context by folder");
+  expect(document.querySelector(".scope-children")).not.toBeInTheDocument();
+  expect(within(tree).getByRole("button", { name: /guide/ })).toBeVisible();
+});
+
 test("shows honest oversized-context error and hides Access without permission", async () => {
   history.replaceState(
     null,

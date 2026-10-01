@@ -3,7 +3,7 @@ import { Analytics, analyticsTabs } from "./Analytics";
 import { APIError, api } from "./api";
 import { FileReader, MobileDetails, Sheet } from "./FileReader";
 import { useAsync } from "./hooks";
-import { SettingsIcon } from "./icons";
+import { FileIcon, SettingsIcon } from "./icons";
 import {
   defaults,
   readPreferences,
@@ -460,11 +460,22 @@ function Workspace({ session }: { session: Session }) {
                 }
               />
             ) : (
-              <FolderBrowser
-                path={path}
-                onFile={openFile}
-                onFolder={openFolder}
-              />
+              <section className="file-empty" aria-labelledby="file-empty-title">
+                <div className="file-empty-icon">
+                  <FileIcon />
+                </div>
+                <h1 id="file-empty-title">Open a file</h1>
+                <p>
+                  Choose a file from the knowledge tree to read it, inspect its
+                  details, and view its source.
+                </p>
+                <button
+                  className="primary mobile-only"
+                  onClick={() => setSheet("folders")}
+                >
+                  Browse files
+                </button>
+              </section>
             )}
           </>
         )}
@@ -595,58 +606,5 @@ function Workspace({ session }: { session: Session }) {
         </div>
       )}
     </div>
-  );
-}
-
-function FolderBrowser({
-  path,
-  onFile,
-  onFolder,
-}: {
-  path: string;
-  onFile: (path: string) => void;
-  onFolder: (path: string) => void;
-}) {
-  const state = useAsync((signal) => api.tree(path, signal), [path]);
-  if (state.loading)
-    return <div className="state loading">Loading folder…</div>;
-  if (state.error)
-    return (
-      <div className="state error">
-        <p>{state.error.message}</p>
-        <button onClick={state.refresh}>Retry</button>
-      </div>
-    );
-  return (
-    <section className="folder-browser">
-      <h2>{name(path)}</h2>
-      <p>{state.data?.entries.length || 0} items</p>
-      {path !== "/" && (
-        <button
-          className="folder-up"
-          onClick={() => onFolder(path.slice(0, path.lastIndexOf("/")) || "/")}
-        >
-          ↑ Parent folder
-        </button>
-      )}
-      <div className="folder-list">
-        {state.data?.entries.map((entry) => (
-          <button
-            key={entry.path}
-            onClick={() =>
-              entry.directory ? onFolder(entry.path) : onFile(entry.path)
-            }
-          >
-            <span>{entry.directory ? "▱" : "≡"}</span>
-            <strong>{entry.name}</strong>
-            <small>
-              {entry.directory
-                ? "Folder"
-                : `${entry.bytes.toLocaleString()} bytes`}
-            </small>
-          </button>
-        ))}
-      </div>
-    </section>
   );
 }
