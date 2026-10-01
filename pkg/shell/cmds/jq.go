@@ -190,6 +190,7 @@ const (
 	jqArith                             // +, -, *, /, %
 	jqAnd                               // and
 	jqOr                                // or
+	jqAlternative                       // //
 	jqNot                               // not
 	jqIf                                // if-then-else-end
 	jqTryCatch                          // try-catch
@@ -223,7 +224,7 @@ func jqParse(filter string) (*jqNode, error) {
 }
 
 type jqToken struct {
-	typ   string // "dot", "ident", "number", "string", "op", "lbracket", "rbracket", "lbrace", "rbrace", "pipe", "comma", "colon", "semi", "lparen", "rparen", "question"
+	typ   string // "dot", "ident", "number", "string", "op", "alternative", "lbracket", "rbracket", "lbrace", "rbrace", "pipe", "comma", "colon", "semi", "lparen", "rparen", "question"
 	value string
 }
 
@@ -332,9 +333,13 @@ func jqTokenize(filter string) []jqToken {
 			tokens = append(tokens, jqToken{"op", "*"})
 			i++
 		case ch == '/':
-			// Check if followed by another / for comment, otherwise operator
-			tokens = append(tokens, jqToken{"op", "/"})
-			i++
+			if i+1 < len(filter) && filter[i+1] == '/' {
+				tokens = append(tokens, jqToken{"alternative", "//"})
+				i += 2
+			} else {
+				tokens = append(tokens, jqToken{"op", "/"})
+				i++
+			}
 		case ch == '%':
 			tokens = append(tokens, jqToken{"op", "%"})
 			i++
@@ -385,18 +390,61 @@ func jqParsePipe(tokens []jqToken, pos int) (*jqNode, int, error) {
 }
 
 func jqParseComma(tokens []jqToken, pos int) (*jqNode, int, error) {
-	left, pos, err := jqParseComparison(tokens, pos)
+	left, pos, err := jqParseLogic(tokens, pos)
 	if err != nil {
 		return nil, pos, err
 	}
 
 	for pos < len(tokens) && tokens[pos].typ == "comma" {
 		pos++ // consume ,
-		right, newPos, err := jqParseComparison(tokens, pos)
+		right, newPos, err := jqParseLogic(tokens, pos)
 		if err != nil {
 			return nil, newPos, err
 		}
 		left = &jqNode{typ: jqComma, children: []*jqNode{left, right}}
+		pos = newPos
+	}
+
+	return left, pos, nil
+}
+
+func jqParseLogic(tokens []jqToken, pos int) (*jqNode, int, error) {
+	left, pos, err := jqParseAlternative(tokens, pos)
+	if err != nil {
+		return nil, pos, err
+	}
+
+	for pos < len(tokens) && tokens[pos].typ == "ident" && (tokens[pos].value == "and" || tokens[pos].value == "or") {
+		op := tokens[pos].value
+		pos++
+		right, newPos, err := jqParseAlternative(tokens, pos)
+		if err != nil {
+			return nil, newPos, err
+		}
+		if op == "and" {
+			left = &jqNode{typ: jqAnd, children: []*jqNode{left, right}}
+		} else {
+			left = &jqNode{typ: jqOr, children: []*jqNode{left, right}}
+		}
+		pos = newPos
+	}
+
+	return left, pos, nil
+}
+
+func jqParseAlternative(tokens []jqToken, pos int) (*jqNode, int, error) {
+	left, pos, err := jqParseComparison(tokens, pos)
+	if err != nil {
+		return nil, pos, err
+	}
+
+	for pos < len(tokens) && tokens[pos].typ == "alternative" {
+		pos++
+		right, newPos, err := jqParseComparison(tokens, pos)
+		if err != nil {
+			return nil, newPos, err
+		}
+		left = &jqNode{typ: jqAlternative, children: []*jqNode{left, right}}
 		pos = newPos
 	}
 
@@ -411,32 +459,15 @@ func jqParseComparison(tokens []jqToken, pos int) (*jqNode, int, error) {
 
 	for pos < len(tokens) && tokens[pos].typ == "op" {
 		op := tokens[pos].value
-		if op == "==" || op == "!=" || op == "<" || op == ">" || op == "<=" || op == ">=" {
-			pos++
-			right, newPos, err := jqParseArith(tokens, pos)
-			if err != nil {
-				return nil, newPos, err
-			}
-			left = &jqNode{typ: jqComparison, value: op, children: []*jqNode{left, right}}
-			pos = newPos
-		} else {
+		if op != "==" && op != "!=" && op != "<" && op != ">" && op != "<=" && op != ">=" {
 			break
 		}
-	}
-
-	// Handle "and" / "or" keywords
-	for pos < len(tokens) && tokens[pos].typ == "ident" && (tokens[pos].value == "and" || tokens[pos].value == "or") {
-		op := tokens[pos].value
 		pos++
 		right, newPos, err := jqParseArith(tokens, pos)
 		if err != nil {
 			return nil, newPos, err
 		}
-		if op == "and" {
-			left = &jqNode{typ: jqAnd, children: []*jqNode{left, right}}
-		} else {
-			left = &jqNode{typ: jqOr, children: []*jqNode{left, right}}
-		}
+		left = &jqNode{typ: jqComparison, value: op, children: []*jqNode{left, right}}
 		pos = newPos
 	}
 
@@ -823,7 +854,7 @@ func jqParseObject(tokens []jqToken, pos int) (*jqNode, int, error) {
 		// Colon and value
 		if pos < len(tokens) && tokens[pos].typ == "colon" {
 			pos++
-			valExpr, newPos, err := jqParseComparison(tokens, pos)
+			valExpr, newPos, err := jqParseLogic(tokens, pos)
 			if err != nil {
 				return nil, newPos, err
 			}
@@ -1129,6 +1160,22 @@ func jqEval(node *jqNode, input interface{}) ([]interface{}, error) {
 		l := len(leftVals) > 0 && jqIsTruthy(leftVals[0])
 		r := len(rightVals) > 0 && jqIsTruthy(rightVals[0])
 		return []interface{}{l || r}, nil
+
+	case jqAlternative:
+		leftVals, err := jqEval(node.children[0], input)
+		if err != nil {
+			return nil, err
+		}
+		results := make([]interface{}, 0, len(leftVals))
+		for _, value := range leftVals {
+			if jqIsTruthy(value) {
+				results = append(results, value)
+			}
+		}
+		if len(results) > 0 {
+			return results, nil
+		}
+		return jqEval(node.children[1], input)
 
 	case jqNot:
 		return []interface{}{!jqIsTruthy(input)}, nil
