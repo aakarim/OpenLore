@@ -301,11 +301,6 @@ The container workflow publishes `latest` from `main`; releases also publish
 
 ## Documentation
 
-**Current release: v0.7.3.** These docs track development on `main`, using v0.7.3
-as the release baseline. See the [changelog](docs/changelog.md) for release notes
-and upgrade guidance, or read the [v0.7.3 docs snapshot](https://github.com/aakarim/OpenLore/tree/v0.7.3/docs)
-for that release. Run `openlore version` to check your installed binary.
-
 | Guide | Contents |
 |---|---|
 | [Changelog](docs/changelog.md) | Current version, release notes, compatibility notes, and versioned docs |

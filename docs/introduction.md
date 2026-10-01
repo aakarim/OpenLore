@@ -1,9 +1,5 @@
 # What is OpenLore
 
-> **Docs version:** Development (`main`), with **v0.7.3** as the current release
-> baseline. See the [changelog](changelog.md) for release notes, upgrade guidance,
-> and documentation matching your installed version.
-
 OpenLore is a minimal, customisable, agent-native knowledge base that keeps your context current and inspectable. You point it at a directory of Markdown, and every agent on your team reads the same files over SSH or MCP.
 
 > **Note:** OpenLore is a single Go binary. There is no vector database, ingestion pipeline or SDK.
