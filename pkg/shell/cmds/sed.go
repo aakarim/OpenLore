@@ -14,24 +14,37 @@ func CmdSed(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io
 	inPlace := false
 	var expressions []string
 	var files []string
+	flagsDone := false
 
 	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "-n":
-			quiet = true
-		case "-i", "--in-place":
-			inPlace = true
-		case "-e":
-			if i+1 < len(args) {
-				expressions = append(expressions, args[i+1])
-				i++
+		arg := args[i]
+		if !flagsDone {
+			switch arg {
+			case "--":
+				flagsDone = true
+				continue
+			case "-n":
+				quiet = true
+				continue
+			case "-i", "--in-place":
+				inPlace = true
+				continue
+			case "-e":
+				if i+1 < len(args) {
+					expressions = append(expressions, args[i+1])
+					i++
+				}
+				continue
 			}
-		default:
-			if len(expressions) == 0 && !strings.HasPrefix(args[i], "-") && len(files) == 0 {
-				expressions = append(expressions, args[i])
-			} else {
-				files = append(files, args[i])
+			if len(arg) > 1 && strings.HasPrefix(arg, "-") {
+				fmt.Fprintf(errW, "sed: unknown option %q\n", arg)
+				return 1
 			}
+		}
+		if len(expressions) == 0 && len(files) == 0 {
+			expressions = append(expressions, arg)
+		} else {
+			files = append(files, arg)
 		}
 	}
 
