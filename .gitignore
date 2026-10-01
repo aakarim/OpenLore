@@ -5,6 +5,7 @@
 /openlore
 /lix
 /dist/
+/.release/
 
 # Generated dashboard assets are embedded only in distribution builds.
 /assets/dashboard/dist/
