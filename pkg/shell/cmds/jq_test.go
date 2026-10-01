@@ -71,3 +71,35 @@ func TestJqAdd(t *testing.T) {
 		t.Errorf("jq add: got %q", strings.TrimSpace(out.String()))
 	}
 }
+
+func TestJqAlternativeOperator(t *testing.T) {
+	fs := testFS()
+	fs.AddFile("/docs/present.json", `{"a":1}`)
+	fs.AddFile("/docs/missing.json", `{}`)
+	fs.AddFile("/docs/false.json", `{"a":false}`)
+	fs.AddFile("/docs/zero.json", `{"a":0}`)
+
+	tests := []struct {
+		name string
+		cmd  string
+		want string
+	}{
+		{name: "present value", cmd: "jq -c '.a // 5' /docs/present.json", want: "1"},
+		{name: "missing value", cmd: "jq -c '.a // 5' /docs/missing.json", want: "5"},
+		{name: "false value", cmd: "jq -c '.a // 5' /docs/false.json", want: "5"},
+		{name: "zero is truthy", cmd: "jq -c '.a // 5' /docs/zero.json", want: "0"},
+		{name: "empty output", cmd: "jq -c 'empty // 5' /docs/present.json", want: "5"},
+		{name: "mixed outputs", cmd: "jq -c '(null, false, 1) // 5' /docs/present.json", want: "1"},
+		{name: "all false outputs", cmd: "jq -c '(null, false) // 5' /docs/present.json", want: "5"},
+		{name: "object value", cmd: "jq -c '{t: (.a // null)}' /docs/present.json", want: `{"t":1}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, errOut, code := execCmd(t, fs, tt.cmd)
+			if code != 0 || strings.TrimSpace(out) != tt.want {
+				t.Fatalf("code=%d stdout=%q stderr=%q, want stdout %q", code, strings.TrimSpace(out), errOut, tt.want)
+			}
+		})
+	}
+}
