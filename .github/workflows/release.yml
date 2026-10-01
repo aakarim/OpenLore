@@ -38,6 +38,21 @@ jobs:
       - name: Build dashboard assets
         run: nix develop --command make dashboard-build
 
+      - name: Build release candidate without publishing
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          version: "~> v2"
+          args: release --snapshot --clean --skip=publish
+
+      - name: Verify release candidate
+        run: |
+          (cd dist && sha256sum --check checksums.txt)
+
+          smoke_dir=$(mktemp -d)
+          trap 'rm -rf "$smoke_dir"' EXIT
+          tar -xzf dist/openlore_linux_amd64.tar.gz -C "$smoke_dir"
+          test "$("$smoke_dir/openlore" version)" = "openlore ${GITHUB_REF_NAME#v}"
+
       - name: Release binaries and Homebrew cask
         uses: goreleaser/goreleaser-action@v7
         with:
