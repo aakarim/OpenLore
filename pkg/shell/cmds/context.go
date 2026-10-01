@@ -21,7 +21,6 @@ type CmdContext interface {
 	DeleteEnv(key string)
 	AllEnv() map[string]string
 	Exec(cmdLine string, w io.Writer, errW io.Writer, stdin io.Reader) int
-	ExecArgs(args []string, w io.Writer, errW io.Writer, stdin io.Reader) int
 	ExecPipeline(line string, w io.Writer, errW io.Writer, stdin io.Reader) int
 	// ActionAllowed reports whether the session may perform the given
 	// capability class. A command that introspects the available surface

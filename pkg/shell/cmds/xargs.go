@@ -1,10 +1,23 @@
 package cmds
 
 import (
+	"fmt"
 	"io"
 	"strconv"
 	"strings"
 )
+
+type argsExecutor interface {
+	ExecArgs(args []string, w io.Writer, errW io.Writer, stdin io.Reader) int
+}
+
+func execArgsPreserving(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.Reader) (int, bool) {
+	executor, ok := ctx.(argsExecutor)
+	if !ok {
+		return 1, false
+	}
+	return executor.ExecArgs(args, w, errW, stdin), true
+}
 
 func CmdXargs(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.Reader) int {
 	replaceStr := ""
@@ -62,12 +75,16 @@ func CmdXargs(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin 
 	// Remove empty items
 	var filtered []string
 	for _, item := range items {
-		item = strings.TrimSpace(item)
 		if item != "" {
 			filtered = append(filtered, item)
 		}
 	}
 	items = filtered
+	executor, ok := ctx.(argsExecutor)
+	if !ok {
+		fmt.Fprintln(errW, "xargs: argument-preserving execution is unavailable")
+		return 1
+	}
 
 	lastExit := 0
 
@@ -77,7 +94,7 @@ func CmdXargs(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin 
 			for _, p := range cmdParts {
 				cmdArgs = append(cmdArgs, strings.ReplaceAll(p, replaceStr, item))
 			}
-			lastExit = ctx.ExecArgs(cmdArgs, w, errW, nil)
+			lastExit = executor.ExecArgs(cmdArgs, w, errW, nil)
 		}
 		return lastExit
 	}
@@ -89,11 +106,11 @@ func CmdXargs(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin 
 				end = len(items)
 			}
 			cmdArgs := append(append([]string(nil), cmdParts...), items[i:end]...)
-			lastExit = ctx.ExecArgs(cmdArgs, w, errW, nil)
+			lastExit = executor.ExecArgs(cmdArgs, w, errW, nil)
 		}
 		return lastExit
 	}
 
 	cmdArgs := append(append([]string(nil), cmdParts...), items...)
-	return ctx.ExecArgs(cmdArgs, w, errW, nil)
+	return executor.ExecArgs(cmdArgs, w, errW, nil)
 }

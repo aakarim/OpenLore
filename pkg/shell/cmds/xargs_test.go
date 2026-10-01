@@ -17,6 +17,11 @@ func TestXargsI(t *testing.T) {
 	if !strings.Contains(out, "got: hello") {
 		t.Errorf("xargs -I: got %q", out)
 	}
+
+	out, _, _ = execCmd(t, testFS(), `printf '  spaced  \n' | xargs -I {} echo '<{}>'`)
+	if out != "<  spaced  >\n" {
+		t.Errorf("xargs -I whitespace: got %q", out)
+	}
 }
 
 func TestXargsTreatsInputAsArgumentsNotShellSource(t *testing.T) {
@@ -40,6 +45,17 @@ func TestXargsTreatsInputAsArgumentsNotShellSource(t *testing.T) {
 			out, errOut, code := execCmd(t, testFS(), tt.command)
 			if code != 0 || out != tt.want || errOut != "" {
 				t.Fatalf("code=%d stdout=%q stderr=%q, want code=0 stdout=%q stderr empty", code, out, errOut, tt.want)
+			}
+		})
+	}
+}
+
+func TestXargsTreatsInputAsArgumentsThroughWrappers(t *testing.T) {
+	for _, wrapper := range []string{"command", "time", "timeout 1"} {
+		t.Run(wrapper, func(t *testing.T) {
+			out, _, code := execCmd(t, testFS(), `printf 'x;echo INJECTED\n' | xargs `+wrapper+` echo`)
+			if code != 0 || out != "x;echo INJECTED\n" {
+				t.Fatalf("code=%d stdout=%q, want literal argument", code, out)
 			}
 		})
 	}

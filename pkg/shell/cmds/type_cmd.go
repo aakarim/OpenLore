@@ -53,6 +53,9 @@ func CmdCommand(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdi
 
 	// Without -v, just execute the command
 	if len(cmdArgs) > 0 {
+		if code, ok := execArgsPreserving(ctx, cmdArgs, w, errW, nil); ok {
+			return code
+		}
 		cmdLine := strings.Join(cmdArgs, " ")
 		return ctx.Exec(cmdLine, w, errW, nil)
 	}

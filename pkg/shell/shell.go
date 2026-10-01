@@ -269,7 +269,25 @@ func (s *Shell) Exec(cmdLine string, w io.Writer, errW io.Writer, stdin io.Reade
 // ExecArgs executes an already-tokenized command without parsing its arguments
 // as shell source.
 func (s *Shell) ExecArgs(args []string, w io.Writer, errW io.Writer, stdin io.Reader) int {
-	return s.execArgs(args, w, errW, stdin)
+	if s.commandObserver == nil || len(args) == 0 {
+		return s.execArgs(args, w, errW, stdin)
+	}
+	command := args[0]
+	eventID := analytics.NewID()
+	parentEventID := s.commandEventID
+	s.commandEventID = eventID
+	defer func() { s.commandEventID = parentEventID }()
+	if s.invocationObserver != nil {
+		s.invocationObserver(s.invocationID, eventID)
+		defer s.invocationObserver(s.invocationID, parentEventID)
+	}
+	position := s.pipelinePosition
+	s.pipelinePosition++
+	counter := &countingWriter{Writer: w}
+	started := time.Now()
+	code := s.execArgs(args, counter, errW, stdin)
+	s.commandObserver(CommandExecution{Command: command, Argc: len(args) - 1, ExitCode: code, Duration: time.Since(started), BytesOut: counter.n, PipelinePosition: position, InvocationID: s.invocationID, EventID: eventID})
+	return code
 }
 
 // ExecPipeline parses a shell line and executes the resulting AST.
