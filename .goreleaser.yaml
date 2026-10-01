@@ -67,3 +67,6 @@ release:
   github:
     owner: aakarim
     name: OpenLore
+  draft: true
+  extra_files:
+    - glob: .release/source-sha.txt
