@@ -21,7 +21,7 @@ func CmdHelp(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "SEARCH")
 	fmt.Fprintln(w, "  grep [-EFinrRohcvl] <pattern> [path]    Search for pattern in files")
-	fmt.Fprintln(w, "    Basic regex by default; -E extended regex; -F fixed strings")
+	fmt.Fprintln(w, "    Basic regex by default; -E extended regex; -F fixed strings; use -E 'a|b' for multiple patterns")
 	fmt.Fprintln(w, "  find [path] [-name pat] [-type f|d]     Find files")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "TEXT PROCESSING")

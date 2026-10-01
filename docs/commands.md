@@ -28,7 +28,7 @@ Directories retain a trailing `/`, hidden entries appear only after an explicit
 
 | Command | Description |
 |---|---|
-| `grep` | Search patterns (`-i`, `-n`, `-r`, `-v`, `-c`, `-l`, `-o`, `-L`, `-w`, `-x`, `-m`) |
+| `grep` | Search patterns (`-E`, `-F`, `-i`, `-n`, `-r`, `-R`, `-o`, `-h`, `-c`, `-v`, `-l`); use `-E 'a|b'` for multiple patterns |
 | `find` | Find files (`-name`, `-type f\|d`) |
 
 ## Text processing
