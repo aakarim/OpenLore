@@ -131,3 +131,28 @@ func TestFactsScanQueueResumesSameScopeGeneration(t *testing.T) {
 		t.Fatalf("new scan did not reset progress=%+v err=%v", state, err)
 	}
 }
+
+func TestFactsScanContentBoundaryChangeStartsNewGeneration(t *testing.T) {
+	_, index := testFactsIndex(t)
+	ctx := context.Background()
+	first := []KnowledgeScope{{Name: "docs", Root: "/docs", ContentBoundary: "policy-one"}}
+	generation, err := index.StartScan(ctx, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := index.CompleteScanPath(ctx, generation, "/docs", []string{"/docs/stale.go"}, false); err != nil {
+		t.Fatal(err)
+	}
+	second := []KnowledgeScope{{Name: "docs", Root: "/docs", ContentBoundary: "policy-two"}}
+	restarted, err := index.StartScan(ctx, second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restarted == generation {
+		t.Fatalf("content policy change resumed generation %d", generation)
+	}
+	paths, err := index.NextScanPaths(ctx, restarted, 10)
+	if err != nil || len(paths) != 1 || paths[0] != "/docs" {
+		t.Fatalf("new generation queue = %v, err=%v", paths, err)
+	}
+}

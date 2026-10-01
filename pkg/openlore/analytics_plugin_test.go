@@ -30,6 +30,24 @@ type phase4Consumer struct {
 	seenOne sync.Once
 }
 
+func TestAnalyticsContentBoundaryIsCanonicalAndPolicySensitive(t *testing.T) {
+	first := config.FilesConfig{Allowed: []string{"*.md", "*.txt"}, Denied: []string{"private.*"}, Ignore: []string{".git", "tmp"}}
+	reordered := config.FilesConfig{Allowed: []string{"*.txt", "*.md"}, Denied: []string{"private.*"}, Ignore: []string{"tmp", ".git"}}
+	if analyticsContentBoundary(first) != analyticsContentBoundary(reordered) {
+		t.Fatal("equivalent file policies produced different content boundaries")
+	}
+	changes := []config.FilesConfig{
+		{Allowed: []string{"*.md", "*.txt", "*.json"}, Denied: []string{"private.*"}, Ignore: []string{".git", "tmp"}},
+		{Allowed: []string{"*.md", "*.txt"}, Denied: []string{"private.*", "draft.*"}, Ignore: []string{".git", "tmp"}},
+		{Allowed: []string{"*.md", "*.txt"}, Denied: []string{"private.*"}, Ignore: []string{".git", "tmp", "vendor"}},
+	}
+	for _, changed := range changes {
+		if analyticsContentBoundary(first) == analyticsContentBoundary(changed) {
+			t.Fatalf("changed file policy retained the same content boundary: %+v", changed)
+		}
+	}
+}
+
 func (c *phase4Consumer) Consume(_ context.Context, event AnalyticsEvent) {
 	c.mu.Lock()
 	c.types = append(c.types, event.Type)

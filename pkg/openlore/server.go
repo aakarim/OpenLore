@@ -326,9 +326,10 @@ func newServerWithRoot(rootDir string, rootFS vfs.FileSystem, lowerFS fs.FS, opt
 			return nil, fmt.Errorf("configuring analytics: %w", analyticsErr)
 		}
 		var knowledgeScopes []analytics.KnowledgeScope
+		contentBoundary := analyticsContentBoundary(cfg.Files)
 		for name, docset := range s.currentAuth().Docsets {
 			for _, mapping := range docset.Paths {
-				knowledgeScopes = append(knowledgeScopes, analytics.KnowledgeScope{Name: name, Root: displayPath(mapping), Exclude: excluded})
+				knowledgeScopes = append(knowledgeScopes, analytics.KnowledgeScope{Name: name, Root: displayPath(mapping), Exclude: excluded, ContentBoundary: contentBoundary})
 			}
 		}
 		service.SetKnowledgeScopes(knowledgeScopes)

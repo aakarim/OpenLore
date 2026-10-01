@@ -2,7 +2,9 @@ package openlore
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/csv"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -17,13 +19,31 @@ import (
 	"time"
 
 	"github.com/aakarim/go-openlore/internal/analytics"
+	"github.com/aakarim/go-openlore/internal/config"
 	"github.com/aakarim/go-openlore/internal/webstyle"
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
 
+const analyticsContentBoundaryVersion = 1
+
 type analyticsPlugin struct {
 	service *analytics.Service
 	server  *Server
+}
+
+func analyticsContentBoundary(files config.FilesConfig) string {
+	files.Allowed = append([]string{}, files.Allowed...)
+	files.Denied = append([]string{}, files.Denied...)
+	files.Ignore = append([]string{}, files.Ignore...)
+	sort.Strings(files.Allowed)
+	sort.Strings(files.Denied)
+	sort.Strings(files.Ignore)
+	encoded, _ := json.Marshal(struct {
+		Version int                `json:"version"`
+		Files   config.FilesConfig `json:"files"`
+	}{Version: analyticsContentBoundaryVersion, Files: files})
+	sum := sha256.Sum256(encoded)
+	return hex.EncodeToString(sum[:])
 }
 
 // analyticsInternalRoots maps configured host storage to content paths. Do not

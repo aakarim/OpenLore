@@ -79,6 +79,9 @@ type KnowledgeScope struct {
 	// It participates in the durable scan fingerprint so older facts and
 	// pending work cannot survive a change to the content boundary.
 	Exclude []string `json:",omitempty"`
+	// ContentBoundary identifies visibility policy outside analytics itself.
+	// A change starts a new generation instead of resuming incompatible work.
+	ContentBoundary string `json:",omitempty"`
 }
 
 type SnapshotStatus struct {
@@ -372,9 +375,9 @@ func (s *Service) IndexedFacts(ctx context.Context, prefix string, limit int) ([
 	if state.Skipped > 0 {
 		status.Warning = fmt.Sprintf("Files over 64 MiB omitted from workspace knowledge totals: %d.", state.Skipped)
 	}
-	if state.Generation > 0 && !state.OwnershipCompatible {
+	if state.Generation > 0 && !state.ScopeCompatible {
 		status.Complete = false
-		status.Coverage = "docset ownership changed; prior facts are incompatible and hidden"
+		status.Coverage = "content scope changed; prior facts are incompatible and hidden"
 		compatibleRows := rows[:0]
 		for _, row := range rows {
 			if row.Generation == state.Generation {
@@ -404,7 +407,7 @@ func (s *Service) IndexedFactsForOwners(ctx context.Context, prefix string, owne
 	if err != nil {
 		return nil, DirectoryFacts{}, SnapshotStatus{State: "failed", Error: err.Error()}, err
 	}
-	if !state.OwnershipCompatible {
+	if !state.ScopeCompatible {
 		return nil, DirectoryFacts{}, status, nil
 	}
 	rows, err := s.index.PrefixScanOwners(ctx, prefix, owners, limit)
@@ -437,9 +440,9 @@ func (s *Service) AuthorizedIndexedFacts(ctx context.Context, key, prefix string
 	if err != nil {
 		return nil, DirectoryFacts{}, status, err
 	}
-	if !scanState.OwnershipCompatible {
+	if !scanState.ScopeCompatible {
 		// Neither previously filtered paths nor new filter work may bypass
-		// the ownership compatibility boundary used by whole-docset views.
+		// the scope compatibility boundary used by whole-docset views.
 		status.Complete = false
 		return nil, DirectoryFacts{}, status, nil
 	}
