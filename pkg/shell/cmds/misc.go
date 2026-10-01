@@ -31,6 +31,9 @@ func CmdTimeout(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdi
 		fmt.Fprintln(errW, "timeout: missing operand")
 		return 1
 	}
+	if code, ok := execArgsPreserving(ctx, args[1:], w, errW, nil); ok {
+		return code
+	}
 	cmdLine := strings.Join(args[1:], " ")
 	return ctx.Exec(cmdLine, w, errW, nil)
 }
@@ -40,8 +43,10 @@ func CmdTime(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 		return 0
 	}
 	start := time.Now()
-	cmdLine := strings.Join(args, " ")
-	exitCode := ctx.Exec(cmdLine, w, errW, nil)
+	exitCode, ok := execArgsPreserving(ctx, args, w, errW, nil)
+	if !ok {
+		exitCode = ctx.Exec(strings.Join(args, " "), w, errW, nil)
+	}
 	elapsed := time.Since(start)
 	fmt.Fprintf(errW, "\nreal\t%s\n", elapsed.Round(time.Millisecond))
 	return exitCode

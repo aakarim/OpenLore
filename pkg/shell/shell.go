@@ -266,6 +266,30 @@ func (s *Shell) Exec(cmdLine string, w io.Writer, errW io.Writer, stdin io.Reade
 	return s.execLine(cmdLine, w, errW, stdin)
 }
 
+// ExecArgs executes an already-tokenized command without parsing its arguments
+// as shell source.
+func (s *Shell) ExecArgs(args []string, w io.Writer, errW io.Writer, stdin io.Reader) int {
+	if s.commandObserver == nil || len(args) == 0 {
+		return s.execArgs(args, w, errW, stdin)
+	}
+	command := args[0]
+	eventID := analytics.NewID()
+	parentEventID := s.commandEventID
+	s.commandEventID = eventID
+	defer func() { s.commandEventID = parentEventID }()
+	if s.invocationObserver != nil {
+		s.invocationObserver(s.invocationID, eventID)
+		defer s.invocationObserver(s.invocationID, parentEventID)
+	}
+	position := s.pipelinePosition
+	s.pipelinePosition++
+	counter := &countingWriter{Writer: w}
+	started := time.Now()
+	code := s.execArgs(args, counter, errW, stdin)
+	s.commandObserver(CommandExecution{Command: command, Argc: len(args) - 1, ExitCode: code, Duration: time.Since(started), BytesOut: counter.n, PipelinePosition: position, InvocationID: s.invocationID, EventID: eventID})
+	return code
+}
+
 // ExecPipeline parses a shell line and executes the resulting AST.
 // stdin is optional — pass nil if no external stdin is available.
 func (s *Shell) ExecPipeline(line string, w io.Writer, errW io.Writer, stdin io.Reader) int {
@@ -479,9 +503,6 @@ func (s *Shell) execCallInner(call *parser.CallExpr, w io.Writer, errW io.Writer
 		args = append(args, expanded)
 	}
 
-	cmdName := args[0]
-	cmdArgs := args[1:]
-
 	// A heredoc on the command replaces stdin with the heredoc body. We
 	// concatenate multiple heredoc bodies in declaration order to match bash.
 	if len(call.Heredocs) > 0 {
@@ -496,7 +517,15 @@ func (s *Shell) execCallInner(call *parser.CallExpr, w io.Writer, errW io.Writer
 	if call.MergeStderr {
 		errW = w
 	}
+	return s.execArgs(args, w, errW, stdin)
+}
 
+func (s *Shell) execArgs(args []string, w io.Writer, errW io.Writer, stdin io.Reader) int {
+	if len(args) == 0 {
+		return 0
+	}
+	cmdName := args[0]
+	cmdArgs := args[1:]
 	if cmdName == "pwd" {
 		fmt.Fprintln(w, s.cwd)
 		return 0

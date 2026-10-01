@@ -26,3 +26,28 @@ func TestCommandObserverSeesPipelineCommandsAndOutput(t *testing.T) {
 		t.Fatalf("unexpected observations: %#v", got)
 	}
 }
+
+func TestCommandObserverSeesXargsGeneratedCommands(t *testing.T) {
+	sh := NewShell(analyticsTestFS{})
+	var got []CommandExecution
+	sh.SetCommandObserver(func(e CommandExecution) { got = append(got, e) })
+	var out bytes.Buffer
+	if code := sh.ExecPipeline("printf 'one two' | xargs -n 1 echo", &out, &out, nil); code != 0 {
+		t.Fatalf("exit %d: %s", code, out.String())
+	}
+	if len(got) != 4 {
+		t.Fatalf("observations = %#v, want printf, two echo calls, and xargs", got)
+	}
+	var echoes int
+	for _, observation := range got {
+		if observation.Command == "echo" {
+			echoes++
+			if observation.InvocationID == "" || observation.BytesOut == 0 {
+				t.Fatalf("generated command was not fully observed: %#v", observation)
+			}
+		}
+	}
+	if echoes != 2 {
+		t.Fatalf("observations = %#v, want two generated echo commands", got)
+	}
+}

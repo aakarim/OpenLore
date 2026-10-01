@@ -1,10 +1,23 @@
 package cmds
 
 import (
+	"fmt"
 	"io"
 	"strconv"
 	"strings"
 )
+
+type argsExecutor interface {
+	ExecArgs(args []string, w io.Writer, errW io.Writer, stdin io.Reader) int
+}
+
+func execArgsPreserving(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.Reader) (int, bool) {
+	executor, ok := ctx.(argsExecutor)
+	if !ok {
+		return 1, false
+	}
+	return executor.ExecArgs(args, w, errW, stdin), true
+}
 
 func CmdXargs(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.Reader) int {
 	replaceStr := ""
@@ -53,6 +66,8 @@ func CmdXargs(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin 
 		items = strings.Split(input, "\x00")
 	} else if delimiter != "" {
 		items = strings.Split(input, delimiter)
+	} else if replaceStr != "" {
+		items = strings.Split(input, "\n")
 	} else {
 		items = strings.Fields(input)
 	}
@@ -60,22 +75,26 @@ func CmdXargs(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin 
 	// Remove empty items
 	var filtered []string
 	for _, item := range items {
-		item = strings.TrimSpace(item)
 		if item != "" {
 			filtered = append(filtered, item)
 		}
 	}
 	items = filtered
+	executor, ok := ctx.(argsExecutor)
+	if !ok {
+		fmt.Fprintln(errW, "xargs: argument-preserving execution is unavailable")
+		return 1
+	}
 
 	lastExit := 0
 
 	if replaceStr != "" {
 		for _, item := range items {
-			var cmdLine []string
+			cmdArgs := make([]string, 0, len(cmdParts))
 			for _, p := range cmdParts {
-				cmdLine = append(cmdLine, strings.ReplaceAll(p, replaceStr, item))
+				cmdArgs = append(cmdArgs, strings.ReplaceAll(p, replaceStr, item))
 			}
-			lastExit = ctx.Exec(strings.Join(cmdLine, " "), w, errW, nil)
+			lastExit = executor.ExecArgs(cmdArgs, w, errW, nil)
 		}
 		return lastExit
 	}
@@ -86,12 +105,12 @@ func CmdXargs(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin 
 			if end > len(items) {
 				end = len(items)
 			}
-			cmdLine := strings.Join(cmdParts, " ") + " " + strings.Join(items[i:end], " ")
-			lastExit = ctx.Exec(cmdLine, w, errW, nil)
+			cmdArgs := append(append([]string(nil), cmdParts...), items[i:end]...)
+			lastExit = executor.ExecArgs(cmdArgs, w, errW, nil)
 		}
 		return lastExit
 	}
 
-	cmdLine := strings.Join(cmdParts, " ") + " " + strings.Join(items, " ")
-	return ctx.Exec(cmdLine, w, errW, nil)
+	cmdArgs := append(append([]string(nil), cmdParts...), items...)
+	return executor.ExecArgs(cmdArgs, w, errW, nil)
 }
