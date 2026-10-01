@@ -31,10 +31,27 @@ jobs:
         run: |
           test "$(cat assets/config/VERSION)" = "${GITHUB_REF_NAME#v}"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          mkdir -p .release
+          echo "$GITHUB_SHA" > .release/source-sha.txt
           echo "Release source: $GITHUB_SHA"
 
       - name: Build dashboard assets
         run: nix develop --command make dashboard-build
+
+      - name: Build release candidate without publishing
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          version: "~> v2"
+          args: release --snapshot --clean --skip=publish
+
+      - name: Verify release candidate
+        run: |
+          (cd dist && sha256sum --check checksums.txt)
+
+          smoke_dir=$(mktemp -d)
+          trap 'rm -rf "$smoke_dir"' EXIT
+          tar -xzf dist/openlore_linux_amd64.tar.gz -C "$smoke_dir"
+          test "$("$smoke_dir/openlore" version)" = "openlore ${GITHUB_REF_NAME#v}"
 
       - name: Release binaries and Homebrew cask
         uses: goreleaser/goreleaser-action@v7
@@ -44,6 +61,21 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+
+      - name: Verify and publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          (cd dist && sha256sum --check checksums.txt)
+          test "$(cat .release/source-sha.txt)" = "$GITHUB_SHA"
+
+          smoke_dir=$(mktemp -d)
+          trap 'rm -rf "$smoke_dir"' EXIT
+          tar -xzf dist/openlore_linux_amd64.tar.gz -C "$smoke_dir"
+          test "$("$smoke_dir/openlore" version)" = "openlore ${GITHUB_REF_NAME#v}"
+
+          test "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)" = true
+          gh release edit "$GITHUB_REF_NAME" --draft=false --latest
 
       - uses: docker/setup-buildx-action@v3
 
