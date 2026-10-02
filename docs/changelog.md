@@ -38,6 +38,9 @@ necessarily the current version. Dates are the GitHub publication dates in UTC.
   been processed.
 - Knowledge analytics no longer reprocess the whole workspace after a restart or
   upgrade.
+- The Homebrew cask is now `lore` (`brew install --cask aakarim/tap/lore`) to
+  avoid colliding with the unrelated `openlore` formula in homebrew-core. The
+  installed binary is still `openlore`.
 
 ## v0.7.3 — 2026-10-01
 

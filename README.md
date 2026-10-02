@@ -18,7 +18,7 @@ Point OpenLore at a folder of Markdown and every agent on your team reads the sa
 Install and serve a folder:
 
 ```bash
-brew install --cask aakarim/tap/openlore
+brew install --cask aakarim/tap/lore
 openlore ./docs
 ```
 
@@ -176,7 +176,7 @@ See [Writing and publishing](docs/writing.md) for user-facing setup and
 Homebrew is supported on macOS and Linux:
 
 ```bash
-brew install --cask aakarim/tap/openlore
+brew install --cask aakarim/tap/lore
 ```
 
 ### Install a Linux release
