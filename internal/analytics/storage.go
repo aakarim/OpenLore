@@ -510,7 +510,9 @@ func OpenSQLiteAggregationStore(path string) (*SQLiteAggregationStore, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(10000)&_pragma=foreign_keys(1)")
+	// Analytics transactions read before writing. Acquire the write lock at
+	// BEGIN so busy_timeout applies instead of failing a read-to-write upgrade.
+	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(10000)&_pragma=foreign_keys(1)&_txlock=immediate")
 	if err != nil {
 		return nil, err
 	}

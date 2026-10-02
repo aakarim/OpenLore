@@ -31,6 +31,11 @@ excluded unless explicitly rooted in a content docset. Identity filtering still
 happens before visible indexed files are folded into a response, and restricted
 docsets are reported only as omitted coverage—never as their counts or sizes.
 Facts are computed from raw on-disk bytes rather than display transforms.
+A completed content index is reused after restart when its docsets, content
+policy, and scalar providers are unchanged. OpenLore-committed writes and
+deletions update the affected paths incrementally. Changing that configuration
+starts a new scan; files changed outside OpenLore while it is stopped are not
+detected until they are next written through OpenLore or the scan is rebuilt.
 
 Dashboard requests do not walk document bodies or retained log files. They
 return the latest compatible committed view, enqueue or promote missing/stale

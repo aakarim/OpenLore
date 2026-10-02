@@ -98,6 +98,13 @@ func (f *countingFactsFS) ReadFile(p string) ([]byte, error) {
 	return f.testFS.ReadFile(p)
 }
 
+func (f *countingFactsFS) ReadFileBounded(p string, maxBytes int64) ([]byte, error) {
+	f.mu.Lock()
+	f.reads++
+	f.mu.Unlock()
+	return f.testFS.ReadFileBounded(p, maxBytes)
+}
+
 func (f *countingFactsFS) readCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -378,6 +385,8 @@ func TestInternalContentExclusionsInvalidateOldFactsAndPendingWork(t *testing.T)
 		"/history/guide.md":           []byte("history docs"),
 	}}
 	service := newIndexedTestService(t, fsys)
+	// Drive the indexer manually while modelling runtime reconfiguration.
+	service.started.Store(true)
 	service.SetKnowledgeScopes([]KnowledgeScope{{Name: "workspace", Root: "/"}})
 	info, _ := fsys.Stat("/data/history/commits.jsonl")
 	if _, err := service.CurrentFacts(ctx, info.FilePath, info, func() ([]byte, error) { return fsys.ReadFile(info.FilePath) }); err != nil {
@@ -439,6 +448,85 @@ func TestInternalContentExclusionsInvalidateOldFactsAndPendingWork(t *testing.T)
 		if err != nil || len(paths) != 2 || paths[0] != "/data-guide/note.md" || paths[1] != "/history/guide.md" {
 			t.Fatalf("content walk=%v err=%v", paths, err)
 		}
+	}
+}
+
+func waitFactsReady(t *testing.T, service *Service) FactsScanState {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		state, err := service.index.ScanState(context.Background())
+		queued, queueErr := service.index.NextScanPaths(context.Background(), state.Generation, 1)
+		if err == nil && queueErr == nil && state.State == "ready" && len(queued) == 0 && !service.processor.active("facts") {
+			return state
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("facts did not become ready: %+v queued=%v err=%v queueErr=%v", state, queued, err, queueErr)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestCompletedFactsSurviveRestartAndUpdateIncrementally(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	fsys := &countingFactsFS{testFS: testFS{"/docs/a.md": []byte("one"), "/docs/b.md": []byte("two")}}
+	open := func() *Service {
+		service, err := New(config.AnalyticsConfig{Dir: dir, Log: config.AnalyticsLogConfig{Compress: "none"}}, Deps{FS: fsys})
+		if err != nil {
+			t.Fatal(err)
+		}
+		service.SetKnowledgeScopes([]KnowledgeScope{{Name: "docs", Root: "/docs"}})
+		return service
+	}
+	first := open()
+	first.Start(ctx)
+	ready := waitFactsReady(t, first)
+	if fsys.readCount() != 2 {
+		t.Fatalf("initial reads=%d", fsys.readCount())
+	}
+	if err := first.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	second := open()
+	defer second.Close(ctx)
+	second.Start(ctx)
+	if state := waitFactsReady(t, second); state.Generation != ready.Generation || !state.CompletedAt.Equal(ready.CompletedAt) {
+		t.Fatalf("restart replaced completed generation: before=%+v after=%+v", ready, state)
+	}
+	if fsys.readCount() != 2 {
+		t.Fatalf("restart reread completed facts: reads=%d", fsys.readCount())
+	}
+
+	fsys.testFS["/docs/a.md"] = []byte("updated")
+	delete(fsys.testFS, "/docs/b.md")
+	second.EnqueueFacts("/docs/a.md")
+	second.EnqueueFacts("/docs/b.md")
+	if state := waitFactsReady(t, second); state.Generation != ready.Generation {
+		t.Fatalf("incremental update started a full scan: %+v", state)
+	}
+	rows, _, err := second.IndexedFacts(ctx, "/docs", 10)
+	if err != nil || len(rows) != 1 || rows[0].Path != "/docs/a.md" || rows[0].Size != int64(len("updated")) {
+		t.Fatalf("incremental rows=%+v err=%v", rows, err)
+	}
+	if fsys.readCount() != 3 {
+		t.Fatalf("incremental update read unrelated files: reads=%d", fsys.readCount())
+	}
+}
+
+func TestContentSourceChangeAfterStartRebuildsCompletedFacts(t *testing.T) {
+	service := newIndexedTestService(t, testFS{"/docs/a.md": []byte("one")})
+	service.SetKnowledgeScopes([]KnowledgeScope{{Name: "docs", Root: "/docs"}})
+	service.Start(context.Background())
+	ready := waitFactsReady(t, service)
+	service.SetTokenizer(fixedTokenizer{name: "exact", count: 7})
+	if state := waitFactsReady(t, service); state.Generation <= ready.Generation {
+		t.Fatalf("source change reused generation: before=%+v after=%+v", ready, state)
+	}
+	rows, _, err := service.IndexedFacts(context.Background(), "/docs", 10)
+	if err != nil || len(rows) != 1 || rows[0].Sources["exact"]["tokens"] != 7 {
+		t.Fatalf("rebuilt facts=%+v err=%v", rows, err)
 	}
 }
 
@@ -563,11 +651,12 @@ func TestFactsScanDoesNotPublishAfterUpsertFailureAndRecovers(t *testing.T) {
 func TestIncompatibleScopeDoesNotServeOrScheduleFilteredFacts(t *testing.T) {
 	ctx := context.Background()
 	service := newIndexedTestService(t, testFS{})
+	service.started.Store(true)
 	service.SetKnowledgeScopes([]KnowledgeScope{{Name: "docs", Root: "/docs"}})
 	store := service.store.(*SQLiteAggregationStore)
 	state, err := service.index.ScanState(ctx)
-	if err != nil {
-		t.Fatal(err)
+	if err != nil || state.Generation == 0 {
+		t.Fatalf("scope did not create a generation: %+v err=%v", state, err)
 	}
 	if err := service.index.Upsert(ctx, IndexedFacts{Path: "/docs/private.md", Owner: "docs", Size: 7, Generation: state.Generation - 1, Sources: map[string]map[string]float64{"size": {"bytes": 7}}}); err != nil {
 		t.Fatal(err)

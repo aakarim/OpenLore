@@ -34,10 +34,11 @@ type FactsIndex interface {
 	Lookup(context.Context, string, int64, int64, []string) (IndexedFacts, bool, error)
 	Upsert(context.Context, IndexedFacts) error
 	Delete(context.Context, string) error
+	DeletePrefix(context.Context, string) error
 	DeleteIfOlder(context.Context, string, int64) error
 	PrefixScan(context.Context, string, ...int) ([]IndexedFacts, error)
 	Prune(context.Context, map[string]struct{}) error
-	StartScan(context.Context, []KnowledgeScope) (int64, error)
+	StartScan(context.Context, []KnowledgeScope, ...string) (int64, error)
 	ScanState(context.Context) (FactsScanState, error)
 	NextScanPaths(context.Context, int64, int) ([]string, error)
 	QueueScanPath(context.Context, int64, string) error
@@ -173,6 +174,36 @@ ON CONFLICT(path,source,scalar) DO UPDATE SET value=excluded.value`, fact.Path, 
 
 func (x *sqliteFactsIndex) Delete(ctx context.Context, p string) error {
 	return x.delete(ctx, p, 0)
+}
+
+func (x *sqliteFactsIndex) DeletePrefix(ctx context.Context, prefix string) error {
+	prefix = vfs.CleanPath(prefix)
+	start := prefix + "/"
+	if prefix == "/" {
+		start = "/"
+	}
+	rows, err := x.db.QueryContext(ctx, `SELECT path FROM files WHERE path=? OR (path>=? AND path<?)`, prefix, start, start+"\U0010ffff")
+	if err != nil {
+		return err
+	}
+	var paths []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			rows.Close()
+			return err
+		}
+		paths = append(paths, p)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, p := range paths {
+		if err := x.Delete(ctx, p); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (x *sqliteFactsIndex) DeleteIfOlder(ctx context.Context, p string, generation int64) error {
@@ -351,7 +382,10 @@ func (x *sqliteFactsIndex) Prune(ctx context.Context, seen map[string]struct{}) 
 	return nil
 }
 
-func (x *sqliteFactsIndex) StartScan(ctx context.Context, scopes []KnowledgeScope) (int64, error) {
+// StartScan starts or reuses the generation for scopes and non-default content
+// sources. Sources are omitted from the default contract for compatibility with
+// completed generations created before sources were part of it.
+func (x *sqliteFactsIndex) StartScan(ctx context.Context, scopes []KnowledgeScope, sources ...string) (int64, error) {
 	clean := append([]KnowledgeScope(nil), scopes...)
 	sort.Slice(clean, func(i, j int) bool {
 		if clean[i].Root == clean[j].Root {
@@ -359,10 +393,13 @@ func (x *sqliteFactsIndex) StartScan(ctx context.Context, scopes []KnowledgeScop
 		}
 		return clean[i].Root < clean[j].Root
 	})
+	sources = append([]string(nil), sources...)
+	sort.Strings(sources)
 	encoded, _ := json.Marshal(struct {
 		Version int              `json:"version"`
 		Scopes  []KnowledgeScope `json:"scopes"`
-	}{Version: factsScanContractVersion, Scopes: clean})
+		Sources []string         `json:"sources,omitempty"`
+	}{Version: factsScanContractVersion, Scopes: clean, Sources: sources})
 	hash := sha256.Sum256(encoded)
 	tx, err := x.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -371,8 +408,13 @@ func (x *sqliteFactsIndex) StartScan(ctx context.Context, scopes []KnowledgeScop
 	defer tx.Rollback()
 	scopeHash := hex.EncodeToString(hash[:])
 	var generation int64
-	var existingState, existingHash string
-	stateErr := tx.QueryRowContext(ctx, `SELECT generation,state,scope_hash FROM facts_scan_state WHERE id=1`).Scan(&generation, &existingState, &existingHash)
+	var existingState, existingHash, completedHash string
+	stateErr := tx.QueryRowContext(ctx, `SELECT generation,state,scope_hash,completed_scope_hash FROM facts_scan_state WHERE id=1`).Scan(&generation, &existingState, &existingHash, &completedHash)
+	if stateErr == nil && existingState == "ready" && existingHash == scopeHash && completedHash == scopeHash {
+		// A restart with the same scan contract keeps the completed generation.
+		// Content changes made through OpenLore are applied incrementally.
+		return generation, tx.Commit()
+	}
 	if stateErr == nil && existingHash == scopeHash && (existingState == "updating" || existingState == "failed") {
 		if _, err := tx.ExecContext(ctx, `UPDATE facts_scan_state SET state='updating',error='' WHERE id=1`); err != nil {
 			return 0, err
@@ -447,7 +489,9 @@ func (x *sqliteFactsIndex) QueueScanPath(ctx context.Context, generation int64, 
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `UPDATE facts_scan_state SET state='updating',error='' WHERE id=1 AND generation=?`, generation); err != nil {
+	// Incremental work keeps a completed generation ready; only an unfinished or
+	// failed generation is a full scan that must report updating.
+	if _, err := tx.ExecContext(ctx, `UPDATE facts_scan_state SET state='updating',error='' WHERE id=1 AND generation=? AND state<>'ready'`, generation); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO facts_scan_queue(generation,path) VALUES(?,?)`, generation, vfs.CleanPath(p)); err != nil {
@@ -469,7 +513,7 @@ func (x *sqliteFactsIndex) CompleteScanPath(ctx context.Context, generation int6
 	if changed, _ := result.RowsAffected(); changed == 0 {
 		return tx.Commit()
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE facts_scan_state SET processed=processed+1,skipped=skipped+? WHERE id=1 AND generation=?`, skipped, generation); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE facts_scan_state SET processed=processed+1,skipped=skipped+? WHERE id=1 AND generation=? AND state<>'ready'`, skipped, generation); err != nil {
 		return err
 	}
 	for _, child := range children {

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
+	"slices"
+	"sort"
 	"sync"
 
 	"github.com/aakarim/go-openlore/pkg/vfs"
@@ -48,23 +50,24 @@ func (x *factsIndexer) configureScopes(scopes []KnowledgeScope, schedule bool) e
 	x.mu.Lock()
 	x.scopes = append([]KnowledgeScope(nil), scopes...)
 	x.mu.Unlock()
-	if schedule {
-		return x.restart(context.Background())
-	}
-	generation, err := x.service.index.StartScan(context.Background(), scopes)
-	if err == nil {
-		x.mu.Lock()
-		x.generation = generation
-		x.mu.Unlock()
-	}
-	return err
+	return x.reconfigure(schedule)
 }
 
-func (x *factsIndexer) restart(ctx context.Context) error {
+// reconfigure applies the current scopes and content sources. Before Start,
+// server construction is still registering providers, so start applies the
+// final configuration once instead of rebuilding for each intermediate step.
+func (x *factsIndexer) reconfigure(schedule bool) error {
+	if !x.service.started.Load() {
+		return nil
+	}
+	return x.start(schedule)
+}
+
+func (x *factsIndexer) start(schedule bool) error {
 	x.mu.Lock()
 	scopes := append([]KnowledgeScope(nil), x.scopes...)
 	x.mu.Unlock()
-	generation, err := x.service.index.StartScan(ctx, scopes)
+	generation, err := x.service.index.StartScan(context.Background(), scopes, x.sources()...)
 	if err != nil {
 		return err
 	}
@@ -72,19 +75,25 @@ func (x *factsIndexer) restart(ctx context.Context) error {
 	x.generation = generation
 	x.pending = map[string]struct{}{}
 	x.mu.Unlock()
-	x.schedule(false)
+	if schedule {
+		// A compatible ready generation runs only incremental work left queued
+		// by a previous process; otherwise this starts or resumes the scan.
+		x.schedule(false)
+	}
 	return nil
 }
 
-func (x *factsIndexer) resume() {
-	state, err := x.service.index.ScanState(context.Background())
-	if err != nil || state.Generation == 0 || state.State == "ready" {
-		return
+func (x *factsIndexer) sources() []string {
+	x.service.providersMu.RLock()
+	sources := sourceNames(x.service.providers)
+	x.service.providersMu.RUnlock()
+	defaults := sourceNames(defaultProviders)
+	sort.Strings(sources)
+	sort.Strings(defaults)
+	if slices.Equal(sources, defaults) {
+		return nil
 	}
-	x.mu.Lock()
-	x.generation = state.Generation
-	x.mu.Unlock()
-	x.schedule(false)
+	return sources
 }
 
 func (x *factsIndexer) enqueue(p string) {
@@ -105,13 +114,13 @@ func (x *factsIndexer) enqueue(p string) {
 		return
 	}
 	state, err := x.service.index.ScanState(context.Background())
-	if err == nil && state.Generation > 0 && state.State == "updating" {
+	if err == nil && state.Generation > 0 {
 		if err := x.service.index.QueueScanPath(context.Background(), state.Generation, p); err == nil {
 			x.schedule(false)
 			return
 		}
 	}
-	_ = x.restart(context.Background())
+	_ = x.reconfigure(true)
 }
 
 func (x *factsIndexer) schedule(priority bool) {
@@ -120,12 +129,16 @@ func (x *factsIndexer) schedule(priority bool) {
 
 func (x *factsIndexer) run(ctx context.Context) {
 	state, err := x.service.index.ScanState(ctx)
-	if err != nil || state.Generation == 0 || state.State == "ready" {
+	if err != nil || state.Generation == 0 {
 		return
 	}
 	paths, err := x.service.index.NextScanPaths(ctx, state.Generation, factsBatchSize)
 	if err != nil {
 		_ = x.service.index.FailScan(context.WithoutCancel(ctx), state.Generation, err)
+		return
+	}
+	ready := state.State == "ready"
+	if ready && len(paths) == 0 {
 		return
 	}
 	for _, p := range paths {
@@ -141,6 +154,10 @@ func (x *factsIndexer) run(ctx context.Context) {
 	}
 	if len(remaining) > 0 {
 		x.schedule(false)
+		return
+	}
+	if ready {
+		// Incremental updates do not prune the completed generation.
 		return
 	}
 	if complete, err := x.service.index.FinishScan(ctx, state.Generation); err != nil {
@@ -159,6 +176,11 @@ func (x *factsIndexer) scanPath(ctx context.Context, generation int64, p string)
 	}
 	info, err := x.service.fs.Stat(p)
 	if errors.Is(err, fs.ErrNotExist) {
+		// Incremental deletes do not run generation pruning, so remove the
+		// deleted file or subtree directly.
+		if err := x.service.index.DeletePrefix(ctx, p); err != nil {
+			return err
+		}
 		return x.service.index.CompleteScanPath(ctx, generation, p, nil, false)
 	}
 	if err != nil {

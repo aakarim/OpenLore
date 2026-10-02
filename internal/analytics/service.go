@@ -212,8 +212,10 @@ func (s *Service) Start(ctx context.Context) {
 	s.started.Store(true)
 	ctx, s.cancel = context.WithCancel(ctx)
 	go s.processor.run(ctx)
-	if s.indexer != nil && s.cfg.PipelineEnabled() {
-		s.indexer.resume()
+	if s.indexer != nil {
+		if err := s.indexer.start(s.cfg.PipelineEnabled()); err != nil {
+			s.indexLog.Do(func() { log.Printf("analytics facts scan could not start: %v", err) })
+		}
 	}
 	s.recorder.Start(ctx)
 	if s.pipeline != nil {
@@ -248,7 +250,7 @@ func (s *Service) AddContentScalarProvider(provider ContentScalarProvider) {
 	s.facts = newIndexedContentFacts(s.fs, s.fs, s.index, &s.indexLog, s.providers, s.excludedContent)
 	s.registry.Bind(s.log, s.facts)
 	s.providersMu.Unlock()
-	s.EnqueueFacts("/")
+	s.reconfigureFacts()
 }
 func (s *Service) SetTokenizer(tokenizer Tokenizer) {
 	if tokenizer == nil {
@@ -265,7 +267,17 @@ func (s *Service) SetTokenizer(tokenizer Tokenizer) {
 	s.facts = newIndexedContentFacts(s.fs, s.fs, s.index, &s.indexLog, s.providers, s.excludedContent)
 	s.registry.Bind(s.log, s.facts)
 	s.providersMu.Unlock()
-	s.EnqueueFacts("/")
+	s.reconfigureFacts()
+}
+
+// reconfigureFacts starts a new generation only when the scan contract changes.
+func (s *Service) reconfigureFacts() {
+	if s.indexer == nil {
+		return
+	}
+	if err := s.indexer.reconfigure(s.cfg.PipelineEnabled()); err != nil {
+		s.indexLog.Do(func() { log.Printf("analytics facts scan could not start: %v", err) })
+	}
 }
 
 func (s *Service) EnqueueFacts(p string) {
