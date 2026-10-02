@@ -600,6 +600,54 @@ func TestDashboardPollingPreservesFailedScan(t *testing.T) {
 	}
 }
 
+func TestDashboardPollingDoesNotRescanOldReadyFacts(t *testing.T) {
+	s, mux, token := newDashboardTestServer(t)
+	dir := t.TempDir()
+	service, err := analytics.New(config.AnalyticsConfig{Dir: dir, Log: config.AnalyticsLogConfig{Compress: "none"}}, analytics.Deps{FS: s.merge})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close(context.Background())
+	service.SetKnowledgeScopes([]analytics.KnowledgeScope{{Name: "public", Root: "/public"}})
+	service.Start(context.Background())
+	s.analytics = service
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		_, status, err := service.IndexedFacts(context.Background(), "/public", 1)
+		if err == nil && status.Complete && !status.Updating {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("facts did not complete: %+v err=%v", status, err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	db, err := sql.Open("sqlite", filepath.Join(dir, "aggregations.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`UPDATE facts_scan_state SET completed_at=?`, time.Now().Add(-time.Hour).UnixNano()); err != nil {
+		t.Fatal(err)
+	}
+	before, _, err := service.IndexedFacts(context.Background(), "/public", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := dashboardRequest(mux, "GET", "/dashboard/api/context?path=/public", token)
+	var node dashboardNode
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &node) != nil || node.Analytics == nil {
+		t.Fatalf("context response: %d %s", w.Code, w.Body.String())
+	}
+	if node.Analytics.State != "ready" || node.Analytics.Updating {
+		t.Fatalf("old facts were rescanned: %+v", node.Analytics)
+	}
+	after, _, err := service.IndexedFacts(context.Background(), "/public", 1)
+	if err != nil || len(after) != len(before) {
+		t.Fatalf("facts changed after poll: before=%+v after=%+v err=%v", before, after, err)
+	}
+}
+
 func TestDashboardHidesStaleOwnersImmediatelyAfterDocsetTopologyChange(t *testing.T) {
 	s, mux, token := newDashboardTestServer(t)
 	dir := t.TempDir()

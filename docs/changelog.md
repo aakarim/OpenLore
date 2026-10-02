@@ -33,6 +33,9 @@ necessarily the current version. Dates are the GitHub publication dates in UTC.
 
 - Added this changelog and guidance for matching documentation to an installed
   version.
+- Completed knowledge analytics now survive restarts without a workspace rescan.
+  Dashboard polling no longer rescans because results are older than a minute;
+  committed writes and deletions update affected paths incrementally.
 
 ## v0.7.3 — 2026-10-01
 
