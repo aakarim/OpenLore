@@ -169,6 +169,28 @@ test("knowledge renders while activity is still loading", async () => {
   ).toBeVisible();
 });
 
+test("overview keeps knowledge visible and reports activity failures", async () => {
+  history.replaceState(
+    null,
+    "",
+    "/dashboard/?view=analytics&path=/&tab=overview",
+  );
+  const fetch = mockAPI();
+  const original = fetch.getMockImplementation()!;
+  fetch.mockImplementation((input, init) =>
+    String(input).includes("/api/usage?")
+      ? Promise.resolve(
+          new Response(JSON.stringify({ error: "activity offline" }), {
+            status: 503,
+          }),
+        )
+      : original(input, init),
+  );
+  render(<App />);
+  expect(await screen.findByText("activity offline")).toBeVisible();
+  expect(screen.getByText("Context by folder")).toBeVisible();
+});
+
 test("analytics status shows how far activity history is processed", async () => {
   history.replaceState(
     null,

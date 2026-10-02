@@ -20,11 +20,13 @@ const tabs: { id: AnalyticsTab; label: string; glyph: string }[] = [
   { id: "access", label: "Access", glyph: "◇" },
 ];
 const n = (value: number | undefined) => (value || 0).toLocaleString("en-GB");
+// Processing boundaries are UTC segment boundaries, so format them in UTC.
 export const formatDate = (value: string) =>
   new Date(value).toLocaleDateString("en-GB", {
     day: "numeric",
     month: "short",
     year: "numeric",
+    timeZone: "UTC",
   });
 function AnalyticsProgress({
   label,
@@ -234,16 +236,23 @@ function Activity({ usage }: { usage: Usage }) {
     </section>
   );
 }
-function ActivityPending({ usage }: { usage?: Usage }) {
+function ActivityPending({ usage, error }: { usage?: Usage; error?: Error }) {
   const progress = usage?.analytics?.progress;
   return (
     <section className="card activity-card">
       <span className="eyebrow">ACTIVITY · SELECTED RANGE</span>
       <h2>Activity</h2>
-      <p className="empty" role="status">
-        Activity totals will appear when this time range has been processed.
-        {progress?.since && ` Processed back to ${formatDate(progress.since)}.`}
-      </p>
+      {error ? (
+        <div className="state error" role="alert">
+          <strong>Activity unavailable</strong>
+          <p>{error.message}</p>
+        </div>
+      ) : (
+        <p className="empty" role="status">
+          Activity totals will appear when this time range has been processed.
+          {progress?.since && ` Processed back to ${formatDate(progress.since)}.`}
+        </p>
+      )}
     </section>
   );
 }
@@ -255,6 +264,7 @@ function completeUsage(usage?: Usage) {
 function Overview({
   context,
   usage,
+  usageError,
   ratio,
   window,
   onScope,
@@ -264,6 +274,7 @@ function Overview({
 }: {
   context: ContextNode;
   usage?: Usage;
+  usageError?: Error;
   ratio: 4 | 6;
   window: number;
   onScope: (path: string) => void;
@@ -287,7 +298,7 @@ function Overview({
     ) || [],
   );
   const ready = completeUsage(usage);
-  const pending = "Processing";
+  const pending = usageError ? "Unavailable" : "Processing";
   const summaries: [AnalyticsTab, string, string, string, string][] = [
     [
       "knowledge",
@@ -347,7 +358,11 @@ function Overview({
             descendants.
           </p>
         </section>
-        {ready ? <Activity usage={ready} /> : <ActivityPending usage={usage} />}
+        {ready ? (
+          <Activity usage={ready} />
+        ) : (
+          <ActivityPending usage={usage} error={usageError} />
+        )}
       </div>
       <div className="summary-grid">
         {summaries.map(([tab, label, value, detail, scope]) => (
@@ -713,6 +728,7 @@ export function Analytics({
             <Overview
               context={context.data}
               usage={usage.data}
+              usageError={usage.data ? undefined : usage.error}
               ratio={ratio}
               window={contextWindow}
               onScope={onScope}

@@ -121,6 +121,31 @@ func (x *sqliteEventIndex) catchUpBatch(ctx context.Context) (more bool, err err
 	return more, nil
 }
 
+// refreshTails indexes events appended to already indexed segments without
+// consuming another unindexed history segment.
+func (x *sqliteEventIndex) refreshTails(ctx context.Context) (err error) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	defer func() {
+		if err != nil {
+			message := err.Error()
+			x.lastError.Store(&message)
+		}
+	}()
+	incremental, ok := x.log.(*fileEventLog)
+	if !ok {
+		return nil
+	}
+	if err := incremental.scanTails(ctx, x.cursor, func(event Event) error { return x.consume(ctx, event) }); err != nil {
+		return err
+	}
+	if err := writeLogCursor(x.checkpoint, x.cursor); err != nil {
+		return err
+	}
+	x.updateCoverageLocked()
+	return nil
+}
+
 func (x *sqliteEventIndex) updateCoverageLocked() {
 	// math.MinInt64 marks complete retained history; zero means unknown.
 	since, complete := time.Time{}, false

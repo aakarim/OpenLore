@@ -393,6 +393,9 @@ func TestDashboardUsageServesRecentRangeBeforeOlderHistory(t *testing.T) {
 	if !computed {
 		t.Fatal("recent range was not computed")
 	}
+	if index.processed.Load() != 1 {
+		t.Fatalf("recent range consumed older history: processed=%d", index.processed.Load())
+	}
 }
 
 func TestEventIndexUsesIndependentCheckpointAndDoesNotAdvanceOnFailure(t *testing.T) {

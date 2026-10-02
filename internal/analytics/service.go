@@ -654,7 +654,9 @@ func (s *Service) DashboardUsage(ctx context.Context, key string, window time.Du
 	if stale {
 		s.processor.enqueue(jobKey, true, func(jobCtx context.Context) {
 			if s.eventIndex != nil {
-				_, catchUpErr := s.eventIndex.catchUpBatch(jobCtx)
+				// Refresh only new tails: an older unindexed segment must not
+				// delay a range that is already covered.
+				catchUpErr := s.eventIndex.refreshTails(jobCtx)
 				if catchUpErr != nil {
 					_, _ = store.db.ExecContext(context.WithoutCancel(jobCtx), `INSERT INTO dashboard_views(key,computed_at,error) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET error=excluded.error`, key, time.Now().UTC().UnixNano(), catchUpErr.Error())
 					return
@@ -732,7 +734,9 @@ func (s *Service) DashboardMaterialized(ctx context.Context, key string, window 
 		jobKey := "aggregation:" + key
 		s.processor.enqueue(jobKey, true, func(jobCtx context.Context) {
 			if s.eventIndex != nil {
-				_, catchUpErr := s.eventIndex.catchUpBatch(jobCtx)
+				// Refresh only new tails: an older unindexed segment must not
+				// delay a range that is already covered.
+				catchUpErr := s.eventIndex.refreshTails(jobCtx)
 				if catchUpErr != nil {
 					_, _ = store.db.ExecContext(context.WithoutCancel(jobCtx), `INSERT INTO dashboard_views(key,computed_at,error) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET error=excluded.error`, key, time.Now().UTC().UnixNano(), catchUpErr.Error())
 					return

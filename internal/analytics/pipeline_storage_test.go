@@ -372,6 +372,44 @@ func TestEventLogNewestBatchesProcessCompressedHistoryOnce(t *testing.T) {
 	}
 }
 
+func TestEventLogCoverageAndTailRefreshTrackSegmentGrowth(t *testing.T) {
+	ctx := context.Background()
+	log, err := OpenEventLog(t.TempDir(), LogOptions{Rotate: time.Hour, Compress: "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := log.(*fileEventLog)
+	now := time.Now().UTC()
+	for _, event := range []Event{{ID: "old", Time: now.Add(-3 * time.Hour)}, {ID: "recent", Time: now}} {
+		if err := log.Append(ctx, event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cursor := logCursor{}
+	if _, err := file.scanNewestBatch(ctx, cursor, func(Event) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if since, complete := file.coverage(cursor); complete || since.After(now) {
+		t.Fatalf("initial coverage since=%v complete=%v", since, complete)
+	}
+	if err := log.Append(ctx, Event{ID: "appended", Time: now}); err != nil {
+		t.Fatal(err)
+	}
+	if since, _ := file.coverage(cursor); !since.After(now.Add(-time.Minute)) {
+		t.Fatalf("grown segment counted as covered from %v", since)
+	}
+	var seen []string
+	if err := file.scanTails(ctx, cursor, func(event Event) error {
+		seen = append(seen, event.ID)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(seen, ",") != "appended" {
+		t.Fatalf("tail refresh events=%v; must not consume older history", seen)
+	}
+}
+
 func TestEventLogRetentionWithoutCompression(t *testing.T) {
 	log, _ := OpenEventLog(t.TempDir(), LogOptions{Rotate: time.Hour, Compress: "none", Retention: time.Hour})
 	_ = log.Append(context.Background(), Event{Time: time.Now().Add(-2 * time.Hour)})
