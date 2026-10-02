@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
-	"slices"
-	"sort"
 	"sync"
 
 	"github.com/aakarim/go-openlore/pkg/vfs"
@@ -28,14 +26,17 @@ type boundedFactsReader interface {
 type factsIndexer struct {
 	service *Service
 
-	mu         sync.Mutex
-	pending    map[string]struct{}
+	mu      sync.Mutex
+	pending map[string]struct{}
+	// dirty records paths queued while their current queue entry may already
+	// be in flight, so completing that entry cannot discard the newer request.
+	dirty      map[string]struct{}
 	scopes     []KnowledgeScope
 	generation int64
 }
 
 func newFactsIndexer(service *Service, _ ...int) *factsIndexer {
-	return &factsIndexer{service: service, pending: map[string]struct{}{}}
+	return &factsIndexer{service: service, pending: map[string]struct{}{}, dirty: map[string]struct{}{}}
 }
 
 func (x *factsIndexer) setScopes(scopes []KnowledgeScope) error {
@@ -85,15 +86,8 @@ func (x *factsIndexer) start(schedule bool) error {
 
 func (x *factsIndexer) sources() []string {
 	x.service.providersMu.RLock()
-	sources := sourceNames(x.service.providers)
-	x.service.providersMu.RUnlock()
-	defaults := sourceNames(defaultProviders)
-	sort.Strings(sources)
-	sort.Strings(defaults)
-	if slices.Equal(sources, defaults) {
-		return nil
-	}
-	return sources
+	defer x.service.providersMu.RUnlock()
+	return sourceNames(x.service.providers)
 }
 
 func (x *factsIndexer) enqueue(p string) {
@@ -113,6 +107,9 @@ func (x *factsIndexer) enqueue(p string) {
 		x.mu.Unlock()
 		return
 	}
+	x.mu.Lock()
+	x.dirty[p] = struct{}{}
+	x.mu.Unlock()
 	state, err := x.service.index.ScanState(context.Background())
 	if err == nil && state.Generation > 0 {
 		if err := x.service.index.QueueScanPath(context.Background(), state.Generation, p); err == nil {
@@ -142,9 +139,21 @@ func (x *factsIndexer) run(ctx context.Context) {
 		return
 	}
 	for _, p := range paths {
+		x.mu.Lock()
+		delete(x.dirty, p)
+		x.mu.Unlock()
 		if err := x.scanPath(ctx, state.Generation, p); err != nil {
 			_ = x.service.index.FailScan(context.WithoutCancel(ctx), state.Generation, err)
 			return
+		}
+		x.mu.Lock()
+		_, requeue := x.dirty[p]
+		x.mu.Unlock()
+		if requeue {
+			if err := x.service.index.QueueScanPath(ctx, state.Generation, p); err != nil {
+				_ = x.service.index.FailScan(context.WithoutCancel(ctx), state.Generation, err)
+				return
+			}
 		}
 	}
 	remaining, err := x.service.index.NextScanPaths(ctx, state.Generation, 1)

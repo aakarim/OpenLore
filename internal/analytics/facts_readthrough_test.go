@@ -515,6 +515,37 @@ func TestCompletedFactsSurviveRestartAndUpdateIncrementally(t *testing.T) {
 	}
 }
 
+type enqueueDuringReadFS struct {
+	testFS
+	once    sync.Once
+	enqueue func()
+}
+
+func (f *enqueueDuringReadFS) ReadFileBounded(p string, maxBytes int64) ([]byte, error) {
+	b, err := f.testFS.ReadFileBounded(p, maxBytes)
+	f.once.Do(func() {
+		f.testFS[p] = []byte("newer")
+		f.enqueue()
+	})
+	return b, err
+}
+
+func TestFactsWriteDuringInFlightPathIsRequeued(t *testing.T) {
+	ctx := context.Background()
+	fsys := &enqueueDuringReadFS{testFS: testFS{"/docs/a.md": []byte("old")}}
+	service := newIndexedTestService(t, fsys)
+	service.started.Store(true)
+	service.SetKnowledgeScopes([]KnowledgeScope{{Name: "docs", Root: "/docs"}})
+	fsys.enqueue = func() { service.EnqueueFacts("/docs/a.md") }
+	for i := 0; i < 4; i++ {
+		service.indexer.run(ctx)
+	}
+	rows, status, err := service.IndexedFacts(ctx, "/docs", 10)
+	if err != nil || !status.Complete || len(rows) != 1 || rows[0].Size != int64(len("newer")) {
+		t.Fatalf("in-flight write was lost: rows=%+v status=%+v err=%v", rows, status, err)
+	}
+}
+
 func TestContentSourceChangeAfterStartRebuildsCompletedFacts(t *testing.T) {
 	service := newIndexedTestService(t, testFS{"/docs/a.md": []byte("one")})
 	service.SetKnowledgeScopes([]KnowledgeScope{{Name: "docs", Root: "/docs"}})
