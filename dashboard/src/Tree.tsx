@@ -1,6 +1,6 @@
 import { api } from "./api";
 import { useAsync } from "./hooks";
-import { FileIcon, FolderIcon } from "./icons";
+import { ChevronIcon, FileIcon, FolderIcon } from "./icons";
 
 type Props = {
   selected: string;
@@ -53,7 +53,7 @@ function Branch({
           >
             {entry.directory && (
               <span className="chevron" aria-hidden>
-                {props.expanded.includes(entry.path) ? "⌄" : "›"}
+                <ChevronIcon open={props.expanded.includes(entry.path)} />
               </span>
             )}
             {!entry.directory && <span className="chevron" />}
@@ -90,7 +90,7 @@ export function Tree(props: Props) {
         }}
       >
         <span className="chevron">
-          {props.expanded.includes("/") ? "⌄" : "›"}
+          <ChevronIcon open={props.expanded.includes("/")} />
         </span>
         <FolderIcon />
         <span>Workspace</span>

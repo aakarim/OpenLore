@@ -372,12 +372,32 @@ test("mobile uses category and details sheets instead of horizontal analytics ta
   render(<App />);
   const user = userEvent.setup();
   await screen.findByText("Context by folder");
-  await user.click(screen.getByRole("button", { name: /Overview ⌃/ }));
+  const navigation = screen.getByRole("navigation", { name: "Mobile workspace" });
+  const overview = within(navigation).getByRole("button", { name: "Overview" });
+  expect(overview).toHaveAttribute("aria-haspopup", "dialog");
+  expect(overview.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
+  await user.click(overview);
   const dialog = screen.getByRole("dialog", { name: "Analytics sections" });
   expect(within(dialog).getByRole("button", { name: /Usage/ })).toBeVisible();
   expect(within(dialog).queryByRole("tab")).not.toBeInTheDocument();
+  for (const button of within(dialog).getAllByRole("button")) {
+    expect(button.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
+  }
   fireEvent.keyDown(dialog, { key: "Escape" });
   await waitFor(() => expect(dialog).not.toBeInTheDocument());
+  await user.click(overview);
+  await user.click(
+    within(screen.getByRole("dialog", { name: "Analytics sections" })).getByRole(
+      "button",
+      { name: "Usage" },
+    ),
+  );
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(within(navigation).getByRole("button", { name: "Usage" })).toHaveAttribute(
+    "aria-haspopup",
+    "dialog",
+  );
+  expect(new URLSearchParams(location.search).get("tab")).toBe("usage");
 });
 
 test("mobile folder tree stays open while unfurling folders", async () => {
@@ -385,7 +405,7 @@ test("mobile folder tree stays open while unfurling folders", async () => {
   render(<App />);
   const user = userEvent.setup();
   await screen.findByRole("complementary", { name: "Knowledge tree" });
-  await user.click(screen.getByRole("button", { name: /▱ Folders/ }));
+  await user.click(screen.getByRole("button", { name: "Folders" }));
 
   const dialog = screen.getByRole("dialog", { name: "Folders" });
   const tree = within(dialog).getByRole("complementary", {
@@ -401,35 +421,43 @@ test("mobile folder tree stays open while unfurling folders", async () => {
   ).toBeVisible();
 });
 
-test("uses the knowledge tree as the only folder browser", async () => {
-  history.replaceState(null, "", "/dashboard/?view=files&path=/");
-  mockAPI();
-  render(<App />);
-  const user = userEvent.setup();
-  const tree = await screen.findByRole("complementary", {
-    name: "Knowledge tree",
-  });
+test.each(["/dashboard/?view=files&path=/", "/lore/guide"])(
+  "uses only the tree for folder navigation at %s",
+  async (url) => {
+    history.replaceState(null, "", url);
+    mockAPI();
+    render(<App />);
+    const user = userEvent.setup();
+    const tree = await screen.findByRole("complementary", {
+      name: "Knowledge tree",
+    });
+    expect(document.querySelector(".folder-browser")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Open a file" })).toBeVisible();
+    await within(tree).findByRole("button", { name: /guide/ });
 
-  expect(document.querySelector(".folder-browser")).not.toBeInTheDocument();
-  expect(screen.getByRole("heading", { name: "Open a file" })).toBeVisible();
-  expect(
-    await within(tree).findByRole("button", { name: /guide/ }),
-  ).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Browse files" }));
+    const dialog = screen.getByRole("dialog", { name: "Folders" });
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: "Browse files" }));
+    const mobileTree = within(
+      screen.getByRole("dialog", { name: "Folders" }),
+    ).getByRole("complementary", { name: "Knowledge tree" });
+    await user.click(within(mobileTree).getByRole("button", { name: /guide/ }));
+    await user.click(
+      await within(mobileTree).findByRole("button", { name: /start.md/ }),
+    );
+    expect(await screen.findByRole("heading", { name: "Start" })).toBeVisible();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Close start.md" }));
+    expect(screen.getByRole("heading", { name: "Open a file" })).toBeVisible();
 
-  await user.click(screen.getByRole("button", { name: "Browse files" }));
-  expect(screen.getByRole("dialog", { name: "Folders" })).toBeVisible();
-  fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
-  await waitFor(() =>
-    expect(
-      screen.queryByRole("dialog", { name: "Folders" }),
-    ).not.toBeInTheDocument(),
-  );
-
-  await user.click(screen.getByRole("button", { name: "Analytics" }));
-  await screen.findByText("Context by folder");
-  expect(document.querySelector(".scope-children")).not.toBeInTheDocument();
-  expect(within(tree).getByRole("button", { name: /guide/ })).toBeVisible();
-});
+    await user.click(screen.getByRole("button", { name: "Analytics" }));
+    await screen.findByText("Context by folder");
+    expect(document.querySelector(".scope-children")).not.toBeInTheDocument();
+    expect(within(tree).getByRole("button", { name: /guide/ })).toBeVisible();
+  },
+);
 
 test("shows honest oversized-context error and hides Access without permission", async () => {
   history.replaceState(
@@ -489,10 +517,15 @@ test("direct file wins restoration, browser back resolves lore pathname, and fil
     "aria-selected",
     "true",
   );
-  await user.click(screen.getByRole("button", { name: "Analytics ↗" }));
+  await user.click(screen.getByRole("button", { name: "View file analytics" }));
   expect(new URLSearchParams(location.search).get("path")).toBe(
     "/guide/start.md",
   );
+  await screen.findByRole("heading", { name: "Most-used lines" });
+  expect(screen.getByText("Single-file analytics")).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "View" }));
+  expect(await screen.findByRole("heading", { name: "Start" })).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "View file analytics" }));
   await screen.findByRole("heading", { name: "Most-used lines" });
   history.replaceState(null, "", "/lore/guide/start.md");
   fireEvent.popState(window);
