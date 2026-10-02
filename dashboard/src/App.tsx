@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Analytics, analyticsTabs } from "./Analytics";
+import { Analytics, analyticsTabs, formatDate } from "./Analytics";
 import { APIError, api } from "./api";
 import { FileReader, MobileDetails, Sheet } from "./FileReader";
 import { useAsync } from "./hooks";
@@ -22,6 +22,7 @@ type SheetName =
   | "details"
   | "analytics"
   | "settings"
+  | "status"
   | null;
 const name = (path: string) =>
   path.split("/").filter(Boolean).at(-1) || "Workspace";
@@ -396,6 +397,12 @@ function Workspace({ session }: { session: Session }) {
                   ↻<span>Refresh</span>
                 </button>
                 <button
+                  aria-label="Analytics status"
+                  onClick={() => setSheet("status")}
+                >
+                  ◷<span>Status</span>
+                </button>
+                <button
                   aria-label="Settings"
                   onClick={() => setSheet("settings")}
                 >
@@ -600,11 +607,85 @@ function Workspace({ session }: { session: Session }) {
           </div>
         </Sheet>
       )}
+      {sheet === "status" && (
+        <Sheet title="Analytics status" onClose={() => setSheet(null)}>
+          <AnalyticsStatusPanel />
+        </Sheet>
+      )}
       {toast && (
         <div className="toast" role="status">
           {toast}
         </div>
       )}
+    </div>
+  );
+}
+
+function AnalyticsStatusPanel() {
+  const status = useAsync(
+    (signal) => api.analyticsStatus(signal),
+    [],
+    true,
+    true,
+  );
+  const activity = status.data?.activity;
+  const refresh = status.refresh;
+  useEffect(() => {
+    if (status.loading || activity?.state !== "updating") return;
+    const timer = window.setTimeout(refresh, 2000);
+    return () => window.clearTimeout(timer);
+  }, [status.loading, activity?.state, refresh]);
+  if (status.error && !activity)
+    return (
+      <p className="coverage-note" role="alert">
+        {status.error.message}
+      </p>
+    );
+  if (!activity)
+    return (
+      <p className="coverage-note" role="status">
+        Loading analytics status…
+      </p>
+    );
+  const processed = activity.complete
+    ? "All retained history"
+    : activity.processed_since
+      ? `Back to ${formatDate(activity.processed_since)}`
+      : "Starting with the most recent activity";
+  const state = {
+    ready: "Up to date",
+    updating: "Processing history",
+    failed: "Processing stopped",
+    disabled: "Processing paused",
+    unavailable: "Unavailable",
+  }[activity.state];
+  return (
+    <div className="settings analytics-status">
+      <dl>
+        <div>
+          <dt>Activity analytics</dt>
+          <dd>{state}</dd>
+        </div>
+        <div>
+          <dt>Processed</dt>
+          <dd>{processed}</dd>
+        </div>
+        {activity.latest_event && (
+          <div>
+            <dt>Latest activity</dt>
+            <dd>{new Date(activity.latest_event).toLocaleString("en-GB")}</dd>
+          </div>
+        )}
+      </dl>
+      {activity.error && (
+        <p className="coverage-note" role="alert">
+          {activity.error}
+        </p>
+      )}
+      <p>
+        Recent activity is processed first. Time ranges appear as soon as all of
+        their activity is processed.
+      </p>
     </div>
   );
 }

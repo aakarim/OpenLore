@@ -33,6 +33,9 @@ necessarily the current version. Dates are the GitHub publication dates in UTC.
 
 - Added this changelog and guidance for matching documentation to an installed
   version.
+- The analytics dashboard shows knowledge and recent activity without waiting
+  for all activity history. A new **Status** panel shows how far history has
+  been processed.
 - Knowledge analytics no longer reprocess the whole workspace after a restart or
   upgrade.
 

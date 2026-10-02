@@ -101,6 +101,8 @@ type SnapshotProgress struct {
 	Phase     string `json:"phase"`
 	Processed int64  `json:"processed"`
 	Unit      string `json:"unit"`
+	// Since is the oldest time from which history has been fully processed.
+	Since time.Time `json:"since,omitzero"`
 }
 
 type UsageSnapshot struct {
@@ -572,9 +574,41 @@ func (s *Service) AuthorizedIndexedFacts(ctx context.Context, key, prefix string
 	return rows, totals, status, nil
 }
 
+func (s *Service) historyProgress() *SnapshotProgress {
+	return &SnapshotProgress{Phase: "history", Processed: s.eventIndex.processed.Load(), Unit: "events", Since: s.eventIndex.processedSince()}
+}
+
+// ActivityStatus describes how much retained event history the dashboard can
+// use. History is indexed newest first, so ProcessedSince moves backwards.
+type ActivityStatus struct {
+	State           string    `json:"state"`
+	Complete        bool      `json:"complete"`
+	ProcessedSince  time.Time `json:"processed_since,omitzero"`
+	LatestEvent     time.Time `json:"latest_event,omitzero"`
+	EventsProcessed int64     `json:"events_processed"`
+	Error           string    `json:"error,omitempty"`
+}
+
+func (s *Service) ActivityStatus(ctx context.Context) ActivityStatus {
+	if s.eventIndex == nil {
+		return ActivityStatus{State: "unavailable", Error: "durable activity requires sqlite storage"}
+	}
+	status := ActivityStatus{State: "updating", ProcessedSince: s.eventIndex.processedSince(), LatestEvent: s.eventIndex.latest(ctx), EventsProcessed: s.eventIndex.processed.Load()}
+	if s.eventIndex.caughtUp.Load() {
+		status.State, status.Complete = "ready", true
+	}
+	if message := s.eventIndex.lastError.Load(); message != nil {
+		status.State, status.Error = "failed", *message
+	}
+	if !s.cfg.PipelineEnabled() {
+		status.State = "disabled"
+	}
+	return status
+}
+
 // DashboardUsage serves only a committed complete summary. Missing or stale
 // work is deduplicated onto the same bounded processor used by fact warming.
-func (s *Service) DashboardUsage(ctx context.Context, key string, compute func(context.Context) (Summary, error)) (UsageSnapshot, error) {
+func (s *Service) DashboardUsage(ctx context.Context, key string, window time.Duration, compute func(context.Context) (Summary, error)) (UsageSnapshot, error) {
 	store, ok := s.store.(*SQLiteAggregationStore)
 	if !ok {
 		return UsageSnapshot{Analytics: SnapshotStatus{State: "unavailable", Error: "durable usage requires sqlite storage"}}, nil
@@ -603,13 +637,13 @@ func (s *Service) DashboardUsage(ctx context.Context, key string, compute func(c
 		result.Analytics.State, result.Analytics.Updating = "disabled", false
 		return result, nil
 	}
-	if s.eventIndex != nil && !s.eventIndex.caughtUp.Load() {
+	if s.eventIndex != nil && !s.eventIndex.covers(window) {
 		result.Analytics.Updating = true
 		if found {
 			result.Analytics.State = "stale"
 		}
 		result.Analytics.Coverage = "durable event index is catching up"
-		result.Analytics.Progress = &SnapshotProgress{Phase: "history", Processed: s.eventIndex.processed.Load(), Unit: "events"}
+		result.Analytics.Progress = s.historyProgress()
 		if message := s.eventIndex.lastError.Load(); message != nil {
 			result.Analytics.Error = *message
 		}
@@ -620,12 +654,16 @@ func (s *Service) DashboardUsage(ctx context.Context, key string, compute func(c
 	if stale {
 		s.processor.enqueue(jobKey, true, func(jobCtx context.Context) {
 			if s.eventIndex != nil {
-				more, catchUpErr := s.eventIndex.catchUpBatch(jobCtx)
+				// Refresh only new tails: an older unindexed segment must not
+				// delay a range that is already covered.
+				catchUpErr := s.eventIndex.refreshTails(jobCtx)
 				if catchUpErr != nil {
 					_, _ = store.db.ExecContext(context.WithoutCancel(jobCtx), `INSERT INTO dashboard_views(key,computed_at,error) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET error=excluded.error`, key, time.Now().UTC().UnixNano(), catchUpErr.Error())
 					return
 				}
-				if more {
+				// Older history may still be indexing; this range is ready
+				// once every event inside it has been indexed.
+				if !s.eventIndex.covers(window) {
 					return
 				}
 			}
@@ -655,7 +693,7 @@ ON CONFLICT(key) DO UPDATE SET value=excluded.value,computed_at=excluded.compute
 	return result, nil
 }
 
-func (s *Service) DashboardMaterialized(ctx context.Context, key string, compute func(context.Context) (Materialized, error)) (Materialized, error) {
+func (s *Service) DashboardMaterialized(ctx context.Context, key string, window time.Duration, compute func(context.Context) (Materialized, error)) (Materialized, error) {
 	store, ok := s.store.(*SQLiteAggregationStore)
 	if !ok {
 		return Materialized{Status: StatusPaused, Note: "durable analytics require sqlite storage"}, nil
@@ -684,9 +722,9 @@ func (s *Service) DashboardMaterialized(ctx context.Context, key string, compute
 		state.State = "disabled"
 		return result, nil
 	}
-	if s.eventIndex != nil && !s.eventIndex.caughtUp.Load() {
+	if s.eventIndex != nil && !s.eventIndex.covers(window) {
 		state.State, state.Updating, state.Coverage = "updating", true, "durable event index is catching up"
-		state.Progress = &SnapshotProgress{Phase: "history", Processed: s.eventIndex.processed.Load(), Unit: "events"}
+		state.Progress = s.historyProgress()
 		if message := s.eventIndex.lastError.Load(); message != nil {
 			state.Error = *message
 		}
@@ -696,12 +734,16 @@ func (s *Service) DashboardMaterialized(ctx context.Context, key string, compute
 		jobKey := "aggregation:" + key
 		s.processor.enqueue(jobKey, true, func(jobCtx context.Context) {
 			if s.eventIndex != nil {
-				more, catchUpErr := s.eventIndex.catchUpBatch(jobCtx)
+				// Refresh only new tails: an older unindexed segment must not
+				// delay a range that is already covered.
+				catchUpErr := s.eventIndex.refreshTails(jobCtx)
 				if catchUpErr != nil {
 					_, _ = store.db.ExecContext(context.WithoutCancel(jobCtx), `INSERT INTO dashboard_views(key,computed_at,error) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET error=excluded.error`, key, time.Now().UTC().UnixNano(), catchUpErr.Error())
 					return
 				}
-				if more {
+				// Older history may still be indexing; this range is ready
+				// once every event inside it has been indexed.
+				if !s.eventIndex.covers(window) {
 					return
 				}
 			}

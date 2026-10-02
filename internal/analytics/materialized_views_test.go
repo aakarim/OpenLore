@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -112,7 +113,7 @@ func TestDashboardUsageAlwaysSerializesActivityAsArray(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			result, err := service.DashboardUsage(context.Background(), "test", nil)
+			result, err := service.DashboardUsage(context.Background(), "test", 30*24*time.Hour, nil)
 			if err != nil || result.Analytics.State != state || result.Analytics.Complete != (state == "ready") {
 				t.Fatalf("result=%+v err=%v", result, err)
 			}
@@ -147,13 +148,13 @@ func TestDashboardUsageDeduplicatesAndPublishesOnlyCompleteResult(t *testing.T) 
 		<-release
 		return Summary{Reads: 7, Activity: []SummaryActivity{}, ComputedAt: time.Now().UTC()}, nil
 	}
-	first, err := service.DashboardUsage(context.Background(), "same", compute)
+	first, err := service.DashboardUsage(context.Background(), "same", 30*24*time.Hour, compute)
 	if err != nil || first.Analytics.State != "cold" || !first.Analytics.Updating || first.Reads != 0 {
 		t.Fatalf("cold result = %#v, err=%v", first, err)
 	}
 	<-started
 	for range 8 {
-		result, err := service.DashboardUsage(context.Background(), "same", compute)
+		result, err := service.DashboardUsage(context.Background(), "same", 30*24*time.Hour, compute)
 		if err != nil || result.Reads != 0 || !result.Analytics.Updating {
 			t.Fatalf("in-flight result = %#v, err=%v", result, err)
 		}
@@ -164,7 +165,7 @@ func TestDashboardUsageDeduplicatesAndPublishesOnlyCompleteResult(t *testing.T) 
 	close(release)
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		result, err := service.DashboardUsage(context.Background(), "same", compute)
+		result, err := service.DashboardUsage(context.Background(), "same", 30*24*time.Hour, compute)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -300,8 +301,11 @@ func TestDisabledProcessingKeepsEventLogAndReenableCatchesUpIdempotently(t *test
 func TestEventIndexProgressAndImmediateBatchFollowup(t *testing.T) {
 	service := newIndexedTestService(t, testFS{})
 	ctx, cancel := context.WithCancel(context.Background())
+	today := time.Now().UTC().Truncate(24 * time.Hour)
 	for i, id := range []string{"first", "second", "third"} {
-		if err := service.log.Append(ctx, Event{ID: id, Time: time.Date(2026, 9, 1+i, 0, 0, 0, 0, time.UTC), Type: "doc.read"}); err != nil {
+		// One daily segment each: 100 days ago, 20 days ago, and today.
+		at := today.Add(-[]time.Duration{100, 20, 0}[i] * 24 * time.Hour)
+		if err := service.log.Append(ctx, Event{ID: id, Time: at, Type: "doc.read"}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -328,12 +332,69 @@ func TestEventIndexProgressAndImmediateBatchFollowup(t *testing.T) {
 			t.Fatalf("batch %d: processed=%d caughtUp=%v", i, index.processed.Load(), index.caughtUp.Load())
 		}
 		if i < 3 {
-			result, err := service.DashboardUsage(ctx, "progress", compute)
+			// History is indexed newest first, so this range includes older
+			// unprocessed history until the final batch.
+			result, err := service.DashboardUsage(ctx, "progress", 365*24*time.Hour, compute)
 			progress := result.Analytics.Progress
 			if err != nil || !result.Analytics.Updating || result.Analytics.Complete || progress == nil || progress.Phase != "history" || progress.Processed != i || progress.Unit != "events" {
 				t.Fatalf("catch-up result=%+v progress=%+v err=%v", result.Analytics, progress, err)
 			}
+			// Processed history starts after the newest unprocessed day.
+			wantSince := today.Add(-[]time.Duration{0, 19, 99}[i] * 24 * time.Hour)
+			if !progress.Since.Equal(wantSince) {
+				t.Fatalf("batch %d processed since %v, want %v", i, progress.Since, wantSince)
+			}
 		}
+		if i == 1 {
+			if !index.covers(7*24*time.Hour) || index.covers(30*24*time.Hour) {
+				t.Fatalf("newest batch coverage: 7d=%v 30d=%v", index.covers(7*24*time.Hour), index.covers(30*24*time.Hour))
+			}
+		}
+		if i == 2 && (!index.covers(90*24*time.Hour) || index.covers(100*24*time.Hour)) {
+			t.Fatalf("second batch coverage: 90d=%v 100d=%v", index.covers(90*24*time.Hour), index.covers(100*24*time.Hour))
+		}
+	}
+}
+
+func TestDashboardUsageServesRecentRangeBeforeOlderHistory(t *testing.T) {
+	service := newIndexedTestService(t, testFS{})
+	ctx := context.Background()
+	today := time.Now().UTC().Truncate(24 * time.Hour)
+	for _, days := range []int{200, 1} {
+		if err := service.log.Append(ctx, Event{ID: fmt.Sprint(days), Time: today.Add(-time.Duration(days) * 24 * time.Hour), Type: "doc.read"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	index := service.eventIndex
+	index.log, index.cursor, index.checkpoint = service.log, logCursor{}, filepath.Join(t.TempDir(), "cursor")
+	if more, err := index.catchUpBatch(ctx); err != nil || !more {
+		t.Fatalf("first batch more=%v err=%v", more, err)
+	}
+	computed := false
+	result, err := service.DashboardUsage(ctx, "recent", 7*24*time.Hour, func(context.Context) (Summary, error) {
+		computed = true
+		return Summary{Reads: 1, ComputedAt: time.Now()}, nil
+	})
+	if err != nil || result.Analytics.Coverage == "durable event index is catching up" {
+		t.Fatalf("recent range waited for old history: %+v err=%v", result.Analytics, err)
+	}
+	old, err := service.DashboardUsage(ctx, "old", 365*24*time.Hour, func(context.Context) (Summary, error) {
+		t.Fatal("old range computed before its history was indexed")
+		return Summary{}, nil
+	})
+	if err != nil || old.Analytics.Coverage != "durable event index is catching up" {
+		t.Fatalf("old range=%+v err=%v", old.Analytics, err)
+	}
+	item, ok := service.processor.pop()
+	if !ok || item.key != "usage:recent" {
+		t.Fatalf("recent range was not queued: %+v", item)
+	}
+	item.run(ctx)
+	if !computed {
+		t.Fatal("recent range was not computed")
+	}
+	if index.processed.Load() != 1 {
+		t.Fatalf("recent range consumed older history: processed=%d", index.processed.Load())
 	}
 }
 

@@ -915,6 +915,18 @@ select:focus-visible,
   color: var(--muted);
   font-size: 12px;
 }
+.analytics-status dl {
+  display: grid;
+  gap: 16px;
+  margin: 24px 0;
+}
+.analytics-status dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+.analytics-status dd {
+  margin: 4px 0 0;
+}
 .open-list,
 .analytics-picker {
   display: grid;
