@@ -53,14 +53,13 @@ jobs:
           tar -xzf dist/openlore_linux_amd64.tar.gz -C "$smoke_dir"
           test "$("$smoke_dir/openlore" version)" = "openlore ${GITHUB_REF_NAME#v}"
 
-      - name: Release binaries and Homebrew cask
+      - name: Release binaries
         uses: goreleaser/goreleaser-action@v7
         with:
           version: "~> v2"
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
 
       - name: Verify and publish release
         env:
@@ -76,6 +75,26 @@ jobs:
 
           test "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)" = true
           gh release edit "$GITHUB_REF_NAME" --draft=false --latest
+
+      - name: Publish Homebrew cask
+        if: ${{ !contains(github.ref_name, '-') }}
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: 1
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+        run: |
+          eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+          brew tap aakarim/tap
+          tap="$(brew --repository aakarim/tap)"
+          cp dist/homebrew/Casks/lore.rb "$tap/Casks/lore.rb"
+          brew style --fix --cask aakarim/tap/lore
+          brew style --cask aakarim/tap/lore
+
+          cd "$tap"
+          git add Casks/lore.rb
+          git -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -m "Brew cask update for lore version $GITHUB_REF_NAME"
+          git push "https://x-access-token:${HOMEBREW_TAP_GITHUB_TOKEN}@github.com/aakarim/homebrew-tap.git" HEAD:main
 
       - uses: docker/setup-buildx-action@v3
 

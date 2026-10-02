@@ -44,24 +44,27 @@ changelog:
       - "^test:"
 
 homebrew_casks:
-  - name: openlore
+  - name: lore
     ids:
       - openlore
     binaries:
       - openlore
     homepage: https://github.com/aakarim/OpenLore
     description: Agent-native knowledge base that keeps shared context current and inspectable
-    skip_upload: auto
-    hooks:
-      post:
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/openlore"]
-          end
+    # The release workflow publishes the cask after `brew style --fix` moves
+    # this block into Homebrew's stanza order. GoReleaser `hooks` emit
+    # `postflight`, which Homebrew's tap syntax check rejects.
+    skip_upload: true
+    # Strip macOS quarantine from the unsigned binary.
+    custom_block: |
+      postflight_steps do
+        on_macos do
+          run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "openlore"], chdir: "."
+        end
+      end
     repository:
       owner: aakarim
       name: homebrew-tap
-      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
 
 release:
   github:
