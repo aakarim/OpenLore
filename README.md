@@ -7,66 +7,69 @@ Sponsored by <a href="https://oiya.ai/?utm_source=github&amp;utm_medium=referral
 
 **Serve your docs to AI agents over SSH and MCP.**
 
-OpenLore is a minimal, customisable, agent-native knowledge base that keeps your context current and inspectable.
+Point OpenLore at a folder of Markdown and every agent on your team reads the same files, whether it's Claude Code, Codex, Cursor or a CI job. Agents use the tools they already know, like `cat`, `grep` and `find`. You decide who can see and change what.
 
----
+<p align="center">
+  <img src="assets/openlore-how-it-works.svg" alt="Claude Code, Codex and a CI job connect to one OpenLore server, which checks each identity's access and serves the same folder of Markdown" width="820">
+</p>
 
-## About
+## Quick start
 
-AI agents can already read Markdown. The problem starts when multiple agents, repositories or people need to rely on the same knowledge.
-
-Keeping docs inside each repo works until that knowledge gets copied, duplicated or goes stale. Different agents end up working from different versions of the truth, and there is no consistent way to control who can read, update or publish what.
-
-OpenLore gives your agents one shared place for documentation, runbooks, skills and project knowledge. Connect every agent to the same source, update it once, and make the latest version immediately available wherever it is needed.
-
-Your knowledge stays as ordinary Markdown. OpenLore serves it as an agent-native virtual filesystem with identity-scoped access, controlled writes and validation when you need them. There is no ingestion pipeline, vector database or LLM required.
-
-Agents can access the same knowledge through MCP or use familiar commands such as `ls`, `cat`, `grep` and `find` over SSH.
-
-SSH is simply one interface. The important part is that every agent is working from the same current, inspectable and governed knowledge.
-
-### Why not just keep Markdown in your repo?
-
-For one agent working in one repository, that's fine.
-
-OpenLore becomes useful when knowledge needs to be shared across agents, repositories or teams, or when you need permissions, publishing, review and a single source of truth without copying the same files everywhere.
-
-[![OpenLore Skills import demo](https://raw.githubusercontent.com/aakarim/openlore-videos/main/assets/demo/v0.4.0/openlore-skills-import.gif)](https://raw.githubusercontent.com/aakarim/openlore-videos/main/assets/demo/v0.4.0/openlore-skills-import.mp4)
-
-## Quick Start
-
-The fastest path is to let your agent set up OpenLore:
+Install and serve a folder:
 
 ```bash
-# Teach your agent how to install, configure, and bundle OpenLore
-ssh openlore.sh teach | your-agent-cli
-
-# Add documentation access instructions to AGENTS.md
-ssh openlore.sh agents >> AGENTS.md
-```
-
-Or install and run it directly:
-
-```bash
-go install github.com/aakarim/go-openlore/cmd/openlore@latest
-
+brew install --cask aakarim/tap/openlore
 openlore ./docs
-
-ssh -p 2222 localhost
-ssh -p 2222 localhost "grep -r 'authentication' /"
 ```
 
-The contents of `./docs` appear at `/`. New here? Start with
-[What is OpenLore](docs/introduction.md), then connect
-[Claude Code](docs/start-claude-code.md) or [any agent over SSH](docs/start-ssh.md).
+SSH runs on port `2222`. The web view and MCP share port `8080`. The contents of `./docs` appear at `/`.
 
-By default this starts:
+Connect an agent:
 
-- SSH on `localhost:2222`
-- the human-facing web view on `http://localhost:8080`
-- MCP over HTTP on `http://localhost:8080/mcp`
+```bash
+# Claude Code
+claude mcp add --transport http openlore http://localhost:8080/mcp
 
-See [Installation](#installation) for more ways to install and package OpenLore.
+# Codex
+codex mcp add openlore --url http://localhost:8080/mcp
+
+# Anything with a shell
+ssh -p 2222 localhost "grep -r 'retry' /"
+```
+
+Tell your agents when to use it:
+
+```bash
+ssh -p 2222 localhost agents >> AGENTS.md
+```
+
+Or let your agent do the whole setup:
+
+```bash
+ssh openlore.sh teach | claude
+```
+
+Not on Homebrew? See [Installation](#installation) for Linux, Windows and Go.
+
+## Why not just keep Markdown in your repo?
+
+For one agent in one repository, do that.
+
+OpenLore is for when several agents, repositories or people need the same knowledge, and you need to say who can read, write or publish what. Update a file once and every agent sees the new version on its next read.
+
+There's no vector database, ingestion pipeline or SDK. Your knowledge stays as ordinary Markdown.
+
+## Guides
+
+- [What is OpenLore](docs/introduction.md)
+- [Claude Code](docs/start-claude-code.md)
+- [Codex]
+- [Cursor]
+- [OpenCode]
+- [Any agent over SSH](docs/start-ssh.md)
+- [Let an agent publish into an inbox](docs/publish-to-inbox.md)
+- [All documentation](https://openlore.sh/docs/)
+
 
 ## Features
 
