@@ -52,3 +52,44 @@ func TestAwkRegexDoesNotMatchAll(t *testing.T) {
 		t.Errorf("awk /^Line/: expected 3 lines, got %d", len(lines))
 	}
 }
+
+// OPE-45: regex patterns, uninitialised variables, numeric literals, and
+// string comparison on $0 must behave as in POSIX awk.
+func TestAwkOPE45Regressions(t *testing.T) {
+	fs := testFS()
+	assertOutput(t, fs, `printf 'x\n## F\ny\n' | awk '/^## F$/ { print "HIT" } { print }'`, "x\nHIT\n## F\ny\n")
+	assertOutput(t, fs, `printf 'x\ny\nz\n' | awk '{ n=n+1; print n }'`, "1\n2\n3\n")
+	assertOutput(t, fs, `printf 'x\n## F\ny\n' | awk '$0 == "## F" && !d { print "HIT"; d=1 } { print }'`, "x\nHIT\n## F\ny\n")
+	// The real-world insert from the issue: regex combined with a flag.
+	assertOutput(t, fs, `printf 'a\n## Follow-ups\nb\n' | awk '/^## Follow-ups$/ && !done { print "## New"; done=1 } { print }'`, "a\n## New\n## Follow-ups\nb\n")
+}
+
+func TestAwkExpressions(t *testing.T) {
+	fs := testFS()
+	assertOutput(t, fs, `printf 'a b\nc d\n' | awk '{ print $2 " " $1 }'`, "b a\nd c\n")
+	assertOutput(t, fs, `printf 'a b c\n' | awk '{ print $NF, $(NF-1), NF }'`, "c b 3\n")
+	assertOutput(t, fs, `printf 'a\nb\na\n' | awk '{ c[$1]++ } END { for (k in c) print k, c[k] }'`, "a 2\nb 1\n")
+	assertOutput(t, fs, `printf 'foo bar\n' | awk '{ gsub(/o/, "0"); sub(/a/, "[&]"); print }'`, "f00 b[a]r\n")
+	assertOutput(t, fs, `printf 'a,b,c\n' | awk -F , '{ $2 = "X"; print }'`, "a X c\n")
+	assertOutput(t, fs, `printf 'a,b\n' | awk 'BEGIN { FS = "," } { print $2 }'`, "b\n")
+	assertOutput(t, fs, `printf '1 2\n' | awk '{ for (i = 1; i <= NF; i++) print $i * 2 }'`, "2\n4\n")
+	assertOutput(t, fs, `printf '2\n5\n' | awk '{ if ($1 > 3) print "big"; else print "small" }'`, "small\nbig\n")
+	assertOutput(t, fs, `printf 'ab\ncd\n' | awk '!/c/ || $0 ~ "d" { print NR ": " $0 }'`, "1: ab\n2: cd\n")
+	assertOutput(t, fs, `printf 'a\n' | awk '{ x = "a+=b"; print x, 1 + 2 " items" }'`, "a+=b 3 items\n")
+}
+
+func TestAwkUnsupportedConstructsFail(t *testing.T) {
+	for _, cmd := range []string{
+		`printf 'x\n' | awk '{ print; next }'`,
+		`printf 'x\n' | awk '{ print "a" > "/docs/out" }'`,
+		`printf 'x\n' | awk '{ print foo(1) }'`,
+		`printf 'x\n' | awk '{ getline line }'`,
+		`printf 'x\n' | awk '{ print 1 +* 2 }'`,
+		`printf 'x\n' | awk '/[/'`,
+	} {
+		_, errOut, code := execCmd(t, testFS(), cmd)
+		if code != 2 || !strings.HasPrefix(errOut, "awk: ") {
+			t.Errorf("%s: code=%d stderr=%q, want exit 2 with awk error", cmd, code, errOut)
+		}
+	}
+}
