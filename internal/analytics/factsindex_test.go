@@ -132,6 +132,36 @@ func TestFactsScanQueueResumesSameScopeGeneration(t *testing.T) {
 	}
 }
 
+func TestFactsScanSourcesAndStaleGeneration(t *testing.T) {
+	_, index := testFactsIndex(t)
+	ctx := context.Background()
+	scopes := []KnowledgeScope{{Name: "docs", Root: "/docs"}}
+	first, err := index.StartScan(ctx, scopes, "size", "approx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := index.CompleteScanPath(ctx, first, "/docs", nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if complete, err := index.FinishScan(ctx, first); err != nil || !complete {
+		t.Fatalf("finish complete=%v err=%v", complete, err)
+	}
+	if reused, err := index.StartScan(ctx, scopes, "approx", "size"); err != nil || reused != first {
+		t.Fatalf("same sources generation=%d want=%d err=%v", reused, first, err)
+	}
+	second, err := index.StartScan(ctx, scopes, "approx", "size", "later")
+	if err != nil || second == first {
+		t.Fatalf("new source reused generation=%d err=%v", second, err)
+	}
+	err = index.Upsert(ctx, IndexedFacts{Path: "/docs/a.md", Generation: first, Sources: map[string]map[string]float64{"size": {"bytes": 1}}})
+	if !errors.Is(err, errStaleFactsGeneration) {
+		t.Fatalf("stale upsert err=%v", err)
+	}
+	if rows, err := index.PrefixScan(ctx, "/docs"); err != nil || len(rows) != 0 {
+		t.Fatalf("stale upsert published rows=%v err=%v", rows, err)
+	}
+}
+
 func TestFactsScanContentBoundaryChangeStartsNewGeneration(t *testing.T) {
 	_, index := testFactsIndex(t)
 	ctx := context.Background()

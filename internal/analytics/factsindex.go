@@ -19,6 +19,8 @@ import (
 
 const factsScanContractVersion = 1
 
+var errStaleFactsGeneration = errors.New("analytics facts generation is no longer current")
+
 type IndexedFacts struct {
 	Path        string
 	Owner       string
@@ -135,6 +137,16 @@ func (x *sqliteFactsIndex) Upsert(ctx context.Context, fact IndexedFacts) error 
 	}
 	if fact.Generation == 0 {
 		_ = tx.QueryRowContext(ctx, `SELECT generation FROM facts_scan_state WHERE id=1`).Scan(&fact.Generation)
+	} else {
+		// A scan can still be running when reconfiguration starts a new
+		// generation. Its results must not overwrite the replacement view.
+		var current int64
+		if err := tx.QueryRowContext(ctx, `SELECT generation FROM facts_scan_state WHERE id=1`).Scan(&current); err != nil {
+			return err
+		}
+		if current != fact.Generation {
+			return errStaleFactsGeneration
+		}
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO files(path,owner,size,mtime_ns,content_hash,computed_at,generation) VALUES(?,?,?,?,?,?,?)
 ON CONFLICT(path) DO UPDATE SET owner=excluded.owner,size=excluded.size,mtime_ns=excluded.mtime_ns,content_hash=excluded.content_hash,computed_at=excluded.computed_at,generation=excluded.generation`, fact.Path, fact.Owner, fact.Size, fact.MTimeNS, fact.ContentHash, fact.ComputedAt.UnixNano(), fact.Generation)
@@ -194,6 +206,10 @@ func (x *sqliteFactsIndex) DeletePrefix(ctx context.Context, prefix string) erro
 			return err
 		}
 		paths = append(paths, p)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
 	}
 	if err := rows.Close(); err != nil {
 		return err
@@ -382,9 +398,8 @@ func (x *sqliteFactsIndex) Prune(ctx context.Context, seen map[string]struct{}) 
 	return nil
 }
 
-// StartScan starts or reuses the generation for scopes and non-default content
-// sources. Sources are omitted from the default contract for compatibility with
-// completed generations created before sources were part of it.
+// StartScan starts or reuses the generation for scopes and content sources.
+// Persisted facts are reusable only when both match the completed generation.
 func (x *sqliteFactsIndex) StartScan(ctx context.Context, scopes []KnowledgeScope, sources ...string) (int64, error) {
 	clean := append([]KnowledgeScope(nil), scopes...)
 	sort.Slice(clean, func(i, j int) bool {
@@ -398,7 +413,7 @@ func (x *sqliteFactsIndex) StartScan(ctx context.Context, scopes []KnowledgeScop
 	encoded, _ := json.Marshal(struct {
 		Version int              `json:"version"`
 		Scopes  []KnowledgeScope `json:"scopes"`
-		Sources []string         `json:"sources,omitempty"`
+		Sources []string         `json:"sources"`
 	}{Version: factsScanContractVersion, Scopes: clean, Sources: sources})
 	hash := sha256.Sum256(encoded)
 	tx, err := x.db.BeginTx(ctx, nil)
