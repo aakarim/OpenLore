@@ -330,6 +330,48 @@ func TestEventLogRotationRetentionAndLateEvents(t *testing.T) {
 	}
 }
 
+func TestEventLogNewestBatchesProcessCompressedHistoryOnce(t *testing.T) {
+	ctx := context.Background()
+	log, err := OpenEventLog(t.TempDir(), LogOptions{Rotate: time.Hour, Compress: "zstd"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().UTC().Add(-3 * time.Hour)
+	for i := 0; i < 2; i++ {
+		if err := log.Append(ctx, Event{ID: fmt.Sprint("sealed-", i), Time: old.Add(time.Duration(i) * time.Hour)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := log.Seal(ctx, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := log.Append(ctx, Event{ID: "active", Time: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	cursor, seen := logCursor{}, []string{}
+	for range 5 {
+		more, err := log.(*fileEventLog).scanNewestBatch(ctx, cursor, func(event Event) error {
+			seen = append(seen, event.ID)
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !more {
+			break
+		}
+	}
+	if strings.Join(seen, ",") != "active,sealed-1,sealed-0" {
+		t.Fatalf("newest-first events = %v", seen)
+	}
+	if more, err := log.(*fileEventLog).scanNewestBatch(ctx, cursor, func(event Event) error {
+		t.Fatalf("reprocessed %s", event.ID)
+		return nil
+	}); err != nil || more {
+		t.Fatalf("final batch more=%v err=%v", more, err)
+	}
+}
+
 func TestEventLogRetentionWithoutCompression(t *testing.T) {
 	log, _ := OpenEventLog(t.TempDir(), LogOptions{Rotate: time.Hour, Compress: "none", Retention: time.Hour})
 	_ = log.Append(context.Background(), Event{Time: time.Now().Add(-2 * time.Hour)})

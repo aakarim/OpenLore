@@ -379,7 +379,7 @@ func (p *analyticsPlugin) runAggregation(r *http.Request, name string) (analytic
 			return p.service.Registry().RunWithSource(r.Context(), name, params, p.server.DashboardEventSource(id, prefix), p.scopedFacts(r))
 		}
 		key := fmt.Sprintf("v1:%s:%s:%d:%d:%#v", p.server.analyticsPolicyKey(id), name, int64(params.Until.Sub(params.Since)/time.Second), params.Limit, params.Extra)
-		return p.service.DashboardMaterialized(r.Context(), key, func(ctx context.Context) (analytics.Materialized, error) {
+		return p.service.DashboardMaterialized(r.Context(), key, params.Until.Sub(params.Since), func(ctx context.Context) (analytics.Materialized, error) {
 			now := time.Now()
 			jobParams := params
 			jobParams.Until = now

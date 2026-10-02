@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"math"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -14,15 +15,18 @@ import (
 // sqliteEventIndex is the durable, idempotent projection used by dashboard
 // analytics. The append-only event log remains the source of truth.
 type sqliteEventIndex struct {
-	db         *sql.DB
-	caughtUp   atomic.Bool
-	processed  atomic.Int64
-	lastError  atomic.Pointer[string]
-	done       chan struct{}
-	mu         sync.Mutex
-	cursor     logCursor
-	log        EventLog
-	checkpoint string
+	db       *sql.DB
+	caughtUp atomic.Bool
+	// coveredSince is the start of the contiguous newest history that has
+	// been indexed. Recent ranges are usable before older history finishes.
+	coveredSince atomic.Int64
+	processed    atomic.Int64
+	lastError    atomic.Pointer[string]
+	done         chan struct{}
+	mu           sync.Mutex
+	cursor       logCursor
+	log          EventLog
+	checkpoint   string
 }
 
 func (x *sqliteEventIndex) consume(ctx context.Context, event Event) error {
@@ -43,6 +47,7 @@ func (x *sqliteEventIndex) run(ctx context.Context, log EventLog, checkpoint str
 	defer close(x.done)
 	x.mu.Lock()
 	x.cursor, x.log, x.checkpoint = loadLogCursor(checkpoint), log, checkpoint
+	x.updateCoverageLocked()
 	x.mu.Unlock()
 	var runBatch func(context.Context)
 	runBatch = func(jobCtx context.Context) {
@@ -99,7 +104,9 @@ func (x *sqliteEventIndex) catchUpBatch(ctx context.Context) (more bool, err err
 		return false, errors.New("event index is not started")
 	}
 	if incremental, ok := x.log.(*fileEventLog); ok {
-		more, err = incremental.scanIncrementalBatch(ctx, x.cursor, func(event Event) error { return x.consume(ctx, event) })
+		// Indexing is idempotent, so process newest history first: the
+		// dashboard's recent ranges become usable before older history.
+		more, err = incremental.scanNewestBatch(ctx, x.cursor, func(event Event) error { return x.consume(ctx, event) })
 		if err != nil {
 			return false, err
 		}
@@ -110,7 +117,42 @@ func (x *sqliteEventIndex) catchUpBatch(ctx context.Context) (more bool, err err
 		return false, err
 	}
 	x.caughtUp.Store(!more)
+	x.updateCoverageLocked()
 	return more, nil
+}
+
+func (x *sqliteEventIndex) updateCoverageLocked() {
+	// math.MinInt64 marks complete retained history; zero means unknown.
+	since, complete := time.Time{}, false
+	if incremental, ok := x.log.(*fileEventLog); ok {
+		since, complete = incremental.coverage(x.cursor)
+	}
+	switch {
+	case complete:
+		x.coveredSince.Store(math.MinInt64)
+	case since.IsZero():
+		x.coveredSince.Store(0)
+	default:
+		x.coveredSince.Store(since.UnixNano())
+	}
+}
+
+// covers reports whether all retained events since now-window are indexed.
+func (x *sqliteEventIndex) covers(window time.Duration) bool {
+	if x.caughtUp.Load() {
+		return true
+	}
+	since := x.coveredSince.Load()
+	return since != 0 && window > 0 && since <= time.Now().Add(-window).UnixNano()
+}
+
+// processedSince returns the time from which history is processed. It is zero
+// when all retained history is processed or no progress is known.
+func (x *sqliteEventIndex) processedSince() time.Time {
+	if since := x.coveredSince.Load(); since != 0 && since != math.MinInt64 {
+		return time.Unix(0, since).UTC()
+	}
+	return time.Time{}
 }
 
 func loadLogCursor(path string) logCursor {

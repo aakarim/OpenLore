@@ -119,8 +119,12 @@ test.each(["cold", "failed", "disabled"])(
     expect(
       await screen.findByText(/Activity totals will appear/),
     ).toBeVisible();
+    // Knowledge does not wait for activity analytics.
+    expect(screen.getByText("Context by folder")).toBeVisible();
     expect(
-      screen.queryByRole("heading", { name: "Activity" }),
+      screen.queryByRole("img", {
+        name: "Daily activity stacked by attribution",
+      }),
     ).not.toBeInTheDocument();
     expect(
       screen.queryByText("No activity in this time range."),
@@ -137,6 +141,67 @@ test.each(["cold", "failed", "disabled"])(
     ).toBeVisible();
   },
 );
+
+test("knowledge renders while activity is still loading", async () => {
+  history.replaceState(
+    null,
+    "",
+    "/dashboard/?view=analytics&path=/&tab=knowledge",
+  );
+  const fetch = mockAPI();
+  const original = fetch.getMockImplementation()!;
+  let finishUsage!: () => void;
+  fetch.mockImplementation((input, init) =>
+    String(input).includes("/api/usage?")
+      ? new Promise<Response>((resolve) => {
+          finishUsage = () => resolve(original(input, init) as never);
+        })
+      : original(input, init),
+  );
+  render(<App />);
+  expect(
+    await screen.findByRole("heading", { name: "Knowledge & context" }),
+  ).toBeVisible();
+  expect(screen.getByText("Computing activity…")).toBeVisible();
+  await act(async () => finishUsage());
+  expect(
+    await screen.findByRole("heading", { name: "Knowledge contribution" }),
+  ).toBeVisible();
+});
+
+test("analytics status shows how far activity history is processed", async () => {
+  history.replaceState(
+    null,
+    "",
+    "/dashboard/?view=analytics&path=/&tab=overview",
+  );
+  const fetch = mockAPI();
+  const original = fetch.getMockImplementation()!;
+  fetch.mockImplementation((input, init) =>
+    String(input).includes("/api/analytics-status")
+      ? Promise.resolve(
+          new Response(
+            JSON.stringify({
+              activity: {
+                state: "updating",
+                complete: false,
+                processed_since: "2026-09-25T00:00:00Z",
+                latest_event: "2026-10-02T09:30:00Z",
+                events_processed: 1200,
+              },
+            }),
+          ),
+        )
+      : original(input, init),
+  );
+  render(<App />);
+  await userEvent
+    .setup()
+    .click(await screen.findByRole("button", { name: "Analytics status" }));
+  const dialog = screen.getByRole("dialog", { name: "Analytics status" });
+  expect(await within(dialog).findByText("Processing history")).toBeVisible();
+  expect(within(dialog).getByText("Back to 25 Sept 2026")).toBeVisible();
+});
 
 test("background progress and completed results stay mounted through slow polls and errors", async () => {
   history.replaceState(
@@ -325,7 +390,9 @@ test("uses the knowledge tree as the only folder browser", async () => {
 
   expect(document.querySelector(".folder-browser")).not.toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "Open a file" })).toBeVisible();
-  expect(within(tree).getByRole("button", { name: /guide/ })).toBeVisible();
+  expect(
+    await within(tree).findByRole("button", { name: /guide/ }),
+  ).toBeVisible();
 
   await user.click(screen.getByRole("button", { name: "Browse files" }));
   expect(screen.getByRole("dialog", { name: "Folders" })).toBeVisible();

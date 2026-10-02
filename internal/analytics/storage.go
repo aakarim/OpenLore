@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -150,7 +151,7 @@ func (l *fileEventLog) Segments() []Segment {
 }
 func (l *fileEventLog) Scan(ctx context.Context, f EventFilter, fn func(Event) error) error {
 	l.mu.Lock()
-	segments, _, err := l.openSegmentsLocked(nil, 0)
+	segments, _, err := l.openSegmentsLocked(nil, 0, false)
 	l.mu.Unlock()
 	if err != nil {
 		return err
@@ -158,7 +159,7 @@ func (l *fileEventLog) Scan(ctx context.Context, f EventFilter, fn func(Event) e
 	return scanOpenSegments(ctx, segments, f, fn)
 }
 
-func (l *fileEventLog) openSegmentsLocked(cursor logCursor, limit int) ([]openLogSegment, bool, error) {
+func (l *fileEventLog) openSegmentsLocked(cursor logCursor, limit int, newestFirst bool) ([]openLogSegment, bool, error) {
 	if l.active != nil {
 		if err := l.active.Sync(); err != nil {
 			return nil, false, err
@@ -166,7 +167,12 @@ func (l *fileEventLog) openSegmentsLocked(cursor logCursor, limit int) ([]openLo
 	}
 	var opened []openLogSegment
 	more := false
-	for _, seg := range l.Segments() {
+	budgeted := 0
+	segments := l.Segments()
+	if newestFirst {
+		slices.Reverse(segments)
+	}
+	for _, seg := range segments {
 		offset := int64(0)
 		if cursor != nil {
 			offset = cursor[seg.Path]
@@ -176,15 +182,24 @@ func (l *fileEventLog) openSegmentsLocked(cursor logCursor, limit int) ([]openLo
 					cursor[seg.Path] = seg.Size
 					continue
 				}
-				offset = 0
+				// Compressed offsets are either complete or unusable for seeking.
+				if offset < seg.Size {
+					offset = 0
+				}
 			}
 			if offset >= seg.Size {
 				continue
 			}
 		}
-		if limit > 0 && len(opened) >= limit {
+		// Newest-first scans always include new tails of indexed segments, so
+		// live appends cannot starve older history from the one-segment budget.
+		tail := newestFirst && offset > 0
+		if limit > 0 && !tail && budgeted >= limit {
 			more = true
 			continue
+		}
+		if !tail {
+			budgeted++
 		}
 		file, err := os.Open(seg.Path)
 		if err != nil {
@@ -278,8 +293,19 @@ func (l *fileEventLog) scanIncremental(ctx context.Context, cursor logCursor, fn
 // scanIncrementalBatch processes at most one snapshotted segment so callers
 // sharing the expensive-work lane can yield between retained-log units.
 func (l *fileEventLog) scanIncrementalBatch(ctx context.Context, cursor logCursor, fn func(Event) error) (bool, error) {
+	return l.scanBatch(ctx, cursor, fn, false)
+}
+
+// scanNewestBatch is scanIncrementalBatch for idempotent projections. It
+// processes the newest unindexed segment first so recent ranges become
+// available before older history.
+func (l *fileEventLog) scanNewestBatch(ctx context.Context, cursor logCursor, fn func(Event) error) (bool, error) {
+	return l.scanBatch(ctx, cursor, fn, true)
+}
+
+func (l *fileEventLog) scanBatch(ctx context.Context, cursor logCursor, fn func(Event) error, newestFirst bool) (bool, error) {
 	l.mu.Lock()
-	segments, more, err := l.openSegmentsLocked(cursor, 1)
+	segments, more, err := l.openSegmentsLocked(cursor, 1, newestFirst)
 	l.mu.Unlock()
 	if err != nil {
 		return false, err
@@ -287,13 +313,35 @@ func (l *fileEventLog) scanIncrementalBatch(ctx context.Context, cursor logCurso
 	if len(segments) == 0 {
 		return false, nil
 	}
-	opened := segments[0]
-	if err := scanOpenSegments(ctx, []openLogSegment{opened}, EventFilter{}, fn); err != nil {
+	if err := scanOpenSegments(ctx, segments, EventFilter{}, fn); err != nil {
 		return false, err
 	}
-	cursor[opened.segment.Path] = opened.segment.Size
+	for _, opened := range segments {
+		cursor[opened.segment.Path] = opened.segment.Size
+	}
 	return more, nil
 }
+
+// coverage reports the time from which retained history is indexed. Events
+// are written to the segment for their rotation period, so history is covered
+// from the end of the newest unindexed segment's period.
+func (l *fileEventLog) coverage(cursor logCursor) (since time.Time, complete bool) {
+	segments := l.Segments()
+	for i := len(segments) - 1; i >= 0; i-- {
+		seg := segments[i]
+		_, indexed := cursor[seg.Path]
+		_, sealedAfterIndexing := cursor[strings.TrimSuffix(seg.Path, ".zst")]
+		if seg.Size > 0 && !indexed && !(seg.Compressed && sealedAfterIndexing) {
+			end, now := seg.Day.Add(l.opts.Rotate), time.Now().UTC()
+			if end.After(now) {
+				end = now
+			}
+			return end, false
+		}
+	}
+	return time.Time{}, true
+}
+
 func (l *fileEventLog) Seal(ctx context.Context, before time.Time) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
