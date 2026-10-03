@@ -38,6 +38,10 @@ necessarily the current version. Dates are the GitHub publication dates in UTC.
   exit 2 with an error instead of producing wrong output.
 - Activity and command analytics work for time ranges with more than 50,000
   events, and failed analytics no longer reload every second.
+- Analytics no longer show "Preparing analytics" indefinitely on busy servers.
+  Published results stay visible while they refresh in the background, activity
+  totals refresh incrementally from cached daily results, and new views are no
+  longer starved by repeated refreshes.
 - The analytics dashboard shows knowledge and recent activity without waiting
   for all activity history. A new **Status** panel shows how far history has
   been processed.

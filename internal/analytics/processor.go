@@ -5,12 +5,21 @@ import (
 	"sync"
 )
 
+// maxPriorityStreak bounds how many priority items may run while background
+// work waits. Continuously requested views must not starve event indexing,
+// content facts, or refreshes of views that already have a result.
+const maxPriorityStreak = 2
+
 // workProcessor is the single bounded lane for content indexing and requested
 // dashboard materializations. A key can be queued or running only once.
+// Items run in arrival order within their class; priority items run first,
+// but background items still get a turn after maxPriorityStreak priority runs.
 type workProcessor struct {
 	mu      sync.Mutex
 	pending map[string]workItem
+	queues  [2][]string // [0] priority, [1] background, in arrival order
 	running map[string]struct{}
+	streak  int
 	wake    chan struct{}
 	done    chan struct{}
 	gate    chan struct{}
@@ -38,50 +47,71 @@ func (p *workProcessor) enqueueFollowup(key string, priority bool, run func(cont
 	return p.enqueueWithFollowup(key, priority, true, run)
 }
 
+func queueIndex(priority bool) int {
+	if priority {
+		return 0
+	}
+	return 1
+}
+
 func (p *workProcessor) enqueueWithFollowup(key string, priority, followup bool, run func(context.Context)) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if _, ok := p.running[key]; ok {
-		if !followup {
-			return false
-		}
-		// Keep one follow-up run. The active item may already have observed its
-		// source queue empty; dropping this enqueue would strand new work.
-		if old, pending := p.pending[key]; !pending {
-			p.pending[key] = workItem{key: key, priority: priority, run: run}
-		} else if priority && !old.priority {
-			old.priority = true
-			p.pending[key] = old
-		}
+	_, running := p.running[key]
+	if running && !followup {
 		return false
 	}
 	if old, ok := p.pending[key]; ok {
 		if priority && !old.priority {
+			p.removeBackground(key)
 			old.priority = true
 			p.pending[key] = old
+			p.queues[0] = append(p.queues[0], key)
 		}
 		return false
 	}
+	// A running key keeps one follow-up run. The active item may already have
+	// observed its source queue empty; dropping this enqueue would strand work.
 	p.pending[key] = workItem{key: key, priority: priority, run: run}
+	p.queues[queueIndex(priority)] = append(p.queues[queueIndex(priority)], key)
 	select {
 	case p.wake <- struct{}{}:
 	default:
 	}
-	return true
+	return !running
+}
+
+func (p *workProcessor) removeBackground(key string) {
+	for i, queued := range p.queues[1] {
+		if queued == key {
+			p.queues[1] = append(p.queues[1][:i:i], p.queues[1][i+1:]...)
+			return
+		}
+	}
 }
 
 func (p *workProcessor) pop() (workItem, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	for _, priority := range []bool{true, false} {
-		for key, item := range p.pending {
-			if item.priority != priority {
-				continue
-			}
-			delete(p.pending, key)
-			p.running[key] = struct{}{}
-			return item, true
+	class := 0
+	if len(p.queues[0]) == 0 || len(p.queues[1]) > 0 && p.streak >= maxPriorityStreak {
+		class = 1
+	}
+	for _, index := range []int{class, 1 - class} {
+		if len(p.queues[index]) == 0 {
+			continue
 		}
+		key := p.queues[index][0]
+		p.queues[index] = p.queues[index][1:]
+		item := p.pending[key]
+		delete(p.pending, key)
+		p.running[key] = struct{}{}
+		if index == 0 {
+			p.streak++
+		} else {
+			p.streak = 0
+		}
+		return item, true
 	}
 	return workItem{}, false
 }

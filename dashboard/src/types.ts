@@ -22,7 +22,6 @@ export type AnalyticsStatus = {
     | "ready"
     | "cold"
     | "updating"
-    | "stale"
     | "disabled"
     | "failed"
     | "unavailable";

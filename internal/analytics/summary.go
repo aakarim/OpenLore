@@ -39,41 +39,71 @@ type SummaryActivity struct {
 // doc.write is preferred over doc.scalars for the same commit/path so one
 // committed leaf contributes exactly one write.
 func UsageSummary(ctx context.Context, source EventSource, p Params, charsPerToken int) (Summary, error) {
+	partial, err := scanUsage(ctx, source, p.Since, p.Until, charsPerToken)
+	if err != nil {
+		return Summary{}, err
+	}
+	return partial.summary(), nil
+}
+
+// usagePartial is the mergeable state of a usage summary over one time range.
+// Partials of adjacent ranges merge into the summary of their union: counters
+// add, and writes stay keyed by commit/path so a commit split across ranges
+// still contributes one write.
+type usagePartial struct {
+	Reads            int                         `json:"reads"`
+	Hits             int                         `json:"hits"`
+	Commands         int                         `json:"commands"`
+	EstimatedTokens  int64                       `json:"estimated_tokens"`
+	EstimatedReads   int                         `json:"estimated_reads"`
+	UnestimatedReads int                         `json:"unestimated_reads"`
+	Activity         map[string]*SummaryActivity `json:"activity"`
+	Writes           map[string]usageWrite       `json:"writes"`
+	// Overflow records that a read was left unestimated because the running
+	// token total would overflow. That depends on every earlier read, so such
+	// a partial cannot be merged exactly.
+	Overflow bool `json:"overflow,omitempty"`
+}
+
+type usageWrite struct {
+	Doc  bool   `json:"doc,omitempty"` // doc.write rather than doc.scalars
+	Date string `json:"date"`
+	Kind Writer `json:"kind"`
+}
+
+func newUsagePartial() *usagePartial {
+	return &usagePartial{Activity: map[string]*SummaryActivity{}, Writes: map[string]usageWrite{}}
+}
+
+func (u *usagePartial) activity(day string) *SummaryActivity {
+	row := u.Activity[day]
+	if row == nil {
+		row = &SummaryActivity{Date: day}
+		u.Activity[day] = row
+	}
+	return row
+}
+
+// scanUsage streams events in [since, until]; zero bounds are open.
+func scanUsage(ctx context.Context, source EventSource, since, until time.Time, charsPerToken int) (*usagePartial, error) {
 	if source == nil {
-		return Summary{}, fmt.Errorf("analytics event source is unavailable")
+		return nil, fmt.Errorf("analytics event source is unavailable")
 	}
 	if charsPerToken <= 0 {
-		return Summary{}, fmt.Errorf("characters per token must be positive")
+		return nil, fmt.Errorf("characters per token must be positive")
 	}
-	summary := Summary{Activity: []SummaryActivity{}, ComputedAt: time.Now().UTC()}
-	activity := map[string]*SummaryActivity{}
-	activityFor := func(event Event) *SummaryActivity {
+	u := newUsagePartial()
+	err := source.Scan(ctx, EventFilter{From: since, To: until}, func(event Event) error {
 		day := event.Time.UTC().Format("2006-01-02")
-		row := activity[day]
-		if row == nil {
-			row = &SummaryActivity{Date: day}
-			activity[day] = row
-		}
-		return row
-	}
-	// Stream the window rather than buffering it. Only one write per
-	// commit/path is retained, preferring doc.write over doc.scalars.
-	writes := map[string]Event{}
-	err := source.Scan(ctx, EventFilter{From: p.Since, To: p.Until}, func(event Event) error {
 		switch event.Type {
-		case "doc.scalars":
-			key := summaryWriteKey(event)
-			if existing, ok := writes[key]; !ok || existing.Type == "doc.scalars" {
-				writes[key] = event
-			}
-		case "doc.write":
-			writes[summaryWriteKey(event)] = event
+		case "doc.scalars", "doc.write":
+			u.addWrite(summaryWriteKey(event), usageWrite{Doc: event.Type == "doc.write", Date: day, Kind: eventKind(event)})
 		case "doc.read", "doc.hit":
-			row := activityFor(event)
+			row := u.activity(day)
 			if event.Type == "doc.read" {
-				summary.Reads++
+				u.Reads++
 			} else {
-				summary.Hits++
+				u.Hits++
 			}
 			row.Reads++
 			incrementActivityKind(row, eventKind(event))
@@ -82,33 +112,79 @@ func UsageSummary(ctx context.Context, source EventSource, p Params, charsPerTok
 				estimate := math.Ceil(characters / float64(charsPerToken))
 				if estimate < math.Exp2(63) {
 					tokens := int64(estimate)
-					if tokens <= math.MaxInt64-summary.EstimatedTokens {
-						summary.EstimatedReads++
-						summary.EstimatedTokens += tokens
+					if tokens <= math.MaxInt64-u.EstimatedTokens {
+						u.EstimatedReads++
+						u.EstimatedTokens += tokens
 						estimated = true
+					} else {
+						u.Overflow = true
 					}
 				}
 			}
 			if !estimated {
-				summary.UnestimatedReads++
+				u.UnestimatedReads++
 			}
 		case "command.exec":
-			row := activityFor(event)
-			summary.Commands++
-			incrementActivityKind(row, eventKind(event))
+			u.Commands++
+			incrementActivityKind(u.activity(day), eventKind(event))
 		}
 		return nil
 	})
 	if err != nil {
-		return Summary{}, err
+		return nil, err
 	}
-	for _, event := range writes {
-		row := activityFor(event)
+	return u, nil
+}
+
+// addWrite applies events in time order: a later doc.write replaces any
+// earlier event, and a later doc.scalars replaces only another doc.scalars.
+func (u *usagePartial) addWrite(key string, write usageWrite) {
+	if existing, ok := u.Writes[key]; !ok || write.Doc || !existing.Doc {
+		u.Writes[key] = write
+	}
+}
+
+// merge adds a partial covering a later time range. It reports false, leaving
+// u unchanged, when the token total overflows: which reads a single scan would
+// leave unestimated then depends on the order of every read.
+func (u *usagePartial) merge(later *usagePartial) bool {
+	if u.Overflow || later.Overflow || later.EstimatedTokens > math.MaxInt64-u.EstimatedTokens {
+		return false
+	}
+	u.Reads += later.Reads
+	u.Hits += later.Hits
+	u.Commands += later.Commands
+	u.EstimatedReads += later.EstimatedReads
+	u.UnestimatedReads += later.UnestimatedReads
+	u.EstimatedTokens += later.EstimatedTokens
+	for day, row := range later.Activity {
+		current := u.activity(day)
+		current.Human += row.Human
+		current.Agent += row.Agent
+		current.Unknown += row.Unknown
+		current.Reads += row.Reads
+		current.Writes += row.Writes
+	}
+	for key, write := range later.Writes {
+		u.addWrite(key, write)
+	}
+	return true
+}
+
+func (u *usagePartial) summary() Summary {
+	summary := Summary{Reads: u.Reads, Hits: u.Hits, Commands: u.Commands, EstimatedTokens: u.EstimatedTokens, EstimatedReads: u.EstimatedReads, UnestimatedReads: u.UnestimatedReads, Activity: []SummaryActivity{}, ComputedAt: time.Now().UTC()}
+	activity := make(map[string]SummaryActivity, len(u.Activity))
+	for day, row := range u.Activity {
+		activity[day] = *row
+	}
+	for _, write := range u.Writes {
+		row := activity[write.Date]
+		row.Date = write.Date
 		summary.Writes++
 		row.Writes++
-		kind := eventKind(event)
-		incrementActivityKind(row, kind)
-		switch kind {
+		incrementActivityKind(&row, write.Kind)
+		activity[write.Date] = row
+		switch write.Kind {
 		case WriterHuman:
 			summary.HumanWrites++
 		case WriterAgent:
@@ -123,12 +199,12 @@ func UsageSummary(ctx context.Context, source EventSource, p Params, charsPerTok
 	}
 	sort.Strings(keys)
 	for _, day := range keys {
-		summary.Activity = append(summary.Activity, *activity[day])
+		summary.Activity = append(summary.Activity, activity[day])
 	}
 	if summary.UnestimatedReads > 0 {
 		summary.Note = fmt.Sprintf("Token estimate covers %d of %d retained read ranges; %d legacy or invalid ranges without usable recorded character counts are omitted.", summary.EstimatedReads, summary.EstimatedReads+summary.UnestimatedReads, summary.UnestimatedReads)
 	}
-	return summary, nil
+	return summary
 }
 
 func summaryWriteKey(event Event) string {

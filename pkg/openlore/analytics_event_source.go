@@ -87,13 +87,22 @@ func (d *dashboardEventSource) Scan(ctx context.Context, filter analytics.EventF
 	// passes could otherwise be emitted using correlations computed without
 	// it. A time cutoff is not enough, because events are timestamped before
 	// they are written. Sources that cannot pin a snapshot are buffered.
-	source, release, err := snapshotEventSource(ctx, d.source, analytics.EventFilter{From: filter.From, To: filter.To})
+	//
+	// Related events can fall just outside the requested range, so the
+	// correlation passes look CorrelationMargin beyond it on either side.
+	window := analytics.EventFilter{From: filter.From, To: filter.To}
+	if !window.From.IsZero() {
+		window.From = window.From.Add(-analytics.CorrelationMargin)
+	}
+	if !window.To.IsZero() {
+		window.To = window.To.Add(analytics.CorrelationMargin)
+	}
+	source, release, err := snapshotEventSource(ctx, d.source, window)
 	if err != nil {
 		return err
 	}
 	defer release()
 	to := filter.To
-	window := analytics.EventFilter{From: filter.From, To: to}
 	byParent := map[string]analyticsAccess{}
 	byInvocation := map[string]analyticsAccess{}
 	if err := source.Scan(ctx, window, func(event analytics.Event) error {
@@ -148,7 +157,7 @@ func (d *dashboardEventSource) Scan(ctx context.Context, filter analytics.EventF
 	for _, principal := range filter.Principals {
 		principals[principal] = true
 	}
-	return source.Scan(ctx, window, func(event analytics.Event) error {
+	return source.Scan(ctx, analytics.EventFilter{From: filter.From, To: to}, func(event analytics.Event) error {
 		if !filter.From.IsZero() && event.Time.Before(filter.From) || !to.IsZero() && event.Time.After(to) {
 			return nil
 		}

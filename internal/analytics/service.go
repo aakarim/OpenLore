@@ -378,7 +378,9 @@ func (s *Service) IndexedFacts(ctx context.Context, prefix string, limit int) ([
 		return nil, SnapshotStatus{State: "failed", Error: stateErr.Error()}, stateErr
 	}
 	status := SnapshotStatus{State: state.State, Complete: state.State == "ready", ComputedAt: state.CompletedAt, Error: state.Error, Coverage: "indexed content docsets only"}
-	status.Updating = state.State == "updating" || s.processor.active("facts")
+	// Incremental updates to a ready generation (individual writes) apply
+	// within one processor turn; only a full scan is reported as updating.
+	status.Updating = state.State == "updating"
 	if state.Generation == 0 {
 		status.State, status.Complete, status.Updating = "cold", false, false
 	} else if state.State == "failed" {
@@ -628,17 +630,44 @@ func (s *Service) ActivityStatus(ctx context.Context) ActivityStatus {
 	return status
 }
 
+// CorrelationMargin is how far beyond a requested range dashboard event
+// sources look for related events (for example a command's child reads) that
+// decide whether an event inside the range is visible.
+const CorrelationMargin = 10 * time.Minute
+
+// usageRefreshInterval is how old a usage view may be before a request
+// refreshes it. Refreshes are incremental, so they are cheap.
+const usageRefreshInterval = time.Minute
+
+// usageTurnBudget bounds how long one processor turn spends building missing
+// days of a usage view before yielding the lane to other work.
+const usageTurnBudget = 5 * time.Second
+
+// usageDayRetention bounds the cached daily partials kept for usage views.
+const usageDayRetention = 366
+
+// aggregationRefreshInterval spaces full rebuilds of a materialized view.
+// A rebuild rescans the whole window, so longer windows refresh less often.
+func aggregationRefreshInterval(window time.Duration) time.Duration {
+	return min(max(window/2880, time.Minute), 15*time.Minute)
+}
+
 // DashboardUsage serves only a committed complete summary. Missing or stale
 // work is deduplicated onto the same bounded processor used by fact warming.
-func (s *Service) DashboardUsage(ctx context.Context, key string, window time.Duration, compute func(context.Context) (Summary, error)) (UsageSnapshot, error) {
+// key identifies the scope (policy, path and ratio) and is shared by every
+// window, so the daily partials behind a 7-day view also serve a 90-day one.
+// A view with a result reports updating only while it has none; refreshing a
+// published result happens in the background without blocking the client.
+func (s *Service) DashboardUsage(ctx context.Context, key string, window time.Duration, source EventSource, charsPerToken int) (UsageSnapshot, error) {
 	store, ok := s.store.(*SQLiteAggregationStore)
 	if !ok {
 		return UsageSnapshot{Analytics: SnapshotStatus{State: "unavailable", Error: "durable usage requires sqlite storage"}}, nil
 	}
+	viewKey := fmt.Sprintf("%s:%d", key, int64(window/time.Second))
 	var raw []byte
 	var computed int64
 	var lastError string
-	err := store.db.QueryRowContext(ctx, `SELECT value,computed_at,error FROM dashboard_views WHERE key=?`, key).Scan(&raw, &computed, &lastError)
+	err := store.db.QueryRowContext(ctx, `SELECT value,computed_at,error FROM dashboard_views WHERE key=?`, viewKey).Scan(&raw, &computed, &lastError)
 	found := err == nil && len(raw) > 0
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return UsageSnapshot{}, err
@@ -660,27 +689,31 @@ func (s *Service) DashboardUsage(ctx context.Context, key string, window time.Du
 		return result, nil
 	}
 	if s.eventIndex != nil && !s.eventIndex.covers(window) {
-		result.Analytics.Updating = true
-		if found {
-			result.Analytics.State = "stale"
+		// A published result stays ready until the range can be rebuilt;
+		// only a cold view reports catch-up progress.
+		if !found {
+			result.Analytics.Updating = true
+			result.Analytics.Coverage = "durable event index is catching up"
+			result.Analytics.Progress = s.historyProgress()
 		}
-		result.Analytics.Coverage = "durable event index is catching up"
-		result.Analytics.Progress = s.historyProgress()
 		if message := s.eventIndex.lastError.Load(); message != nil {
 			result.Analytics.Error = *message
 		}
 		return result, nil
 	}
-	stale := !found || time.Since(result.Analytics.ComputedAt) > time.Minute
-	jobKey := "usage:" + key
+	stale := !found || time.Since(result.Analytics.ComputedAt) > usageRefreshInterval
 	if stale && !retryBackoff(found, lastError, computed) {
-		s.processor.enqueue(jobKey, true, func(jobCtx context.Context) {
+		jobKey := "usage:" + viewKey
+		var run func(context.Context)
+		run = func(jobCtx context.Context) {
+			fail := func(err error) {
+				_, _ = store.db.ExecContext(context.WithoutCancel(jobCtx), failedViewSQL, viewKey, time.Now().UTC().UnixNano(), err.Error())
+			}
 			if s.eventIndex != nil {
 				// Refresh only new tails: an older unindexed segment must not
 				// delay a range that is already covered.
-				catchUpErr := s.eventIndex.refreshTails(jobCtx)
-				if catchUpErr != nil {
-					_, _ = store.db.ExecContext(context.WithoutCancel(jobCtx), failedViewSQL, key, time.Now().UTC().UnixNano(), catchUpErr.Error())
+				if err := s.eventIndex.refreshTails(jobCtx); err != nil {
+					fail(err)
 					return
 				}
 				// Older history may still be indexing; this range is ready
@@ -689,20 +722,36 @@ func (s *Service) DashboardUsage(ctx context.Context, key string, window time.Du
 					return
 				}
 			}
-			summary, computeErr := compute(jobCtx)
-			if computeErr != nil {
-				_, _ = store.db.ExecContext(context.WithoutCancel(jobCtx), failedViewSQL, key, time.Now().UTC().UnixNano(), computeErr.Error())
+			now := time.Now().UTC()
+			summary, done, err := usageSummary(jobCtx, store.db, key, now.Add(-window), now, source, charsPerToken, time.Now().Add(usageTurnBudget))
+			if err != nil {
+				fail(err)
 				return
 			}
-			encoded, encodeErr := json.Marshal(summary)
-			if encodeErr == nil {
-				_, _ = store.db.ExecContext(context.WithoutCancel(jobCtx), `INSERT INTO dashboard_views(key,value,computed_at,error) VALUES(?,?,?,'')
-ON CONFLICT(key) DO UPDATE SET value=excluded.value,computed_at=excluded.computed_at,error=''`, key, encoded, summary.ComputedAt.UnixNano())
+			if !done {
+				s.processor.enqueueFollowup(jobKey, !found, run)
+				return
 			}
-		})
-		result.Analytics.Updating = true
-		if found {
-			result.Analytics.State = "stale"
+			encoded, err := json.Marshal(summary)
+			if err == nil {
+				_, _ = store.db.ExecContext(context.WithoutCancel(jobCtx), `INSERT INTO dashboard_views(key,value,computed_at,error) VALUES(?,?,?,'')
+ON CONFLICT(key) DO UPDATE SET value=excluded.value,computed_at=excluded.computed_at,error=''`, viewKey, encoded, summary.ComputedAt.UnixNano())
+			}
+		}
+		// A missing view is what the client is waiting for; refreshing a
+		// published one is background work.
+		s.processor.enqueue(jobKey, !found, run)
+		if !found {
+			result.Analytics.Updating = true
+			now := time.Now().UTC()
+			first, last := usageDays(now.Add(-window), now)
+			var days int64
+			if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM dashboard_usage_days WHERE key=? AND day>=? AND day<?`, key, first, last).Scan(&days); err != nil {
+				return UsageSnapshot{}, err
+			}
+			if days > 0 {
+				result.Analytics.Progress = &SnapshotProgress{Phase: "activity", Processed: days, Unit: "days"}
+			}
 		}
 	}
 	if lastError != "" {
@@ -713,6 +762,159 @@ ON CONFLICT(key) DO UPDATE SET value=excluded.value,computed_at=excluded.compute
 		}
 	}
 	return result, nil
+}
+
+const dayNanos = int64(24 * time.Hour)
+
+func dayStart(day int64) time.Time { return time.Unix(0, day*dayNanos).UTC() }
+
+// usageDays returns the UTC days [first, last) that lie wholly inside
+// [since, until] and are settled: no event within CorrelationMargin of the
+// day can still be recorded in real time. Settled days are cached; the
+// ranges before first and from last onwards are always scanned.
+func usageDays(since, until time.Time) (first, last int64) {
+	first = (since.UnixNano() + dayNanos - 1) / dayNanos
+	last = until.Add(-CorrelationMargin).UnixNano() / dayNanos
+	return first, max(first, last)
+}
+
+// usageSummary merges cached daily partials with fresh scans of the unsettled
+// edges of [since, until]. It builds missing days until deadline and reports
+// done=false when more turns are needed.
+func usageSummary(ctx context.Context, db *sql.DB, key string, since, until time.Time, source EventSource, charsPerToken int, deadline time.Time) (Summary, bool, error) {
+	if err := invalidateUsageDays(ctx, db, key); err != nil {
+		return Summary{}, false, err
+	}
+	first, last := usageDays(since, until)
+	if _, err := db.ExecContext(ctx, `DELETE FROM dashboard_usage_days WHERE day<?`, until.UnixNano()/dayNanos-usageDayRetention); err != nil {
+		return Summary{}, false, err
+	}
+	days := map[int64]*usagePartial{}
+	rows, err := db.QueryContext(ctx, `SELECT day,value FROM dashboard_usage_days WHERE key=? AND day>=? AND day<?`, key, first, last)
+	if err != nil {
+		return Summary{}, false, err
+	}
+	for rows.Next() {
+		var day int64
+		var value []byte
+		partial := newUsagePartial()
+		if err := rows.Scan(&day, &value); err != nil {
+			rows.Close()
+			return Summary{}, false, err
+		}
+		if err := json.Unmarshal(value, partial); err != nil {
+			rows.Close()
+			return Summary{}, false, err
+		}
+		days[day] = partial
+	}
+	if err := rows.Close(); err != nil {
+		return Summary{}, false, err
+	}
+	var maxRow sql.NullInt64
+	if err := db.QueryRowContext(ctx, `SELECT MAX(rowid) FROM analytics_events`).Scan(&maxRow); err != nil {
+		return Summary{}, false, err
+	}
+	// Build the newest missing days first so recent ranges fill in early.
+	// Every turn builds at least one day so slow days still make progress.
+	built := 0
+	for day := last - 1; day >= first; day-- {
+		if days[day] != nil {
+			continue
+		}
+		if built > 0 && time.Now().After(deadline) {
+			return Summary{}, false, nil
+		}
+		built++
+		partial, err := scanUsage(ctx, source, dayStart(day), dayStart(day+1).Add(-time.Nanosecond), charsPerToken)
+		if err != nil {
+			return Summary{}, false, err
+		}
+		encoded, err := json.Marshal(partial)
+		if err != nil {
+			return Summary{}, false, err
+		}
+		// Every event indexed by now was visible to the scan, so only later
+		// rows can invalidate this day.
+		if _, err := db.ExecContext(ctx, `INSERT INTO dashboard_usage_days(key,day,value,valid_rowid) VALUES(?,?,?,?)
+ON CONFLICT(key,day) DO UPDATE SET value=excluded.value,valid_rowid=excluded.valid_rowid`, key, day, encoded, maxRow.Int64); err != nil {
+			return Summary{}, false, err
+		}
+		days[day] = partial
+	}
+	partials := []*usagePartial{}
+	tailSince := since
+	if first < last {
+		if since.Before(dayStart(first)) {
+			edge, err := scanUsage(ctx, source, since, dayStart(first).Add(-time.Nanosecond), charsPerToken)
+			if err != nil {
+				return Summary{}, false, err
+			}
+			partials = append(partials, edge)
+		}
+		for day := first; day < last; day++ {
+			partials = append(partials, days[day])
+		}
+		tailSince = dayStart(last)
+	}
+	tail, err := scanUsage(ctx, source, tailSince, until, charsPerToken)
+	if err != nil {
+		return Summary{}, false, err
+	}
+	total := newUsagePartial()
+	for _, partial := range append(partials, tail) {
+		if !total.merge(partial) {
+			// Token overflow is classified per read in order, so only a
+			// single scan of the whole window reproduces it.
+			whole, err := scanUsage(ctx, source, since, until, charsPerToken)
+			if err != nil {
+				return Summary{}, false, err
+			}
+			return whole.summary(), true, nil
+		}
+	}
+	return total.summary(), true, nil
+}
+
+// invalidateUsageDays drops cached days that events indexed since they were
+// built could change, such as late or backfilled events, then records that
+// the remaining days are valid up to the newest indexed event. Events are
+// never deleted and re-indexing keeps an event's rowid, so rows above a day's
+// valid_rowid are exactly the events it has not seen.
+func invalidateUsageDays(ctx context.Context, db *sql.DB, key string) error {
+	var checked, maxRow sql.NullInt64
+	if err := db.QueryRowContext(ctx, `SELECT MIN(valid_rowid) FROM dashboard_usage_days WHERE key=?`, key).Scan(&checked); err != nil || !checked.Valid {
+		return err
+	}
+	if err := db.QueryRowContext(ctx, `SELECT MAX(rowid) FROM analytics_events`).Scan(&maxRow); err != nil || maxRow.Int64 <= checked.Int64 {
+		return err
+	}
+	rows, err := db.QueryContext(ctx, `SELECT time_ns,rowid FROM analytics_events WHERE rowid>? AND rowid<=?`, checked.Int64, maxRow.Int64)
+	if err != nil {
+		return err
+	}
+	changed := map[int64]int64{}
+	for rows.Next() {
+		var timeNS, rowid int64
+		if err := rows.Scan(&timeNS, &rowid); err != nil {
+			rows.Close()
+			return err
+		}
+		margin := int64(CorrelationMargin)
+		for day := (timeNS - margin) / dayNanos; day <= (timeNS+margin)/dayNanos; day++ {
+			changed[day] = max(changed[day], rowid)
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for day, rowid := range changed {
+		if _, err := db.ExecContext(ctx, `DELETE FROM dashboard_usage_days WHERE key=? AND day=? AND valid_rowid<?`, key, day, rowid); err != nil {
+			return err
+		}
+	}
+	_, err = db.ExecContext(ctx, `UPDATE dashboard_usage_days SET valid_rowid=? WHERE key=? AND valid_rowid<?`, maxRow.Int64, key, maxRow.Int64)
+	return err
 }
 
 func (s *Service) DashboardMaterialized(ctx context.Context, key string, window time.Duration, compute func(context.Context) (Materialized, error)) (Materialized, error) {
@@ -745,16 +947,20 @@ func (s *Service) DashboardMaterialized(ctx context.Context, key string, window 
 		return result, nil
 	}
 	if s.eventIndex != nil && !s.eventIndex.covers(window) {
-		state.State, state.Updating, state.Coverage = "updating", true, "durable event index is catching up"
-		state.Progress = s.historyProgress()
+		// A published result stays ready until the range can be rebuilt;
+		// only a cold view reports catch-up progress.
+		if !found {
+			state.State, state.Updating, state.Coverage = "updating", true, "durable event index is catching up"
+			state.Progress = s.historyProgress()
+		}
 		if message := s.eventIndex.lastError.Load(); message != nil {
 			state.Error = *message
 		}
 		return result, nil
 	}
-	if (!found || time.Since(state.ComputedAt) > time.Minute) && !retryBackoff(found, lastError, computed) {
+	if (!found || time.Since(state.ComputedAt) > aggregationRefreshInterval(window)) && !retryBackoff(found, lastError, computed) {
 		jobKey := "aggregation:" + key
-		s.processor.enqueue(jobKey, true, func(jobCtx context.Context) {
+		s.processor.enqueue(jobKey, !found, func(jobCtx context.Context) {
 			if s.eventIndex != nil {
 				// Refresh only new tails: an older unindexed segment must not
 				// delay a range that is already covered.
@@ -780,10 +986,8 @@ func (s *Service) DashboardMaterialized(ctx context.Context, key string, window 
 				_, _ = store.db.ExecContext(context.WithoutCancel(jobCtx), `INSERT INTO dashboard_views(key,value,computed_at,error) VALUES(?,?,?,'') ON CONFLICT(key) DO UPDATE SET value=excluded.value,computed_at=excluded.computed_at,error=''`, key, encoded, view.ComputedAt.UnixNano())
 			}
 		})
-		state.Updating = true
-		if found {
-			state.State = "stale"
-		}
+		// A published result stays ready while it refreshes in the background.
+		state.Updating = !found
 	}
 	if lastError != "" {
 		state.Error = lastError

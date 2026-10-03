@@ -427,12 +427,14 @@ function Contribution({ usage }: { usage: Usage }) {
     </section>
   );
 }
-// Delay before polling again: one second while building, or until the
-// server's retry time for a failed view.
+// Delay before polling again: one second while building, until the
+// server's retry time for a failed view, or a minute for a published result,
+// which the server refreshes in the background without reporting updating.
 export function pollDelay(status?: AnalyticsStatus) {
   if (status?.updating) return 1000;
   if (status?.state === "failed" && status.retry_at)
     return Math.max(1000, Date.parse(status.retry_at) - Date.now());
+  if (status?.state === "ready" && status.complete) return 60_000;
   return undefined;
 }
 function Aggregation(props: {

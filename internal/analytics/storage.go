@@ -668,6 +668,10 @@ path TEXT NOT NULL, PRIMARY KEY(key,path)
 CREATE TABLE IF NOT EXISTS dashboard_views (
 key TEXT PRIMARY KEY, value BLOB, computed_at INTEGER NOT NULL, error TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS dashboard_usage_days (
+key TEXT NOT NULL, day INTEGER NOT NULL, value BLOB NOT NULL, valid_rowid INTEGER NOT NULL,
+PRIMARY KEY(key,day)
+);
 CREATE TABLE IF NOT EXISTS analytics_events (
 id TEXT PRIMARY KEY, time_ns INTEGER NOT NULL, type TEXT NOT NULL, principal TEXT NOT NULL, value BLOB NOT NULL
 );
