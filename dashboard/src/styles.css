@@ -797,14 +797,45 @@ select:focus-visible,
   font: 11px var(--mono);
   gap: 12px;
 }
-.reader-head .breadcrumbs {
+.file-location {
+  position: relative;
   min-width: 0;
   flex: 1;
 }
-.reader-head [aria-current="page"] {
-  min-width: 0;
-  overflow-wrap: anywhere;
+.file-name {
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: var(--ink);
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+  text-decoration: underline dotted;
+  text-underline-offset: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-name:hover:not(:disabled) {
+  background: transparent;
+  color: var(--purple);
+}
+.file-path {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 5;
+  width: max-content;
+  max-width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--purple);
+  background: var(--purple-soft);
+  color: var(--ink);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
 }
 .view-toggle {
   display: flex;
@@ -1396,7 +1427,10 @@ button.primary:hover:not(:disabled) {
   }
   .reader-head {
     min-height: 43px;
-    padding: 10px 12px;
+    padding: 0 12px;
+  }
+  .file-name {
+    min-height: 44px;
   }
   .reader-head .view-toggle {
     display: none;

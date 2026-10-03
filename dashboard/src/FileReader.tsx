@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { api } from "./api";
 import { useAsync } from "./hooks";
 import { ChartIcon, CloseIcon, SettingsIcon } from "./icons";
@@ -340,7 +340,6 @@ export function FileReader({
   mode,
   onMode,
   onFile,
-  onFolder,
   onAnalytics,
   ratio = 4,
   contextWindow,
@@ -352,7 +351,6 @@ export function FileReader({
   mode: "preview" | "source";
   onMode: (mode: "preview" | "source") => void;
   onFile: (path: string) => void;
-  onFolder: (path: string) => void;
   onAnalytics: () => void;
   ratio?: number;
   contextWindow: number;
@@ -360,9 +358,19 @@ export function FileReader({
   onScroll: (position: number) => void;
 }) {
   const state = useAsync((signal) => api.file(path, signal), [path]);
+  const pathId = useId();
+  const [showPath, setShowPath] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const onScrollRef = useRef(onScroll);
   onScrollRef.current = onScroll;
+  useEffect(() => {
+    if (!showPath) return;
+    const dismiss = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setShowPath(false);
+    };
+    window.addEventListener("keydown", dismiss);
+    return () => window.removeEventListener("keydown", dismiss);
+  }, [showPath]);
   useEffect(() => {
     if (!state.data) return;
     const mobile = matchMedia("(max-width: 760px)").matches;
@@ -395,28 +403,36 @@ export function FileReader({
     <div className="file-layout">
       <section className="reader">
         <div className="reader-head">
-          <nav className="breadcrumbs" aria-label="File location">
-            <button onClick={() => onFolder("/")}>Workspace</button>
-            {path
-              .split("/")
-              .filter(Boolean)
-              .map((part, i, parts) => (
-                <span key={i}>
-                  <span aria-hidden="true">/</span>
-                  {i === parts.length - 1 ? (
-                    <span aria-current="page">{part}</span>
-                  ) : (
-                    <button
-                      onClick={() =>
-                        onFolder(`/${parts.slice(0, i + 1).join("/")}`)
-                      }
-                    >
-                      {part}
-                    </button>
-                  )}
-                </span>
-              ))}
-          </nav>
+          <div
+            className="file-location"
+            onMouseEnter={() => setShowPath(true)}
+            onMouseLeave={(event) => {
+              if (!event.currentTarget.contains(document.activeElement))
+                setShowPath(false);
+            }}
+            onBlur={() => setShowPath(false)}
+          >
+            <button
+              className="file-name"
+              aria-label={`Show path for ${basename(path)}`}
+              aria-describedby={pathId}
+              onFocus={() => setShowPath(true)}
+              onClick={(event) => {
+                event.currentTarget.focus();
+                setShowPath(true);
+              }}
+            >
+              {basename(path)}
+            </button>
+            <span
+              className="file-path"
+              id={pathId}
+              role="tooltip"
+              hidden={!showPath}
+            >
+              {path}
+            </span>
+          </div>
           <div className="view-toggle">
             <button
               aria-pressed={mode === "preview"}

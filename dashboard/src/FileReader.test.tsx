@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import { api } from "./api";
@@ -30,7 +30,6 @@ const readerProps = {
   mode: "preview" as const,
   onMode: vi.fn(),
   onFile: vi.fn(),
-  onFolder: vi.fn(),
   onAnalytics: vi.fn(),
   ratio: 6,
   contextWindow: 12,
@@ -48,31 +47,43 @@ test("renders plaintext preview and estimates FileInfo from characters and ratio
   expect(screen.queryByText("999")).not.toBeInTheDocument();
 });
 
-test("file breadcrumbs identify the current file and navigate to full ancestor paths", async () => {
+test("filename tooltip shows the full path on hover, focus, or click and dismisses on Escape or blur", async () => {
   const path = "/docs/team notes/drafts/plan.md";
   vi.spyOn(api, "file").mockResolvedValue({ ...baseFile, path });
-  const onFolder = vi.fn();
-  render(<FileReader {...readerProps} path={path} onFolder={onFolder} />);
-  const breadcrumbs = await screen.findByRole("navigation", {
-    name: "File location",
+  const onFile = vi.fn();
+  render(<FileReader {...readerProps} path={path} onFile={onFile} />);
+  const user = userEvent.setup();
+  const filename = await screen.findByRole("button", {
+    name: "Show path for plan.md",
   });
-  expect(within(breadcrumbs).getByText("plan.md")).toHaveAttribute(
-    "aria-current",
-    "page",
-  );
+  expect(filename).toHaveTextContent("plan.md");
+  expect(filename).toHaveAccessibleDescription(path);
+  expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   expect(
-    within(breadcrumbs).queryByRole("button", { name: "plan.md" }),
+    screen.queryByRole("navigation", { name: "File location" }),
   ).not.toBeInTheDocument();
-  for (const [name, expected] of [
-    ["docs", "/docs"],
-    ["team notes", "/docs/team notes"],
-    ["drafts", "/docs/team notes/drafts"],
-    ["Workspace", "/"],
-  ]) {
-    await userEvent.click(within(breadcrumbs).getByRole("button", { name }));
-    expect(onFolder).toHaveBeenLastCalledWith(expected);
-  }
-  expect(readerProps.onFile).not.toHaveBeenCalled();
+  await user.hover(filename);
+  expect(screen.getByRole("tooltip")).toHaveTextContent(path);
+  await user.keyboard("{Escape}");
+  expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  await user.unhover(filename);
+  await user.hover(filename);
+  expect(screen.getByRole("tooltip")).toBeVisible();
+  await user.unhover(filename);
+  expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  await user.tab();
+  expect(filename).toHaveFocus();
+  expect(screen.getByRole("tooltip")).toBeVisible();
+  await user.keyboard("{Escape}");
+  expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  expect(filename).toHaveFocus();
+  await user.click(filename);
+  expect(screen.getByRole("tooltip")).toHaveTextContent(path);
+  await user.unhover(filename);
+  expect(screen.getByRole("tooltip")).toBeVisible();
+  await user.tab();
+  expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  expect(onFile).not.toHaveBeenCalled();
 });
 
 test("canonicalizes internal links once, preserves modified clicks, and protects images", async () => {

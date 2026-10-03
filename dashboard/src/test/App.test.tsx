@@ -676,46 +676,28 @@ test("direct file wins restoration, browser back resolves lore pathname, and fil
   fireEvent.popState(window);
   expect(await screen.findByRole("heading", { name: "Start" })).toBeVisible();
   expect(
-    within(screen.getByRole("navigation", { name: "File location" })).getByText(
-      "start.md",
-    ),
-  ).toHaveAttribute("aria-current", "page");
+    screen.getByRole("button", { name: "Show path for start.md" }),
+  ).toHaveTextContent("start.md");
 });
 
-test("file breadcrumbs return to ancestor folders without losing open tabs", async () => {
+test("filename path tooltip does not navigate away from the open file", async () => {
   history.replaceState(null, "", "/lore/guide/start.md");
   mockAPI();
   render(<App />);
   const user = userEvent.setup();
-  const breadcrumbs = await screen.findByRole("navigation", {
-    name: "File location",
-  });
-  await user.click(within(breadcrumbs).getByRole("button", { name: "guide" }));
-  expect(location.pathname).toBe("/lore/guide");
+  await user.click(
+    await screen.findByRole("button", { name: "Show path for start.md" }),
+  );
+  expect(screen.getByRole("tooltip")).toHaveTextContent("/guide/start.md");
+  expect(location.pathname).toBe("/lore/guide/start.md");
+  expect(screen.getByRole("heading", { name: "Start" })).toBeVisible();
+  expect(screen.getByRole("tab", { name: "start.md" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
   expect(
     screen.queryByRole("navigation", { name: "File location" }),
   ).not.toBeInTheDocument();
-  expect(
-    screen.getByRole("complementary", { name: "Knowledge tree" }),
-  ).toBeVisible();
-  const tab = screen.getByRole("tab", { name: "start.md" });
-  expect(tab).toHaveAttribute("aria-selected", "false");
-  await user.click(tab);
-  expect(await screen.findByRole("heading", { name: "Start" })).toBeVisible();
-  expect(location.pathname).toBe("/lore/guide/start.md");
-  await user.click(
-    within(screen.getByRole("navigation", { name: "File location" })).getByRole(
-      "button",
-      { name: "Workspace" },
-    ),
-  );
-  expect(location.pathname).toBe("/dashboard/");
-  expect(new URLSearchParams(location.search).get("view")).toBe("files");
-  expect(new URLSearchParams(location.search).get("path")).toBe("/");
-  expect(screen.getByRole("tab", { name: "start.md" })).toHaveAttribute(
-    "aria-selected",
-    "false",
-  );
 });
 
 test("Access does not depend on usage or full context availability", async () => {

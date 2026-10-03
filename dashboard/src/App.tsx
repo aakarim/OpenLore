@@ -474,7 +474,6 @@ function Workspace({ session }: { session: Session }) {
                 mode={mode}
                 onMode={setMode}
                 onFile={openFile}
-                onFolder={openFolder}
                 onAnalytics={() => navigate("analytics", activeFile, "usage")}
                 contextWindow={prefs.contextWindow}
                 ratio={prefs.ratio}
