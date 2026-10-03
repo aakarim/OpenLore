@@ -9,9 +9,9 @@ import {
 import type { ContextNode } from "./types";
 
 const colors = [
-  "#ed986f",
-  "#9e8cd0",
-  "#71b6b0",
+  "var(--orange)",
+  "var(--agent)",
+  "var(--human)",
   "#dfbd73",
   "#d786aa",
   "#84a9db",
@@ -140,7 +140,7 @@ function layout(
       angle,
       Math.PI * 2,
       1,
-      "#87909e",
+      "var(--unknown)",
       tokens,
       `${node.path}#other`,
       `Other (${omitted.length} items)`,

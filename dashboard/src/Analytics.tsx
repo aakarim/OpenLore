@@ -1,6 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { api } from "./api";
 import { useAsync } from "./hooks";
+import {
+  ChartIcon,
+  CodeIcon,
+  FileIcon,
+  OverviewIcon,
+  SearchIcon,
+  ShieldIcon,
+} from "./icons";
 import { Sunburst, estimatedTokens } from "./Sunburst";
 import type {
   Access,
@@ -11,13 +19,13 @@ import type {
   Usage,
 } from "./types";
 
-const tabs: { id: AnalyticsTab; label: string; glyph: string }[] = [
-  { id: "overview", label: "Overview", glyph: "▦" },
-  { id: "knowledge", label: "Knowledge", glyph: "◫" },
-  { id: "usage", label: "Usage", glyph: "⌁" },
-  { id: "gaps", label: "Gaps", glyph: "?" },
-  { id: "commands", label: "Commands", glyph: "⌘" },
-  { id: "access", label: "Access", glyph: "◇" },
+const tabs: { id: AnalyticsTab; label: string; icon: ReactNode }[] = [
+  { id: "overview", label: "Overview", icon: <OverviewIcon /> },
+  { id: "knowledge", label: "Knowledge", icon: <FileIcon /> },
+  { id: "usage", label: "Usage", icon: <ChartIcon /> },
+  { id: "gaps", label: "Gaps", icon: <SearchIcon /> },
+  { id: "commands", label: "Commands", icon: <CodeIcon /> },
+  { id: "access", label: "Access", icon: <ShieldIcon /> },
 ];
 const n = (value: number | undefined) => (value || 0).toLocaleString("en-GB");
 // Processing boundaries are UTC segment boundaries, so format them in UTC.
@@ -193,7 +201,7 @@ function Activity({ usage }: { usage: Usage }) {
           {activity.map((day, index) => {
             const x = index * step + 2,
               values = [day.human, day.agent, day.unknown],
-              colors = ["#71b6b0", "#9e8cd0", "#87909e"];
+              colors = ["var(--human)", "var(--agent)", "var(--unknown)"];
             let y = height;
             return (
               <g key={day.date}>
@@ -369,10 +377,7 @@ function Overview({
         {summaries.map(([tab, label, value, detail, scope]) => (
           <button className="summary-card" onClick={() => onTab(tab)} key={tab}>
             <span className="eyebrow">{scope}</span>
-            <span>
-              {label}
-              <b>↗</b>
-            </span>
+            <span>{label}</span>
             <strong>{value}</strong>
             <small>{detail}</small>
           </button>
@@ -536,7 +541,7 @@ function DataTable({
                   onFile &&
                   typeof cell === "string" &&
                   cell.startsWith("/") ? (
-                    <button onClick={() => onFile(cell)}>{cell} ↗</button>
+                    <button onClick={() => onFile(cell)}>{cell}</button>
                   ) : (
                     formatCell(cell)
                   )}
@@ -852,8 +857,8 @@ export function Analytics({
         <div className="scope-explorer">
           <div className="file-scope">
             <span>Single-file analytics</span>
-            <button className="primary" onClick={() => onFile(path)}>
-              View ↗
+            <button className="view-file" onClick={() => onFile(path)}>
+              View
             </button>
           </div>
         </div>
