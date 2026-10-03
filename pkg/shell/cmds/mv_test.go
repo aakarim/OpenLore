@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/aakarim/go-openlore/pkg/shell"
@@ -87,6 +88,17 @@ func TestMvRejectedBatchHasNoPartialOperation(t *testing.T) {
 	}
 	if _, ok := fs.Files["/docs/moved.txt"]; ok {
 		t.Fatal("rejected batch wrote destination")
+	}
+}
+
+func TestMvUnsupportedBatchNamesCauseAndFails(t *testing.T) {
+	fs := &mvBatchFS{mapFS: testFS(), reject: syscall.ENOTSUP}
+	errOut, code := execMvBatch(fs, "mv /docs/notes.txt /docs/moved.txt && echo continued")
+	if code != 1 || !strings.Contains(errOut, "does not support atomic moves") {
+		t.Fatalf("mv: code=%d err=%q", code, errOut)
+	}
+	if _, ok := fs.Files["/docs/notes.txt"]; !ok {
+		t.Fatal("unsupported batch removed source")
 	}
 }
 
