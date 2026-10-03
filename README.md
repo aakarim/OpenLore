@@ -9,7 +9,7 @@
 
 Sponsored by <a href="https://oiya.ai/?utm_source=github&amp;utm_medium=referral&amp;utm_campaign=openlore&amp;utm_content=sponsor_logo"><img src="assets/oiya-logo.svg" alt="Oiya" height="24" align="absmiddle"></a>
 
-**Serve your docs to AI agents over SSH and MCP.**
+**Give every AI agent on your team the same up-to-date knowledge.**
 
 </div>
 
