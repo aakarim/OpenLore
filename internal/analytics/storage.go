@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -53,6 +54,9 @@ type openLogSegment struct {
 	segment Segment
 	file    *os.File
 	offset  int64
+	// reader, when set, supplies the bytes from offset to Size instead of
+	// file, and closing the segment does not close file.
+	reader io.Reader
 }
 
 func OpenEventLog(dir string, opts LogOptions) (EventLog, error) {
@@ -150,7 +154,7 @@ func (l *fileEventLog) Segments() []Segment {
 }
 func (l *fileEventLog) Scan(ctx context.Context, f EventFilter, fn func(Event) error) error {
 	l.mu.Lock()
-	segments, _, err := l.openSegmentsLocked(nil, 0)
+	segments, _, err := l.openSegmentsLocked(nil, -1, false)
 	l.mu.Unlock()
 	if err != nil {
 		return err
@@ -158,7 +162,50 @@ func (l *fileEventLog) Scan(ctx context.Context, f EventFilter, fn func(Event) e
 	return scanOpenSegments(ctx, segments, f, fn)
 }
 
-func (l *fileEventLog) openSegmentsLocked(cursor logCursor, limit int) ([]openLogSegment, bool, error) {
+// Snapshot pins the current segments and their sizes. Later appends, seals,
+// and new segments are outside the snapshot.
+func (l *fileEventLog) Snapshot(context.Context) (EventSnapshot, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.active != nil {
+		if err := l.active.Sync(); err != nil {
+			return nil, err
+		}
+	}
+	segments := l.Segments()
+	snapshot := &fileEventSnapshot{segments: make([]openLogSegment, 0, len(segments))}
+	for _, seg := range segments {
+		file, err := os.Open(seg.Path)
+		if err != nil {
+			closeOpenSegments(snapshot.segments)
+			return nil, err
+		}
+		snapshot.segments = append(snapshot.segments, openLogSegment{segment: seg, file: file})
+	}
+	return snapshot, nil
+}
+
+// fileEventSnapshot keeps segment files open, so a concurrent seal that
+// replaces a segment cannot change the bytes a later pass reads.
+type fileEventSnapshot struct{ segments []openLogSegment }
+
+func (s *fileEventSnapshot) Scan(ctx context.Context, f EventFilter, fn func(Event) error) error {
+	segments := make([]openLogSegment, len(s.segments))
+	for i, opened := range s.segments {
+		// Each pass reads through its own section reader at the pinned size.
+		segments[i] = openLogSegment{segment: opened.segment, reader: io.NewSectionReader(opened.file, 0, opened.segment.Size)}
+	}
+	return scanOpenSegments(ctx, segments, f, fn)
+}
+
+func (s *fileEventSnapshot) Close() error {
+	closeOpenSegments(s.segments)
+	return nil
+}
+
+// openSegmentsLocked opens at most limit unindexed segments; a negative limit
+// is unlimited. Newest-first scans also include tails of indexed segments.
+func (l *fileEventLog) openSegmentsLocked(cursor logCursor, limit int, newestFirst bool) ([]openLogSegment, bool, error) {
 	if l.active != nil {
 		if err := l.active.Sync(); err != nil {
 			return nil, false, err
@@ -166,7 +213,12 @@ func (l *fileEventLog) openSegmentsLocked(cursor logCursor, limit int) ([]openLo
 	}
 	var opened []openLogSegment
 	more := false
-	for _, seg := range l.Segments() {
+	budgeted := 0
+	segments := l.Segments()
+	if newestFirst {
+		slices.Reverse(segments)
+	}
+	for _, seg := range segments {
 		offset := int64(0)
 		if cursor != nil {
 			offset = cursor[seg.Path]
@@ -176,15 +228,24 @@ func (l *fileEventLog) openSegmentsLocked(cursor logCursor, limit int) ([]openLo
 					cursor[seg.Path] = seg.Size
 					continue
 				}
-				offset = 0
+				// Compressed offsets are either complete or unusable for seeking.
+				if offset < seg.Size {
+					offset = 0
+				}
 			}
 			if offset >= seg.Size {
 				continue
 			}
 		}
-		if limit > 0 && len(opened) >= limit {
+		// Newest-first scans always include new tails of indexed segments, so
+		// live appends cannot starve older history from the one-segment budget.
+		tail := newestFirst && offset > 0
+		if limit >= 0 && !tail && budgeted >= limit {
 			more = true
 			continue
+		}
+		if !tail {
+			budgeted++
 		}
 		file, err := os.Open(seg.Path)
 		if err != nil {
@@ -205,7 +266,9 @@ func (l *fileEventLog) openSegmentsLocked(cursor logCursor, limit int) ([]openLo
 
 func closeOpenSegments(segments []openLogSegment) {
 	for _, segment := range segments {
-		_ = segment.file.Close()
+		if segment.reader == nil {
+			_ = segment.file.Close()
+		}
 	}
 }
 
@@ -223,7 +286,10 @@ func scanOpenSegments(ctx context.Context, segments []openLogSegment, f EventFil
 			return err
 		}
 		seg := opened.segment
-		var reader io.Reader = io.LimitReader(opened.file, seg.Size-opened.offset)
+		reader := opened.reader
+		if reader == nil {
+			reader = io.LimitReader(opened.file, seg.Size-opened.offset)
+		}
 		var decoder *zstd.Decoder
 		if seg.Compressed {
 			var err error
@@ -278,8 +344,30 @@ func (l *fileEventLog) scanIncremental(ctx context.Context, cursor logCursor, fn
 // scanIncrementalBatch processes at most one snapshotted segment so callers
 // sharing the expensive-work lane can yield between retained-log units.
 func (l *fileEventLog) scanIncrementalBatch(ctx context.Context, cursor logCursor, fn func(Event) error) (bool, error) {
+	return l.scanBatch(ctx, cursor, fn, false)
+}
+
+// scanNewestBatch is scanIncrementalBatch for idempotent projections. It
+// processes the newest unindexed segment first so recent ranges become
+// available before older history.
+func (l *fileEventLog) scanNewestBatch(ctx context.Context, cursor logCursor, fn func(Event) error) (bool, error) {
+	return l.scanBatch(ctx, cursor, fn, true)
+}
+
+// scanTails indexes only appended bytes of already indexed segments. It lets a
+// covered range refresh without waiting for another older-history segment.
+func (l *fileEventLog) scanTails(ctx context.Context, cursor logCursor, fn func(Event) error) error {
+	_, err := l.scanSegments(ctx, cursor, fn, true, 0)
+	return err
+}
+
+func (l *fileEventLog) scanBatch(ctx context.Context, cursor logCursor, fn func(Event) error, newestFirst bool) (bool, error) {
+	return l.scanSegments(ctx, cursor, fn, newestFirst, 1)
+}
+
+func (l *fileEventLog) scanSegments(ctx context.Context, cursor logCursor, fn func(Event) error, newestFirst bool, limit int) (bool, error) {
 	l.mu.Lock()
-	segments, more, err := l.openSegmentsLocked(cursor, 1)
+	segments, more, err := l.openSegmentsLocked(cursor, limit, newestFirst)
 	l.mu.Unlock()
 	if err != nil {
 		return false, err
@@ -287,13 +375,37 @@ func (l *fileEventLog) scanIncrementalBatch(ctx context.Context, cursor logCurso
 	if len(segments) == 0 {
 		return false, nil
 	}
-	opened := segments[0]
-	if err := scanOpenSegments(ctx, []openLogSegment{opened}, EventFilter{}, fn); err != nil {
+	if err := scanOpenSegments(ctx, segments, EventFilter{}, fn); err != nil {
 		return false, err
 	}
-	cursor[opened.segment.Path] = opened.segment.Size
+	for _, opened := range segments {
+		cursor[opened.segment.Path] = opened.segment.Size
+	}
 	return more, nil
 }
+
+// coverage reports the time from which retained history is indexed. Events
+// are written to the segment for their rotation period, so history is covered
+// from the end of the newest unindexed segment's period.
+func (l *fileEventLog) coverage(cursor logCursor) (since time.Time, complete bool) {
+	segments := l.Segments()
+	for i := len(segments) - 1; i >= 0; i-- {
+		seg := segments[i]
+		// An uncompressed segment can grow after it was indexed; only bytes up
+		// to the recorded offset count as covered.
+		indexed := cursor[seg.Path] >= seg.Size
+		_, sealedAfterIndexing := cursor[strings.TrimSuffix(seg.Path, ".zst")]
+		if seg.Size > 0 && !indexed && !(seg.Compressed && sealedAfterIndexing) {
+			end, now := seg.Day.Add(l.opts.Rotate), time.Now().UTC()
+			if end.After(now) {
+				end = now
+			}
+			return end, false
+		}
+	}
+	return time.Time{}, true
+}
+
 func (l *fileEventLog) Seal(ctx context.Context, before time.Time) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -510,7 +622,9 @@ func OpenSQLiteAggregationStore(path string) (*SQLiteAggregationStore, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(10000)&_pragma=foreign_keys(1)")
+	// Analytics transactions read before writing. Acquire the write lock at
+	// BEGIN so busy_timeout applies instead of failing a read-to-write upgrade.
+	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(10000)&_pragma=foreign_keys(1)&_txlock=immediate")
 	if err != nil {
 		return nil, err
 	}

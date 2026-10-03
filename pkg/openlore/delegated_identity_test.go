@@ -1,6 +1,7 @@
 package openlore
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -194,6 +195,37 @@ func TestConfigAdminWithoutWritableDocsetCanUseConfigWriteVerbs(t *testing.T) {
 	}
 	if sh.ActionAllowed(cmds.ActionPublish) {
 		t.Fatal("config-only administrator gained publish authority")
+	}
+}
+
+// Regression for OPE-46: config administrators get a configViewFS layer, which
+// must forward atomic change sets so `mv` works instead of failing with
+// "operation not supported".
+func TestConfigAdminCanMoveFiles(t *testing.T) {
+	auth := initialRulesAuth()
+	auth.Rules = nil
+	auth.Roles["writer"] = config.RoleSpec{Allow: config.CapabilityRules{Capabilities: []string{"lore:config:edit"}}}
+	server, root := bootRulesServer(t, auth, nil)
+	if err := os.WriteFile(filepath.Join(root, "docs", "a.md"), []byte("one\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	id, ok := server.identityForName("alice")
+	if !ok {
+		t.Fatal("alice identity not found")
+	}
+	var out, errOut bytes.Buffer
+	if code := server.buildSessionShell(id).ExecPipeline("mv /docs/a.md /docs/b.md", &out, &errOut, nil); code != 0 {
+		t.Fatalf("mv exit = %d, stderr = %q", code, errOut.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, "docs", "a.md")); !os.IsNotExist(err) {
+		t.Fatalf("source still exists: %v", err)
+	}
+	if data, err := os.ReadFile(filepath.Join(root, "docs", "b.md")); err != nil || string(data) != "one\n" {
+		t.Fatalf("destination = %q, %v", data, err)
+	}
+	errOut.Reset()
+	if code := server.buildSessionShell(id).ExecPipeline("mv /docs/b.md /opt/openlore/lore.json", &out, &errOut, nil); code == 0 {
+		t.Fatalf("move onto the live config succeeded; stderr = %q", errOut.String())
 	}
 }
 

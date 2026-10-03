@@ -1,5 +1,6 @@
 import type {
   Access,
+  AnalyticsProcessingStatus,
   ContextNode,
   FileResponse,
   HistoryResponse,
@@ -74,6 +75,8 @@ export const api = {
     request<HistoryResponse>(`history?${query({ path, cursor })}`, signal),
   usage: (path: string, days: number, ratio: number, signal?: AbortSignal) =>
     request<Usage>(`usage?${query({ path, days, ratio })}`, signal),
+  analyticsStatus: (signal?: AbortSignal) =>
+    request<AnalyticsProcessingStatus>("analytics-status", signal),
   access: (path: string, signal?: AbortSignal) =>
     request<Access>(`access?${query({ path })}`, signal),
   aggregation: (

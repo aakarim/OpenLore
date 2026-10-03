@@ -36,6 +36,16 @@ necessarily the current version. Dates are the GitHub publication dates in UTC.
 - Fixed `awk` regex patterns matching every line, variables staying at 0, and
   string comparisons on `$0` never matching. Unsupported `awk` constructs now
   exit 2 with an error instead of producing wrong output.
+- Activity and command analytics work for time ranges with more than 50,000
+  events, and failed analytics no longer reload every second.
+- The analytics dashboard shows knowledge and recent activity without waiting
+  for all activity history. A new **Status** panel shows how far history has
+  been processed.
+- Knowledge analytics no longer reprocess the whole workspace after a restart or
+  upgrade.
+- The Homebrew cask is now `lore` (`brew install --cask aakarim/tap/lore`) to
+  avoid colliding with the unrelated `openlore` formula in homebrew-core. The
+  installed binary is still `openlore`.
 
 ## v0.7.3 — 2026-10-01
 

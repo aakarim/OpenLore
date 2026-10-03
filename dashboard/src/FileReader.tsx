@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { useAsync } from "./hooks";
+import { ChartIcon, CloseIcon, SettingsIcon } from "./icons";
 import type { FileResponse, HistoryResponse, Session } from "./types";
 
 const basename = (path: string) =>
@@ -201,10 +202,18 @@ function FileInfo({
         {copyStatus}
       </output>
       <div className="detail-actions">
-        <button className="primary" onClick={onAnalytics}>
-          Analytics ↗
+        <button
+          className="primary"
+          aria-label="View file analytics"
+          onClick={onAnalytics}
+        >
+          Analytics <ChartIcon />
         </button>
-        {onSettings && <button onClick={onSettings}>⚙ Settings</button>}
+        {onSettings && (
+          <button onClick={onSettings}>
+            <SettingsIcon /> Settings
+          </button>
+        )}
       </div>
     </div>
   );
@@ -574,7 +583,7 @@ export function Sheet({
         <header>
           <h2 id="sheet-title">{title}</h2>
           <button className="close" onClick={onClose} aria-label="Close">
-            ×
+            <CloseIcon />
           </button>
         </header>
         {children}

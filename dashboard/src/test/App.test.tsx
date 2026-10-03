@@ -119,8 +119,12 @@ test.each(["cold", "failed", "disabled"])(
     expect(
       await screen.findByText(/Activity totals will appear/),
     ).toBeVisible();
+    // Knowledge does not wait for activity analytics.
+    expect(screen.getByText("Context by folder")).toBeVisible();
     expect(
-      screen.queryByRole("heading", { name: "Activity" }),
+      screen.queryByRole("img", {
+        name: "Daily activity stacked by attribution",
+      }),
     ).not.toBeInTheDocument();
     expect(
       screen.queryByText("No activity in this time range."),
@@ -137,6 +141,234 @@ test.each(["cold", "failed", "disabled"])(
     ).toBeVisible();
   },
 );
+
+test("knowledge renders while activity is still loading", async () => {
+  history.replaceState(
+    null,
+    "",
+    "/dashboard/?view=analytics&path=/&tab=knowledge",
+  );
+  const fetch = mockAPI();
+  const original = fetch.getMockImplementation()!;
+  let finishUsage!: () => void;
+  fetch.mockImplementation((input, init) =>
+    String(input).includes("/api/usage?")
+      ? new Promise<Response>((resolve) => {
+          finishUsage = () => resolve(original(input, init) as never);
+        })
+      : original(input, init),
+  );
+  render(<App />);
+  expect(
+    await screen.findByRole("heading", { name: "Knowledge & context" }),
+  ).toBeVisible();
+  expect(screen.getByText("Computing activity…")).toBeVisible();
+  await act(async () => finishUsage());
+  expect(
+    await screen.findByRole("heading", { name: "Knowledge contribution" }),
+  ).toBeVisible();
+});
+
+test("overview keeps knowledge visible and reports activity failures", async () => {
+  history.replaceState(
+    null,
+    "",
+    "/dashboard/?view=analytics&path=/&tab=overview",
+  );
+  const fetch = mockAPI();
+  const original = fetch.getMockImplementation()!;
+  fetch.mockImplementation((input, init) =>
+    String(input).includes("/api/usage?")
+      ? Promise.resolve(
+          new Response(JSON.stringify({ error: "activity offline" }), {
+            status: 503,
+          }),
+        )
+      : original(input, init),
+  );
+  render(<App />);
+  expect(await screen.findByText("activity offline")).toBeVisible();
+  expect(screen.getByText("Context by folder")).toBeVisible();
+});
+
+test("polling aggregations keep their result mounted instead of flashing", async () => {
+  history.replaceState(
+    null,
+    "",
+    "/dashboard/?view=analytics&path=/&tab=commands",
+  );
+  const fetch = mockAPI();
+  const original = fetch.getMockImplementation()!;
+  let calls = 0;
+  fetch.mockImplementation((input, init) => {
+    if (!String(input).includes("/analytics/aggregations/top-commands"))
+      return original(input, init);
+    calls++;
+    const response = new Response(
+      JSON.stringify({
+        status: "planned",
+        note: "Analytics build failed",
+        table: { columns: [], rows: [], total: 0 },
+        computed_at: "",
+        window: {},
+        analytics: {
+          state: "failed",
+          updating: true,
+          complete: false,
+          error: "build failed",
+        },
+      }),
+    );
+    // Hold later polls open so an unmounted result would be observable.
+    return calls === 1
+      ? Promise.resolve(response)
+      : new Promise<Response>(() => {});
+  });
+  render(<App />);
+  const card = (await screen.findByRole("heading", { name: "Top commands" }))
+    .parentElement!;
+  await within(card).findByText("Analytics build failed");
+  await waitFor(() => expect(calls).toBeGreaterThan(1), { timeout: 2500 });
+  expect(within(card).queryByText("Computing analytics…")).toBeNull();
+  expect(within(card).getByText("Analytics build failed")).toBeVisible();
+});
+
+test("aggregations reset on new filters and report refresh errors", async () => {
+  history.replaceState(
+    null,
+    "",
+    "/dashboard/?view=analytics&path=/&tab=commands",
+  );
+  const fetch = mockAPI();
+  const original = fetch.getMockImplementation()!;
+  let calls = 0;
+  fetch.mockImplementation((input, init) => {
+    const url = String(input);
+    if (!url.includes("/analytics/aggregations/top-commands"))
+      return original(input, init);
+    calls++;
+    if (url.includes("since=7d"))
+      return Promise.resolve(
+        new Response(JSON.stringify({ error: "unavailable" }), { status: 503 }),
+      );
+    if (calls > 1)
+      return Promise.resolve(new Response("offline", { status: 503 }));
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          status: "ok",
+          table: {
+            columns: ["command", "count"],
+            rows: [["cat", 3]],
+            total: 1,
+          },
+          computed_at: "2026-10-03T00:00:00Z",
+          window: {},
+          analytics: { state: "stale", updating: true, complete: true },
+        }),
+      ),
+    );
+  });
+  render(<App />);
+  const card = (await screen.findByRole("heading", { name: "Top commands" }))
+    .parentElement!;
+  expect(await within(card).findByText("cat")).toBeVisible();
+  // A same-query refresh failure keeps the result and reports the failure.
+  expect(
+    await within(card).findByText(/Could not refresh/, {}, { timeout: 2500 }),
+  ).toBeVisible();
+  expect(within(card).getByText("cat")).toBeVisible();
+
+  await userEvent.setup().selectOptions(screen.getByRole("combobox"), "7");
+  const refreshed = (
+    await screen.findByRole("heading", { name: "Top commands" })
+  ).parentElement!;
+  expect(
+    await within(refreshed).findByText("Request failed (503)"),
+  ).toBeVisible();
+  expect(within(refreshed).queryByText("cat")).toBeNull();
+});
+
+test("failed aggregations poll again at their retry time", async () => {
+  history.replaceState(
+    null,
+    "",
+    "/dashboard/?view=analytics&path=/&tab=commands",
+  );
+  const fetch = mockAPI();
+  const original = fetch.getMockImplementation()!;
+  let calls = 0;
+  fetch.mockImplementation((input, init) => {
+    if (!String(input).includes("/analytics/aggregations/top-commands"))
+      return original(input, init);
+    calls++;
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          status: calls === 1 ? "planned" : "ok",
+          note: calls === 1 ? "Analytics build failed" : undefined,
+          table:
+            calls === 1
+              ? { columns: [], rows: [], total: 0 }
+              : { columns: ["command", "count"], rows: [["ls", 2]], total: 1 },
+          computed_at: "",
+          window: {},
+          analytics:
+            calls === 1
+              ? {
+                  state: "failed",
+                  updating: false,
+                  complete: false,
+                  error: "build failed",
+                  retry_at: new Date(Date.now() + 1500).toISOString(),
+                }
+              : { state: "ready", updating: false, complete: true },
+        }),
+      ),
+    );
+  });
+  render(<App />);
+  const card = (await screen.findByRole("heading", { name: "Top commands" }))
+    .parentElement!;
+  await within(card).findByText("Analytics build failed");
+  expect(
+    await within(card).findByText("ls", {}, { timeout: 3000 }),
+  ).toBeVisible();
+});
+
+test("analytics status shows how far activity history is processed", async () => {
+  history.replaceState(
+    null,
+    "",
+    "/dashboard/?view=analytics&path=/&tab=overview",
+  );
+  const fetch = mockAPI();
+  const original = fetch.getMockImplementation()!;
+  fetch.mockImplementation((input, init) =>
+    String(input).includes("/api/analytics-status")
+      ? Promise.resolve(
+          new Response(
+            JSON.stringify({
+              activity: {
+                state: "updating",
+                complete: false,
+                processed_since: "2026-09-25T00:00:00Z",
+                latest_event: "2026-10-02T09:30:00Z",
+                events_processed: 1200,
+              },
+            }),
+          ),
+        )
+      : original(input, init),
+  );
+  render(<App />);
+  await userEvent
+    .setup()
+    .click(await screen.findByRole("button", { name: "Analytics status" }));
+  const dialog = screen.getByRole("dialog", { name: "Analytics status" });
+  expect(await within(dialog).findByText("Processing history")).toBeVisible();
+  expect(within(dialog).getByText("Back to 25 Sept 2026")).toBeVisible();
+});
 
 test("background progress and completed results stay mounted through slow polls and errors", async () => {
   history.replaceState(
@@ -285,12 +517,32 @@ test("mobile uses category and details sheets instead of horizontal analytics ta
   render(<App />);
   const user = userEvent.setup();
   await screen.findByText("Context by folder");
-  await user.click(screen.getByRole("button", { name: /Overview ⌃/ }));
+  const navigation = screen.getByRole("navigation", { name: "Mobile workspace" });
+  const overview = within(navigation).getByRole("button", { name: "Overview" });
+  expect(overview).toHaveAttribute("aria-haspopup", "dialog");
+  expect(overview.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
+  await user.click(overview);
   const dialog = screen.getByRole("dialog", { name: "Analytics sections" });
   expect(within(dialog).getByRole("button", { name: /Usage/ })).toBeVisible();
   expect(within(dialog).queryByRole("tab")).not.toBeInTheDocument();
+  for (const button of within(dialog).getAllByRole("button")) {
+    expect(button.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
+  }
   fireEvent.keyDown(dialog, { key: "Escape" });
   await waitFor(() => expect(dialog).not.toBeInTheDocument());
+  await user.click(overview);
+  await user.click(
+    within(screen.getByRole("dialog", { name: "Analytics sections" })).getByRole(
+      "button",
+      { name: "Usage" },
+    ),
+  );
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(within(navigation).getByRole("button", { name: "Usage" })).toHaveAttribute(
+    "aria-haspopup",
+    "dialog",
+  );
+  expect(new URLSearchParams(location.search).get("tab")).toBe("usage");
 });
 
 test("mobile folder tree stays open while unfurling folders", async () => {
@@ -298,7 +550,7 @@ test("mobile folder tree stays open while unfurling folders", async () => {
   render(<App />);
   const user = userEvent.setup();
   await screen.findByRole("complementary", { name: "Knowledge tree" });
-  await user.click(screen.getByRole("button", { name: /▱ Folders/ }));
+  await user.click(screen.getByRole("button", { name: "Folders" }));
 
   const dialog = screen.getByRole("dialog", { name: "Folders" });
   const tree = within(dialog).getByRole("complementary", {
@@ -314,33 +566,43 @@ test("mobile folder tree stays open while unfurling folders", async () => {
   ).toBeVisible();
 });
 
-test("uses the knowledge tree as the only folder browser", async () => {
-  history.replaceState(null, "", "/dashboard/?view=files&path=/");
-  mockAPI();
-  render(<App />);
-  const user = userEvent.setup();
-  const tree = await screen.findByRole("complementary", {
-    name: "Knowledge tree",
-  });
+test.each(["/dashboard/?view=files&path=/", "/lore/guide"])(
+  "uses only the tree for folder navigation at %s",
+  async (url) => {
+    history.replaceState(null, "", url);
+    mockAPI();
+    render(<App />);
+    const user = userEvent.setup();
+    const tree = await screen.findByRole("complementary", {
+      name: "Knowledge tree",
+    });
+    expect(document.querySelector(".folder-browser")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Open a file" })).toBeVisible();
+    await within(tree).findByRole("button", { name: /guide/ });
 
-  expect(document.querySelector(".folder-browser")).not.toBeInTheDocument();
-  expect(screen.getByRole("heading", { name: "Open a file" })).toBeVisible();
-  expect(within(tree).getByRole("button", { name: /guide/ })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Browse files" }));
+    const dialog = screen.getByRole("dialog", { name: "Folders" });
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: "Browse files" }));
+    const mobileTree = within(
+      screen.getByRole("dialog", { name: "Folders" }),
+    ).getByRole("complementary", { name: "Knowledge tree" });
+    await user.click(within(mobileTree).getByRole("button", { name: /guide/ }));
+    await user.click(
+      await within(mobileTree).findByRole("button", { name: /start.md/ }),
+    );
+    expect(await screen.findByRole("heading", { name: "Start" })).toBeVisible();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Close start.md" }));
+    expect(screen.getByRole("heading", { name: "Open a file" })).toBeVisible();
 
-  await user.click(screen.getByRole("button", { name: "Browse files" }));
-  expect(screen.getByRole("dialog", { name: "Folders" })).toBeVisible();
-  fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
-  await waitFor(() =>
-    expect(
-      screen.queryByRole("dialog", { name: "Folders" }),
-    ).not.toBeInTheDocument(),
-  );
-
-  await user.click(screen.getByRole("button", { name: "Analytics" }));
-  await screen.findByText("Context by folder");
-  expect(document.querySelector(".scope-children")).not.toBeInTheDocument();
-  expect(within(tree).getByRole("button", { name: /guide/ })).toBeVisible();
-});
+    await user.click(screen.getByRole("button", { name: "Analytics" }));
+    await screen.findByText("Context by folder");
+    expect(document.querySelector(".scope-children")).not.toBeInTheDocument();
+    expect(within(tree).getByRole("button", { name: /guide/ })).toBeVisible();
+  },
+);
 
 test("shows honest oversized-context error and hides Access without permission", async () => {
   history.replaceState(
@@ -400,10 +662,15 @@ test("direct file wins restoration, browser back resolves lore pathname, and fil
     "aria-selected",
     "true",
   );
-  await user.click(screen.getByRole("button", { name: "Analytics ↗" }));
+  await user.click(screen.getByRole("button", { name: "View file analytics" }));
   expect(new URLSearchParams(location.search).get("path")).toBe(
     "/guide/start.md",
   );
+  await screen.findByRole("heading", { name: "Most-used lines" });
+  expect(screen.getByText("Single-file analytics")).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "View" }));
+  expect(await screen.findByRole("heading", { name: "Start" })).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "View file analytics" }));
   await screen.findByRole("heading", { name: "Most-used lines" });
   history.replaceState(null, "", "/lore/guide/start.md");
   fireEvent.popState(window);
@@ -503,7 +770,9 @@ test("returning to the browser tab preserves workspace state during session refr
       ),
     );
   });
-  await waitFor(() => expect(fileRequests()).toBeGreaterThan(initialFileRequests));
+  await waitFor(() =>
+    expect(fileRequests()).toBeGreaterThan(initialFileRequests),
+  );
   expect(screen.getByRole("button", { name: "Source" })).toHaveAttribute(
     "aria-pressed",
     "true",

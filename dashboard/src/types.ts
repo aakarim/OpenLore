@@ -32,7 +32,13 @@ export type AnalyticsStatus = {
   coverage?: string;
   error?: string;
   warning?: string;
-  progress?: { phase: "content" | "history"; processed: number; unit: string };
+  retry_at?: string;
+  progress?: {
+    phase: "content" | "history";
+    processed: number;
+    unit: string;
+    since?: string;
+  };
 };
 export type Facts = Pick<
   ContextNode,
@@ -100,6 +106,16 @@ export type Access = {
   }[];
   folder_rules: { origin: string; scope: string; rules: object }[];
   notes: string[];
+};
+export type AnalyticsProcessingStatus = {
+  activity: {
+    state: "ready" | "updating" | "failed" | "disabled" | "unavailable";
+    complete: boolean;
+    processed_since?: string;
+    latest_event?: string;
+    events_processed: number;
+    error?: string;
+  };
 };
 export type AnalyticsTab =
   "overview" | "knowledge" | "usage" | "gaps" | "commands" | "access";

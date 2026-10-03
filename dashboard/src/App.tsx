@@ -1,9 +1,20 @@
 import { useCallback, useEffect, useState } from "react";
-import { Analytics, analyticsTabs } from "./Analytics";
+import { Analytics, analyticsTabs, formatDate } from "./Analytics";
 import { APIError, api } from "./api";
 import { FileReader, MobileDetails, Sheet } from "./FileReader";
 import { useAsync } from "./hooks";
-import { FileIcon, SettingsIcon } from "./icons";
+import {
+  CloseIcon,
+  CopyIcon,
+  FileIcon,
+  FolderIcon,
+  InfoIcon,
+  LinkIcon,
+  MenuIcon,
+  RefreshIcon,
+  SettingsIcon,
+} from "./icons";
+import { ThemeToggle } from "./ThemeToggle";
 import {
   defaults,
   readPreferences,
@@ -22,6 +33,7 @@ type SheetName =
   | "details"
   | "analytics"
   | "settings"
+  | "status"
   | null;
 const name = (path: string) =>
   path.split("/").filter(Boolean).at(-1) || "Workspace";
@@ -90,7 +102,10 @@ export function App() {
     return (
       <main className="startup">
         <div className="brand">
-          <b>O</b> OpenLore
+          OpenLore
+          <span className="brand-slash" aria-hidden="true">
+            /
+          </span>
         </div>
         <h1>
           {session.error instanceof APIError && session.error.status === 401
@@ -309,11 +324,13 @@ function Workspace({ session }: { session: Session }) {
           aria-label={collapsed ? "Expand tree" : "Collapse tree"}
           onClick={() => setCollapsed(!collapsed)}
         >
-          ☰
+          <MenuIcon />
         </button>
         <div className="brand">
-          <b>O</b>
           <span>OpenLore</span>
+          <span className="brand-slash" aria-hidden="true">
+            /
+          </span>
         </div>
         <nav aria-label="Workspace views">
           <button
@@ -336,6 +353,7 @@ function Workspace({ session }: { session: Session }) {
           </button>
         </nav>
         <span className="identity">{session.identity}</span>
+        <ThemeToggle />
       </header>
       {!collapsed && <Tree {...treeProps} />}
       <main className="workspace">
@@ -374,7 +392,7 @@ function Workspace({ session }: { session: Session }) {
                     title="Copy agent path"
                     onClick={() => void copy(path)}
                   >
-                    □
+                    <CopyIcon />
                   </button>
                   <button
                     className="icon-button"
@@ -382,7 +400,7 @@ function Workspace({ session }: { session: Session }) {
                     title="Copy URL"
                     onClick={() => void copy(location.href)}
                   >
-                    ↗
+                    <LinkIcon />
                   </button>
                 </div>
                 <h1>{name(path)}</h1>
@@ -393,7 +411,15 @@ function Workspace({ session }: { session: Session }) {
                   aria-label="Refresh analytics"
                   onClick={() => setRevision((r) => r + 1)}
                 >
-                  ↻<span>Refresh</span>
+                  <RefreshIcon />
+                  <span>Refresh</span>
+                </button>
+                <button
+                  aria-label="Analytics status"
+                  onClick={() => setSheet("status")}
+                >
+                  <InfoIcon />
+                  <span>Status</span>
                 </button>
                 <button
                   aria-label="Settings"
@@ -435,7 +461,7 @@ function Workspace({ session }: { session: Session }) {
                     aria-label={`Close ${name(p)}`}
                     onClick={() => closeFile(p)}
                   >
-                    ×
+                    <CloseIcon />
                   </button>
                 </div>
               ))}
@@ -481,20 +507,29 @@ function Workspace({ session }: { session: Session }) {
         )}
       </main>
       <nav className="mobile-nav" aria-label="Mobile workspace">
-        <button onClick={() => setSheet("folders")}>▱ Folders</button>
+        <button aria-haspopup="dialog" onClick={() => setSheet("folders")}>
+          <FolderIcon /> <span>Folders</span>
+        </button>
         {view === "files" && (
-          <button onClick={() => setSheet("open")}>
-            Open files · {prefs.openPaths.length} ⌃
+          <button aria-haspopup="dialog" onClick={() => setSheet("open")}>
+            <FileIcon /> <span>Open files · {prefs.openPaths.length}</span>
           </button>
         )}
         <button
+          aria-haspopup="dialog"
           disabled={view === "files" && !activeFile}
           onClick={() => setSheet(view === "files" ? "details" : "analytics")}
         >
-          {view === "files"
-            ? "ⓘ Details"
-            : `${analyticsTabs.find((t) => t.id === tab)?.glyph} ${analyticsTabs.find((t) => t.id === tab)?.label}`}{" "}
-          ⌃
+          {view === "files" ? (
+            <>
+              <InfoIcon /> <span>Details</span>
+            </>
+          ) : (
+            <>
+              {analyticsTabs.find((t) => t.id === tab)?.icon}
+              <span>{analyticsTabs.find((t) => t.id === tab)?.label}</span>
+            </>
+          )}
         </button>
       </nav>
       {sheet === "folders" && (
@@ -521,7 +556,7 @@ function Workspace({ session }: { session: Session }) {
                     aria-label={`Close ${name(p)}`}
                     onClick={() => closeFile(p)}
                   >
-                    ×
+                    <CloseIcon />
                   </button>
                 </div>
               ))
@@ -556,7 +591,7 @@ function Workspace({ session }: { session: Session }) {
                   onClick={() => navigate("analytics", path, t.id)}
                 >
                   <span>
-                    {t.glyph} {t.label}
+                    {t.icon} {t.label}
                   </span>
                   {t.id === tab && "✓"}
                 </button>
@@ -600,11 +635,85 @@ function Workspace({ session }: { session: Session }) {
           </div>
         </Sheet>
       )}
+      {sheet === "status" && (
+        <Sheet title="Analytics status" onClose={() => setSheet(null)}>
+          <AnalyticsStatusPanel />
+        </Sheet>
+      )}
       {toast && (
         <div className="toast" role="status">
           {toast}
         </div>
       )}
+    </div>
+  );
+}
+
+function AnalyticsStatusPanel() {
+  const status = useAsync(
+    (signal) => api.analyticsStatus(signal),
+    [],
+    true,
+    true,
+  );
+  const activity = status.data?.activity;
+  const refresh = status.refresh;
+  useEffect(() => {
+    if (status.loading || activity?.state !== "updating") return;
+    const timer = window.setTimeout(refresh, 2000);
+    return () => window.clearTimeout(timer);
+  }, [status.loading, activity?.state, refresh]);
+  if (status.error && !activity)
+    return (
+      <p className="coverage-note" role="alert">
+        {status.error.message}
+      </p>
+    );
+  if (!activity)
+    return (
+      <p className="coverage-note" role="status">
+        Loading analytics status…
+      </p>
+    );
+  const processed = activity.complete
+    ? "All retained history"
+    : activity.processed_since
+      ? `Back to ${formatDate(activity.processed_since)}`
+      : "Starting with the most recent activity";
+  const state = {
+    ready: "Up to date",
+    updating: "Processing history",
+    failed: "Processing stopped",
+    disabled: "Processing paused",
+    unavailable: "Unavailable",
+  }[activity.state];
+  return (
+    <div className="settings analytics-status">
+      <dl>
+        <div>
+          <dt>Activity analytics</dt>
+          <dd>{state}</dd>
+        </div>
+        <div>
+          <dt>Processed</dt>
+          <dd>{processed}</dd>
+        </div>
+        {activity.latest_event && (
+          <div>
+            <dt>Latest activity</dt>
+            <dd>{new Date(activity.latest_event).toLocaleString("en-GB")}</dd>
+          </div>
+        )}
+      </dl>
+      {activity.error && (
+        <p className="coverage-note" role="alert">
+          {activity.error}
+        </p>
+      )}
+      <p>
+        Recent activity is processed first. Time ranges appear as soon as all of
+        their activity is processed.
+      </p>
     </div>
   );
 }

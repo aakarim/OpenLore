@@ -93,6 +93,9 @@ type SnapshotStatus struct {
 	Error      string            `json:"error,omitempty"`
 	Warning    string            `json:"warning,omitempty"`
 	Progress   *SnapshotProgress `json:"progress,omitempty"`
+	// RetryAt is when a failed view without a previous result will next be
+	// rebuilt. Clients poll again then so transient failures recover.
+	RetryAt time.Time `json:"retry_at,omitzero"`
 }
 
 // Totals are not known during discovery/replay. Report real work done rather
@@ -101,6 +104,8 @@ type SnapshotProgress struct {
 	Phase     string `json:"phase"`
 	Processed int64  `json:"processed"`
 	Unit      string `json:"unit"`
+	// Since is the oldest time from which history has been fully processed.
+	Since time.Time `json:"since,omitzero"`
 }
 
 type UsageSnapshot struct {
@@ -212,8 +217,10 @@ func (s *Service) Start(ctx context.Context) {
 	s.started.Store(true)
 	ctx, s.cancel = context.WithCancel(ctx)
 	go s.processor.run(ctx)
-	if s.indexer != nil && s.cfg.PipelineEnabled() {
-		s.indexer.resume()
+	if s.indexer != nil {
+		if err := s.indexer.start(s.cfg.PipelineEnabled()); err != nil {
+			s.indexLog.Do(func() { log.Printf("analytics facts scan could not start: %v", err) })
+		}
 	}
 	s.recorder.Start(ctx)
 	if s.pipeline != nil {
@@ -248,7 +255,7 @@ func (s *Service) AddContentScalarProvider(provider ContentScalarProvider) {
 	s.facts = newIndexedContentFacts(s.fs, s.fs, s.index, &s.indexLog, s.providers, s.excludedContent)
 	s.registry.Bind(s.log, s.facts)
 	s.providersMu.Unlock()
-	s.EnqueueFacts("/")
+	s.reconfigureFacts()
 }
 func (s *Service) SetTokenizer(tokenizer Tokenizer) {
 	if tokenizer == nil {
@@ -265,7 +272,17 @@ func (s *Service) SetTokenizer(tokenizer Tokenizer) {
 	s.facts = newIndexedContentFacts(s.fs, s.fs, s.index, &s.indexLog, s.providers, s.excludedContent)
 	s.registry.Bind(s.log, s.facts)
 	s.providersMu.Unlock()
-	s.EnqueueFacts("/")
+	s.reconfigureFacts()
+}
+
+// reconfigureFacts starts a new generation only when the scan contract changes.
+func (s *Service) reconfigureFacts() {
+	if s.indexer == nil {
+		return
+	}
+	if err := s.indexer.reconfigure(s.cfg.PipelineEnabled()); err != nil {
+		s.indexLog.Do(func() { log.Printf("analytics facts scan could not start: %v", err) })
+	}
 }
 
 func (s *Service) EnqueueFacts(p string) {
@@ -560,9 +577,60 @@ func (s *Service) AuthorizedIndexedFacts(ctx context.Context, key, prefix string
 	return rows, totals, status, nil
 }
 
+// dashboardRetryInterval spaces retries of a view whose build failed without
+// a previous result, so polling clients do not trigger a rebuild every second.
+const dashboardRetryInterval = time.Minute
+
+// failedViewSQL records a build failure. Without a saved result, computed_at
+// is the latest failure time and restarts the retry backoff; with one, it
+// keeps describing when that result was computed.
+const failedViewSQL = `INSERT INTO dashboard_views(key,computed_at,error) VALUES(?,?,?)
+ON CONFLICT(key) DO UPDATE SET error=excluded.error,
+computed_at=CASE WHEN dashboard_views.value IS NULL THEN excluded.computed_at ELSE dashboard_views.computed_at END`
+
+func retryBackoff(found bool, lastError string, failedAt int64) bool {
+	return !found && lastError != "" && time.Since(time.Unix(0, failedAt)) < dashboardRetryInterval
+}
+
+func retryAt(failedAt int64) time.Time {
+	return time.Unix(0, failedAt).Add(dashboardRetryInterval).UTC()
+}
+
+func (s *Service) historyProgress() *SnapshotProgress {
+	return &SnapshotProgress{Phase: "history", Processed: s.eventIndex.processed.Load(), Unit: "events", Since: s.eventIndex.processedSince()}
+}
+
+// ActivityStatus describes how much retained event history the dashboard can
+// use. History is indexed newest first, so ProcessedSince moves backwards.
+type ActivityStatus struct {
+	State           string    `json:"state"`
+	Complete        bool      `json:"complete"`
+	ProcessedSince  time.Time `json:"processed_since,omitzero"`
+	LatestEvent     time.Time `json:"latest_event,omitzero"`
+	EventsProcessed int64     `json:"events_processed"`
+	Error           string    `json:"error,omitempty"`
+}
+
+func (s *Service) ActivityStatus(ctx context.Context) ActivityStatus {
+	if s.eventIndex == nil {
+		return ActivityStatus{State: "unavailable", Error: "durable activity requires sqlite storage"}
+	}
+	status := ActivityStatus{State: "updating", ProcessedSince: s.eventIndex.processedSince(), LatestEvent: s.eventIndex.latest(ctx), EventsProcessed: s.eventIndex.processed.Load()}
+	if s.eventIndex.caughtUp.Load() {
+		status.State, status.Complete = "ready", true
+	}
+	if message := s.eventIndex.lastError.Load(); message != nil {
+		status.State, status.Error = "failed", *message
+	}
+	if !s.cfg.PipelineEnabled() {
+		status.State = "disabled"
+	}
+	return status
+}
+
 // DashboardUsage serves only a committed complete summary. Missing or stale
 // work is deduplicated onto the same bounded processor used by fact warming.
-func (s *Service) DashboardUsage(ctx context.Context, key string, compute func(context.Context) (Summary, error)) (UsageSnapshot, error) {
+func (s *Service) DashboardUsage(ctx context.Context, key string, window time.Duration, compute func(context.Context) (Summary, error)) (UsageSnapshot, error) {
 	store, ok := s.store.(*SQLiteAggregationStore)
 	if !ok {
 		return UsageSnapshot{Analytics: SnapshotStatus{State: "unavailable", Error: "durable usage requires sqlite storage"}}, nil
@@ -591,13 +659,13 @@ func (s *Service) DashboardUsage(ctx context.Context, key string, compute func(c
 		result.Analytics.State, result.Analytics.Updating = "disabled", false
 		return result, nil
 	}
-	if s.eventIndex != nil && !s.eventIndex.caughtUp.Load() {
+	if s.eventIndex != nil && !s.eventIndex.covers(window) {
 		result.Analytics.Updating = true
 		if found {
 			result.Analytics.State = "stale"
 		}
 		result.Analytics.Coverage = "durable event index is catching up"
-		result.Analytics.Progress = &SnapshotProgress{Phase: "history", Processed: s.eventIndex.processed.Load(), Unit: "events"}
+		result.Analytics.Progress = s.historyProgress()
 		if message := s.eventIndex.lastError.Load(); message != nil {
 			result.Analytics.Error = *message
 		}
@@ -605,22 +673,25 @@ func (s *Service) DashboardUsage(ctx context.Context, key string, compute func(c
 	}
 	stale := !found || time.Since(result.Analytics.ComputedAt) > time.Minute
 	jobKey := "usage:" + key
-	if stale {
+	if stale && !retryBackoff(found, lastError, computed) {
 		s.processor.enqueue(jobKey, true, func(jobCtx context.Context) {
 			if s.eventIndex != nil {
-				more, catchUpErr := s.eventIndex.catchUpBatch(jobCtx)
+				// Refresh only new tails: an older unindexed segment must not
+				// delay a range that is already covered.
+				catchUpErr := s.eventIndex.refreshTails(jobCtx)
 				if catchUpErr != nil {
-					_, _ = store.db.ExecContext(context.WithoutCancel(jobCtx), `INSERT INTO dashboard_views(key,computed_at,error) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET error=excluded.error`, key, time.Now().UTC().UnixNano(), catchUpErr.Error())
+					_, _ = store.db.ExecContext(context.WithoutCancel(jobCtx), failedViewSQL, key, time.Now().UTC().UnixNano(), catchUpErr.Error())
 					return
 				}
-				if more {
+				// Older history may still be indexing; this range is ready
+				// once every event inside it has been indexed.
+				if !s.eventIndex.covers(window) {
 					return
 				}
 			}
 			summary, computeErr := compute(jobCtx)
 			if computeErr != nil {
-				_, _ = store.db.ExecContext(context.WithoutCancel(jobCtx), `INSERT INTO dashboard_views(key,computed_at,error) VALUES(?,?,?)
-ON CONFLICT(key) DO UPDATE SET error=excluded.error`, key, time.Now().UTC().UnixNano(), computeErr.Error())
+				_, _ = store.db.ExecContext(context.WithoutCancel(jobCtx), failedViewSQL, key, time.Now().UTC().UnixNano(), computeErr.Error())
 				return
 			}
 			encoded, encodeErr := json.Marshal(summary)
@@ -638,12 +709,13 @@ ON CONFLICT(key) DO UPDATE SET value=excluded.value,computed_at=excluded.compute
 		result.Analytics.Error = lastError
 		if !found {
 			result.Analytics.State = "failed"
+			result.Analytics.RetryAt = retryAt(computed)
 		}
 	}
 	return result, nil
 }
 
-func (s *Service) DashboardMaterialized(ctx context.Context, key string, compute func(context.Context) (Materialized, error)) (Materialized, error) {
+func (s *Service) DashboardMaterialized(ctx context.Context, key string, window time.Duration, compute func(context.Context) (Materialized, error)) (Materialized, error) {
 	store, ok := s.store.(*SQLiteAggregationStore)
 	if !ok {
 		return Materialized{Status: StatusPaused, Note: "durable analytics require sqlite storage"}, nil
@@ -672,30 +744,34 @@ func (s *Service) DashboardMaterialized(ctx context.Context, key string, compute
 		state.State = "disabled"
 		return result, nil
 	}
-	if s.eventIndex != nil && !s.eventIndex.caughtUp.Load() {
+	if s.eventIndex != nil && !s.eventIndex.covers(window) {
 		state.State, state.Updating, state.Coverage = "updating", true, "durable event index is catching up"
-		state.Progress = &SnapshotProgress{Phase: "history", Processed: s.eventIndex.processed.Load(), Unit: "events"}
+		state.Progress = s.historyProgress()
 		if message := s.eventIndex.lastError.Load(); message != nil {
 			state.Error = *message
 		}
 		return result, nil
 	}
-	if !found || time.Since(state.ComputedAt) > time.Minute {
+	if (!found || time.Since(state.ComputedAt) > time.Minute) && !retryBackoff(found, lastError, computed) {
 		jobKey := "aggregation:" + key
 		s.processor.enqueue(jobKey, true, func(jobCtx context.Context) {
 			if s.eventIndex != nil {
-				more, catchUpErr := s.eventIndex.catchUpBatch(jobCtx)
+				// Refresh only new tails: an older unindexed segment must not
+				// delay a range that is already covered.
+				catchUpErr := s.eventIndex.refreshTails(jobCtx)
 				if catchUpErr != nil {
-					_, _ = store.db.ExecContext(context.WithoutCancel(jobCtx), `INSERT INTO dashboard_views(key,computed_at,error) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET error=excluded.error`, key, time.Now().UTC().UnixNano(), catchUpErr.Error())
+					_, _ = store.db.ExecContext(context.WithoutCancel(jobCtx), failedViewSQL, key, time.Now().UTC().UnixNano(), catchUpErr.Error())
 					return
 				}
-				if more {
+				// Older history may still be indexing; this range is ready
+				// once every event inside it has been indexed.
+				if !s.eventIndex.covers(window) {
 					return
 				}
 			}
 			view, computeErr := compute(jobCtx)
 			if computeErr != nil {
-				_, _ = store.db.ExecContext(context.WithoutCancel(jobCtx), `INSERT INTO dashboard_views(key,computed_at,error) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET error=excluded.error`, key, time.Now().UTC().UnixNano(), computeErr.Error())
+				_, _ = store.db.ExecContext(context.WithoutCancel(jobCtx), failedViewSQL, key, time.Now().UTC().UnixNano(), computeErr.Error())
 				return
 			}
 			view.Analytics = nil
@@ -713,6 +789,7 @@ func (s *Service) DashboardMaterialized(ctx context.Context, key string, compute
 		state.Error = lastError
 		if !found {
 			state.State, result.Note = "failed", "Analytics build failed"
+			state.RetryAt = retryAt(computed)
 		}
 	}
 	return result, nil

@@ -45,15 +45,6 @@ func UsageSummary(ctx context.Context, source EventSource, p Params, charsPerTok
 	if charsPerToken <= 0 {
 		return Summary{}, fmt.Errorf("characters per token must be positive")
 	}
-	var events []Event
-	err := source.Scan(ctx, EventFilter{From: p.Since, To: p.Until}, func(event Event) error {
-		events = append(events, event)
-		return nil
-	})
-	if err != nil {
-		return Summary{}, err
-	}
-
 	summary := Summary{Activity: []SummaryActivity{}, ComputedAt: time.Now().UTC()}
 	activity := map[string]*SummaryActivity{}
 	activityFor := func(event Event) *SummaryActivity {
@@ -65,20 +56,18 @@ func UsageSummary(ctx context.Context, source EventSource, p Params, charsPerTok
 		}
 		return row
 	}
+	// Stream the window rather than buffering it. Only one write per
+	// commit/path is retained, preferring doc.write over doc.scalars.
 	writes := map[string]Event{}
-	for _, event := range events {
-		if event.Type != "doc.scalars" {
-			continue
-		}
-		writes[summaryWriteKey(event)] = event
-	}
-	for _, event := range events {
-		if event.Type == "doc.write" {
-			writes[summaryWriteKey(event)] = event
-		}
-	}
-	for _, event := range events {
+	err := source.Scan(ctx, EventFilter{From: p.Since, To: p.Until}, func(event Event) error {
 		switch event.Type {
+		case "doc.scalars":
+			key := summaryWriteKey(event)
+			if existing, ok := writes[key]; !ok || existing.Type == "doc.scalars" {
+				writes[key] = event
+			}
+		case "doc.write":
+			writes[summaryWriteKey(event)] = event
 		case "doc.read", "doc.hit":
 			row := activityFor(event)
 			if event.Type == "doc.read" {
@@ -108,6 +97,10 @@ func UsageSummary(ctx context.Context, source EventSource, p Params, charsPerTok
 			summary.Commands++
 			incrementActivityKind(row, eventKind(event))
 		}
+		return nil
+	})
+	if err != nil {
+		return Summary{}, err
 	}
 	for _, event := range writes {
 		row := activityFor(event)

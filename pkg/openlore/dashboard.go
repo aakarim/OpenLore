@@ -104,6 +104,7 @@ func (s *Server) dashboardRoutes(frontend fs.FS) HTTPRouteRegistrar {
 			"context": s.dashboardContext, "file": s.dashboardFile,
 			"raw": s.dashboardRaw, "history": s.dashboardHistory,
 			"access": s.dashboardAccess, "usage": s.dashboardUsage,
+			"analytics-status": s.dashboardAnalyticsStatus,
 		} {
 			mux.Handle("GET /dashboard/api/"+route, s.dashboardAuth(handler))
 		}
@@ -364,15 +365,11 @@ func (s *Server) dashboardContext(w http.ResponseWriter, r *http.Request) {
 		dashboardError(w, http.StatusRequestEntityTooLarge, errDashboardSize.Error())
 		return
 	}
-	// Polling observes active/failed work; it must not requeue the scope on
-	// every request or erase a failure by relabelling it as stale.
-	if s.analytics.ProcessingEnabled() && !status.Updating &&
-		(status.State == "cold" || status.State == "ready" && time.Since(status.ComputedAt) > time.Minute) {
+	// Polling observes active/failed work. Completed facts are maintained by
+	// committed-write updates; age alone must not start a workspace rescan.
+	if s.analytics.ProcessingEnabled() && !status.Updating && status.State == "cold" {
 		s.analytics.PromoteFacts(target)
 		status.Updating = true
-		if status.State != "cold" {
-			status.State = "stale"
-		}
 	}
 	node := &dashboardNode{Path: target, Name: path.Base(target), Directory: info.Dir, Analytics: &status}
 	byPath := map[string]*dashboardNode{target: node}
@@ -614,7 +611,7 @@ func (s *Server) dashboardUsage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	viewKey := fmt.Sprintf("v1:%s:%s:%d:%d", s.analyticsPolicyKey(id), target, days, ratio)
-	summary, err := s.analytics.DashboardUsage(r.Context(), viewKey, func(ctx context.Context) (analytics.Summary, error) {
+	summary, err := s.analytics.DashboardUsage(r.Context(), viewKey, time.Duration(days)*24*time.Hour, func(ctx context.Context) (analytics.Summary, error) {
 		jobNow := time.Now().UTC()
 		jobParams := analytics.Params{Since: jobNow.Add(-time.Duration(days) * 24 * time.Hour), Until: jobNow, Extra: map[string]string{"path": target}}
 		return analytics.UsageSummary(ctx, s.DashboardEventSource(id, target), jobParams, ratio)
@@ -624,6 +621,18 @@ func (s *Server) dashboardUsage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dashboardJSON(w, summary)
+}
+
+// dashboardAnalyticsStatus reports instance processing progress without event
+// contents, counts by scope, or paths, so any dashboard reader may see it.
+func (s *Server) dashboardAnalyticsStatus(w http.ResponseWriter, r *http.Request) {
+	if s.analytics == nil {
+		dashboardError(w, http.StatusServiceUnavailable, "analytics is disabled")
+		return
+	}
+	dashboardJSON(w, struct {
+		Activity analytics.ActivityStatus `json:"activity"`
+	}{Activity: s.analytics.ActivityStatus(r.Context())})
 }
 
 func (s *Server) analyticsPolicyKey(id Identity) string {

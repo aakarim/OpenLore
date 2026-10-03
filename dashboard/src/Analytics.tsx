@@ -1,6 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { api } from "./api";
 import { useAsync } from "./hooks";
+import {
+  ChartIcon,
+  CodeIcon,
+  FileIcon,
+  OverviewIcon,
+  SearchIcon,
+  ShieldIcon,
+} from "./icons";
 import { Sunburst, estimatedTokens } from "./Sunburst";
 import type {
   Access,
@@ -11,15 +19,23 @@ import type {
   Usage,
 } from "./types";
 
-const tabs: { id: AnalyticsTab; label: string; glyph: string }[] = [
-  { id: "overview", label: "Overview", glyph: "▦" },
-  { id: "knowledge", label: "Knowledge", glyph: "◫" },
-  { id: "usage", label: "Usage", glyph: "⌁" },
-  { id: "gaps", label: "Gaps", glyph: "?" },
-  { id: "commands", label: "Commands", glyph: "⌘" },
-  { id: "access", label: "Access", glyph: "◇" },
+const tabs: { id: AnalyticsTab; label: string; icon: ReactNode }[] = [
+  { id: "overview", label: "Overview", icon: <OverviewIcon /> },
+  { id: "knowledge", label: "Knowledge", icon: <FileIcon /> },
+  { id: "usage", label: "Usage", icon: <ChartIcon /> },
+  { id: "gaps", label: "Gaps", icon: <SearchIcon /> },
+  { id: "commands", label: "Commands", icon: <CodeIcon /> },
+  { id: "access", label: "Access", icon: <ShieldIcon /> },
 ];
 const n = (value: number | undefined) => (value || 0).toLocaleString("en-GB");
+// Processing boundaries are UTC segment boundaries, so format them in UTC.
+export const formatDate = (value: string) =>
+  new Date(value).toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    timeZone: "UTC",
+  });
 function AnalyticsProgress({
   label,
   status,
@@ -55,7 +71,9 @@ function AnalyticsProgress({
         <span>
           {detail}
           {busy && progress
-            ? ` · ${n(progress.processed)} ${progress.unit} processed${progress.phase === "history" ? " this session" : ""}`
+            ? progress.phase === "history" && progress.since
+              ? ` · processed back to ${formatDate(progress.since)}`
+              : ` · ${n(progress.processed)} ${progress.unit} processed${progress.phase === "history" ? " this session" : ""}`
             : ""}
         </span>
       </div>
@@ -183,7 +201,7 @@ function Activity({ usage }: { usage: Usage }) {
           {activity.map((day, index) => {
             const x = index * step + 2,
               values = [day.human, day.agent, day.unknown],
-              colors = ["#71b6b0", "#9e8cd0", "#87909e"];
+              colors = ["var(--human)", "var(--agent)", "var(--unknown)"];
             let y = height;
             return (
               <g key={day.date}>
@@ -226,9 +244,36 @@ function Activity({ usage }: { usage: Usage }) {
     </section>
   );
 }
+function ActivityPending({ usage, error }: { usage?: Usage; error?: Error }) {
+  const progress = usage?.analytics?.progress;
+  return (
+    <section className="card activity-card">
+      <span className="eyebrow">ACTIVITY · SELECTED RANGE</span>
+      <h2>Activity</h2>
+      {error ? (
+        <div className="state error" role="alert">
+          <strong>Activity unavailable</strong>
+          <p>{error.message}</p>
+        </div>
+      ) : (
+        <p className="empty" role="status">
+          Activity totals will appear when this time range has been processed.
+          {progress?.since &&
+            ` Processed back to ${formatDate(progress.since)}.`}
+        </p>
+      )}
+    </section>
+  );
+}
+function completeUsage(usage?: Usage) {
+  return usage && (!usage.analytics || usage.analytics.complete)
+    ? usage
+    : undefined;
+}
 function Overview({
   context,
   usage,
+  usageError,
   ratio,
   window,
   onScope,
@@ -237,7 +282,8 @@ function Overview({
   days,
 }: {
   context: ContextNode;
-  usage: Usage;
+  usage?: Usage;
+  usageError?: Error;
   ratio: 4 | 6;
   window: number;
   onScope: (path: string) => void;
@@ -260,6 +306,8 @@ function Overview({
       d.roles.filter((r) => r.grant && !r.denied).map((r) => r.role),
     ) || [],
   );
+  const ready = completeUsage(usage);
+  const pending = usageError ? "Unavailable" : "Processing";
   const summaries: [AnalyticsTab, string, string, string, string][] = [
     [
       "knowledge",
@@ -271,8 +319,10 @@ function Overview({
     [
       "usage",
       "Usage",
-      `${n(usage.reads)} reads`,
-      `${n(usage.estimated_tokens)} estimated input tokens`,
+      ready ? `${n(ready.reads)} reads` : pending,
+      ready
+        ? `${n(ready.estimated_tokens)} estimated input tokens`
+        : "Activity in the selected range",
       "SELECTED RANGE",
     ],
     [
@@ -287,7 +337,7 @@ function Overview({
     [
       "commands",
       "Commands",
-      `${n(usage.commands)} commands`,
+      ready ? `${n(ready.commands)} commands` : pending,
       "Command and principal activity",
       "SELECTED RANGE",
     ],
@@ -317,16 +367,17 @@ function Overview({
             descendants.
           </p>
         </section>
-        <Activity usage={usage} />
+        {ready ? (
+          <Activity usage={ready} />
+        ) : (
+          <ActivityPending usage={usage} error={usageError} />
+        )}
       </div>
       <div className="summary-grid">
         {summaries.map(([tab, label, value, detail, scope]) => (
           <button className="summary-card" onClick={() => onTab(tab)} key={tab}>
             <span className="eyebrow">{scope}</span>
-            <span>
-              {label}
-              <b>↗</b>
-            </span>
+            <span>{label}</span>
             <strong>{value}</strong>
             <small>{detail}</small>
           </button>
@@ -376,7 +427,31 @@ function Contribution({ usage }: { usage: Usage }) {
     </section>
   );
 }
-function Aggregation({
+// Delay before polling again: one second while building, or until the
+// server's retry time for a failed view.
+export function pollDelay(status?: AnalyticsStatus) {
+  if (status?.updating) return 1000;
+  if (status?.state === "failed" && status.retry_at)
+    return Math.max(1000, Date.parse(status.retry_at) - Date.now());
+  return undefined;
+}
+function Aggregation(props: {
+  name: string;
+  path: string;
+  days: number;
+  title: string;
+  onFile?: (path: string) => void;
+}) {
+  // A new query starts from an empty card; only same-query polls keep the
+  // previous response mounted.
+  return (
+    <AggregationCard
+      key={`${props.name}\u0000${props.path}\u0000${props.days}`}
+      {...props}
+    />
+  );
+}
+function AggregationCard({
   name,
   path,
   days,
@@ -393,19 +468,31 @@ function Aggregation({
   const state = useAsync(
     (signal) => api.aggregation(name, path, days, signal),
     [name, path, days, revision],
+    true,
+    true,
   );
   useEffect(() => {
-    if (!state.data?.analytics?.updating) return;
+    if (state.loading) return;
+    const delay = pollDelay(state.data?.analytics);
+    if (delay === undefined) return;
     const timer = window.setTimeout(
       () => setRevision((value) => value + 1),
-      1000,
+      delay,
     );
     return () => window.clearTimeout(timer);
-  }, [state.data?.analytics]);
+  }, [state.data?.analytics, state.loading]);
   return (
     <section className="card table-card">
       <h2>{title}</h2>
-      <State loading={state.loading} error={state.error}>
+      <State
+        loading={state.loading && !state.data}
+        error={state.data ? undefined : state.error}
+      >
+        {state.data && state.error && (
+          <p className="coverage-note" role="alert">
+            Could not refresh: {state.error.message}
+          </p>
+        )}
         {state.data?.analytics && state.data.analytics.state !== "ready" && (
           <p className="coverage-note" data-state={state.data.analytics.state}>
             {state.data.analytics.state}.
@@ -454,7 +541,7 @@ function DataTable({
                   onFile &&
                   typeof cell === "string" &&
                   cell.startsWith("/") ? (
-                    <button onClick={() => onFile(cell)}>{cell} ↗</button>
+                    <button onClick={() => onFile(cell)}>{cell}</button>
                   ) : (
                     formatCell(cell)
                   )}
@@ -640,13 +727,13 @@ export function Analytics({
   useEffect(() => {
     if (context.loading || usage.loading) return;
     const statuses = [context.data?.analytics, usage.data?.analytics];
-    if (
-      !statuses.some((status) => status?.updating || status?.state === "cold")
-    )
-      return;
+    const delays = statuses
+      .map((status) => (status?.state === "cold" ? 1000 : pollDelay(status)))
+      .filter((delay): delay is number => delay !== undefined);
+    if (!delays.length) return;
     const timer = window.setTimeout(
       () => setAnalyticsRevision((value) => value + 1),
-      1000,
+      Math.min(...delays),
     );
     return () => window.clearTimeout(timer);
   }, [
@@ -659,26 +746,31 @@ export function Analytics({
     if (usage.data?.computed_at) onComputed(usage.data.computed_at);
   }, [usage.data?.computed_at, onComputed]);
   const visibleTabs = tabs.filter((item) => item.id !== "access" || canAccess);
+  const readyUsage = completeUsage(usage.data);
+  const activity = (render: (data: Usage) => React.ReactNode) =>
+    usage.error && !usage.data ? (
+      <div className="state error" role="alert">
+        <strong>Activity unavailable</strong>
+        <p>{usage.error.message}</p>
+      </div>
+    ) : readyUsage ? (
+      render(readyUsage)
+    ) : usage.loading && !usage.data ? (
+      <div className="state loading" role="status">
+        Computing activity…
+      </div>
+    ) : (
+      <ActivityPending usage={usage.data} />
+    );
   const body = (selectedTab: AnalyticsTab) => {
-    if (
-      ["overview", "knowledge", "usage"].includes(selectedTab) &&
-      usage.data?.analytics &&
-      !usage.data.analytics.complete
-    ) {
-      return (
-        <p className="empty" role="status">
-          Activity totals will appear when a complete result is available.
-        </p>
-      );
-    }
     switch (selectedTab) {
       case "overview":
         return (
-          context.data &&
-          usage.data && (
+          context.data && (
             <Overview
               context={context.data}
               usage={usage.data}
+              usageError={usage.data ? undefined : usage.error}
               ratio={ratio}
               window={contextWindow}
               onScope={onScope}
@@ -690,8 +782,7 @@ export function Analytics({
         );
       case "knowledge":
         return (
-          context.data &&
-          usage.data && (
+          context.data && (
             <>
               <section className="card">
                 <span className="eyebrow">CURRENT STATE · NOT TIME SCOPED</span>
@@ -702,22 +793,24 @@ export function Analytics({
                   window={contextWindow}
                 />
               </section>
-              <Contribution usage={usage.data} />
+              {activity((data) => (
+                <Contribution usage={data} />
+              ))}
             </>
           )
         );
       case "usage":
         return (
           context.data &&
-          usage.data && (
+          activity((data) => (
             <UsagePanel
               path={path}
               days={days}
-              usage={usage.data}
-              context={context.data}
+              usage={data}
+              context={context.data!}
               onFile={onFile}
             />
-          )
+          ))
         );
       case "gaps":
         return (
@@ -764,8 +857,8 @@ export function Analytics({
         <div className="scope-explorer">
           <div className="file-scope">
             <span>Single-file analytics</span>
-            <button className="primary" onClick={() => onFile(path)}>
-              View ↗
+            <button className="view-file" onClick={() => onFile(path)}>
+              View
             </button>
           </div>
         </div>
@@ -855,12 +948,12 @@ export function Analytics({
       <State
         loading={
           ["overview", "knowledge", "usage"].includes(tab) &&
-          ((context.loading && !context.data) || (usage.loading && !usage.data))
+          context.loading &&
+          !context.data
         }
         error={
-          ["overview", "knowledge", "usage"].includes(tab)
-            ? (!context.data ? context.error : undefined) ||
-              (!usage.data ? usage.error : undefined)
+          ["overview", "knowledge", "usage"].includes(tab) && !context.data
+            ? context.error
             : undefined
         }
       >

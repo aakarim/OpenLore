@@ -213,7 +213,7 @@ func dashboardRequest(h http.Handler, method, endpoint, token string) *httptest.
 
 func TestDashboardAuthenticationAndReadOnlyMethods(t *testing.T) {
 	s, mux, token := newDashboardTestServer(t)
-	for _, endpoint := range []string{"session", "tree", "context", "file", "raw", "history", "access", "usage"} {
+	for _, endpoint := range []string{"session", "tree", "context", "file", "raw", "history", "access", "usage", "analytics-status"} {
 		t.Run(endpoint, func(t *testing.T) {
 			for _, supplied := range []string{"", "invalid"} {
 				w := dashboardRequest(mux, "GET", "/dashboard/api/"+endpoint+"?path=/public/other.md", supplied)
@@ -597,6 +597,85 @@ func TestDashboardPollingPreservesFailedScan(t *testing.T) {
 	}
 	if fsys.count() != reads {
 		t.Fatal("polling retried the failed file")
+	}
+}
+
+func TestDashboardPollingDoesNotRescanOldReadyFacts(t *testing.T) {
+	s, mux, token := newDashboardTestServer(t)
+	dir := t.TempDir()
+	service, err := analytics.New(config.AnalyticsConfig{Dir: dir, Log: config.AnalyticsLogConfig{Compress: "none"}}, analytics.Deps{FS: s.merge})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close(context.Background())
+	service.SetKnowledgeScopes([]analytics.KnowledgeScope{{Name: "public", Root: "/public"}})
+	service.Start(context.Background())
+	s.analytics = service
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		_, status, err := service.IndexedFacts(context.Background(), "/public", 1)
+		if err == nil && status.Complete && !status.Updating {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("facts did not complete: %+v err=%v", status, err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	db, err := sql.Open("sqlite", filepath.Join(dir, "aggregations.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`UPDATE facts_scan_state SET completed_at=?`, time.Now().Add(-time.Hour).UnixNano()); err != nil {
+		t.Fatal(err)
+	}
+	before, _, err := service.IndexedFacts(context.Background(), "/public", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := dashboardRequest(mux, "GET", "/dashboard/api/context?path=/public", token)
+	var node dashboardNode
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &node) != nil || node.Analytics == nil {
+		t.Fatalf("context response: %d %s", w.Code, w.Body.String())
+	}
+	if node.Analytics.State != "ready" || node.Analytics.Updating {
+		t.Fatalf("old facts were rescanned: %+v", node.Analytics)
+	}
+	after, _, err := service.IndexedFacts(context.Background(), "/public", 1)
+	if err != nil || len(after) != len(before) {
+		t.Fatalf("facts changed after poll: before=%+v after=%+v err=%v", before, after, err)
+	}
+}
+
+func TestDashboardAnalyticsStatusReportsProcessedHistory(t *testing.T) {
+	s, mux, token := newDashboardTestServer(t)
+	service, err := analytics.New(config.AnalyticsConfig{Dir: t.TempDir(), Log: config.AnalyticsLogConfig{Compress: "none"}}, analytics.Deps{FS: s.merge})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close(context.Background())
+	service.Start(context.Background())
+	s.analytics = service
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		w := dashboardRequest(mux, "GET", "/dashboard/api/analytics-status", token)
+		var body struct {
+			Activity analytics.ActivityStatus `json:"activity"`
+		}
+		if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &body) != nil {
+			t.Fatalf("status response: %d %s", w.Code, w.Body.String())
+		}
+		if body.Activity.State == "ready" && body.Activity.Complete {
+			if strings.Contains(w.Body.String(), "processed_since") {
+				t.Fatalf("complete history reported a partial boundary: %s", w.Body.String())
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("activity did not become ready: %s", w.Body.String())
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
