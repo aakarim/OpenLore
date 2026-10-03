@@ -337,6 +337,37 @@ test("failed aggregations poll again at their retry time", async () => {
   ).toBeVisible();
 });
 
+test("cold aggregations explain that results are being built", async () => {
+  history.replaceState(
+    null,
+    "",
+    "/dashboard/?view=analytics&path=/&tab=commands",
+  );
+  const fetch = mockAPI();
+  const original = fetch.getMockImplementation()!;
+  fetch.mockImplementation((input, init) => {
+    if (!String(input).includes("/analytics/aggregations/top-commands"))
+      return original(input, init);
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          status: "planned",
+          note: "Results appear when the first build finishes.",
+          table: { columns: [], rows: [], total: 0 },
+          computed_at: "",
+          window: {},
+          analytics: { state: "cold", updating: true, complete: false },
+        }),
+      ),
+    );
+  });
+  render(<App />);
+  const card = (await screen.findByRole("heading", { name: "Top commands" }))
+    .parentElement!;
+  expect(await within(card).findByText(/Building results/)).toBeVisible();
+  expect(within(card).queryByText(/cold/)).toBeNull();
+});
+
 test("analytics status shows how far activity history is processed", async () => {
   history.replaceState(
     null,
@@ -441,7 +472,11 @@ test("background progress and completed results stay mounted through slow polls 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1000);
     });
-    expect(progress).toHaveAttribute("aria-valuenow", "100");
+    // Finished processing with nothing to report needs no banner.
+    expect(progress).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("region", { name: "Background analytics" }),
+    ).not.toBeInTheDocument();
     expect(chart).toBeVisible();
     expect(
       screen.queryByText(/Could not refresh analytics/),

@@ -36,6 +36,23 @@ export const formatDate = (value: string) =>
     year: "numeric",
     timeZone: "UTC",
   });
+// Processing that finished with nothing to report needs no banner.
+function progressSettled(
+  status: AnalyticsStatus | undefined,
+  loading: boolean,
+  error?: Error,
+) {
+  return (
+    !loading &&
+    !error &&
+    !status?.updating &&
+    (!status ||
+      (status.state === "ready" &&
+        status.complete &&
+        !status.warning &&
+        !status.error))
+  );
+}
 function AnalyticsProgress({
   label,
   status,
@@ -437,6 +454,14 @@ export function pollDelay(status?: AnalyticsStatus) {
   if (status?.state === "ready" && status.complete) return 60_000;
   return undefined;
 }
+const aggregationStateLabel: Partial<
+  Record<AnalyticsStatus["state"], string>
+> = {
+  cold: "Building results",
+  updating: "Waiting for activity history",
+  failed: "Build failed",
+  disabled: "Processing paused",
+};
 function Aggregation(props: {
   name: string;
   path: string;
@@ -497,7 +522,9 @@ function AggregationCard({
         )}
         {state.data?.analytics && state.data.analytics.state !== "ready" && (
           <p className="coverage-note" data-state={state.data.analytics.state}>
-            {state.data.analytics.state}.
+            {aggregationStateLabel[state.data.analytics.state] ??
+              state.data.analytics.state}
+            .
             {state.data.analytics.complete &&
               " Last complete result remains visible."}
             {state.data.analytics.error && ` ${state.data.analytics.error}`}
@@ -749,6 +776,18 @@ export function Analytics({
   }, [usage.data?.computed_at, onComputed]);
   const visibleTabs = tabs.filter((item) => item.id !== "access" || canAccess);
   const readyUsage = completeUsage(usage.data);
+  const knowledgeSettled = progressSettled(
+    context.data?.analytics,
+    context.loading && !context.data,
+    !context.data ? context.error : undefined,
+  );
+  const activitySettled =
+    !needsUsage ||
+    progressSettled(
+      usage.data?.analytics,
+      usage.loading && !usage.data,
+      !usage.data ? usage.error : undefined,
+    );
   const activity = (render: (data: Usage) => React.ReactNode) =>
     usage.error && !usage.data ? (
       <div className="state error" role="alert">
@@ -923,25 +962,29 @@ export function Analytics({
           </small>
         </div>
       )}
-      <section
-        className="analytics-processing"
-        aria-label="Background analytics"
-      >
-        <AnalyticsProgress
-          label="Knowledge analytics"
-          status={context.data?.analytics}
-          loading={context.loading && !context.data}
-          error={!context.data ? context.error : undefined}
-        />
-        {needsUsage && (
-          <AnalyticsProgress
-            label="Activity analytics"
-            status={usage.data?.analytics}
-            loading={usage.loading && !usage.data}
-            error={!usage.data ? usage.error : undefined}
-          />
-        )}
-      </section>
+      {(!knowledgeSettled || !activitySettled) && (
+        <section
+          className="analytics-processing"
+          aria-label="Background analytics"
+        >
+          {!knowledgeSettled && (
+            <AnalyticsProgress
+              label="Knowledge analytics"
+              status={context.data?.analytics}
+              loading={context.loading && !context.data}
+              error={!context.data ? context.error : undefined}
+            />
+          )}
+          {!activitySettled && (
+            <AnalyticsProgress
+              label="Activity analytics"
+              status={usage.data?.analytics}
+              loading={usage.loading && !usage.data}
+              error={!usage.data ? usage.error : undefined}
+            />
+          )}
+        </section>
+      )}
       {((context.error && context.data) || (usage.error && usage.data)) && (
         <p role="alert" className="coverage-note">
           Could not refresh analytics. Previous results remain visible.
