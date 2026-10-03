@@ -340,6 +340,7 @@ export function FileReader({
   mode,
   onMode,
   onFile,
+  onFolder,
   onAnalytics,
   ratio = 4,
   contextWindow,
@@ -351,6 +352,7 @@ export function FileReader({
   mode: "preview" | "source";
   onMode: (mode: "preview" | "source") => void;
   onFile: (path: string) => void;
+  onFolder: (path: string) => void;
   onAnalytics: () => void;
   ratio?: number;
   contextWindow: number;
@@ -393,7 +395,28 @@ export function FileReader({
     <div className="file-layout">
       <section className="reader">
         <div className="reader-head">
-          <strong>{basename(path)}</strong>
+          <nav className="breadcrumbs" aria-label="File location">
+            <button onClick={() => onFolder("/")}>Workspace</button>
+            {path
+              .split("/")
+              .filter(Boolean)
+              .map((part, i, parts) => (
+                <span key={i}>
+                  <span aria-hidden="true">/</span>
+                  {i === parts.length - 1 ? (
+                    <span aria-current="page">{part}</span>
+                  ) : (
+                    <button
+                      onClick={() =>
+                        onFolder(`/${parts.slice(0, i + 1).join("/")}`)
+                      }
+                    >
+                      {part}
+                    </button>
+                  )}
+                </span>
+              ))}
+          </nav>
           <div className="view-toggle">
             <button
               aria-pressed={mode === "preview"}
