@@ -265,7 +265,7 @@ test("aggregations reset on new filters and report refresh errors", async () => 
           },
           computed_at: "2026-10-03T00:00:00Z",
           window: {},
-          analytics: { state: "stale", updating: true, complete: true },
+          analytics: { state: "updating", updating: true, complete: true },
         }),
       ),
     );
@@ -395,7 +395,7 @@ test("background progress and completed results stay mounted through slow polls 
         analytics:
           calls === 1
             ? {
-                state: "stale",
+                state: "updating",
                 complete: true,
                 updating: true,
                 progress: { phase: "history", processed: 731, unit: "events" },

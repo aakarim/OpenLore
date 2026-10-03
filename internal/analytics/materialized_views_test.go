@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -759,5 +760,59 @@ func TestPublishedDashboardViewsRefreshInBackgroundWithoutUpdating(t *testing.T)
 	service.DashboardMaterialized(context.Background(), "view", window, nil)
 	if service.processor.active("aggregation:aggregation:view") {
 		t.Fatal("30-day aggregation refreshed within its refresh interval")
+	}
+}
+
+func TestPublishedDashboardViewsStayReadyDuringHistoryCatchUp(t *testing.T) {
+	service, err := New(config.AnalyticsConfig{Dir: t.TempDir()}, Deps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close(context.Background())
+	store := service.store.(*SQLiteAggregationStore)
+	window := 30 * 24 * time.Hour
+	for _, key := range []string{"usage:2592000", "aggregation:view"} {
+		if _, err := store.db.Exec(`INSERT INTO dashboard_views(key,value,computed_at,error) VALUES(?,'{}',?,'')`, key, time.Now().Add(-time.Hour).UnixNano()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if service.eventIndex.covers(window) {
+		t.Fatal("history unexpectedly covered")
+	}
+	usage, err := service.DashboardUsage(context.Background(), "usage", window, nil, 4)
+	if err != nil || usage.Analytics.State != "ready" || usage.Analytics.Updating || usage.Analytics.Progress != nil {
+		t.Fatalf("published usage during catch-up=%+v err=%v", usage.Analytics, err)
+	}
+	view, err := service.DashboardMaterialized(context.Background(), "view", window, nil)
+	if err != nil || view.Analytics.State != "ready" || view.Analytics.Updating || view.Analytics.Progress != nil {
+		t.Fatalf("published view during catch-up=%+v err=%v", view.Analytics, err)
+	}
+	cold, err := service.DashboardUsage(context.Background(), "cold", window, nil, 4)
+	if err != nil || cold.Analytics.State != "cold" || !cold.Analytics.Updating || cold.Analytics.Progress == nil {
+		t.Fatalf("cold usage during catch-up=%+v err=%v", cold.Analytics, err)
+	}
+}
+
+func TestUsageSummaryMatchesFullScanWhenTokenTotalOverflowsAcrossDays(t *testing.T) {
+	service := newIndexedTestService(t, testFS{})
+	store := service.store.(*SQLiteAggregationStore)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	today := now.Truncate(24 * time.Hour)
+	characters := math.Exp2(62)
+	indexEvents(t, service,
+		Event{ID: "one", Time: today.Add(-3*24*time.Hour + time.Hour), Type: "doc.read", Fields: map[string]any{"characters": characters}},
+		Event{ID: "two", Time: today.Add(-2*24*time.Hour + time.Hour), Type: "doc.read", Fields: map[string]any{"characters": characters}},
+	)
+	since := now.Add(-7 * 24 * time.Hour)
+	want, err := UsageSummary(ctx, service.eventIndex, Params{Since: since, Until: now}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 { // cold build, then from cached days
+		got, done, err := usageSummary(ctx, store.db, "scope", since, now, service.eventIndex, 1, time.Now().Add(time.Minute))
+		if err != nil || !done || got.EstimatedTokens != want.EstimatedTokens || got.EstimatedReads != 1 || got.UnestimatedReads != 1 {
+			t.Fatalf("overflow summary=%+v done=%v err=%v want %+v", got, done, err, want)
+		}
 	}
 }

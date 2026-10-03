@@ -689,12 +689,13 @@ func (s *Service) DashboardUsage(ctx context.Context, key string, window time.Du
 		return result, nil
 	}
 	if s.eventIndex != nil && !s.eventIndex.covers(window) {
-		result.Analytics.Updating = true
-		if found {
-			result.Analytics.State = "stale"
+		// A published result stays ready until the range can be rebuilt;
+		// only a cold view reports catch-up progress.
+		if !found {
+			result.Analytics.Updating = true
+			result.Analytics.Coverage = "durable event index is catching up"
+			result.Analytics.Progress = s.historyProgress()
 		}
-		result.Analytics.Coverage = "durable event index is catching up"
-		result.Analytics.Progress = s.historyProgress()
 		if message := s.eventIndex.lastError.Load(); message != nil {
 			result.Analytics.Error = *message
 		}
@@ -841,25 +842,37 @@ ON CONFLICT(key,day) DO UPDATE SET value=excluded.value,valid_rowid=excluded.val
 		}
 		days[day] = partial
 	}
-	total := newUsagePartial()
+	partials := []*usagePartial{}
+	tailSince := since
 	if first < last {
 		if since.Before(dayStart(first)) {
 			edge, err := scanUsage(ctx, source, since, dayStart(first).Add(-time.Nanosecond), charsPerToken)
 			if err != nil {
 				return Summary{}, false, err
 			}
-			total.merge(edge)
+			partials = append(partials, edge)
 		}
 		for day := first; day < last; day++ {
-			total.merge(days[day])
+			partials = append(partials, days[day])
 		}
-		since = dayStart(last)
+		tailSince = dayStart(last)
 	}
-	tail, err := scanUsage(ctx, source, since, until, charsPerToken)
+	tail, err := scanUsage(ctx, source, tailSince, until, charsPerToken)
 	if err != nil {
 		return Summary{}, false, err
 	}
-	total.merge(tail)
+	total := newUsagePartial()
+	for _, partial := range append(partials, tail) {
+		if !total.merge(partial) {
+			// Token overflow is classified per read in order, so only a
+			// single scan of the whole window reproduces it.
+			whole, err := scanUsage(ctx, source, since, until, charsPerToken)
+			if err != nil {
+				return Summary{}, false, err
+			}
+			return whole.summary(), true, nil
+		}
+	}
 	return total.summary(), true, nil
 }
 
@@ -934,8 +947,12 @@ func (s *Service) DashboardMaterialized(ctx context.Context, key string, window 
 		return result, nil
 	}
 	if s.eventIndex != nil && !s.eventIndex.covers(window) {
-		state.State, state.Updating, state.Coverage = "updating", true, "durable event index is catching up"
-		state.Progress = s.historyProgress()
+		// A published result stays ready until the range can be rebuilt;
+		// only a cold view reports catch-up progress.
+		if !found {
+			state.State, state.Updating, state.Coverage = "updating", true, "durable event index is catching up"
+			state.Progress = s.historyProgress()
+		}
 		if message := s.eventIndex.lastError.Load(); message != nil {
 			state.Error = *message
 		}

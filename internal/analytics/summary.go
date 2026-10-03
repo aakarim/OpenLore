@@ -59,6 +59,10 @@ type usagePartial struct {
 	UnestimatedReads int                         `json:"unestimated_reads"`
 	Activity         map[string]*SummaryActivity `json:"activity"`
 	Writes           map[string]usageWrite       `json:"writes"`
+	// Overflow records that a read was left unestimated because the running
+	// token total would overflow. That depends on every earlier read, so such
+	// a partial cannot be merged exactly.
+	Overflow bool `json:"overflow,omitempty"`
 }
 
 type usageWrite struct {
@@ -112,6 +116,8 @@ func scanUsage(ctx context.Context, source EventSource, since, until time.Time, 
 						u.EstimatedReads++
 						u.EstimatedTokens += tokens
 						estimated = true
+					} else {
+						u.Overflow = true
 					}
 				}
 			}
@@ -138,18 +144,19 @@ func (u *usagePartial) addWrite(key string, write usageWrite) {
 	}
 }
 
-// merge adds a partial covering a later time range.
-func (u *usagePartial) merge(later *usagePartial) {
+// merge adds a partial covering a later time range. It reports false, leaving
+// u unchanged, when the token total overflows: which reads a single scan would
+// leave unestimated then depends on the order of every read.
+func (u *usagePartial) merge(later *usagePartial) bool {
+	if u.Overflow || later.Overflow || later.EstimatedTokens > math.MaxInt64-u.EstimatedTokens {
+		return false
+	}
 	u.Reads += later.Reads
 	u.Hits += later.Hits
 	u.Commands += later.Commands
 	u.EstimatedReads += later.EstimatedReads
 	u.UnestimatedReads += later.UnestimatedReads
-	if later.EstimatedTokens <= math.MaxInt64-u.EstimatedTokens {
-		u.EstimatedTokens += later.EstimatedTokens
-	} else {
-		u.EstimatedTokens = math.MaxInt64
-	}
+	u.EstimatedTokens += later.EstimatedTokens
 	for day, row := range later.Activity {
 		current := u.activity(day)
 		current.Human += row.Human
@@ -161,6 +168,7 @@ func (u *usagePartial) merge(later *usagePartial) {
 	for key, write := range later.Writes {
 		u.addWrite(key, write)
 	}
+	return true
 }
 
 func (u *usagePartial) summary() Summary {
