@@ -1,11 +1,17 @@
+<div align="center">
+
 # 📜 OpenLore
 
 [![Release](https://img.shields.io/github/v/release/aakarim/OpenLore)](https://github.com/aakarim/OpenLore/releases/latest)
 [![Go Reference](https://pkg.go.dev/badge/github.com/aakarim/go-openlore.svg)](https://pkg.go.dev/github.com/aakarim/go-openlore)
 
+<a href="https://trendshift.io/repositories/85262?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-85262" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/85262/daily?language=Go" alt="aakarim%2FOpenLore | Trendshift" width="250" height="55"/></a>
+
 Sponsored by <a href="https://oiya.ai/?utm_source=github&amp;utm_medium=referral&amp;utm_campaign=openlore&amp;utm_content=sponsor_logo"><img src="assets/oiya-logo.svg" alt="Oiya" height="24" align="absmiddle"></a>
 
-**Serve your docs to AI agents over SSH and MCP.**
+**Give every AI agent on your team the same up-to-date knowledge.**
+
+</div>
 
 Point OpenLore at a folder of Markdown and every agent on your team reads the same files, whether it's Claude Code, Codex, Cursor or a CI job. Agents use the tools they already know, like `cat`, `grep` and `find`. You decide who can see and change what.
 
