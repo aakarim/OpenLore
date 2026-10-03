@@ -675,7 +675,29 @@ test("direct file wins restoration, browser back resolves lore pathname, and fil
   history.replaceState(null, "", "/lore/guide/start.md");
   fireEvent.popState(window);
   expect(await screen.findByRole("heading", { name: "Start" })).toBeVisible();
-  expect(document.querySelector(".breadcrumbs")).not.toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: "Show path for start.md" }),
+  ).toHaveTextContent("start.md");
+});
+
+test("filename path tooltip does not navigate away from the open file", async () => {
+  history.replaceState(null, "", "/lore/guide/start.md");
+  mockAPI();
+  render(<App />);
+  const user = userEvent.setup();
+  await user.click(
+    await screen.findByRole("button", { name: "Show path for start.md" }),
+  );
+  expect(screen.getByRole("tooltip")).toHaveTextContent("/guide/start.md");
+  expect(location.pathname).toBe("/lore/guide/start.md");
+  expect(screen.getByRole("heading", { name: "Start" })).toBeVisible();
+  expect(screen.getByRole("tab", { name: "start.md" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  expect(
+    screen.queryByRole("navigation", { name: "File location" }),
+  ).not.toBeInTheDocument();
 });
 
 test("Access does not depend on usage or full context availability", async () => {

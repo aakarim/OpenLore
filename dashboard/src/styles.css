@@ -787,20 +787,55 @@ select:focus-visible,
   background: var(--panel);
 }
 .reader-head {
-  height: 50px;
-  flex: 0 0 50px;
+  min-height: 50px;
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 15px;
+  padding: 10px 15px;
   border-bottom: 1px solid var(--border);
   font: 11px var(--mono);
   gap: 12px;
 }
-.reader-head > strong {
+.file-location {
+  position: relative;
+  min-width: 0;
+  flex: 1;
+}
+.file-name {
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+  text-decoration: underline dotted;
+  text-underline-offset: 4px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.file-name:hover:not(:disabled) {
+  background: transparent;
+  color: var(--purple);
+}
+.file-path {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 5;
+  width: max-content;
+  max-width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--purple);
+  background: var(--purple-soft);
+  color: var(--ink);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
 }
 .view-toggle {
   display: flex;
@@ -1218,8 +1253,10 @@ button.primary:hover:not(:disabled) {
     overflow: visible;
   }
   .topbar {
-    height: 64px;
-    padding: 0 10px;
+    height: calc(64px + env(safe-area-inset-top, 0px));
+    padding: env(safe-area-inset-top, 0px)
+      max(10px, env(safe-area-inset-right, 0px)) 0
+      max(10px, env(safe-area-inset-left, 0px));
     position: sticky;
     top: 0;
   }
@@ -1249,7 +1286,9 @@ button.primary:hover:not(:disabled) {
   }
   .workspace {
     height: auto;
-    padding: 14px 12px 90px;
+    padding: 14px max(12px, env(safe-area-inset-right, 0px))
+      calc(90px + env(safe-area-inset-bottom, 0px))
+      max(12px, env(safe-area-inset-left, 0px));
     overflow: visible;
   }
   .workspace-head {
@@ -1338,10 +1377,12 @@ button.primary:hover:not(:disabled) {
     left: 0;
     right: 0;
     bottom: 0;
-    height: 64px;
+    height: calc(64px + env(safe-area-inset-bottom, 0px));
     background: var(--bg);
     border-top: 2px solid var(--rule);
-    padding: 9px;
+    padding: 9px max(9px, env(safe-area-inset-right, 0px))
+      calc(9px + env(safe-area-inset-bottom, 0px))
+      max(9px, env(safe-area-inset-left, 0px));
     gap: 7px;
   }
   .mobile-nav button {
@@ -1385,9 +1426,11 @@ button.primary:hover:not(:disabled) {
     height: auto;
   }
   .reader-head {
-    height: 43px;
-    flex-basis: 43px;
+    min-height: 43px;
     padding: 0 12px;
+  }
+  .file-name {
+    min-height: 44px;
   }
   .reader-head .view-toggle {
     display: none;
@@ -1437,7 +1480,9 @@ button.primary:hover:not(:disabled) {
     border: 2px solid var(--rule);
     border-bottom: 0;
     border-radius: 0;
-    padding: 19px 16px 25px;
+    padding: 19px max(16px, env(safe-area-inset-right, 0px))
+      calc(25px + env(safe-area-inset-bottom, 0px))
+      max(16px, env(safe-area-inset-left, 0px));
   }
   .sheet-tree {
     max-height: 65vh;

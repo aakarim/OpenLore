@@ -47,6 +47,45 @@ test("renders plaintext preview and estimates FileInfo from characters and ratio
   expect(screen.queryByText("999")).not.toBeInTheDocument();
 });
 
+test("filename tooltip shows the full path on hover, focus, or click and dismisses on Escape or blur", async () => {
+  const path = "/docs/team notes/drafts/plan.md";
+  vi.spyOn(api, "file").mockResolvedValue({ ...baseFile, path });
+  const onFile = vi.fn();
+  render(<FileReader {...readerProps} path={path} onFile={onFile} />);
+  const user = userEvent.setup();
+  const filename = await screen.findByRole("button", {
+    name: "Show path for plan.md",
+  });
+  expect(filename).toHaveTextContent("plan.md");
+  expect(filename).toHaveAccessibleDescription(path);
+  expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole("navigation", { name: "File location" }),
+  ).not.toBeInTheDocument();
+  await user.hover(filename);
+  expect(screen.getByRole("tooltip")).toHaveTextContent(path);
+  await user.keyboard("{Escape}");
+  expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  await user.unhover(filename);
+  await user.hover(filename);
+  expect(screen.getByRole("tooltip")).toBeVisible();
+  await user.unhover(filename);
+  expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  await user.tab();
+  expect(filename).toHaveFocus();
+  expect(screen.getByRole("tooltip")).toBeVisible();
+  await user.keyboard("{Escape}");
+  expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  expect(filename).toHaveFocus();
+  await user.click(filename);
+  expect(screen.getByRole("tooltip")).toHaveTextContent(path);
+  await user.unhover(filename);
+  expect(screen.getByRole("tooltip")).toBeVisible();
+  await user.tab();
+  expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  expect(onFile).not.toHaveBeenCalled();
+});
+
 test("canonicalizes internal links once, preserves modified clicks, and protects images", async () => {
   const onFile = vi.fn();
   const file: FileResponse = {
