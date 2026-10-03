@@ -1,4 +1,10 @@
-import { useEffect, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  type ReactNode,
+} from "react";
 import { api } from "./api";
 import { useAsync } from "./hooks";
 import {
@@ -36,7 +42,64 @@ export const formatDate = (value: string) =>
     year: "numeric",
     timeZone: "UTC",
   });
-function AnalyticsProgress({
+// Processing that finished with nothing to report is not shown in status.
+function progressSettled(
+  status: AnalyticsStatus | undefined,
+  loading: boolean,
+  error?: Error,
+) {
+  return (
+    !loading &&
+    !error &&
+    !status?.updating &&
+    (!status ||
+      (status.state === "ready" &&
+        status.complete &&
+        !status.warning &&
+        !status.error))
+  );
+}
+export type ProcessingItem = {
+  label: string;
+  status?: AnalyticsStatus;
+  loading: boolean;
+  error?: Error;
+};
+export type ProcessingReport = (
+  key: string,
+  item: ProcessingItem | null,
+) => void;
+// Analytics views report unsettled processing to the status overlay instead
+// of rendering progress inline.
+export const ProcessingContext = createContext<ProcessingReport>(() => {});
+function useProcessingReport(key: string, item: ProcessingItem | null) {
+  const report = useContext(ProcessingContext);
+  const visible =
+    item && !progressSettled(item.status, item.loading, item.error)
+      ? item
+      : null;
+  const { label, status, loading, error } = visible ?? {};
+  useEffect(() => {
+    report(
+      key,
+      label === undefined ? null : { label, status, loading: !!loading, error },
+    );
+  }, [report, key, label, status, loading, error]);
+  useEffect(() => () => report(key, null), [report, key]);
+}
+export function processingState(items: ProcessingItem[]) {
+  if (items.some((item) => item.status?.updating || item.loading))
+    return "updating";
+  if (
+    items.some(
+      (item) =>
+        item.error || item.status?.error || item.status?.state === "failed",
+    )
+  )
+    return "failed";
+  return items.length ? "notice" : "ready";
+}
+export function AnalyticsProgress({
   label,
   status,
   loading,
@@ -437,6 +500,14 @@ export function pollDelay(status?: AnalyticsStatus) {
   if (status?.state === "ready" && status.complete) return 60_000;
   return undefined;
 }
+const aggregationStateLabel: Partial<
+  Record<AnalyticsStatus["state"], string>
+> = {
+  cold: "Building results",
+  updating: "Waiting for activity history",
+  failed: "Build failed",
+  disabled: "Processing paused",
+};
 function Aggregation(props: {
   name: string;
   path: string;
@@ -473,6 +544,12 @@ function AggregationCard({
     true,
     true,
   );
+  useProcessingReport(`aggregation:${name}`, {
+    label: title,
+    status: state.data?.analytics,
+    loading: state.loading && !state.data,
+    error: !state.data ? state.error : undefined,
+  });
   useEffect(() => {
     if (state.loading) return;
     const delay = pollDelay(state.data?.analytics);
@@ -497,7 +574,9 @@ function AggregationCard({
         )}
         {state.data?.analytics && state.data.analytics.state !== "ready" && (
           <p className="coverage-note" data-state={state.data.analytics.state}>
-            {state.data.analytics.state}.
+            {aggregationStateLabel[state.data.analytics.state] ??
+              state.data.analytics.state}
+            .
             {state.data.analytics.complete &&
               " Last complete result remains visible."}
             {state.data.analytics.error && ` ${state.data.analytics.error}`}
@@ -749,6 +828,23 @@ export function Analytics({
   }, [usage.data?.computed_at, onComputed]);
   const visibleTabs = tabs.filter((item) => item.id !== "access" || canAccess);
   const readyUsage = completeUsage(usage.data);
+  useProcessingReport("knowledge", {
+    label: "Knowledge analytics",
+    status: context.data?.analytics,
+    loading: context.loading && !context.data,
+    error: !context.data ? context.error : undefined,
+  });
+  useProcessingReport(
+    "activity",
+    needsUsage
+      ? {
+          label: "Activity analytics",
+          status: usage.data?.analytics,
+          loading: usage.loading && !usage.data,
+          error: !usage.data ? usage.error : undefined,
+        }
+      : null,
+  );
   const activity = (render: (data: Usage) => React.ReactNode) =>
     usage.error && !usage.data ? (
       <div className="state error" role="alert">
@@ -923,25 +1019,6 @@ export function Analytics({
           </small>
         </div>
       )}
-      <section
-        className="analytics-processing"
-        aria-label="Background analytics"
-      >
-        <AnalyticsProgress
-          label="Knowledge analytics"
-          status={context.data?.analytics}
-          loading={context.loading && !context.data}
-          error={!context.data ? context.error : undefined}
-        />
-        {needsUsage && (
-          <AnalyticsProgress
-            label="Activity analytics"
-            status={usage.data?.analytics}
-            loading={usage.loading && !usage.data}
-            error={!usage.data ? usage.error : undefined}
-          />
-        )}
-      </section>
       {((context.error && context.data) || (usage.error && usage.data)) && (
         <p role="alert" className="coverage-note">
           Could not refresh analytics. Previous results remain visible.

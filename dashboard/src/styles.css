@@ -458,6 +458,35 @@ select:focus-visible,
   align-items: center;
   gap: 7px;
 }
+.status-indicator {
+  display: inline-block;
+  box-sizing: border-box;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--purple);
+}
+.status-button[data-state="failed"] .status-indicator {
+  background: var(--error);
+}
+.status-button[data-state="updating"] .status-indicator {
+  background: transparent;
+  border: 2px solid var(--border);
+  border-top-color: var(--orange);
+  animation: status-spin 0.9s linear infinite;
+}
+@keyframes status-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .status-button[data-state="updating"] .status-indicator {
+    animation: none;
+    background: var(--orange);
+    border: 0;
+  }
+}
 .analytics-tabs {
   display: flex;
   gap: 6px;

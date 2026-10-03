@@ -931,7 +931,7 @@ func (s *Service) DashboardMaterialized(ctx context.Context, key string, window 
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return Materialized{}, err
 	}
-	result := Materialized{Status: StatusPlanned, Note: "Cold build queued"}
+	result := Materialized{Status: StatusPlanned, Note: "Results appear when the first build finishes."}
 	if found {
 		if err := json.Unmarshal(raw, &result); err != nil {
 			return Materialized{}, err
