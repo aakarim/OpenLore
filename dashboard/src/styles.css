@@ -1127,7 +1127,7 @@ button.primary:hover:not(:disabled) {
 .open-list button[aria-current="true"],
 .analytics-picker button.selected {
   border-color: var(--orange);
-  color: var(--orange);
+  color: var(--ink);
 }
 .open-list small {
   color: var(--muted);
