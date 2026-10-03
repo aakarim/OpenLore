@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
-import { Analytics, analyticsTabs, formatDate } from "./Analytics";
+import {
+  Analytics,
+  AnalyticsProgress,
+  ProcessingContext,
+  analyticsTabs,
+  formatDate,
+  processingState,
+  type ProcessingItem,
+} from "./Analytics";
 import { APIError, api } from "./api";
 import { FileReader, MobileDetails, Sheet } from "./FileReader";
 import { useAsync } from "./hooks";
@@ -145,6 +153,21 @@ function Workspace({ session }: { session: Session }) {
   const [collapsed, setCollapsed] = useState(false);
   const [days, setDays] = useState(30);
   const [computed, setComputed] = useState("");
+  const [processing, setProcessing] = useState<
+    Record<string, ProcessingItem>
+  >({});
+  const reportProcessing = useCallback(
+    (key: string, item: ProcessingItem | null) =>
+      setProcessing((current) => {
+        if (item) return { ...current, [key]: item };
+        if (!(key in current)) return current;
+        const { [key]: _removed, ...rest } = current;
+        return rest;
+      }),
+    [],
+  );
+  const processingItems = Object.values(processing);
+  const processingStatus = processingState(processingItems);
   const [revision, setRevision] = useState(0);
   const [toast, setToast] = useState("");
   const setPreference = (patch: Partial<Preferences>) =>
@@ -415,10 +438,17 @@ function Workspace({ session }: { session: Session }) {
                   <span>Refresh</span>
                 </button>
                 <button
-                  aria-label="Analytics status"
+                  className="status-button"
+                  data-state={processingStatus}
+                  aria-label={`Analytics status: ${statusLabel[processingStatus]}`}
+                  title={statusLabel[processingStatus]}
                   onClick={() => setSheet("status")}
                 >
-                  <InfoIcon />
+                  {processingStatus === "ready" ? (
+                    <InfoIcon />
+                  ) : (
+                    <span className="status-indicator" aria-hidden="true" />
+                  )}
                   <span>Status</span>
                 </button>
                 <button
@@ -430,20 +460,22 @@ function Workspace({ session }: { session: Session }) {
                 </button>
               </div>
             </div>
-            <Analytics
-              key={revision}
-              path={path}
-              tab={tab}
-              days={days}
-              onDays={setDays}
-              ratio={prefs.ratio}
-              contextWindow={prefs.contextWindow}
-              canAccess={session.access}
-              onTab={(t) => navigate("analytics", path, t)}
-              onScope={(p) => navigate("analytics", p, tab)}
-              onFile={openFile}
-              onComputed={setComputed}
-            />
+            <ProcessingContext value={reportProcessing}>
+              <Analytics
+                key={revision}
+                path={path}
+                tab={tab}
+                days={days}
+                onDays={setDays}
+                ratio={prefs.ratio}
+                contextWindow={prefs.contextWindow}
+                canAccess={session.access}
+                onTab={(t) => navigate("analytics", path, t)}
+                onScope={(p) => navigate("analytics", p, tab)}
+                onFile={openFile}
+                onComputed={setComputed}
+              />
+            </ProcessingContext>
           </>
         ) : (
           <>
@@ -637,6 +669,16 @@ function Workspace({ session }: { session: Session }) {
       )}
       {sheet === "status" && (
         <Sheet title="Analytics status" onClose={() => setSheet(null)}>
+          {processingItems.length > 0 && (
+            <section
+              className="analytics-processing"
+              aria-label="Background analytics"
+            >
+              {Object.entries(processing).map(([key, item]) => (
+                <AnalyticsProgress key={key} {...item} />
+              ))}
+            </section>
+          )}
           <AnalyticsStatusPanel />
         </Sheet>
       )}
@@ -648,6 +690,13 @@ function Workspace({ session }: { session: Session }) {
     </div>
   );
 }
+
+const statusLabel = {
+  updating: "Processing analytics",
+  failed: "Analytics processing failed",
+  notice: "Analytics notes available",
+  ready: "Analytics up to date",
+} as const;
 
 function AnalyticsStatusPanel() {
   const status = useAsync(

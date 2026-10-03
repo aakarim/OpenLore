@@ -12,6 +12,13 @@ import { App, loginURL } from "../App";
 import { pollDelay } from "../Analytics";
 import { mockAPI } from "./fixtures";
 
+async function openStatus() {
+  await userEvent
+    .setup()
+    .click(await screen.findByRole("button", { name: /^Analytics status/ }));
+  return screen.getByRole("dialog", { name: "Analytics status" });
+}
+
 test("desktop tree opens a production API document and switches views without losing its tab", async () => {
   mockAPI();
   render(<App />);
@@ -85,7 +92,13 @@ test("ready but incomplete knowledge totals show their coverage", async () => {
   );
   mockAPI({ partialContext: true });
   render(<App />);
-  expect(await screen.findByText(/restricted docsets omitted/)).toBeVisible();
+  expect(
+    await screen.findByRole("button", {
+      name: "Analytics status: Analytics notes available",
+    }),
+  ).toBeVisible();
+  const dialog = await openStatus();
+  expect(within(dialog).getByText(/restricted docsets omitted/)).toBeVisible();
 });
 
 test.each(["cold", "failed", "disabled"])(
@@ -394,10 +407,7 @@ test("analytics status shows how far activity history is processed", async () =>
       : original(input, init),
   );
   render(<App />);
-  await userEvent
-    .setup()
-    .click(await screen.findByRole("button", { name: "Analytics status" }));
-  const dialog = screen.getByRole("dialog", { name: "Analytics status" });
+  const dialog = await openStatus();
   expect(await within(dialog).findByText("Processing history")).toBeVisible();
   expect(within(dialog).getByText("Back to 25 Sept 2026")).toBeVisible();
 });
@@ -436,10 +446,18 @@ test("background progress and completed results stay mounted through slow polls 
     );
   });
   render(<App />);
-  const progress = await screen.findByRole("progressbar", {
+  // Progress lives in the status overlay; the button shows it is running.
+  const button = await screen.findByRole("button", {
+    name: "Analytics status: Processing analytics",
+  });
+  const dialog = await openStatus();
+  const progress = await within(dialog).findByRole("progressbar", {
     name: "Activity analytics progress",
   });
-  await screen.findByText(/731 events processed/);
+  await within(dialog).findByText(/731 events processed/);
+  expect(
+    screen.queryByRole("region", { name: "Background analytics" }),
+  ).toBe(within(dialog).getByRole("region", { name: "Background analytics" }));
   const chart = screen.getByRole("img", {
     name: "Daily activity stacked by attribution",
   });
@@ -472,11 +490,12 @@ test("background progress and completed results stay mounted through slow polls 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1000);
     });
-    // Finished processing with nothing to report needs no banner.
+    // Finished processing with nothing to report leaves the overlay.
     expect(progress).not.toBeInTheDocument();
     expect(
       screen.queryByRole("region", { name: "Background analytics" }),
     ).not.toBeInTheDocument();
+    expect(button).toHaveAccessibleName("Analytics status: Analytics up to date");
     expect(chart).toBeVisible();
     expect(
       screen.queryByText(/Could not refresh analytics/),
@@ -516,9 +535,14 @@ test("completed scans retain oversized-file warnings", async () => {
     );
   });
   render(<App />);
-  expect(await screen.findByText(/Files over 64 MiB omitted/)).toBeVisible();
+  const dialog = await openStatus();
   expect(
-    screen.getByRole("progressbar", { name: "Knowledge analytics progress" }),
+    await within(dialog).findByText(/Files over 64 MiB omitted/),
+  ).toBeVisible();
+  expect(
+    within(dialog).getByRole("progressbar", {
+      name: "Knowledge analytics progress",
+    }),
   ).toHaveAttribute("aria-valuenow", "100");
 });
 
@@ -650,9 +674,17 @@ test("shows honest oversized-context error and hides Access without permission",
   render(<App />);
   expect(await screen.findByRole("alert")).toHaveTextContent("too large");
   expect(
-    screen.getByRole("progressbar", { name: "Knowledge analytics progress" }),
+    await screen.findByRole("button", {
+      name: "Analytics status: Analytics processing failed",
+    }),
+  ).toBeVisible();
+  const dialog = await openStatus();
+  expect(
+    within(dialog).getByRole("progressbar", {
+      name: "Knowledge analytics progress",
+    }),
   ).toHaveAttribute("aria-valuenow", "0");
-  expect(screen.getByText("Processing stopped")).toBeVisible();
+  expect(within(dialog).getByText("Processing stopped")).toBeVisible();
   expect(screen.queryByRole("tab", { name: "Access" })).not.toBeInTheDocument();
 });
 
