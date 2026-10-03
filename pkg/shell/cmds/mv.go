@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"syscall"
 
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
@@ -95,6 +96,10 @@ func CmdMv(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.
 		var stale *vfs.TreeStaleError
 		if errors.As(err, &stale) {
 			fmt.Fprintf(errW, "mv: %s: source changed concurrently; destination was not written\n", source)
+			return 1
+		}
+		if errors.Is(err, syscall.ENOTSUP) {
+			fmt.Fprintf(errW, "mv: %s: this session's filesystem does not support atomic moves; nothing was changed\n", source)
 			return 1
 		}
 		return writeResultMsg(errW, "mv", destination, err)

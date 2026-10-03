@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path"
+	"syscall"
 
 	"github.com/aakarim/go-openlore/internal/config"
 	"github.com/aakarim/go-openlore/pkg/vfs"
@@ -172,4 +173,23 @@ func (f *configViewFS) RemoveAll(name string, opts vfs.RemoveOpts) error {
 	return f.WritableFS.RemoveAll(name, opts)
 }
 
-var _ vfs.WritableFS = (*configViewFS)(nil)
+// AdmitChangeSet forwards atomic batches (such as `mv`) to the session's
+// substrate. The synthetic /opt tree is backed by the auth file, not the
+// substrate, so batches touching it are rejected like other /opt mutations.
+func (f *configViewFS) AdmitChangeSet(cs vfs.ChangeSet) error {
+	admitter, ok := f.WritableFS.(vfs.ChangeSetAdmitter)
+	if !ok {
+		return syscall.ENOTSUP
+	}
+	for _, change := range cs.Leaves() {
+		if pathWithinRoot("/opt", vfs.CleanPath(change.Target)) {
+			return vfs.ErrReadOnly
+		}
+	}
+	return admitter.AdmitChangeSet(cs)
+}
+
+var (
+	_ vfs.WritableFS        = (*configViewFS)(nil)
+	_ vfs.ChangeSetAdmitter = (*configViewFS)(nil)
+)
