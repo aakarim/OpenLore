@@ -125,6 +125,84 @@ func TestDashboardUsageAlwaysSerializesActivityAsArray(t *testing.T) {
 	}
 }
 
+func TestFailedDashboardViewsBackOffInsteadOfRebuildingEveryPoll(t *testing.T) {
+	service, err := New(config.AnalyticsConfig{Dir: t.TempDir()}, Deps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close(context.Background())
+	service.eventIndex.caughtUp.Store(true)
+	store := service.store.(*SQLiteAggregationStore)
+	for _, key := range []string{"usage", "aggregation:view"} {
+		if _, err := store.db.Exec(`INSERT INTO dashboard_views(key,computed_at,error) VALUES(?,?,'build failed')`, key, time.Now().UnixNano()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	usage, err := service.DashboardUsage(context.Background(), "usage", 7*24*time.Hour, nil)
+	if err != nil || usage.Analytics.State != "failed" || usage.Analytics.Updating {
+		t.Fatalf("usage retried immediately: %+v err=%v", usage.Analytics, err)
+	}
+	view, err := service.DashboardMaterialized(context.Background(), "view", 7*24*time.Hour, nil)
+	if err != nil || view.Analytics.State != "failed" || view.Analytics.Updating {
+		t.Fatalf("aggregation retried immediately: %+v err=%v", view.Analytics, err)
+	}
+	if service.processor.active("usage:usage") || service.processor.active("aggregation:aggregation:view") {
+		t.Fatal("failed view was queued during backoff")
+	}
+	old := time.Now().Add(-2 * dashboardRetryInterval).UnixNano()
+	if _, err := store.db.Exec(`UPDATE dashboard_views SET computed_at=?`, old); err != nil {
+		t.Fatal(err)
+	}
+	if usage, _ := service.DashboardUsage(context.Background(), "usage", 7*24*time.Hour, nil); !usage.Analytics.Updating {
+		t.Fatalf("failed usage was not retried after backoff: %+v", usage.Analytics)
+	}
+}
+
+func TestConsecutiveDashboardFailuresRestartBackoff(t *testing.T) {
+	service, err := New(config.AnalyticsConfig{Dir: t.TempDir()}, Deps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close(context.Background())
+	service.eventIndex.caughtUp.Store(true)
+	store := service.store.(*SQLiteAggregationStore)
+	old := time.Now().Add(-2 * dashboardRetryInterval).UnixNano()
+	if _, err := store.db.Exec(`INSERT INTO dashboard_views(key,computed_at,error) VALUES('usage',?,'first failure')`, old); err != nil {
+		t.Fatal(err)
+	}
+	fail := func(context.Context) (Summary, error) { return Summary{}, errors.New("second failure") }
+	first, err := service.DashboardUsage(context.Background(), "usage", 7*24*time.Hour, fail)
+	if err != nil || !first.Analytics.Updating {
+		t.Fatalf("expired backoff did not retry: %+v err=%v", first.Analytics, err)
+	}
+	item, ok := service.processor.pop()
+	if !ok {
+		t.Fatal("retry was not queued")
+	}
+	item.run(context.Background())
+	service.processor.finish(item.key)
+	second, err := service.DashboardUsage(context.Background(), "usage", 7*24*time.Hour, fail)
+	if err != nil || second.Analytics.Updating || second.Analytics.Error != "second failure" {
+		t.Fatalf("second failure did not restart backoff: %+v err=%v", second.Analytics, err)
+	}
+	if wait := time.Until(second.Analytics.RetryAt); wait < dashboardRetryInterval-5*time.Second || wait > dashboardRetryInterval {
+		t.Fatalf("retry_at=%v is not one interval after the latest failure", second.Analytics.RetryAt)
+	}
+
+	// A failure while a saved result exists must not move its computed time.
+	computed := time.Now().Add(-time.Hour).UnixNano()
+	if _, err := store.db.Exec(`INSERT INTO dashboard_views(key,value,computed_at,error) VALUES('saved','{}',?,'')`, computed); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(failedViewSQL, "saved", time.Now().UnixNano(), "refresh failed"); err != nil {
+		t.Fatal(err)
+	}
+	var got int64
+	if err := store.db.QueryRow(`SELECT computed_at FROM dashboard_views WHERE key='saved'`).Scan(&got); err != nil || got != computed {
+		t.Fatalf("saved result computed_at=%d want %d err=%v", got, computed, err)
+	}
+}
+
 func TestDashboardUsageDeduplicatesAndPublishesOnlyCompleteResult(t *testing.T) {
 	dir := t.TempDir()
 	service, err := New(config.AnalyticsConfig{Dir: dir, Log: config.AnalyticsLogConfig{Compress: "none"}}, Deps{})

@@ -2,6 +2,7 @@ package openlore
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -219,6 +220,106 @@ func TestAnalyticsEventClassifiesDirectAndDelegatedCallers(t *testing.T) {
 				t.Fatalf("event attribution = %#v", event)
 			}
 		})
+	}
+}
+
+func TestDashboardEventSourceStreamsLargeWindows(t *testing.T) {
+	server, alice, _ := analyticsScopeServer()
+	now := time.Now().UTC()
+	events := make(sliceAnalyticsSource, 0, 60001)
+	events = append(events, analytics.Event{ID: "command", Time: now, Type: "command.exec", InvocationID: "invocation"})
+	for i := range 60000 {
+		events = append(events, analytics.Event{ID: fmt.Sprint("read-", i), Time: now, Type: "doc.read", InvocationID: "invocation", Fields: map[string]any{"path": "/docs/readable.md"}})
+	}
+	source := &dashboardEventSource{server: server, identity: alice, prefix: "/docs", source: events}
+	count, command := 0, false
+	if err := source.Scan(context.Background(), analytics.EventFilter{}, func(event analytics.Event) error {
+		count++
+		command = command || event.ID == "command"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if count != len(events) || !command {
+		t.Fatalf("large window emitted %d of %d events, command=%v", count, len(events), command)
+	}
+}
+
+// appendingSource appends events to a file log after its first scan, as a
+// concurrent writer would between authorization passes. It appends whether the
+// caller scans a snapshot or the log directly.
+type appendingSource struct {
+	analytics.EventLog
+	appended bool
+	appendFn func()
+}
+
+func (s *appendingSource) afterScan() {
+	if !s.appended {
+		s.appended = true
+		s.appendFn()
+	}
+}
+
+func (s *appendingSource) Scan(ctx context.Context, filter analytics.EventFilter, fn func(analytics.Event) error) error {
+	defer s.afterScan()
+	return s.EventLog.Scan(ctx, filter, fn)
+}
+
+func (s *appendingSource) Snapshot(ctx context.Context) (analytics.EventSnapshot, error) {
+	snapshot, err := s.EventLog.(analytics.SnapshotEventSource).Snapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &appendingSnapshot{EventSnapshot: snapshot, source: s}, nil
+}
+
+type appendingSnapshot struct {
+	analytics.EventSnapshot
+	source *appendingSource
+}
+
+func (s *appendingSnapshot) Scan(ctx context.Context, filter analytics.EventFilter, fn func(analytics.Event) error) error {
+	defer s.source.afterScan()
+	return s.EventSnapshot.Scan(ctx, filter, fn)
+}
+
+func TestDashboardEventSourceIgnoresEventsAppendedBetweenPasses(t *testing.T) {
+	server, alice, _ := analyticsScopeServer()
+	log, err := analytics.OpenEventLog(t.TempDir(), analytics.LogOptions{Compress: "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	ctx := context.Background()
+	// Recorder timestamps events before they are written, so late appends can
+	// carry times before the scan began.
+	at := time.Now().UTC().Add(-time.Second)
+	if err := log.Append(ctx, analytics.Event{ID: "readable", Time: at, Type: "doc.read", ParentID: "command", Fields: map[string]any{"path": "/docs/readable.md"}}); err != nil {
+		t.Fatal(err)
+	}
+	source := &appendingSource{EventLog: log, appendFn: func() {
+		// The command and a denied child arrive after correlations were proved.
+		// The command is mixed-scope and must not be emitted.
+		for _, event := range []analytics.Event{
+			{ID: "command", Time: at, Type: "command.exec"},
+			{ID: "denied", Time: at, Type: "doc.read", ParentID: "command", Fields: map[string]any{"path": "/docs/private/secret.md"}},
+		} {
+			if err := log.Append(ctx, event); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}}
+	got := map[string]bool{}
+	scoped := &dashboardEventSource{server: server, identity: alice, prefix: "/docs", source: source}
+	if err := scoped.Scan(ctx, analytics.EventFilter{}, func(event analytics.Event) error {
+		got[event.ID] = true
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !source.appended || !got["readable"] || got["command"] || got["denied"] {
+		t.Fatalf("appended between passes=%v emitted=%v", source.appended, got)
 	}
 }
 

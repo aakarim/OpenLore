@@ -33,6 +33,8 @@ necessarily the current version. Dates are the GitHub publication dates in UTC.
 
 - Added this changelog and guidance for matching documentation to an installed
   version.
+- Activity and command analytics work for time ranges with more than 50,000
+  events, and failed analytics no longer reload every second.
 - The analytics dashboard shows knowledge and recent activity without waiting
   for all activity history. A new **Status** panel shows how far history has
   been processed.

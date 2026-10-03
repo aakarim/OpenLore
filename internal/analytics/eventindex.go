@@ -202,6 +202,32 @@ func writeLogCursor(path string, cursor logCursor) error {
 }
 
 func (x *sqliteEventIndex) Scan(ctx context.Context, filter EventFilter, fn func(Event) error) error {
+	return x.scan(ctx, filter, fn, math.MaxInt64)
+}
+
+// Snapshot pins the indexed events by rowid. Events are never deleted and
+// re-indexing an event updates its existing row, so every event added after
+// the snapshot has a larger rowid.
+func (x *sqliteEventIndex) Snapshot(ctx context.Context) (EventSnapshot, error) {
+	var maxRow sql.NullInt64
+	if err := x.db.QueryRowContext(ctx, `SELECT MAX(rowid) FROM analytics_events`).Scan(&maxRow); err != nil {
+		return nil, err
+	}
+	return &sqliteEventSnapshot{index: x, maxRow: maxRow.Int64}, nil
+}
+
+type sqliteEventSnapshot struct {
+	index  *sqliteEventIndex
+	maxRow int64
+}
+
+func (s *sqliteEventSnapshot) Scan(ctx context.Context, filter EventFilter, fn func(Event) error) error {
+	return s.index.scan(ctx, filter, fn, s.maxRow)
+}
+
+func (*sqliteEventSnapshot) Close() error { return nil }
+
+func (x *sqliteEventIndex) scan(ctx context.Context, filter EventFilter, fn func(Event) error, maxRow int64) error {
 	from, to := int64(0), int64(^uint64(0)>>1)
 	if !filter.From.IsZero() {
 		from = filter.From.UTC().UnixNano()
@@ -209,7 +235,7 @@ func (x *sqliteEventIndex) Scan(ctx context.Context, filter EventFilter, fn func
 	if !filter.To.IsZero() {
 		to = filter.To.UTC().UnixNano()
 	}
-	rows, err := x.db.QueryContext(ctx, `SELECT value FROM analytics_events WHERE time_ns>=? AND time_ns<=? ORDER BY time_ns,id`, from, to)
+	rows, err := x.db.QueryContext(ctx, `SELECT value FROM analytics_events WHERE time_ns>=? AND time_ns<=? AND rowid<=? ORDER BY time_ns,id`, from, to, maxRow)
 	if err != nil {
 		return err
 	}

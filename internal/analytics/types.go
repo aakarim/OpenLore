@@ -108,6 +108,18 @@ type EventFilter struct {
 type EventSource interface {
 	Scan(context.Context, EventFilter, func(Event) error) error
 }
+
+// SnapshotEventSource is implemented by sources that can scan a fixed set of
+// events repeatedly. Every scan of the snapshot observes the same events, even
+// if new events are appended between scans.
+type SnapshotEventSource interface {
+	Snapshot(context.Context) (EventSnapshot, error)
+}
+
+type EventSnapshot interface {
+	EventSource
+	Close() error
+}
 type Consumer interface{ Consume(context.Context, Event) }
 type Processor interface {
 	Name() string
