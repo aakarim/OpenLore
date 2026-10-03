@@ -233,6 +233,109 @@ test("polling aggregations keep their result mounted instead of flashing", async
   expect(within(card).getByText("Analytics build failed")).toBeVisible();
 });
 
+test("aggregations reset on new filters and report refresh errors", async () => {
+  history.replaceState(
+    null,
+    "",
+    "/dashboard/?view=analytics&path=/&tab=commands",
+  );
+  const fetch = mockAPI();
+  const original = fetch.getMockImplementation()!;
+  let calls = 0;
+  fetch.mockImplementation((input, init) => {
+    const url = String(input);
+    if (!url.includes("/analytics/aggregations/top-commands"))
+      return original(input, init);
+    calls++;
+    if (url.includes("since=7d"))
+      return Promise.resolve(
+        new Response(JSON.stringify({ error: "unavailable" }), { status: 503 }),
+      );
+    if (calls > 1)
+      return Promise.resolve(new Response("offline", { status: 503 }));
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          status: "ok",
+          table: {
+            columns: ["command", "count"],
+            rows: [["cat", 3]],
+            total: 1,
+          },
+          computed_at: "2026-10-03T00:00:00Z",
+          window: {},
+          analytics: { state: "stale", updating: true, complete: true },
+        }),
+      ),
+    );
+  });
+  render(<App />);
+  const card = (await screen.findByRole("heading", { name: "Top commands" }))
+    .parentElement!;
+  expect(await within(card).findByText("cat")).toBeVisible();
+  // A same-query refresh failure keeps the result and reports the failure.
+  expect(
+    await within(card).findByText(/Could not refresh/, {}, { timeout: 2500 }),
+  ).toBeVisible();
+  expect(within(card).getByText("cat")).toBeVisible();
+
+  await userEvent.setup().selectOptions(screen.getByRole("combobox"), "7");
+  const refreshed = (
+    await screen.findByRole("heading", { name: "Top commands" })
+  ).parentElement!;
+  expect(
+    await within(refreshed).findByText("Request failed (503)"),
+  ).toBeVisible();
+  expect(within(refreshed).queryByText("cat")).toBeNull();
+});
+
+test("failed aggregations poll again at their retry time", async () => {
+  history.replaceState(
+    null,
+    "",
+    "/dashboard/?view=analytics&path=/&tab=commands",
+  );
+  const fetch = mockAPI();
+  const original = fetch.getMockImplementation()!;
+  let calls = 0;
+  fetch.mockImplementation((input, init) => {
+    if (!String(input).includes("/analytics/aggregations/top-commands"))
+      return original(input, init);
+    calls++;
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          status: calls === 1 ? "planned" : "ok",
+          note: calls === 1 ? "Analytics build failed" : undefined,
+          table:
+            calls === 1
+              ? { columns: [], rows: [], total: 0 }
+              : { columns: ["command", "count"], rows: [["ls", 2]], total: 1 },
+          computed_at: "",
+          window: {},
+          analytics:
+            calls === 1
+              ? {
+                  state: "failed",
+                  updating: false,
+                  complete: false,
+                  error: "build failed",
+                  retry_at: new Date(Date.now() + 1500).toISOString(),
+                }
+              : { state: "ready", updating: false, complete: true },
+        }),
+      ),
+    );
+  });
+  render(<App />);
+  const card = (await screen.findByRole("heading", { name: "Top commands" }))
+    .parentElement!;
+  await within(card).findByText("Analytics build failed");
+  expect(
+    await within(card).findByText("ls", {}, { timeout: 3000 }),
+  ).toBeVisible();
+});
+
 test("analytics status shows how far activity history is processed", async () => {
   history.replaceState(
     null,

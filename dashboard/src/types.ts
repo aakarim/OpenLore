@@ -32,6 +32,7 @@ export type AnalyticsStatus = {
   coverage?: string;
   error?: string;
   warning?: string;
+  retry_at?: string;
   progress?: {
     phase: "content" | "history";
     processed: number;

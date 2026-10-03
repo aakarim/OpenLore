@@ -2,7 +2,6 @@ package openlore
 
 import (
 	"context"
-	"time"
 
 	"github.com/aakarim/go-openlore/internal/analytics"
 )
@@ -83,15 +82,21 @@ func (d *dashboardEventSource) Scan(ctx context.Context, filter analytics.EventF
 	// than buffering the window, stream it in passes: first prove command
 	// correlations, then session scope, then emit authorized events. Memory is
 	// bounded by correlation IDs, not by the number of events in the window.
-	to := filter.To
-	if to.IsZero() {
-		// Exclude events appended while the passes run.
-		to = time.Now().UTC()
+	//
+	// Every pass must observe the same events: an event appended between
+	// passes could otherwise be emitted using correlations computed without
+	// it. A time cutoff is not enough, because events are timestamped before
+	// they are written. Sources that cannot pin a snapshot are buffered.
+	source, release, err := snapshotEventSource(ctx, d.source, analytics.EventFilter{From: filter.From, To: filter.To})
+	if err != nil {
+		return err
 	}
+	defer release()
+	to := filter.To
 	window := analytics.EventFilter{From: filter.From, To: to}
 	byParent := map[string]analyticsAccess{}
 	byInvocation := map[string]analyticsAccess{}
-	if err := d.source.Scan(ctx, window, func(event analytics.Event) error {
+	if err := source.Scan(ctx, window, func(event analytics.Event) error {
 		access := d.directAccess(event, prefix)
 		if access.proved {
 			if event.ParentID != "" {
@@ -125,7 +130,7 @@ func (d *dashboardEventSource) Scan(ctx context.Context, filter analytics.EventF
 	}
 	bySession := map[string]analyticsAccess{}
 	if len(types) == 0 || types["session.start"] || types["session.end"] || types["auth.login"] {
-		if err := d.source.Scan(ctx, window, func(event analytics.Event) error {
+		if err := source.Scan(ctx, window, func(event analytics.Event) error {
 			if event.SessionID == "" || sessionEvent(event.Type) {
 				return nil
 			}
@@ -143,8 +148,8 @@ func (d *dashboardEventSource) Scan(ctx context.Context, filter analytics.EventF
 	for _, principal := range filter.Principals {
 		principals[principal] = true
 	}
-	return d.source.Scan(ctx, window, func(event analytics.Event) error {
-		if !filter.From.IsZero() && event.Time.Before(filter.From) || event.Time.After(to) {
+	return source.Scan(ctx, window, func(event analytics.Event) error {
+		if !filter.From.IsZero() && event.Time.Before(filter.From) || !to.IsZero() && event.Time.After(to) {
 			return nil
 		}
 		if len(types) > 0 && !types[event.Type] {
@@ -164,6 +169,44 @@ func (d *dashboardEventSource) Scan(ctx context.Context, filter analytics.EventF
 		}
 		return nil
 	})
+}
+
+// snapshotEventSource returns a source whose scans all observe the same
+// events. Sources without native snapshots are buffered once; they are only
+// used by embedders without durable SQLite analytics.
+func snapshotEventSource(ctx context.Context, source analytics.EventSource, window analytics.EventFilter) (analytics.EventSource, func(), error) {
+	if snapshots, ok := source.(analytics.SnapshotEventSource); ok {
+		snapshot, err := snapshots.Snapshot(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		return snapshot, func() { _ = snapshot.Close() }, nil
+	}
+	var events bufferedEventSource
+	if err := source.Scan(ctx, window, func(event analytics.Event) error {
+		events = append(events, event)
+		return nil
+	}); err != nil {
+		return nil, nil, err
+	}
+	return events, func() {}, nil
+}
+
+type bufferedEventSource []analytics.Event
+
+func (s bufferedEventSource) Scan(ctx context.Context, filter analytics.EventFilter, fn func(analytics.Event) error) error {
+	for _, event := range s {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !filter.From.IsZero() && event.Time.Before(filter.From) || !filter.To.IsZero() && event.Time.After(filter.To) {
+			continue
+		}
+		if err := fn(event); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func analyticsCommandEvent(eventType string) bool {

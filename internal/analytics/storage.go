@@ -54,6 +54,9 @@ type openLogSegment struct {
 	segment Segment
 	file    *os.File
 	offset  int64
+	// reader, when set, supplies the bytes from offset to Size instead of
+	// file, and closing the segment does not close file.
+	reader io.Reader
 }
 
 func OpenEventLog(dir string, opts LogOptions) (EventLog, error) {
@@ -159,6 +162,47 @@ func (l *fileEventLog) Scan(ctx context.Context, f EventFilter, fn func(Event) e
 	return scanOpenSegments(ctx, segments, f, fn)
 }
 
+// Snapshot pins the current segments and their sizes. Later appends, seals,
+// and new segments are outside the snapshot.
+func (l *fileEventLog) Snapshot(context.Context) (EventSnapshot, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.active != nil {
+		if err := l.active.Sync(); err != nil {
+			return nil, err
+		}
+	}
+	segments := l.Segments()
+	snapshot := &fileEventSnapshot{segments: make([]openLogSegment, 0, len(segments))}
+	for _, seg := range segments {
+		file, err := os.Open(seg.Path)
+		if err != nil {
+			closeOpenSegments(snapshot.segments)
+			return nil, err
+		}
+		snapshot.segments = append(snapshot.segments, openLogSegment{segment: seg, file: file})
+	}
+	return snapshot, nil
+}
+
+// fileEventSnapshot keeps segment files open, so a concurrent seal that
+// replaces a segment cannot change the bytes a later pass reads.
+type fileEventSnapshot struct{ segments []openLogSegment }
+
+func (s *fileEventSnapshot) Scan(ctx context.Context, f EventFilter, fn func(Event) error) error {
+	segments := make([]openLogSegment, len(s.segments))
+	for i, opened := range s.segments {
+		// Each pass reads through its own section reader at the pinned size.
+		segments[i] = openLogSegment{segment: opened.segment, reader: io.NewSectionReader(opened.file, 0, opened.segment.Size)}
+	}
+	return scanOpenSegments(ctx, segments, f, fn)
+}
+
+func (s *fileEventSnapshot) Close() error {
+	closeOpenSegments(s.segments)
+	return nil
+}
+
 // openSegmentsLocked opens at most limit unindexed segments; a negative limit
 // is unlimited. Newest-first scans also include tails of indexed segments.
 func (l *fileEventLog) openSegmentsLocked(cursor logCursor, limit int, newestFirst bool) ([]openLogSegment, bool, error) {
@@ -222,7 +266,9 @@ func (l *fileEventLog) openSegmentsLocked(cursor logCursor, limit int, newestFir
 
 func closeOpenSegments(segments []openLogSegment) {
 	for _, segment := range segments {
-		_ = segment.file.Close()
+		if segment.reader == nil {
+			_ = segment.file.Close()
+		}
 	}
 }
 
@@ -240,7 +286,10 @@ func scanOpenSegments(ctx context.Context, segments []openLogSegment, f EventFil
 			return err
 		}
 		seg := opened.segment
-		var reader io.Reader = io.LimitReader(opened.file, seg.Size-opened.offset)
+		reader := opened.reader
+		if reader == nil {
+			reader = io.LimitReader(opened.file, seg.Size-opened.offset)
+		}
 		var decoder *zstd.Decoder
 		if seg.Compressed {
 			var err error

@@ -93,6 +93,9 @@ type SnapshotStatus struct {
 	Error      string            `json:"error,omitempty"`
 	Warning    string            `json:"warning,omitempty"`
 	Progress   *SnapshotProgress `json:"progress,omitempty"`
+	// RetryAt is when a failed view without a previous result will next be
+	// rebuilt. Clients poll again then so transient failures recover.
+	RetryAt time.Time `json:"retry_at,omitzero"`
 }
 
 // Totals are not known during discovery/replay. Report real work done rather
@@ -578,8 +581,19 @@ func (s *Service) AuthorizedIndexedFacts(ctx context.Context, key, prefix string
 // a previous result, so polling clients do not trigger a rebuild every second.
 const dashboardRetryInterval = time.Minute
 
+// failedViewSQL records a build failure. Without a saved result, computed_at
+// is the latest failure time and restarts the retry backoff; with one, it
+// keeps describing when that result was computed.
+const failedViewSQL = `INSERT INTO dashboard_views(key,computed_at,error) VALUES(?,?,?)
+ON CONFLICT(key) DO UPDATE SET error=excluded.error,
+computed_at=CASE WHEN dashboard_views.value IS NULL THEN excluded.computed_at ELSE dashboard_views.computed_at END`
+
 func retryBackoff(found bool, lastError string, failedAt int64) bool {
 	return !found && lastError != "" && time.Since(time.Unix(0, failedAt)) < dashboardRetryInterval
+}
+
+func retryAt(failedAt int64) time.Time {
+	return time.Unix(0, failedAt).Add(dashboardRetryInterval).UTC()
 }
 
 func (s *Service) historyProgress() *SnapshotProgress {
@@ -666,7 +680,7 @@ func (s *Service) DashboardUsage(ctx context.Context, key string, window time.Du
 				// delay a range that is already covered.
 				catchUpErr := s.eventIndex.refreshTails(jobCtx)
 				if catchUpErr != nil {
-					_, _ = store.db.ExecContext(context.WithoutCancel(jobCtx), `INSERT INTO dashboard_views(key,computed_at,error) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET error=excluded.error`, key, time.Now().UTC().UnixNano(), catchUpErr.Error())
+					_, _ = store.db.ExecContext(context.WithoutCancel(jobCtx), failedViewSQL, key, time.Now().UTC().UnixNano(), catchUpErr.Error())
 					return
 				}
 				// Older history may still be indexing; this range is ready
@@ -677,8 +691,7 @@ func (s *Service) DashboardUsage(ctx context.Context, key string, window time.Du
 			}
 			summary, computeErr := compute(jobCtx)
 			if computeErr != nil {
-				_, _ = store.db.ExecContext(context.WithoutCancel(jobCtx), `INSERT INTO dashboard_views(key,computed_at,error) VALUES(?,?,?)
-ON CONFLICT(key) DO UPDATE SET error=excluded.error`, key, time.Now().UTC().UnixNano(), computeErr.Error())
+				_, _ = store.db.ExecContext(context.WithoutCancel(jobCtx), failedViewSQL, key, time.Now().UTC().UnixNano(), computeErr.Error())
 				return
 			}
 			encoded, encodeErr := json.Marshal(summary)
@@ -696,6 +709,7 @@ ON CONFLICT(key) DO UPDATE SET value=excluded.value,computed_at=excluded.compute
 		result.Analytics.Error = lastError
 		if !found {
 			result.Analytics.State = "failed"
+			result.Analytics.RetryAt = retryAt(computed)
 		}
 	}
 	return result, nil
@@ -746,7 +760,7 @@ func (s *Service) DashboardMaterialized(ctx context.Context, key string, window 
 				// delay a range that is already covered.
 				catchUpErr := s.eventIndex.refreshTails(jobCtx)
 				if catchUpErr != nil {
-					_, _ = store.db.ExecContext(context.WithoutCancel(jobCtx), `INSERT INTO dashboard_views(key,computed_at,error) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET error=excluded.error`, key, time.Now().UTC().UnixNano(), catchUpErr.Error())
+					_, _ = store.db.ExecContext(context.WithoutCancel(jobCtx), failedViewSQL, key, time.Now().UTC().UnixNano(), catchUpErr.Error())
 					return
 				}
 				// Older history may still be indexing; this range is ready
@@ -757,7 +771,7 @@ func (s *Service) DashboardMaterialized(ctx context.Context, key string, window 
 			}
 			view, computeErr := compute(jobCtx)
 			if computeErr != nil {
-				_, _ = store.db.ExecContext(context.WithoutCancel(jobCtx), `INSERT INTO dashboard_views(key,computed_at,error) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET error=excluded.error`, key, time.Now().UTC().UnixNano(), computeErr.Error())
+				_, _ = store.db.ExecContext(context.WithoutCancel(jobCtx), failedViewSQL, key, time.Now().UTC().UnixNano(), computeErr.Error())
 				return
 			}
 			view.Analytics = nil
@@ -775,6 +789,7 @@ func (s *Service) DashboardMaterialized(ctx context.Context, key string, window 
 		state.Error = lastError
 		if !found {
 			state.State, result.Note = "failed", "Analytics build failed"
+			state.RetryAt = retryAt(computed)
 		}
 	}
 	return result, nil

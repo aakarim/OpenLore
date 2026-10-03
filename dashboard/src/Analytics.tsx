@@ -250,7 +250,8 @@ function ActivityPending({ usage, error }: { usage?: Usage; error?: Error }) {
       ) : (
         <p className="empty" role="status">
           Activity totals will appear when this time range has been processed.
-          {progress?.since && ` Processed back to ${formatDate(progress.since)}.`}
+          {progress?.since &&
+            ` Processed back to ${formatDate(progress.since)}.`}
         </p>
       )}
     </section>
@@ -421,7 +422,31 @@ function Contribution({ usage }: { usage: Usage }) {
     </section>
   );
 }
-function Aggregation({
+// Delay before polling again: one second while building, or until the
+// server's retry time for a failed view.
+export function pollDelay(status?: AnalyticsStatus) {
+  if (status?.updating) return 1000;
+  if (status?.state === "failed" && status.retry_at)
+    return Math.max(1000, Date.parse(status.retry_at) - Date.now());
+  return undefined;
+}
+function Aggregation(props: {
+  name: string;
+  path: string;
+  days: number;
+  title: string;
+  onFile?: (path: string) => void;
+}) {
+  // A new query starts from an empty card; only same-query polls keep the
+  // previous response mounted.
+  return (
+    <AggregationCard
+      key={`${props.name}\u0000${props.path}\u0000${props.days}`}
+      {...props}
+    />
+  );
+}
+function AggregationCard({
   name,
   path,
   days,
@@ -442,13 +467,15 @@ function Aggregation({
     true,
   );
   useEffect(() => {
-    if (!state.data?.analytics?.updating) return;
+    if (state.loading) return;
+    const delay = pollDelay(state.data?.analytics);
+    if (delay === undefined) return;
     const timer = window.setTimeout(
       () => setRevision((value) => value + 1),
-      1000,
+      delay,
     );
     return () => window.clearTimeout(timer);
-  }, [state.data?.analytics]);
+  }, [state.data?.analytics, state.loading]);
   return (
     <section className="card table-card">
       <h2>{title}</h2>
@@ -456,6 +483,11 @@ function Aggregation({
         loading={state.loading && !state.data}
         error={state.data ? undefined : state.error}
       >
+        {state.data && state.error && (
+          <p className="coverage-note" role="alert">
+            Could not refresh: {state.error.message}
+          </p>
+        )}
         {state.data?.analytics && state.data.analytics.state !== "ready" && (
           <p className="coverage-note" data-state={state.data.analytics.state}>
             {state.data.analytics.state}.
@@ -690,13 +722,13 @@ export function Analytics({
   useEffect(() => {
     if (context.loading || usage.loading) return;
     const statuses = [context.data?.analytics, usage.data?.analytics];
-    if (
-      !statuses.some((status) => status?.updating || status?.state === "cold")
-    )
-      return;
+    const delays = statuses
+      .map((status) => (status?.state === "cold" ? 1000 : pollDelay(status)))
+      .filter((delay): delay is number => delay !== undefined);
+    if (!delays.length) return;
     const timer = window.setTimeout(
       () => setAnalyticsRevision((value) => value + 1),
-      1000,
+      Math.min(...delays),
     );
     return () => window.clearTimeout(timer);
   }, [
