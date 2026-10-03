@@ -20,6 +20,12 @@ import (
 
 type consumerFunc func(context.Context, Event)
 
+type sourceFunc func(context.Context, EventFilter, func(Event) error) error
+
+func (f sourceFunc) Scan(ctx context.Context, filter EventFilter, fn func(Event) error) error {
+	return f(ctx, filter, fn)
+}
+
 func (f consumerFunc) Consume(ctx context.Context, event Event) { f(ctx, event) }
 
 func TestDirectoryFactsKeepNestedDocsetOwnershipSeparate(t *testing.T) {
@@ -109,11 +115,11 @@ func TestDashboardUsageAlwaysSerializesActivityAsArray(t *testing.T) {
 				if state == "ready" {
 					value, lastError = `{"activity":null,"reads":7}`, ""
 				}
-				if _, err := store.db.Exec(`INSERT INTO dashboard_views(key,value,computed_at,error) VALUES('test',?,?,?)`, value, time.Now().UnixNano(), lastError); err != nil {
+				if _, err := store.db.Exec(`INSERT INTO dashboard_views(key,value,computed_at,error) VALUES('test:2592000',?,?,?)`, value, time.Now().UnixNano(), lastError); err != nil {
 					t.Fatal(err)
 				}
 			}
-			result, err := service.DashboardUsage(context.Background(), "test", 30*24*time.Hour, nil)
+			result, err := service.DashboardUsage(context.Background(), "test", 30*24*time.Hour, nil, 4)
 			if err != nil || result.Analytics.State != state || result.Analytics.Complete != (state == "ready") {
 				t.Fatalf("result=%+v err=%v", result, err)
 			}
@@ -133,12 +139,12 @@ func TestFailedDashboardViewsBackOffInsteadOfRebuildingEveryPoll(t *testing.T) {
 	defer service.Close(context.Background())
 	service.eventIndex.caughtUp.Store(true)
 	store := service.store.(*SQLiteAggregationStore)
-	for _, key := range []string{"usage", "aggregation:view"} {
+	for _, key := range []string{"usage:604800", "aggregation:view"} {
 		if _, err := store.db.Exec(`INSERT INTO dashboard_views(key,computed_at,error) VALUES(?,?,'build failed')`, key, time.Now().UnixNano()); err != nil {
 			t.Fatal(err)
 		}
 	}
-	usage, err := service.DashboardUsage(context.Background(), "usage", 7*24*time.Hour, nil)
+	usage, err := service.DashboardUsage(context.Background(), "usage", 7*24*time.Hour, nil, 4)
 	if err != nil || usage.Analytics.State != "failed" || usage.Analytics.Updating {
 		t.Fatalf("usage retried immediately: %+v err=%v", usage.Analytics, err)
 	}
@@ -146,14 +152,14 @@ func TestFailedDashboardViewsBackOffInsteadOfRebuildingEveryPoll(t *testing.T) {
 	if err != nil || view.Analytics.State != "failed" || view.Analytics.Updating {
 		t.Fatalf("aggregation retried immediately: %+v err=%v", view.Analytics, err)
 	}
-	if service.processor.active("usage:usage") || service.processor.active("aggregation:aggregation:view") {
+	if service.processor.active("usage:usage:604800") || service.processor.active("aggregation:aggregation:view") {
 		t.Fatal("failed view was queued during backoff")
 	}
 	old := time.Now().Add(-2 * dashboardRetryInterval).UnixNano()
 	if _, err := store.db.Exec(`UPDATE dashboard_views SET computed_at=?`, old); err != nil {
 		t.Fatal(err)
 	}
-	if usage, _ := service.DashboardUsage(context.Background(), "usage", 7*24*time.Hour, nil); !usage.Analytics.Updating {
+	if usage, _ := service.DashboardUsage(context.Background(), "usage", 7*24*time.Hour, nil, 4); !usage.Analytics.Updating {
 		t.Fatalf("failed usage was not retried after backoff: %+v", usage.Analytics)
 	}
 }
@@ -167,11 +173,11 @@ func TestConsecutiveDashboardFailuresRestartBackoff(t *testing.T) {
 	service.eventIndex.caughtUp.Store(true)
 	store := service.store.(*SQLiteAggregationStore)
 	old := time.Now().Add(-2 * dashboardRetryInterval).UnixNano()
-	if _, err := store.db.Exec(`INSERT INTO dashboard_views(key,computed_at,error) VALUES('usage',?,'first failure')`, old); err != nil {
+	if _, err := store.db.Exec(`INSERT INTO dashboard_views(key,computed_at,error) VALUES('usage:604800',?,'first failure')`, old); err != nil {
 		t.Fatal(err)
 	}
-	fail := func(context.Context) (Summary, error) { return Summary{}, errors.New("second failure") }
-	first, err := service.DashboardUsage(context.Background(), "usage", 7*24*time.Hour, fail)
+	fail := sourceFunc(func(context.Context, EventFilter, func(Event) error) error { return errors.New("second failure") })
+	first, err := service.DashboardUsage(context.Background(), "usage", 7*24*time.Hour, fail, 4)
 	if err != nil || !first.Analytics.Updating {
 		t.Fatalf("expired backoff did not retry: %+v err=%v", first.Analytics, err)
 	}
@@ -181,7 +187,7 @@ func TestConsecutiveDashboardFailuresRestartBackoff(t *testing.T) {
 	}
 	item.run(context.Background())
 	service.processor.finish(item.key)
-	second, err := service.DashboardUsage(context.Background(), "usage", 7*24*time.Hour, fail)
+	second, err := service.DashboardUsage(context.Background(), "usage", 7*24*time.Hour, fail, 4)
 	if err != nil || second.Analytics.Updating || second.Analytics.Error != "second failure" {
 		t.Fatalf("second failure did not restart backoff: %+v err=%v", second.Analytics, err)
 	}
@@ -219,35 +225,44 @@ func TestDashboardUsageDeduplicatesAndPublishesOnlyCompleteResult(t *testing.T) 
 	}
 
 	started, release := make(chan struct{}), make(chan struct{})
-	var calls atomic.Int32
-	compute := func(context.Context) (Summary, error) {
-		calls.Add(1)
-		close(started)
-		<-release
-		return Summary{Reads: 7, Activity: []SummaryActivity{}, ComputedAt: time.Now().UTC()}, nil
+	var once sync.Once
+	var runs atomic.Int32
+	reads := summarySource{}
+	for i := range 7 {
+		reads = append(reads, Event{ID: fmt.Sprint(i), Time: time.Now().Add(-time.Hour), Type: "doc.read"})
 	}
-	first, err := service.DashboardUsage(context.Background(), "same", 30*24*time.Hour, compute)
+	source := sourceFunc(func(ctx context.Context, filter EventFilter, fn func(Event) error) error {
+		once.Do(func() {
+			close(started)
+			<-release
+		})
+		if time.Since(filter.To) < time.Minute {
+			runs.Add(1) // each run ends with one scan of the unsettled tail
+		}
+		return reads.Scan(ctx, filter, fn)
+	})
+	first, err := service.DashboardUsage(context.Background(), "same", 30*24*time.Hour, source, 4)
 	if err != nil || first.Analytics.State != "cold" || !first.Analytics.Updating || first.Reads != 0 {
 		t.Fatalf("cold result = %#v, err=%v", first, err)
 	}
 	<-started
 	for range 8 {
-		result, err := service.DashboardUsage(context.Background(), "same", 30*24*time.Hour, compute)
+		result, err := service.DashboardUsage(context.Background(), "same", 30*24*time.Hour, source, 4)
 		if err != nil || result.Reads != 0 || !result.Analytics.Updating {
 			t.Fatalf("in-flight result = %#v, err=%v", result, err)
 		}
 	}
-	if calls.Load() != 1 {
-		t.Fatalf("duplicate compute calls = %d", calls.Load())
-	}
 	close(release)
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		result, err := service.DashboardUsage(context.Background(), "same", 30*24*time.Hour, compute)
+		result, err := service.DashboardUsage(context.Background(), "same", 30*24*time.Hour, source, 4)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if result.Reads == 7 && result.Analytics.Complete {
+			if runs.Load() != 1 {
+				t.Fatalf("duplicate usage runs = %d", runs.Load())
+			}
 			break
 		}
 		if time.Now().After(deadline) {
@@ -395,10 +410,10 @@ func TestEventIndexProgressAndImmediateBatchFollowup(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("initial catch-up was not scheduled")
 	}
-	compute := func(context.Context) (Summary, error) {
+	compute := sourceFunc(func(context.Context, EventFilter, func(Event) error) error {
 		t.Fatal("usage must wait for catch-up")
-		return Summary{}, nil
-	}
+		return nil
+	})
 	for i := int64(1); i <= 3; i++ {
 		item, ok := service.processor.pop()
 		if !ok || item.key != "event-index" {
@@ -412,7 +427,7 @@ func TestEventIndexProgressAndImmediateBatchFollowup(t *testing.T) {
 		if i < 3 {
 			// History is indexed newest first, so this range includes older
 			// unprocessed history until the final batch.
-			result, err := service.DashboardUsage(ctx, "progress", 365*24*time.Hour, compute)
+			result, err := service.DashboardUsage(ctx, "progress", 365*24*time.Hour, compute, 4)
 			progress := result.Analytics.Progress
 			if err != nil || !result.Analytics.Updating || result.Analytics.Complete || progress == nil || progress.Phase != "history" || progress.Processed != i || progress.Unit != "events" {
 				t.Fatalf("catch-up result=%+v progress=%+v err=%v", result.Analytics, progress, err)
@@ -449,22 +464,22 @@ func TestDashboardUsageServesRecentRangeBeforeOlderHistory(t *testing.T) {
 		t.Fatalf("first batch more=%v err=%v", more, err)
 	}
 	computed := false
-	result, err := service.DashboardUsage(ctx, "recent", 7*24*time.Hour, func(context.Context) (Summary, error) {
+	result, err := service.DashboardUsage(ctx, "recent", 7*24*time.Hour, sourceFunc(func(context.Context, EventFilter, func(Event) error) error {
 		computed = true
-		return Summary{Reads: 1, ComputedAt: time.Now()}, nil
-	})
+		return nil
+	}), 4)
 	if err != nil || result.Analytics.Coverage == "durable event index is catching up" {
 		t.Fatalf("recent range waited for old history: %+v err=%v", result.Analytics, err)
 	}
-	old, err := service.DashboardUsage(ctx, "old", 365*24*time.Hour, func(context.Context) (Summary, error) {
+	old, err := service.DashboardUsage(ctx, "old", 365*24*time.Hour, sourceFunc(func(context.Context, EventFilter, func(Event) error) error {
 		t.Fatal("old range computed before its history was indexed")
-		return Summary{}, nil
-	})
+		return nil
+	}), 4)
 	if err != nil || old.Analytics.Coverage != "durable event index is catching up" {
 		t.Fatalf("old range=%+v err=%v", old.Analytics, err)
 	}
 	item, ok := service.processor.pop()
-	if !ok || item.key != "usage:recent" {
+	if !ok || item.key != "usage:recent:604800" {
 		t.Fatalf("recent range was not queued: %+v", item)
 	}
 	item.run(ctx)
@@ -550,5 +565,199 @@ func TestWorkProcessorRetainsFollowupQueuedAsRunFinishes(t *testing.T) {
 		case <-time.After(time.Second):
 			t.Fatal("follow-up work was stranded")
 		}
+	}
+}
+
+func TestWorkProcessorRunsInArrivalOrderAndDoesNotStarveBackgroundWork(t *testing.T) {
+	p := newWorkProcessor()
+	var ran []string
+	record := func(key string) func(context.Context) {
+		return func(context.Context) { ran = append(ran, key) }
+	}
+	p.enqueue("background-a", false, record("background-a"))
+	p.enqueue("background-b", false, record("background-b"))
+	for _, key := range []string{"view-1", "view-2", "view-3", "view-4", "view-5"} {
+		p.enqueue(key, true, record(key))
+	}
+	// A pending background item promoted by a request moves to the priority
+	// queue rather than keeping its background position.
+	p.enqueue("background-b", true, record("ignored"))
+	for {
+		item, ok := p.pop()
+		if !ok {
+			break
+		}
+		item.run(context.Background())
+		p.finish(item.key)
+	}
+	want := []string{"view-1", "view-2", "background-a", "view-3", "view-4", "view-5", "background-b"}
+	if strings.Join(ran, ",") != strings.Join(want, ",") {
+		t.Fatalf("ran %v, want %v", ran, want)
+	}
+}
+
+// indexEvents appends events to the service log and indexes all of them.
+func indexEvents(t *testing.T, service *Service, events ...Event) {
+	t.Helper()
+	ctx := context.Background()
+	for _, event := range events {
+		if err := service.log.Append(ctx, event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	index := service.eventIndex
+	if index.log == nil {
+		index.log, index.cursor, index.checkpoint = service.log, logCursor{}, filepath.Join(t.TempDir(), "cursor")
+	}
+	if err := index.catchUp(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := index.refreshTails(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUsageSummaryReusesSettledDaysAndRebuildsDaysWithLateEvents(t *testing.T) {
+	service := newIndexedTestService(t, testFS{})
+	store := service.store.(*SQLiteAggregationStore)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	today := now.Truncate(24 * time.Hour)
+	var events []Event
+	for day := 0; day < 10; day++ {
+		at := today.Add(-time.Duration(day)*24*time.Hour + time.Hour)
+		events = append(events,
+			Event{ID: fmt.Sprintf("read-%d", day), Time: at, Type: "doc.read", Fields: map[string]any{"characters": 8, "actor_kind": "human"}},
+			Event{ID: fmt.Sprintf("command-%d", day), Time: at, Type: "command.exec", Fields: map[string]any{"actor_kind": "agent"}},
+		)
+	}
+	// One commit recorded as scalars late on one day and as a write just after
+	// midnight still counts once, as a write, across the two cached days.
+	midnight := today.Add(-3 * 24 * time.Hour)
+	events = append(events,
+		Event{ID: "scalars", Time: midnight.Add(-time.Second), Type: "doc.scalars", Fields: map[string]any{"commit_id": "c", "path": "/a.md", "writer": "agent"}},
+		Event{ID: "write", Time: midnight.Add(time.Second), Type: "doc.write", Fields: map[string]any{"commit_id": "c", "path": "/a.md", "writer": "human"}},
+	)
+	indexEvents(t, service, events...)
+
+	var scans []EventFilter
+	source := sourceFunc(func(ctx context.Context, filter EventFilter, fn func(Event) error) error {
+		scans = append(scans, filter)
+		return service.eventIndex.Scan(ctx, filter, fn)
+	})
+	since := now.Add(-7 * 24 * time.Hour)
+	want, err := UsageSummary(ctx, service.eventIndex, Params{Since: since, Until: now}, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	same := func(got Summary) bool {
+		got.ComputedAt, want.ComputedAt = time.Time{}, time.Time{}
+		a, _ := json.Marshal(got)
+		b, _ := json.Marshal(want)
+		return string(a) == string(b)
+	}
+	got, done, err := usageSummary(ctx, store.db, "scope", since, now, source, 4, time.Now().Add(time.Minute))
+	if err != nil || !done || !same(got) || got.Writes != 1 || got.HumanWrites != 1 {
+		t.Fatalf("incremental=%+v done=%v err=%v want %+v", got, done, err, want)
+	}
+	first, last := usageDays(since, now)
+	if len(scans) != int(last-first)+2 {
+		t.Fatalf("cold build scanned %d ranges, want %d days plus both edges", len(scans), last-first)
+	}
+
+	scans = nil
+	if got, done, err = usageSummary(ctx, store.db, "scope", since, now, source, 4, time.Now().Add(time.Minute)); err != nil || !done || !same(got) {
+		t.Fatalf("refresh=%+v done=%v err=%v", got, done, err)
+	}
+	if len(scans) != 2 {
+		t.Fatalf("refresh scanned %d ranges, want only the two unsettled edges", len(scans))
+	}
+
+	// A late event for a settled day invalidates that day only.
+	late := today.Add(-4*24*time.Hour + 2*time.Hour)
+	indexEvents(t, service, Event{ID: "late", Time: late, Type: "doc.read", Fields: map[string]any{"actor_kind": "human"}})
+	if want, err = UsageSummary(ctx, service.eventIndex, Params{Since: since, Until: now}, 4); err != nil {
+		t.Fatal(err)
+	}
+	scans = nil
+	if got, done, err = usageSummary(ctx, store.db, "scope", since, now, source, 4, time.Now().Add(time.Minute)); err != nil || !done || !same(got) {
+		t.Fatalf("after late event=%+v done=%v err=%v want %+v", got, done, err, want)
+	}
+	if len(scans) != 3 || !scans[0].From.Equal(late.Truncate(24*time.Hour)) {
+		t.Fatalf("late event rebuilt %v, want its day plus both edges", scans)
+	}
+}
+
+func TestUsageSummaryBuildsMissingDaysAcrossBoundedTurns(t *testing.T) {
+	service := newIndexedTestService(t, testFS{})
+	store := service.store.(*SQLiteAggregationStore)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	var dayScans int
+	source := sourceFunc(func(ctx context.Context, filter EventFilter, fn func(Event) error) error {
+		dayScans++
+		return nil
+	})
+	since := now.Add(-30 * 24 * time.Hour)
+	// An expired deadline still builds one day per turn.
+	for turn := 1; ; turn++ {
+		dayScans = 0
+		_, done, err := usageSummary(ctx, store.db, "scope", since, now, source, 4, time.Now().Add(-time.Second))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if done {
+			first, last := usageDays(since, now)
+			if turn != int(last-first) {
+				t.Fatalf("finished after %d turns, want one per day", turn)
+			}
+			break
+		}
+		if dayScans != 1 {
+			t.Fatalf("turn %d scanned %d days", turn, dayScans)
+		}
+	}
+}
+
+func TestPublishedDashboardViewsRefreshInBackgroundWithoutUpdating(t *testing.T) {
+	service, err := New(config.AnalyticsConfig{Dir: t.TempDir()}, Deps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close(context.Background())
+	service.eventIndex.caughtUp.Store(true)
+	store := service.store.(*SQLiteAggregationStore)
+	window := 30 * 24 * time.Hour
+	old := time.Now().Add(-time.Hour).UnixNano()
+	for _, key := range []string{"usage:2592000", "aggregation:view"} {
+		if _, err := store.db.Exec(`INSERT INTO dashboard_views(key,value,computed_at,error) VALUES(?,'{}',?,'')`, key, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	usage, err := service.DashboardUsage(context.Background(), "usage", window, summarySource{}, 4)
+	if err != nil || usage.Analytics.State != "ready" || usage.Analytics.Updating || !usage.Analytics.Complete {
+		t.Fatalf("published usage=%+v err=%v", usage.Analytics, err)
+	}
+	view, err := service.DashboardMaterialized(context.Background(), "view", window, func(context.Context) (Materialized, error) { return Materialized{}, nil })
+	if err != nil || view.Analytics.State != "ready" || view.Analytics.Updating || !view.Analytics.Complete {
+		t.Fatalf("published view=%+v err=%v", view.Analytics, err)
+	}
+	// Refreshes are background work: a cold view requested later runs first.
+	service.DashboardUsage(context.Background(), "cold", window, summarySource{}, 4)
+	for _, want := range []string{"usage:cold:2592000", "usage:usage:2592000", "aggregation:aggregation:view"} {
+		item, ok := service.processor.pop()
+		if !ok || item.key != want {
+			t.Fatalf("popped %q, want %q", item.key, want)
+		}
+		service.processor.finish(item.key)
+	}
+
+	// A recent result of a long window is not rebuilt on every request.
+	if _, err := store.db.Exec(`UPDATE dashboard_views SET computed_at=? WHERE key='aggregation:view'`, time.Now().Add(-5*time.Minute).UnixNano()); err != nil {
+		t.Fatal(err)
+	}
+	service.DashboardMaterialized(context.Background(), "view", window, nil)
+	if service.processor.active("aggregation:aggregation:view") {
+		t.Fatal("30-day aggregation refreshed within its refresh interval")
 	}
 }

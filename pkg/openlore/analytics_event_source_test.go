@@ -139,6 +139,26 @@ func TestDashboardEventSourceOnlyCorrelatesCommandsAndPoisonsAmbiguousSession(t 
 	}
 }
 
+func TestDashboardEventSourceCorrelatesAcrossRangeBoundary(t *testing.T) {
+	server, alice, _ := analyticsScopeServer()
+	end := time.Now().UTC().Truncate(time.Hour)
+	events := sliceAnalyticsSource{
+		{ID: "command", Time: end.Add(-time.Second), Type: "command.exec", InvocationID: "invocation", Fields: map[string]any{"command": "cat"}},
+		{ID: "read", Time: end.Add(time.Second), Type: "doc.read", InvocationID: "invocation", ParentID: "command", Fields: map[string]any{"path": "/docs/readable.md"}},
+	}
+	got := map[string]bool{}
+	source := &dashboardEventSource{server: server, identity: alice, prefix: "/docs", source: events}
+	if err := source.Scan(context.Background(), analytics.EventFilter{From: end.Add(-time.Hour), To: end}, func(event analytics.Event) error {
+		got[event.ID] = true
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !got["command"] || got["read"] {
+		t.Fatalf("boundary correlation = %#v, want only the in-range command", got)
+	}
+}
+
 func TestDashboardEventSourceCanonicalizesCopiedResourceFields(t *testing.T) {
 	server, alice, _ := analyticsScopeServer()
 	originalPath := "/knowledge/readable.md"

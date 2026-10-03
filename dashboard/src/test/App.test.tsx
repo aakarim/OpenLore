@@ -9,6 +9,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import { App, loginURL } from "../App";
+import { pollDelay } from "../Analytics";
 import { mockAPI } from "./fixtures";
 
 test("desktop tree opens a production API document and switches views without losing its tab", async () => {
@@ -885,4 +886,16 @@ test("returning to an analytics tab reuses its fetched results", async () => {
   await screen.findByRole("heading", { name: "Top search queries" });
 
   expect(analyticsRequests()).toEqual(afterFirstVisit);
+});
+
+test("published results poll every minute and building results every second", () => {
+  expect(pollDelay({ state: "cold", updating: true, complete: false })).toBe(
+    1000,
+  );
+  expect(pollDelay({ state: "ready", updating: false, complete: true })).toBe(
+    60_000,
+  );
+  expect(
+    pollDelay({ state: "disabled", updating: false, complete: false }),
+  ).toBeUndefined();
 });

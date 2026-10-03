@@ -610,12 +610,8 @@ func (s *Server) dashboardUsage(w http.ResponseWriter, r *http.Request) {
 		dashboardJSON(w, summary)
 		return
 	}
-	viewKey := fmt.Sprintf("v1:%s:%s:%d:%d", s.analyticsPolicyKey(id), target, days, ratio)
-	summary, err := s.analytics.DashboardUsage(r.Context(), viewKey, time.Duration(days)*24*time.Hour, func(ctx context.Context) (analytics.Summary, error) {
-		jobNow := time.Now().UTC()
-		jobParams := analytics.Params{Since: jobNow.Add(-time.Duration(days) * 24 * time.Hour), Until: jobNow, Extra: map[string]string{"path": target}}
-		return analytics.UsageSummary(ctx, s.DashboardEventSource(id, target), jobParams, ratio)
-	})
+	key := fmt.Sprintf("v2:%s:%s:%d", s.analyticsPolicyKey(id), target, ratio)
+	summary, err := s.analytics.DashboardUsage(r.Context(), key, time.Duration(days)*24*time.Hour, s.DashboardEventSource(id, target), ratio)
 	if err != nil {
 		dashboardError(w, http.StatusServiceUnavailable, "usage unavailable")
 		return

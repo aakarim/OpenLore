@@ -300,15 +300,18 @@ func TestFactsWarmingIsPartialBoundedAndYieldsToPriorityWork(t *testing.T) {
 	if status.Progress == nil || status.Progress.Phase != "content" || status.Progress.Processed != 2 || status.Progress.Unit != "paths" {
 		t.Fatalf("mid-build progress=%+v", status.Progress)
 	}
-	priorityRan := make(chan struct{})
-	service.processor.enqueue("requested-view", true, func(context.Context) { close(priorityRan) })
+	priorityRan := make(chan int)
+	// Count reads inside the requested job: warming continues as soon as it
+	// returns, so reading the count afterwards races with the next batch.
+	service.processor.enqueue("requested-view", true, func(context.Context) { priorityRan <- fsys.readCount() })
 	close(fsys.release)
+	var reads int
 	select {
-	case <-priorityRan:
+	case reads = <-priorityRan:
 	case <-time.After(2 * time.Second):
 		t.Fatal("requested work was starved by warming")
 	}
-	if reads := fsys.readCount(); reads > factsBatchSize+1 {
+	if reads > factsBatchSize+1 {
 		t.Fatalf("priority ran only after %d file reads, batch limit=%d", reads, factsBatchSize)
 	}
 	deadline := time.Now().Add(3 * time.Second)
