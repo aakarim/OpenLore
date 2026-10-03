@@ -191,6 +191,48 @@ test("overview keeps knowledge visible and reports activity failures", async () 
   expect(screen.getByText("Context by folder")).toBeVisible();
 });
 
+test("polling aggregations keep their result mounted instead of flashing", async () => {
+  history.replaceState(
+    null,
+    "",
+    "/dashboard/?view=analytics&path=/&tab=commands",
+  );
+  const fetch = mockAPI();
+  const original = fetch.getMockImplementation()!;
+  let calls = 0;
+  fetch.mockImplementation((input, init) => {
+    if (!String(input).includes("/analytics/aggregations/top-commands"))
+      return original(input, init);
+    calls++;
+    const response = new Response(
+      JSON.stringify({
+        status: "planned",
+        note: "Analytics build failed",
+        table: { columns: [], rows: [], total: 0 },
+        computed_at: "",
+        window: {},
+        analytics: {
+          state: "failed",
+          updating: true,
+          complete: false,
+          error: "build failed",
+        },
+      }),
+    );
+    // Hold later polls open so an unmounted result would be observable.
+    return calls === 1
+      ? Promise.resolve(response)
+      : new Promise<Response>(() => {});
+  });
+  render(<App />);
+  const card = (await screen.findByRole("heading", { name: "Top commands" }))
+    .parentElement!;
+  await within(card).findByText("Analytics build failed");
+  await waitFor(() => expect(calls).toBeGreaterThan(1), { timeout: 2500 });
+  expect(within(card).queryByText("Computing analytics…")).toBeNull();
+  expect(within(card).getByText("Analytics build failed")).toBeVisible();
+});
+
 test("analytics status shows how far activity history is processed", async () => {
   history.replaceState(
     null,
@@ -592,7 +634,9 @@ test("returning to the browser tab preserves workspace state during session refr
       ),
     );
   });
-  await waitFor(() => expect(fileRequests()).toBeGreaterThan(initialFileRequests));
+  await waitFor(() =>
+    expect(fileRequests()).toBeGreaterThan(initialFileRequests),
+  );
   expect(screen.getByRole("button", { name: "Source" })).toHaveAttribute(
     "aria-pressed",
     "true",

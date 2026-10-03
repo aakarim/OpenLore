@@ -125,6 +125,39 @@ func TestDashboardUsageAlwaysSerializesActivityAsArray(t *testing.T) {
 	}
 }
 
+func TestFailedDashboardViewsBackOffInsteadOfRebuildingEveryPoll(t *testing.T) {
+	service, err := New(config.AnalyticsConfig{Dir: t.TempDir()}, Deps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close(context.Background())
+	service.eventIndex.caughtUp.Store(true)
+	store := service.store.(*SQLiteAggregationStore)
+	for _, key := range []string{"usage", "aggregation:view"} {
+		if _, err := store.db.Exec(`INSERT INTO dashboard_views(key,computed_at,error) VALUES(?,?,'build failed')`, key, time.Now().UnixNano()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	usage, err := service.DashboardUsage(context.Background(), "usage", 7*24*time.Hour, nil)
+	if err != nil || usage.Analytics.State != "failed" || usage.Analytics.Updating {
+		t.Fatalf("usage retried immediately: %+v err=%v", usage.Analytics, err)
+	}
+	view, err := service.DashboardMaterialized(context.Background(), "view", 7*24*time.Hour, nil)
+	if err != nil || view.Analytics.State != "failed" || view.Analytics.Updating {
+		t.Fatalf("aggregation retried immediately: %+v err=%v", view.Analytics, err)
+	}
+	if service.processor.active("usage:usage") || service.processor.active("aggregation:aggregation:view") {
+		t.Fatal("failed view was queued during backoff")
+	}
+	old := time.Now().Add(-2 * dashboardRetryInterval).UnixNano()
+	if _, err := store.db.Exec(`UPDATE dashboard_views SET computed_at=?`, old); err != nil {
+		t.Fatal(err)
+	}
+	if usage, _ := service.DashboardUsage(context.Background(), "usage", 7*24*time.Hour, nil); !usage.Analytics.Updating {
+		t.Fatalf("failed usage was not retried after backoff: %+v", usage.Analytics)
+	}
+}
+
 func TestDashboardUsageDeduplicatesAndPublishesOnlyCompleteResult(t *testing.T) {
 	dir := t.TempDir()
 	service, err := New(config.AnalyticsConfig{Dir: dir, Log: config.AnalyticsLogConfig{Compress: "none"}}, Deps{})

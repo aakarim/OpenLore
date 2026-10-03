@@ -574,6 +574,14 @@ func (s *Service) AuthorizedIndexedFacts(ctx context.Context, key, prefix string
 	return rows, totals, status, nil
 }
 
+// dashboardRetryInterval spaces retries of a view whose build failed without
+// a previous result, so polling clients do not trigger a rebuild every second.
+const dashboardRetryInterval = time.Minute
+
+func retryBackoff(found bool, lastError string, failedAt int64) bool {
+	return !found && lastError != "" && time.Since(time.Unix(0, failedAt)) < dashboardRetryInterval
+}
+
 func (s *Service) historyProgress() *SnapshotProgress {
 	return &SnapshotProgress{Phase: "history", Processed: s.eventIndex.processed.Load(), Unit: "events", Since: s.eventIndex.processedSince()}
 }
@@ -651,7 +659,7 @@ func (s *Service) DashboardUsage(ctx context.Context, key string, window time.Du
 	}
 	stale := !found || time.Since(result.Analytics.ComputedAt) > time.Minute
 	jobKey := "usage:" + key
-	if stale {
+	if stale && !retryBackoff(found, lastError, computed) {
 		s.processor.enqueue(jobKey, true, func(jobCtx context.Context) {
 			if s.eventIndex != nil {
 				// Refresh only new tails: an older unindexed segment must not
@@ -730,7 +738,7 @@ func (s *Service) DashboardMaterialized(ctx context.Context, key string, window 
 		}
 		return result, nil
 	}
-	if !found || time.Since(state.ComputedAt) > time.Minute {
+	if (!found || time.Since(state.ComputedAt) > time.Minute) && !retryBackoff(found, lastError, computed) {
 		jobKey := "aggregation:" + key
 		s.processor.enqueue(jobKey, true, func(jobCtx context.Context) {
 			if s.eventIndex != nil {

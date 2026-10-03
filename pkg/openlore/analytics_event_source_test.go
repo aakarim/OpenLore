@@ -2,6 +2,7 @@ package openlore
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -219,6 +220,28 @@ func TestAnalyticsEventClassifiesDirectAndDelegatedCallers(t *testing.T) {
 				t.Fatalf("event attribution = %#v", event)
 			}
 		})
+	}
+}
+
+func TestDashboardEventSourceStreamsLargeWindows(t *testing.T) {
+	server, alice, _ := analyticsScopeServer()
+	now := time.Now().UTC()
+	events := make(sliceAnalyticsSource, 0, 60001)
+	events = append(events, analytics.Event{ID: "command", Time: now, Type: "command.exec", InvocationID: "invocation"})
+	for i := range 60000 {
+		events = append(events, analytics.Event{ID: fmt.Sprint("read-", i), Time: now, Type: "doc.read", InvocationID: "invocation", Fields: map[string]any{"path": "/docs/readable.md"}})
+	}
+	source := &dashboardEventSource{server: server, identity: alice, prefix: "/docs", source: events}
+	count, command := 0, false
+	if err := source.Scan(context.Background(), analytics.EventFilter{}, func(event analytics.Event) error {
+		count++
+		command = command || event.ID == "command"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if count != len(events) || !command {
+		t.Fatalf("large window emitted %d of %d events, command=%v", count, len(events), command)
 	}
 }
 

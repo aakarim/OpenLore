@@ -438,6 +438,8 @@ function Aggregation({
   const state = useAsync(
     (signal) => api.aggregation(name, path, days, signal),
     [name, path, days, revision],
+    true,
+    true,
   );
   useEffect(() => {
     if (!state.data?.analytics?.updating) return;
@@ -450,7 +452,10 @@ function Aggregation({
   return (
     <section className="card table-card">
       <h2>{title}</h2>
-      <State loading={state.loading} error={state.error}>
+      <State
+        loading={state.loading && !state.data}
+        error={state.data ? undefined : state.error}
+      >
         {state.data?.analytics && state.data.analytics.state !== "ready" && (
           <p className="coverage-note" data-state={state.data.analytics.state}>
             {state.data.analytics.state}.

@@ -2,7 +2,7 @@ package openlore
 
 import (
 	"context"
-	"fmt"
+	"time"
 
 	"github.com/aakarim/go-openlore/internal/analytics"
 )
@@ -31,8 +31,6 @@ type dashboardEventSource struct {
 	prefix   string
 	source   analytics.EventSource
 }
-
-const dashboardUsageEventLimit = 50000
 
 type analyticsAccess struct {
 	proved  bool
@@ -81,23 +79,20 @@ func (d *dashboardEventSource) Scan(ctx context.Context, filter analytics.EventF
 	if d.prefix == "" {
 		prefix = "/"
 	}
-	// Resource attribution can follow an event in the append-only log, so retain
-	// the source snapshot long enough to establish complete invocation/session
-	// scope before streaming authorized requested events from that snapshot.
+	// Resource attribution can follow an event in the append-only log. Rather
+	// than buffering the window, stream it in passes: first prove command
+	// correlations, then session scope, then emit authorized events. Memory is
+	// bounded by correlation IDs, not by the number of events in the window.
+	to := filter.To
+	if to.IsZero() {
+		// Exclude events appended while the passes run.
+		to = time.Now().UTC()
+	}
+	window := analytics.EventFilter{From: filter.From, To: to}
 	byParent := map[string]analyticsAccess{}
 	byInvocation := map[string]analyticsAccess{}
-	var events []analytics.Event
-	var direct []analyticsAccess
-	// Read only the requested durable time window. All event types remain in
-	// scope here so command/session attribution can still be proved before the
-	// caller's type filter is applied below.
-	if err := d.source.Scan(ctx, analytics.EventFilter{From: filter.From, To: filter.To}, func(event analytics.Event) error {
-		if len(events) >= dashboardUsageEventLimit {
-			return fmt.Errorf("authorized usage window exceeds the %d event processing limit", dashboardUsageEventLimit)
-		}
-		events = append(events, event)
+	if err := d.source.Scan(ctx, window, func(event analytics.Event) error {
 		access := d.directAccess(event, prefix)
-		direct = append(direct, access)
 		if access.proved {
 			if event.ParentID != "" {
 				current := byParent[event.ParentID]
@@ -114,55 +109,61 @@ func (d *dashboardEventSource) Scan(ctx context.Context, filter analytics.EventF
 	}); err != nil {
 		return err
 	}
-
-	eventAccess := make([]analyticsAccess, len(events))
-	for i, event := range events {
-		access := direct[i]
+	eventAccess := func(event analytics.Event) analyticsAccess {
+		access := d.directAccess(event, prefix)
 		if !access.proved && analyticsCommandEvent(event.Type) {
 			access = mergeAnalyticsAccess(byParent[event.ID], byInvocation[event.InvocationID])
 		}
-		eventAccess[i] = access
-	}
-	bySession := map[string]analyticsAccess{}
-	for i, event := range events {
-		if event.SessionID == "" || event.Type == "session.start" || event.Type == "session.end" || event.Type == "auth.login" {
-			continue
-		}
-		access := eventAccess[i]
-		current := bySession[event.SessionID]
-		// An unproved command or event makes the session ambiguous.
-		current.add(access.proved && access.allowed)
-		bySession[event.SessionID] = current
+		return access
 	}
 	types := make(map[string]bool, len(filter.Types))
 	for _, eventType := range filter.Types {
 		types[eventType] = true
 	}
+	sessionEvent := func(eventType string) bool {
+		return eventType == "session.start" || eventType == "session.end" || eventType == "auth.login"
+	}
+	bySession := map[string]analyticsAccess{}
+	if len(types) == 0 || types["session.start"] || types["session.end"] || types["auth.login"] {
+		if err := d.source.Scan(ctx, window, func(event analytics.Event) error {
+			if event.SessionID == "" || sessionEvent(event.Type) {
+				return nil
+			}
+			access := eventAccess(event)
+			current := bySession[event.SessionID]
+			// An unproved command or event makes the session ambiguous.
+			current.add(access.proved && access.allowed)
+			bySession[event.SessionID] = current
+			return nil
+		}); err != nil {
+			return err
+		}
+	}
 	principals := make(map[string]bool, len(filter.Principals))
 	for _, principal := range filter.Principals {
 		principals[principal] = true
 	}
-	for i, event := range events {
-		if !filter.From.IsZero() && event.Time.Before(filter.From) || !filter.To.IsZero() && event.Time.After(filter.To) {
-			continue
+	return d.source.Scan(ctx, window, func(event analytics.Event) error {
+		if !filter.From.IsZero() && event.Time.Before(filter.From) || event.Time.After(to) {
+			return nil
 		}
 		if len(types) > 0 && !types[event.Type] {
-			continue
+			return nil
 		}
 		if len(principals) > 0 && !principals[event.Principal] {
-			continue
+			return nil
 		}
-		access := eventAccess[i]
-		if event.Type == "session.start" || event.Type == "session.end" || event.Type == "auth.login" {
+		var access analyticsAccess
+		if sessionEvent(event.Type) {
 			access = bySession[event.SessionID]
+		} else {
+			access = eventAccess(event)
 		}
 		if access.proved && access.allowed {
-			if err := fn(d.canonicalEvent(event)); err != nil {
-				return err
-			}
+			return fn(d.canonicalEvent(event))
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 func analyticsCommandEvent(eventType string) bool {
