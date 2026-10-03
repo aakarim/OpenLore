@@ -113,6 +113,10 @@ func newAwkInterpreter(program, fieldSep string, varDefs []string, w io.Writer, 
 	awk.vars["RS"] = awk.rs
 	awk.vars["ORS"] = awk.ors
 
+	if kind := awkUnterminatedLiteral(program); kind != "" {
+		awk.fail("unterminated %s literal", kind)
+		return awk
+	}
 	awk.rules = parseAwkProgram(program)
 	return awk
 }
@@ -203,6 +207,10 @@ func extractBlock(s string) (string, string) {
 }
 
 func (a *awkInterpreter) run(lines []string) int {
+	if a.err != "" {
+		return a.reportError()
+	}
+
 	// Run BEGIN rules
 	for _, rule := range a.rules {
 		if rule.isBegin {
@@ -995,9 +1003,10 @@ func (a *awkInterpreter) evalExpr(expr string) string {
 	}
 
 	// Numeric literal. Checked before variables so that 1 is never
-	// looked up as a name.
+	// looked up as a name. Normalised so that 0.0 is false like 0 and
+	// prints as awk prints numbers.
 	if awkIsNumberLiteral(expr) {
-		return expr
+		return awkFormatNum(awkNum(expr))
 	}
 
 	// Variable lookup
@@ -1275,6 +1284,11 @@ func awkLiteralMask(expr string) []bool {
 	for i := 0; i < len(expr); i++ {
 		if expr[i] == '"' || (expr[i] == '/' && awkRegexCanStart(expr, i)) {
 			end := awkLiteralEnd(expr, i)
+			if end < 0 {
+				// Unterminated: mask to the end so nothing inside is parsed
+				// as an operator. The program is rejected before it runs.
+				end = len(expr) - 1
+			}
 			for j := i; j <= end; j++ {
 				mask[j] = true
 			}
@@ -1297,7 +1311,25 @@ func awkLiteralEnd(expr string, start int) int {
 			return i
 		}
 	}
-	return len(expr) - 1
+	return -1
+}
+
+// awkUnterminatedLiteral reports the kind of the first string or regex
+// literal in prog that has no closing delimiter, or "" if all are closed.
+func awkUnterminatedLiteral(prog string) string {
+	for i := 0; i < len(prog); i++ {
+		if prog[i] == '"' || (prog[i] == '/' && awkRegexCanStart(prog, i)) {
+			end := awkLiteralEnd(prog, i)
+			if end < 0 {
+				if prog[i] == '"' {
+					return "string"
+				}
+				return "regex"
+			}
+			i = end
+		}
+	}
+	return ""
 }
 
 // awkRegexCanStart reports whether a slash at i opens a regex literal

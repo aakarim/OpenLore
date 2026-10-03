@@ -76,6 +76,9 @@ func TestAwkExpressions(t *testing.T) {
 	assertOutput(t, fs, `printf '2\n5\n' | awk '{ if ($1 > 3) print "big"; else print "small" }'`, "small\nbig\n")
 	assertOutput(t, fs, `printf 'ab\ncd\n' | awk '!/c/ || $0 ~ "d" { print NR ": " $0 }'`, "1: ab\n2: cd\n")
 	assertOutput(t, fs, `printf 'a\n' | awk '{ x = "a+=b"; print x, 1 + 2 " items" }'`, "a+=b 3 items\n")
+	// Zero-valued numeric literals are false, and numbers print normalised.
+	assertOutput(t, fs, `printf 'a\n' | awk '{ x = 0.0; if (!0.0 && !x) print "f"; print (0.0 || 0), 1.50 }'`, "f\n0 1.5\n")
+	assertOutput(t, fs, `printf 'a\n' | awk '{ x = "0.0"; if (x) print "string is true" }'`, "string is true\n")
 }
 
 func TestAwkUnsupportedConstructsFail(t *testing.T) {
@@ -86,10 +89,16 @@ func TestAwkUnsupportedConstructsFail(t *testing.T) {
 		`printf 'x\n' | awk '{ getline line }'`,
 		`printf 'x\n' | awk '{ print 1 +* 2 }'`,
 		`printf 'x\n' | awk '/[/'`,
+		`printf 'x\n' | awk '/abc'`,
+		`printf 'x\n' | awk '/x/ { print "abc }'`,
+		`printf 'x\n' | awk 'BEGIN { print "start" } { print "abc }'`,
 	} {
-		_, errOut, code := execCmd(t, testFS(), cmd)
+		out, errOut, code := execCmd(t, testFS(), cmd)
 		if code != 2 || !strings.HasPrefix(errOut, "awk: ") {
 			t.Errorf("%s: code=%d stderr=%q, want exit 2 with awk error", cmd, code, errOut)
+		}
+		if strings.Contains(cmd, "abc") && out != "" {
+			t.Errorf("%s: printed %q before rejecting an unterminated literal", cmd, out)
 		}
 	}
 }
