@@ -966,3 +966,54 @@ test("published results poll every minute and building results every second", ()
     pollDelay({ state: "disabled", updating: false, complete: false }),
   ).toBeUndefined();
 });
+
+test("a failed refresh of a published result is reported in status", async () => {
+  history.replaceState(
+    null,
+    "",
+    "/dashboard/?view=analytics&path=/&tab=overview",
+  );
+  const fetch = mockAPI();
+  const original = fetch.getMockImplementation()!;
+  let calls = 0;
+  fetch.mockImplementation(async (input, init) => {
+    const response = await original(input, init);
+    if (!String(input).includes("/api/usage?")) return response;
+    calls++;
+    if (calls > 1) return new Response("Unavailable", { status: 503 });
+    return new Response(
+      JSON.stringify({
+        ...(await response.json()),
+        analytics: { state: "ready", complete: true, updating: false },
+      }),
+    );
+  });
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    render(<App />);
+    await screen.findByRole("img", {
+      name: "Daily activity stacked by attribution",
+    });
+    const button = await screen.findByRole("button", {
+      name: "Analytics status: Analytics up to date",
+    });
+    expect(calls).toBe(1);
+    // Published results are polled every minute.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await waitFor(() => expect(calls).toBe(2));
+    await waitFor(() =>
+      expect(button).toHaveAccessibleName(
+        "Analytics status: Analytics processing failed",
+      ),
+    );
+  } finally {
+    vi.useRealTimers();
+  }
+  const dialog = await openStatus();
+  expect(within(dialog).getByText("Could not refresh")).toBeVisible();
+  expect(
+    within(dialog).getByText(/Previous results remain visible/),
+  ).toBeVisible();
+});
