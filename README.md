@@ -57,6 +57,12 @@ ssh openlore.sh teach | claude
 
 Not on Homebrew? See [Installation](#installation) for Linux, Windows and Go.
 
+### Deploy a shared server
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/aakarim/OpenLore)
+
+One click gives you an HTTPS server with MCP, passkey login and a persistent disk. See [Deploy OpenLore to Render](docs/render.md) for first sign-in and connecting agents.
+
 ## Why not just keep Markdown in your repo?
 
 For one agent in one repository, do that.
@@ -74,6 +80,7 @@ There's no vector database, ingestion pipeline or SDK. Your knowledge stays as o
 - [OpenCode]
 - [Any agent over SSH](docs/start-ssh.md)
 - [Let an agent publish into an inbox](docs/publish-to-inbox.md)
+- [Deploy to Render](docs/render.md)
 - [All documentation](https://openlore.sh/docs/)
 
 
@@ -300,6 +307,12 @@ Azure, DigitalOcean, or custom infrastructure. The repository's Railpack and
 Fly files provide the image, persistent-volume, and port wiring; they do not
 seed or mutate configuration at process startup.
 
+For a quick hosted server without a customised repository, use the
+[Deploy to Render](docs/render.md) button. Unlike the Railpack and Fly files,
+its start script writes a starter `openlore.yml` and `lore.json` to an empty
+disk on first boot. Render serves HTTPS, MCP and the web view only; it has no
+public TCP ingress for OpenLore SSH.
+
 Railway assigns its SSH TCP proxy a public hostname and port. Standard SSH port
 22 requires an external raw TCP load balancer. Fly.io can map public port 22 to
 OpenLore's internal port 2222 with a dedicated address. Raw SSH has no hostname
@@ -317,6 +330,7 @@ The container workflow publishes `latest` from `main`; releases also publish
 | [Claude Code with OpenLore](docs/start-claude-code.md) | Connect Claude Code over MCP and scope what it sees |
 | [Any agent with OpenLore over SSH](docs/start-ssh.md) | Connect a coding agent or CI job over SSH and give it an identity |
 | [Let an agent publish into an inbox](docs/publish-to-inbox.md) | Accept contributions from an agent without letting it edit anything else |
+| [Deploy OpenLore to Render](docs/render.md) | One-click Render deployment, first passkey sign-in, upgrades, and custom domains |
 | [Ways to use OpenLore](docs/usage.md) | SSH, MCP, web, SSHFS, embedded binaries, GitHub Action, MCPB, and library usage |
 | [Editing OpenLore files](docs/editors.md) | Direct VS Code and SFTP editor setup without a local project mirror |
 | [Command reference](docs/commands.md) | Complete shell, introspection, publishing, syntax, CLI command, and flag reference |

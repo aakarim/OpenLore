@@ -1,0 +1,22 @@
+# Render Blueprint for the "Deploy to Render" button. See docs/render.md.
+services:
+  - type: web
+    name: openlore
+    runtime: docker
+    # Persistent disks need a paid instance type.
+    plan: starter
+    dockerfilePath: ./deploy/render/Dockerfile
+    dockerContext: ./deploy/render
+    # Instances created from the button should not redeploy when this
+    # repository changes. Redeploy manually to pick up a new release.
+    autoDeployTrigger: "off"
+    healthCheckPath: /
+    envVars:
+      - key: PORT
+        value: "8080"
+      - key: OPENLORE_VERSION
+        value: latest
+    disk:
+      name: openlore-data
+      mountPath: /var/lib/openlore
+      sizeGB: 1
