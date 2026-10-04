@@ -42,6 +42,9 @@ necessarily the current version. Dates are the GitHub publication dates in UTC.
   Published results stay visible while they refresh in the background, activity
   totals refresh incrementally from cached daily results, and new views are no
   longer starved by repeated refreshes.
+- Activity tables (commands, searches, file and line usage) refresh
+  incrementally from cached daily results, like activity totals, and cached
+  analytics are no longer discarded every time the server restarts.
 - The analytics dashboard shows knowledge and recent activity without waiting
   for all activity history. A new **Status** panel shows how far history has
   been processed.

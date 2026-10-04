@@ -135,7 +135,7 @@ func TestFactsAndTopCommands(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	table, err := topCommands(context.Background(), log, nil, Params{})
+	table, err := builtin("top-commands")(context.Background(), log, nil, Params{})
 	if err != nil {
 		t.Fatal(err)
 	}

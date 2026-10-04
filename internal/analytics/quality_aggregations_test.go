@@ -3,10 +3,31 @@ package analytics
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
+	"math/rand/v2"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 )
+
+// builtin returns the Compute of a built-in aggregation.
+func builtin(name string) func(context.Context, EventSource, ContentFacts, Params) (Table, error) {
+	for _, aggregation := range BuiltinAggregations() {
+		if aggregation.Name == name {
+			return aggregation.Compute
+		}
+	}
+	panic("unknown aggregation " + name)
+}
+
+func lineAggregation(most bool) string {
+	if most {
+		return "most-used-lines"
+	}
+	return "least-used-lines"
+}
 
 func appendEvents(t *testing.T, log EventLog, events ...Event) {
 	t.Helper()
@@ -61,14 +82,14 @@ func TestFileAndFolderUsageIncludeNeverReadInventory(t *testing.T) {
 		Event{Time: recent, Type: "doc.hit", Fields: map[string]any{"path": "/docs/sub/hit.md", "content_hash": "hit-hash"}},
 		Event{Time: recent, Type: "doc.scalars", Fields: map[string]any{"path": "/docs/read.md", "after": map[string]any{"tokens": float64(2000)}}},
 	)
-	table, err := fileUsageTable("asc")(context.Background(), log, facts, Params{Extra: map[string]string{"path": "/docs"}})
+	table, err := builtin("least-used-files")(context.Background(), log, facts, Params{Extra: map[string]string{"path": "/docs"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(table.Rows) != 3 || table.Rows[0][0] != "/docs/sub/unused.md" || table.Rows[1][0] != "/docs/read.md" || table.Rows[1][4] != float64(2000) || table.Rows[1][5] != .5 || table.Rows[2][0] != "/docs/sub/hit.md" {
 		t.Fatalf("file usage rows = %#v", table.Rows)
 	}
-	folders, err := leastUsedFolders(context.Background(), log, facts, Params{Extra: map[string]string{"path": "/docs", "depth": "1"}})
+	folders, err := builtin("least-used-folders")(context.Background(), log, facts, Params{Extra: map[string]string{"path": "/docs", "depth": "1"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +115,7 @@ func TestLeastUsedLinesIgnoresStaleContentHashes(t *testing.T) {
 		Event{Time: now.Add(2 * time.Minute), Type: "doc.scalars", Fields: map[string]any{"path": "/docs/a.md", "content_hash": current.ContentHash, "after": map[string]any{"lines": float64(5), "tokens": float64(10)}}},
 		Event{Time: now.Add(-time.Minute), Type: "doc.hit", Fields: map[string]any{"path": "/docs/a.md", "content_hash": current.ContentHash, "unit": map[string]any{"lines": map[string]any{"start": 2, "end": 3}}}},
 	)
-	table, err := leastUsedLines(context.Background(), log, facts, Params{Extra: map[string]string{"path": "/docs/a.md"}})
+	table, err := builtin("least-used-lines")(context.Background(), log, facts, Params{Extra: map[string]string{"path": "/docs/a.md"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +157,7 @@ func TestMostUsedLinesSortsCurrentRevisionByReadCount(t *testing.T) {
 		events = append(events, Event{Time: now.Add(time.Duration(i) * time.Minute), Type: "doc.read", Fields: map[string]any{"path": "/docs/a.md", "content_hash": "prior-revision", "unit": map[string]any{}}})
 	}
 	appendEvents(t, log, events...)
-	table, err := mostUsedLines(context.Background(), log, facts, Params{Extra: map[string]string{"path": "/docs/a.md"}})
+	table, err := builtin("most-used-lines")(context.Background(), log, facts, Params{Extra: map[string]string{"path": "/docs/a.md"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +177,7 @@ func TestMostUsedLinesSortsCurrentRevisionByReadCount(t *testing.T) {
 
 func TestLeastUsedLinesRejectsDirectory(t *testing.T) {
 	facts := NewContentFacts(testFS{"/docs/a.md": []byte("one\n")})
-	if _, err := leastUsedLines(context.Background(), nil, facts, Params{Extra: map[string]string{"path": "/docs"}}); err == nil {
+	if _, err := builtin("least-used-lines")(context.Background(), nil, facts, Params{Extra: map[string]string{"path": "/docs"}}); err == nil {
 		t.Fatal("directory path was accepted")
 	}
 }
@@ -171,7 +192,7 @@ func TestUsedLinesBoundsNewlineHeavyFiles(t *testing.T) {
 		"/over-limit": bytes.Repeat([]byte{'\n'}, 100_001),
 	})
 	for _, most := range []bool{false, true} {
-		table, err := usedLines(context.Background(), log, facts, Params{Extra: map[string]string{"path": "/at-limit"}}, most)
+		table, err := builtin(lineAggregation(most))(context.Background(), log, facts, Params{Extra: map[string]string{"path": "/at-limit"}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -179,7 +200,7 @@ func TestUsedLinesBoundsNewlineHeavyFiles(t *testing.T) {
 			t.Fatalf("most=%v: expected complete at-limit range, got %#v", most, table)
 		}
 		// A nil source also proves rejection happens before any event scan.
-		table, err = usedLines(context.Background(), nil, facts, Params{Limit: 1, Extra: map[string]string{"path": "/over-limit"}}, most)
+		table, err = builtin(lineAggregation(most))(context.Background(), nil, facts, Params{Limit: 1, Extra: map[string]string{"path": "/over-limit"}})
 		if err == nil || !strings.Contains(err.Error(), "exceeding 100000 lines") || len(table.Rows) != 0 {
 			t.Fatalf("most=%v: expected explicit rejection, not truncation: %#v, %v", most, table, err)
 		}
@@ -198,5 +219,107 @@ func TestPhaseTwoAggregationsAreRegisteredAsLive(t *testing.T) {
 		if got := registry.Status(name); got != StatusOK {
 			t.Errorf("%s status = %s, want ok", name, got)
 		}
+	}
+}
+
+// Every incremental aggregation must give the same table from merged,
+// JSON round-tripped partials of consecutive ranges as from one scan.
+func TestIncrementalAggregationsMergeExactly(t *testing.T) {
+	files := testFS{"/docs/a.md": []byte("one\ntwo\nthree\nfour\nfive\n"), "/docs/sub/b.md": []byte("b\n"), "/docs/c.md": []byte("c")}
+	facts := NewContentFacts(files)
+	current, err := facts.Stat(context.Background(), "/docs/a.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	random := rand.New(rand.NewPCG(1, 2))
+	pick := func(values ...string) string { return values[random.IntN(len(values))] }
+	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	var events summarySource
+	for i := range 600 {
+		e := Event{ID: fmt.Sprint(i), Time: start.Add(time.Duration(i) * 7 * time.Minute), Principal: pick("ann", "bob", "cy"), SessionID: pick("s1", "s2", "s3", ""), Transport: pick("ssh", "mcp")}
+		switch random.IntN(7) {
+		case 0:
+			e.Type, e.Fields = "command.exec", map[string]any{"command": pick("cat", "grep", "ls"), "exit_code": float64(random.IntN(2)), "duration_ms": float64(random.IntN(5))}
+		case 1:
+			e.Type, e.Fields = pick("command.unknown", "syntax.unknown"), map[string]any{"command": pick("vim", ""), "syntax": "<<"}
+		case 2:
+			e.Type = "session.start"
+		case 3:
+			e.Type, e.Fields = "search.query", map[string]any{"pattern": pick("auth", " auth ", "billing"), "filled": random.IntN(2) == 0}
+		case 4, 5:
+			hash := pick(current.ContentHash, "old")
+			unit := map[string]any{}
+			if random.IntN(2) == 0 {
+				first := 1 + random.IntN(5)
+				unit["lines"] = map[string]any{"start": float64(first), "end": float64(first + random.IntN(3))}
+			}
+			e.Type, e.Fields = pick("doc.read", "doc.hit"), map[string]any{"path": pick("/docs/a.md", "/docs/sub/b.md", "/elsewhere.md"), "content_hash": hash, "unit": unit}
+		case 6:
+			after := map[string]any{"lines": float64(5)}
+			if random.IntN(2) == 0 {
+				after["tokens"] = float64(random.IntN(100))
+			}
+			e.Type, e.Fields = "doc.scalars", map[string]any{"commit_id": pick("c1", "c2", "c3", "c4"), "path": pick("/docs/a.md", "/docs/c.md"), "docset": "docs", "writer": pick("human", "agent", "bot"), "content_hash": pick(current.ContentHash, "old"), "delta": map[string]any{"bytes": float64(random.IntN(9)), "lines": float64(1)}, "after": after}
+		}
+		events = append(events, e)
+	}
+	// Like durable sources, honour the type filter.
+	source := sourceFunc(func(ctx context.Context, filter EventFilter, fn func(Event) error) error {
+		return events.Scan(ctx, filter, func(e Event) error {
+			if len(filter.Types) > 0 && !slices.Contains(filter.Types, e.Type) {
+				return nil
+			}
+			return fn(e)
+		})
+	})
+	end := events[len(events)-1].Time
+	boundaries := []time.Time{start, start.Add(13 * time.Hour), start.Add(24 * time.Hour), start.Add(50 * time.Hour), end.Add(time.Second)}
+	for _, aggregation := range BuiltinAggregations() {
+		inc := aggregation.Incremental
+		if inc == nil {
+			continue
+		}
+		t.Run(aggregation.Name, func(t *testing.T) {
+			p := Params{Since: start, Until: end, Extra: map[string]string{"path": "/docs"}}
+			if strings.HasSuffix(aggregation.Name, "-lines") {
+				p.Extra["path"] = "/docs/a.md"
+			}
+			want, err := aggregation.Compute(context.Background(), source, facts, p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var merged Partial
+			for i := 0; i+1 < len(boundaries); i++ {
+				partial := inc.New(p)
+				if err := source.Scan(context.Background(), EventFilter{From: boundaries[i], To: boundaries[i+1].Add(-time.Nanosecond), Types: inc.Types}, func(e Event) error {
+					partial.Add(e)
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+				encoded, err := json.Marshal(partial)
+				if err != nil {
+					t.Fatal(err)
+				}
+				decoded := inc.New(p)
+				if err := json.Unmarshal(encoded, decoded); err != nil {
+					t.Fatal(err)
+				}
+				if merged == nil {
+					merged = decoded
+				} else {
+					merged.Merge(decoded)
+				}
+			}
+			got, err := inc.Table(context.Background(), merged, facts, p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantJSON, _ := json.Marshal(want)
+			gotJSON, _ := json.Marshal(got)
+			if string(wantJSON) != string(gotJSON) || len(want.Rows) == 0 {
+				t.Fatalf("merged table differs or is empty:\n got %s\nwant %s", gotJSON, wantJSON)
+			}
+		})
 	}
 }

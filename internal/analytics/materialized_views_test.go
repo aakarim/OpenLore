@@ -2,6 +2,7 @@ package analytics
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,6 +26,30 @@ type sourceFunc func(context.Context, EventFilter, func(Event) error) error
 
 func (f sourceFunc) Scan(ctx context.Context, filter EventFilter, fn func(Event) error) error {
 	return f(ctx, filter, fn)
+}
+
+func testUsageSummary(ctx context.Context, db *sql.DB, key string, since, until time.Time, source EventSource, charsPerToken int, deadline time.Time) (Summary, bool, error) {
+	partial, done, err := usageDayPartials(db, key, source, charsPerToken).summarize(ctx, since, until, deadline)
+	if err != nil || !done {
+		return Summary{}, done, err
+	}
+	return partial.(*usagePartial).summary(), true, nil
+}
+
+// materializedView requests the non-incremental test aggregation "view".
+func materializedView(t *testing.T, service *Service, window time.Duration) Materialized {
+	t.Helper()
+	if service.registry.Status("view") != StatusOK {
+		if err := service.RegisterAggregations([]Aggregation{{Name: "view", Compute: func(context.Context, EventSource, ContentFacts, Params) (Table, error) { return Table{}, nil }}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := time.Now()
+	view, err := service.DashboardMaterialized(context.Background(), "view", "view", Params{Since: now.Add(-window), Until: now}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return view
 }
 
 func (f consumerFunc) Consume(ctx context.Context, event Event) { f(ctx, event) }
@@ -140,7 +165,7 @@ func TestFailedDashboardViewsBackOffInsteadOfRebuildingEveryPoll(t *testing.T) {
 	defer service.Close(context.Background())
 	service.eventIndex.caughtUp.Store(true)
 	store := service.store.(*SQLiteAggregationStore)
-	for _, key := range []string{"usage:604800", "aggregation:view"} {
+	for _, key := range []string{"usage:604800", "aggregation:view:604800:0"} {
 		if _, err := store.db.Exec(`INSERT INTO dashboard_views(key,computed_at,error) VALUES(?,?,'build failed')`, key, time.Now().UnixNano()); err != nil {
 			t.Fatal(err)
 		}
@@ -149,11 +174,10 @@ func TestFailedDashboardViewsBackOffInsteadOfRebuildingEveryPoll(t *testing.T) {
 	if err != nil || usage.Analytics.State != "failed" || usage.Analytics.Updating {
 		t.Fatalf("usage retried immediately: %+v err=%v", usage.Analytics, err)
 	}
-	view, err := service.DashboardMaterialized(context.Background(), "view", 7*24*time.Hour, nil)
-	if err != nil || view.Analytics.State != "failed" || view.Analytics.Updating {
-		t.Fatalf("aggregation retried immediately: %+v err=%v", view.Analytics, err)
+	if view := materializedView(t, service, 7*24*time.Hour); view.Analytics.State != "failed" || view.Analytics.Updating {
+		t.Fatalf("aggregation retried immediately: %+v", view.Analytics)
 	}
-	if service.processor.active("usage:usage:604800") || service.processor.active("aggregation:aggregation:view") {
+	if service.processor.active("usage:usage:604800") || service.processor.active("aggregation:view:604800:0") {
 		t.Fatal("failed view was queued during backoff")
 	}
 	old := time.Now().Add(-2 * dashboardRetryInterval).UnixNano()
@@ -657,17 +681,17 @@ func TestUsageSummaryReusesSettledDaysAndRebuildsDaysWithLateEvents(t *testing.T
 		b, _ := json.Marshal(want)
 		return string(a) == string(b)
 	}
-	got, done, err := usageSummary(ctx, store.db, "scope", since, now, source, 4, time.Now().Add(time.Minute))
+	got, done, err := testUsageSummary(ctx, store.db, "scope", since, now, source, 4, time.Now().Add(time.Minute))
 	if err != nil || !done || !same(got) || got.Writes != 1 || got.HumanWrites != 1 {
 		t.Fatalf("incremental=%+v done=%v err=%v want %+v", got, done, err, want)
 	}
-	first, last := usageDays(since, now)
+	first, last := settledDays(since, now)
 	if len(scans) != int(last-first)+2 {
 		t.Fatalf("cold build scanned %d ranges, want %d days plus both edges", len(scans), last-first)
 	}
 
 	scans = nil
-	if got, done, err = usageSummary(ctx, store.db, "scope", since, now, source, 4, time.Now().Add(time.Minute)); err != nil || !done || !same(got) {
+	if got, done, err = testUsageSummary(ctx, store.db, "scope", since, now, source, 4, time.Now().Add(time.Minute)); err != nil || !done || !same(got) {
 		t.Fatalf("refresh=%+v done=%v err=%v", got, done, err)
 	}
 	if len(scans) != 2 {
@@ -681,7 +705,7 @@ func TestUsageSummaryReusesSettledDaysAndRebuildsDaysWithLateEvents(t *testing.T
 		t.Fatal(err)
 	}
 	scans = nil
-	if got, done, err = usageSummary(ctx, store.db, "scope", since, now, source, 4, time.Now().Add(time.Minute)); err != nil || !done || !same(got) {
+	if got, done, err = testUsageSummary(ctx, store.db, "scope", since, now, source, 4, time.Now().Add(time.Minute)); err != nil || !done || !same(got) {
 		t.Fatalf("after late event=%+v done=%v err=%v want %+v", got, done, err, want)
 	}
 	if len(scans) != 3 || !scans[0].From.Equal(late.Truncate(24*time.Hour)) {
@@ -703,12 +727,12 @@ func TestUsageSummaryBuildsMissingDaysAcrossBoundedTurns(t *testing.T) {
 	// An expired deadline still builds one day per turn.
 	for turn := 1; ; turn++ {
 		dayScans = 0
-		_, done, err := usageSummary(ctx, store.db, "scope", since, now, source, 4, time.Now().Add(-time.Second))
+		_, done, err := testUsageSummary(ctx, store.db, "scope", since, now, source, 4, time.Now().Add(-time.Second))
 		if err != nil {
 			t.Fatal(err)
 		}
 		if done {
-			first, last := usageDays(since, now)
+			first, last := settledDays(since, now)
 			if turn != int(last-first) {
 				t.Fatalf("finished after %d turns, want one per day", turn)
 			}
@@ -730,7 +754,7 @@ func TestPublishedDashboardViewsRefreshInBackgroundWithoutUpdating(t *testing.T)
 	store := service.store.(*SQLiteAggregationStore)
 	window := 30 * 24 * time.Hour
 	old := time.Now().Add(-time.Hour).UnixNano()
-	for _, key := range []string{"usage:2592000", "aggregation:view"} {
+	for _, key := range []string{"usage:2592000", "aggregation:view:2592000:0"} {
 		if _, err := store.db.Exec(`INSERT INTO dashboard_views(key,value,computed_at,error) VALUES(?,'{}',?,'')`, key, old); err != nil {
 			t.Fatal(err)
 		}
@@ -739,13 +763,12 @@ func TestPublishedDashboardViewsRefreshInBackgroundWithoutUpdating(t *testing.T)
 	if err != nil || usage.Analytics.State != "ready" || usage.Analytics.Updating || !usage.Analytics.Complete {
 		t.Fatalf("published usage=%+v err=%v", usage.Analytics, err)
 	}
-	view, err := service.DashboardMaterialized(context.Background(), "view", window, func(context.Context) (Materialized, error) { return Materialized{}, nil })
-	if err != nil || view.Analytics.State != "ready" || view.Analytics.Updating || !view.Analytics.Complete {
-		t.Fatalf("published view=%+v err=%v", view.Analytics, err)
+	if view := materializedView(t, service, window); view.Analytics.State != "ready" || view.Analytics.Updating || !view.Analytics.Complete {
+		t.Fatalf("published view=%+v", view.Analytics)
 	}
 	// Refreshes are background work: a cold view requested later runs first.
 	service.DashboardUsage(context.Background(), "cold", window, summarySource{}, 4)
-	for _, want := range []string{"usage:cold:2592000", "usage:usage:2592000", "aggregation:aggregation:view"} {
+	for _, want := range []string{"usage:cold:2592000", "usage:usage:2592000", "aggregation:view:2592000:0"} {
 		item, ok := service.processor.pop()
 		if !ok || item.key != want {
 			t.Fatalf("popped %q, want %q", item.key, want)
@@ -754,11 +777,11 @@ func TestPublishedDashboardViewsRefreshInBackgroundWithoutUpdating(t *testing.T)
 	}
 
 	// A recent result of a long window is not rebuilt on every request.
-	if _, err := store.db.Exec(`UPDATE dashboard_views SET computed_at=? WHERE key='aggregation:view'`, time.Now().Add(-5*time.Minute).UnixNano()); err != nil {
+	if _, err := store.db.Exec(`UPDATE dashboard_views SET computed_at=? WHERE key='aggregation:view:2592000:0'`, time.Now().Add(-5*time.Minute).UnixNano()); err != nil {
 		t.Fatal(err)
 	}
-	service.DashboardMaterialized(context.Background(), "view", window, nil)
-	if service.processor.active("aggregation:aggregation:view") {
+	materializedView(t, service, window)
+	if service.processor.active("aggregation:view:2592000:0") {
 		t.Fatal("30-day aggregation refreshed within its refresh interval")
 	}
 }
@@ -771,7 +794,7 @@ func TestPublishedDashboardViewsStayReadyDuringHistoryCatchUp(t *testing.T) {
 	defer service.Close(context.Background())
 	store := service.store.(*SQLiteAggregationStore)
 	window := 30 * 24 * time.Hour
-	for _, key := range []string{"usage:2592000", "aggregation:view"} {
+	for _, key := range []string{"usage:2592000", "aggregation:view:2592000:0"} {
 		if _, err := store.db.Exec(`INSERT INTO dashboard_views(key,value,computed_at,error) VALUES(?,'{}',?,'')`, key, time.Now().Add(-time.Hour).UnixNano()); err != nil {
 			t.Fatal(err)
 		}
@@ -783,9 +806,8 @@ func TestPublishedDashboardViewsStayReadyDuringHistoryCatchUp(t *testing.T) {
 	if err != nil || usage.Analytics.State != "ready" || usage.Analytics.Updating || usage.Analytics.Progress != nil {
 		t.Fatalf("published usage during catch-up=%+v err=%v", usage.Analytics, err)
 	}
-	view, err := service.DashboardMaterialized(context.Background(), "view", window, nil)
-	if err != nil || view.Analytics.State != "ready" || view.Analytics.Updating || view.Analytics.Progress != nil {
-		t.Fatalf("published view during catch-up=%+v err=%v", view.Analytics, err)
+	if view := materializedView(t, service, window); view.Analytics.State != "ready" || view.Analytics.Updating || view.Analytics.Progress != nil {
+		t.Fatalf("published view during catch-up=%+v", view.Analytics)
 	}
 	cold, err := service.DashboardUsage(context.Background(), "cold", window, nil, 4)
 	if err != nil || cold.Analytics.State != "cold" || !cold.Analytics.Updating || cold.Analytics.Progress == nil {
@@ -810,9 +832,68 @@ func TestUsageSummaryMatchesFullScanWhenTokenTotalOverflowsAcrossDays(t *testing
 		t.Fatal(err)
 	}
 	for range 2 { // cold build, then from cached days
-		got, done, err := usageSummary(ctx, store.db, "scope", since, now, service.eventIndex, 1, time.Now().Add(time.Minute))
+		got, done, err := testUsageSummary(ctx, store.db, "scope", since, now, service.eventIndex, 1, time.Now().Add(time.Minute))
 		if err != nil || !done || got.EstimatedTokens != want.EstimatedTokens || got.EstimatedReads != 1 || got.UnestimatedReads != 1 {
 			t.Fatalf("overflow summary=%+v done=%v err=%v want %+v", got, done, err, want)
 		}
+	}
+}
+
+func TestIncrementalAggregationViewReusesSettledDays(t *testing.T) {
+	service := newIndexedTestService(t, testFS{})
+	ctx := context.Background()
+	now := time.Now().UTC()
+	today := now.Truncate(24 * time.Hour)
+	var events []Event
+	for day := range 10 {
+		events = append(events, Event{ID: fmt.Sprint(day), Time: today.Add(-time.Duration(day)*24*time.Hour + time.Hour), Type: "command.exec", Principal: "ann", Fields: map[string]any{"command": "cat"}})
+	}
+	indexEvents(t, service, events...)
+	service.eventIndex.caughtUp.Store(true)
+	scans := 0
+	source := sourceFunc(func(ctx context.Context, filter EventFilter, fn func(Event) error) error {
+		scans++
+		return service.eventIndex.Scan(ctx, filter, fn)
+	})
+	params := Params{Since: now.Add(-7 * 24 * time.Hour), Until: now}
+	build := func() Materialized {
+		t.Helper()
+		view, err := service.DashboardMaterialized(ctx, "scope", "top-commands", params, source, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for {
+			item, ok := service.processor.pop()
+			if !ok {
+				break
+			}
+			item.run(ctx)
+			service.processor.finish(item.key)
+		}
+		return view
+	}
+	if cold := build(); cold.Analytics.State != "cold" || !cold.Analytics.Updating {
+		t.Fatalf("cold view=%+v", cold.Analytics)
+	}
+	first, last := settledDays(params.Since, now)
+	if scans != int(last-first)+2 {
+		t.Fatalf("cold build scanned %d ranges, want %d days plus both edges", scans, last-first)
+	}
+	want := 0
+	for _, event := range events {
+		if !event.Time.Before(params.Since) {
+			want++
+		}
+	}
+	view := build()
+	if view.Analytics.State != "ready" || len(view.Table.Rows) != 1 || view.Table.Rows[0][1] != float64(want) {
+		t.Fatalf("published view=%+v rows=%v", view.Analytics, view.Table.Rows)
+	}
+	// Another window of the same scope reuses the cached days.
+	scans = 0
+	params.Since = now.Add(-3 * 24 * time.Hour)
+	build()
+	if scans != 2 {
+		t.Fatalf("3-day build scanned %d ranges, want only the two unsettled edges", scans)
 	}
 }
