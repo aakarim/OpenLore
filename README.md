@@ -19,6 +19,12 @@ Point OpenLore at a folder of Markdown and every agent on your team reads the sa
   <img src="assets/openlore-how-it-works.svg" alt="Claude Code, Codex and a CI job connect to one OpenLore server, which checks each identity's access and serves the same folder of Markdown" width="820">
 </p>
 
+<p align="center">
+  <a href="https://render.com/deploy?repo=https://github.com/aakarim/OpenLore"><img src="https://render.com/images/deploy-to-render-button.svg" alt="Deploy to Render"></a>
+  <br>
+  <sub>One-click hosted server. See <a href="docs/render.md">Deploy OpenLore to Render</a>.</sub>
+</p>
+
 ## Quick start
 
 Install and serve a folder:
@@ -56,12 +62,6 @@ ssh openlore.sh teach | claude
 ```
 
 Not on Homebrew? See [Installation](#installation) for Linux, Windows and Go.
-
-### Deploy a shared server
-
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/aakarim/OpenLore)
-
-One click gives you an HTTPS server with MCP, passkey login and a persistent disk. See [Deploy OpenLore to Render](docs/render.md) for first sign-in and connecting agents.
 
 ## Why not just keep Markdown in your repo?
 
