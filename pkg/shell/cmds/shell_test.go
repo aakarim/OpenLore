@@ -171,12 +171,27 @@ func TestExitStatusParam(t *testing.T) {
 		{"false | true; echo $?", "0"},
 		{"if false; then :; else echo $?; fi", "1"},
 		{"false; echo $?; echo $?", "1\n0"},
+		{"true; false | echo $?", "0"},
+		{"false; true | echo $?", "1"},
+		{"false; true |& echo $?", "1"},
 	}
 	for _, tc := range cases {
 		out, _, _ := execCmd(t, testFS(), tc.cmd)
 		if got := strings.TrimRight(out, "\n"); got != tc.want {
 			t.Errorf("%s: got %q, want %q", tc.cmd, got, tc.want)
 		}
+	}
+}
+
+func TestExitStatusParamAfterParseError(t *testing.T) {
+	sh := shell.NewShell(testFS())
+	if code := sh.ExecPipeline("| echo", &bytes.Buffer{}, &bytes.Buffer{}, nil); code != 2 {
+		t.Fatalf("parse error: exit %d, want 2", code)
+	}
+	var out bytes.Buffer
+	sh.ExecPipeline("echo $?", &out, &bytes.Buffer{}, nil)
+	if got := strings.TrimSpace(out.String()); got != "2" {
+		t.Errorf("$? after parse error: got %q, want %q", got, "2")
 	}
 }
 
