@@ -16,13 +16,13 @@ Sponsored by <a href="https://oiya.ai/?utm_source=github&amp;utm_medium=referral
 Point OpenLore at a folder of Markdown and every agent on your team reads the same files, whether it's Claude Code, Codex, Cursor or a CI job. Agents use the tools they already know, like `cat`, `grep` and `find`. You decide who can see and change what.
 
 <p align="center">
-  <img src="assets/openlore-how-it-works.svg" alt="Claude Code, Codex and a CI job connect to one OpenLore server, which checks each identity's access and serves the same folder of Markdown" width="820">
-</p>
-
-<p align="center">
   <a href="https://render.com/deploy?repo=https://github.com/aakarim/OpenLore"><img src="https://render.com/images/deploy-to-render-button.svg" alt="Deploy to Render"></a>
   <br>
   <sub>One-click hosted server. See <a href="docs/render.md">Deploy OpenLore to Render</a>.</sub>
+</p>
+
+<p align="center">
+  <img src="assets/openlore-how-it-works.svg" alt="Claude Code, Codex and a CI job connect to one OpenLore server, which checks each identity's access and serves the same folder of Markdown" width="820">
 </p>
 
 ## Quick start
