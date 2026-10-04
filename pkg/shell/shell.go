@@ -65,6 +65,9 @@ type Shell struct {
 	metricEmitter        func(context.Context, string, map[string]any)
 	invocationObserver   func(string, string)
 	exitRequested        bool
+	// lastExit is the status of the most recently completed statement, which
+	// `$?` expands to.
+	lastExit int
 }
 
 // UnsupportedUsage describes a command or shell syntax that OpenLore does not
@@ -319,6 +322,7 @@ func (s *Shell) execLine(line string, w io.Writer, errW io.Writer, stdin io.Read
 			})
 		}
 		fmt.Fprintf(errW, "parse error: %s\n", err)
+		s.lastExit = 2
 		return 2
 	}
 
@@ -347,6 +351,7 @@ func (s *Shell) execStmt(stmt *parser.Stmt, w io.Writer, errW io.Writer, stdin i
 		}
 	}
 
+	s.lastExit = code
 	return code
 }
 
@@ -562,13 +567,19 @@ func (s *Shell) execArgs(args []string, w io.Writer, errW io.Writer, stdin io.Re
 func (s *Shell) execBinary(bc *parser.BinaryCmd, w io.Writer, errW io.Writer, stdin io.Reader) int {
 	switch bc.Op {
 	case parser.Pipe:
+		// Pipeline operands run concurrently in bash, so each one sees the
+		// $? from before the pipeline, not the status of its left neighbour.
+		prev := s.lastExit
 		var buf bytes.Buffer
 		s.execStmt(bc.X, &buf, errW, stdin)
+		s.lastExit = prev
 		return s.execStmt(bc.Y, w, errW, &buf)
 
 	case parser.PipeAll:
+		prev := s.lastExit
 		var buf bytes.Buffer
 		s.execStmt(bc.X, &buf, &buf, stdin)
+		s.lastExit = prev
 		return s.execStmt(bc.Y, w, errW, &buf)
 
 	case parser.AndStmt:
@@ -813,7 +824,7 @@ func (s *Shell) expandParam(pe *parser.ParamExp) string {
 
 	switch name {
 	case "?":
-		return "0"
+		return fmt.Sprintf("%d", s.lastExit)
 	case "#":
 		return s.GetEnv("#")
 	case "0":
