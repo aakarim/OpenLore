@@ -159,6 +159,27 @@ func TestSubshell(t *testing.T) {
 	}
 }
 
+func TestExitStatusParam(t *testing.T) {
+	cases := []struct{ cmd, want string }{
+		{"false; echo u=$?", "u=1"},
+		{`false; echo "q=$?"`, "q=1"},
+		{"true; echo $?", "0"},
+		{"grep zzqq /docs/notes.txt; echo g=$?", "g=1"},
+		{"nosuchcmd 2>/dev/null; echo $?", "127"},
+		{"! true; echo $?", "1"},
+		{"false || echo $?", "1"},
+		{"false | true; echo $?", "0"},
+		{"if false; then :; else echo $?; fi", "1"},
+		{"false; echo $?; echo $?", "1\n0"},
+	}
+	for _, tc := range cases {
+		out, _, _ := execCmd(t, testFS(), tc.cmd)
+		if got := strings.TrimRight(out, "\n"); got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.cmd, got, tc.want)
+		}
+	}
+}
+
 func TestPipeWithVariableExpansion(t *testing.T) {
 	sh := shell.NewShell(testFS())
 	sh.SetEnv("PAT", "alice")

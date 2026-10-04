@@ -65,6 +65,9 @@ type Shell struct {
 	metricEmitter        func(context.Context, string, map[string]any)
 	invocationObserver   func(string, string)
 	exitRequested        bool
+	// lastExit is the status of the most recently completed statement, which
+	// `$?` expands to.
+	lastExit int
 }
 
 // UnsupportedUsage describes a command or shell syntax that OpenLore does not
@@ -347,6 +350,7 @@ func (s *Shell) execStmt(stmt *parser.Stmt, w io.Writer, errW io.Writer, stdin i
 		}
 	}
 
+	s.lastExit = code
 	return code
 }
 
@@ -813,7 +817,7 @@ func (s *Shell) expandParam(pe *parser.ParamExp) string {
 
 	switch name {
 	case "?":
-		return "0"
+		return fmt.Sprintf("%d", s.lastExit)
 	case "#":
 		return s.GetEnv("#")
 	case "0":
