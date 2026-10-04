@@ -111,7 +111,7 @@ export function AnalyticsProgress({
   error?: Error;
 }) {
   const busy = status?.updating || loading;
-  const state = status?.state || (error ? "failed" : "ready");
+  const state = error ? "failed" : status?.state || "ready";
   const ready = !busy && state === "ready";
   const progress = status?.progress;
   const detail = busy
@@ -122,11 +122,13 @@ export function AnalyticsProgress({
         : "Preparing analytics"
     : ready
       ? "Up to date"
-      : state === "failed"
-        ? "Processing stopped"
-        : status?.state === "disabled"
-          ? "Processing paused"
-          : "Not available yet";
+      : error && status
+        ? "Could not refresh"
+        : state === "failed"
+          ? "Processing stopped"
+          : status?.state === "disabled"
+            ? "Processing paused"
+            : "Not available yet";
   return (
     <div className="analytics-progress" data-state={busy ? "updating" : state}>
       <div className="analytics-progress-heading" role="status">
@@ -158,6 +160,11 @@ export function AnalyticsProgress({
       {status?.error && (
         <p className="coverage-note" role="alert">
           {status.error}
+        </p>
+      )}
+      {error && status && (
+        <p className="coverage-note" role="alert">
+          {error.message}. Previous results remain visible.
         </p>
       )}
     </div>
@@ -548,7 +555,7 @@ function AggregationCard({
     label: title,
     status: state.data?.analytics,
     loading: state.loading && !state.data,
-    error: !state.data ? state.error : undefined,
+    error: state.error,
   });
   useEffect(() => {
     if (state.loading) return;
@@ -832,7 +839,7 @@ export function Analytics({
     label: "Knowledge analytics",
     status: context.data?.analytics,
     loading: context.loading && !context.data,
-    error: !context.data ? context.error : undefined,
+    error: context.error,
   });
   useProcessingReport(
     "activity",
@@ -841,7 +848,7 @@ export function Analytics({
           label: "Activity analytics",
           status: usage.data?.analytics,
           loading: usage.loading && !usage.data,
-          error: !usage.data ? usage.error : undefined,
+          error: usage.error,
         }
       : null,
   );
