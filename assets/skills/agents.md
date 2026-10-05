@@ -6,12 +6,12 @@ This project's documentation is available over SSH using OpenLore.
 decisions, or shared team knowledge — search the knowledge base before
 guessing or asking. If an `openlore` skill is installed in this harness, load
 it for the full procedures; this section is the summary. To install the
-skill: `ssh <server> openlore-skill > <skills-dir>/openlore/SKILL.md`.
+skill: `ssh {{ ssh_target }} openlore-skill > <skills-dir>/openlore/SKILL.md`.
 
 ### Connecting
 
 ```bash
-ssh -p 2222 localhost
+ssh {{ ssh_target }}
 ```
 
 ### Useful Commands
@@ -54,5 +54,5 @@ ls, cat, head, tail, grep, find, tree, stat, wc, sort, uniq, cut, sed, awk, tr, 
 Mount docs as a local filesystem:
 
 ```bash
-sshfs -p 2222 localhost:/ /mnt/docs -o ro
+sshfs {{ ssh_target }}:/ /mnt/docs -o ro
 ```

@@ -33,12 +33,14 @@ const passkeyHelp = `
     passkey revoke "MacBook"                          Delete a passkey by label
 
   Setup:
-    Add this to your openlore.yml to enable passkeys:
+    Passkeys are enabled by default for the server's advertised HTTP
+    address (external_url in openlore.yml, else the local http_port). To
+    pin the relying party explicitly:
 
       passkeys:
         enabled: true
-        rp_id: localhost                    # your domain
-        rp_origins: ["http://localhost:8080"]
+        rp_id: docs.example.com             # your domain
+        rp_origins: ["https://docs.example.com"]
         lore_path: /lore
 
     Then run 'passkey register' and open the printed URL in a browser.

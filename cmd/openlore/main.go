@@ -779,15 +779,23 @@ func main() {
 		fmt.Printf("  Directory:  (embedded docs)\n")
 	}
 	fmt.Printf("  config: %s\n", cfg.Source())
-	fmt.Printf("  SSH:        ssh -p %d localhost\n", cfg.Port)
+	fmt.Printf("  SSH:        ssh %s\n", cfg.LocalSSHTarget())
 	if cfg.MetricsPort > 0 {
 		fmt.Printf("  Metrics:    http://localhost:%d/metrics\n", cfg.MetricsPort)
 	}
 	if cfg.HTTPPort > 0 {
-		fmt.Printf("  HTTP:       http://localhost:%d\n", cfg.HTTPPort)
+		fmt.Printf("  HTTP:       %s\n", cfg.LocalHTTPURL())
 	}
 	if cfg.MCPEnabled && cfg.MCPPath != "" && cfg.HTTPPort > 0 {
-		fmt.Printf("  MCP:        http://localhost:%d%s\n", cfg.HTTPPort, "/"+strings.Trim(cfg.MCPPath, "/"))
+		fmt.Printf("  MCP:        %s/%s\n", cfg.LocalHTTPURL(), strings.Trim(cfg.MCPPath, "/"))
+	}
+	// Generated instructions and links use the advertised address; show it
+	// whenever it differs from the local listeners above.
+	if cfg.SSHTarget() != cfg.LocalSSHTarget() {
+		fmt.Printf("  Public SSH: ssh %s\n", cfg.SSHTarget())
+	}
+	if cfg.HTTPPort > 0 && cfg.HTTPBaseURL() != cfg.LocalHTTPURL() {
+		fmt.Printf("  Public URL: %s\n", cfg.HTTPBaseURL())
 	}
 	fmt.Println()
 

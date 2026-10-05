@@ -202,6 +202,11 @@ var entries = map[string]entry{
 		Description: "SSH port advertised to clients through the `X-SSH-Port` header when a load balancer remaps `port`.",
 		Example:     "22",
 	},
+	"external_url": {
+		Default:     "",
+		Description: "Externally advertised HTTP origin used in published links, passkey URLs and generated connection instructions; its host is also the advertised SSH host. Unset uses the first `passkeys.rp_origins` entry, else the local `http_port`.",
+		Example:     "https://docs.example.com",
+	},
 	"mcp": {
 		Description: "The MCP-over-HTTP endpoint for clients such as Claude Code and Codex.",
 	},
@@ -296,8 +301,8 @@ var entries = map[string]entry{
 		Example:     "false",
 	},
 	"passkeys.rp_id": {
-		Default:     "localhost",
-		Description: "WebAuthn relying-party ID, normally the public domain of the dashboard.",
+		Default:     "",
+		Description: "WebAuthn relying-party ID, normally the public domain of the dashboard. Unset uses the host of the advertised HTTP origin.",
 		Example:     "docs.example.com",
 	},
 	"passkeys.rp_name": {
@@ -306,8 +311,8 @@ var entries = map[string]entry{
 		Example:     `"Acme Docs"`,
 	},
 	"passkeys.rp_origins": {
-		Default:     `["http://localhost:8080"]`,
-		Description: "Origins allowed to start WebAuthn ceremonies.",
+		Default:     "",
+		Description: "Origins allowed to start WebAuthn ceremonies. Unset uses `external_url`, else the local `http_port` origin.",
 		Example:     `["https://docs.example.com"]`,
 	},
 	"passkeys.lore_path": {

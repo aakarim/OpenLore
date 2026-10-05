@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math"
 	"mime"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -42,6 +43,10 @@ type Config struct {
 	DataDir         string
 	HTTPPort        int
 	ExternalSSHPort int // advertised SSH port (for X-SSH-Port header behind a LB)
+	// ExternalURL is the externally advertised HTTP origin used in generated
+	// links; its host is also the advertised SSH host. Empty derives both from
+	// passkeys.rp_origins or the local listeners (see HTTPBaseURL).
+	ExternalURL string
 	// MCPEnabled controls whether the always-on MCP-over-HTTP endpoint runs.
 	// Default true. The endpoint is mounted at MCPPath on the HTTP server.
 	MCPEnabled bool
@@ -174,6 +179,69 @@ func (c Config) Source() string {
 	default:
 		return "defaults"
 	}
+}
+
+// LocalHTTPURL is the HTTP origin of this process's own listener.
+func (c Config) LocalHTTPURL() string {
+	scheme, defaultPort := "http", 80
+	if c.TLSCert != "" {
+		scheme, defaultPort = "https", 443
+	}
+	if c.HTTPPort == defaultPort {
+		return scheme + "://localhost"
+	}
+	return fmt.Sprintf("%s://localhost:%d", scheme, c.HTTPPort)
+}
+
+// HTTPBaseURL is the externally advertised HTTP origin used in generated
+// links: external_url when set, otherwise the first passkeys.rp_origins entry
+// (the origin browsers already use), otherwise the local listener.
+func (c Config) HTTPBaseURL() string {
+	switch {
+	case c.ExternalURL != "":
+		return strings.TrimRight(c.ExternalURL, "/")
+	case len(c.Passkeys.RPOrigins) > 0:
+		return strings.TrimRight(c.Passkeys.RPOrigins[0], "/")
+	default:
+		return c.LocalHTTPURL()
+	}
+}
+
+// AdvertisedHost is the host clients are told to connect to, over both HTTP
+// and SSH: the host of HTTPBaseURL.
+func (c Config) AdvertisedHost() string {
+	if u, err := url.Parse(c.HTTPBaseURL()); err == nil && u.Hostname() != "" {
+		return u.Hostname()
+	}
+	return "localhost"
+}
+
+// AdvertisedSSHPort is the SSH port clients are told to connect to:
+// external_ssh_port when a load balancer remaps it, otherwise port.
+func (c Config) AdvertisedSSHPort() int {
+	if c.ExternalSSHPort != 0 {
+		return c.ExternalSSHPort
+	}
+	return c.Port
+}
+
+// SSHTarget returns the ssh arguments that reach the advertised server, such
+// as "-p 2222 localhost", or just the host when the port is 22.
+func (c Config) SSHTarget() string {
+	return sshTarget(c.AdvertisedHost(), c.AdvertisedSSHPort())
+}
+
+// LocalSSHTarget returns the ssh arguments that reach this process's own
+// listener.
+func (c Config) LocalSSHTarget() string {
+	return sshTarget("localhost", c.Port)
+}
+
+func sshTarget(host string, port int) string {
+	if port == 22 {
+		return host
+	}
+	return fmt.Sprintf("-p %d %s", port, host)
 }
 
 type RulesConfig struct {
@@ -584,6 +652,7 @@ type fileConfig struct {
 	DataDir             string                 `yaml:"data_dir"`
 	HTTPPort            *int                   `yaml:"http_port"`
 	ExternalSSHPort     int                    `yaml:"external_ssh_port"`
+	ExternalURL         string                 `yaml:"external_url"`
 	MCP                 *mcpYAML               `yaml:"mcp"`
 	API                 *apiYAML               `yaml:"api"`
 	TLSCert             string                 `yaml:"tls_cert"`
@@ -788,10 +857,9 @@ func New(opts ...Option) (Config, error) {
 		Analytics:           AnalyticsConfig{Dir: "analytics", Log: AnalyticsLogConfig{Rotate: 24 * time.Hour, Compress: "zstd"}, Ship: AnalyticsShipConfig{Interval: 30 * time.Second, Remote: "none"}, Pipeline: AnalyticsPipelineConfig{Buffer: 1024}, ShutdownTimeout: 10 * time.Second, Aggregations: AnalyticsAggregationConfig{RefreshInterval: 5 * time.Minute, Store: "sqlite"}, Index: AnalyticsIndexConfig{Workers: 2}, Export: AnalyticsExportConfig{Prometheus: true}},
 		Plugins:             PluginsConfig{Skills: SkillsPluginConfig{RemoteCheckTTL: 60 * time.Second, RemoteTimeout: 3 * time.Second, RemoteMaxBytes: 10 * 1024 * 1024}},
 		Passkeys: PasskeysConfig{
+			// RPID and RPOrigins default to the effective HTTP address; see below.
 			Enabled:      true,
-			RPID:         "localhost",
 			RPName:       "OpenLore",
-			RPOrigins:    []string{"http://localhost:8080"},
 			LorePath:     "/lore",
 			PasskeysFile: "./config/passkeys.json",
 			SessionTTL:   "24h",
@@ -818,6 +886,21 @@ func New(opts ...Option) (Config, error) {
 	}
 	if value := os.Getenv("OPENLORE_EXPERIMENTAL"); value != "" {
 		cfg.Experimental = append(cfg.Experimental, strings.Split(value, ",")...)
+	}
+
+	if cfg.ExternalURL != "" {
+		u, err := url.Parse(cfg.ExternalURL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
+			return Config{}, fmt.Errorf("external_url %q must be an absolute http or https URL", cfg.ExternalURL)
+		}
+	}
+	// Passkey ceremonies run against the advertised HTTP address, so derive
+	// unset relying-party settings from it rather than from fixed defaults.
+	if len(cfg.Passkeys.RPOrigins) == 0 {
+		cfg.Passkeys.RPOrigins = []string{cfg.HTTPBaseURL()}
+	}
+	if cfg.Passkeys.RPID == "" {
+		cfg.Passkeys.RPID = cfg.AdvertisedHost()
 	}
 
 	if (cfg.MCPEnabled || cfg.APIEnabled) && cfg.MCPRequireAuth != nil && *cfg.MCPRequireAuth && cfg.Tokens == nil {
@@ -902,6 +985,9 @@ func WithConfigFile(path string) Option {
 		}
 		if fc.ExternalSSHPort != 0 {
 			cfg.ExternalSSHPort = fc.ExternalSSHPort
+		}
+		if fc.ExternalURL != "" {
+			cfg.ExternalURL = fc.ExternalURL
 		}
 		if fc.TLSCert != "" {
 			cfg.TLSCert = fc.TLSCert
@@ -1031,6 +1117,9 @@ func WithEmbeddedConfig(data []byte, motdFallback string) Option {
 			}
 			if fc.ExternalSSHPort != 0 {
 				cfg.ExternalSSHPort = fc.ExternalSSHPort
+			}
+			if fc.ExternalURL != "" {
+				cfg.ExternalURL = fc.ExternalURL
 			}
 			if fc.TLSCert != "" {
 				cfg.TLSCert = fc.TLSCert

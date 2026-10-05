@@ -164,6 +164,17 @@ SSH port advertised to clients through the `X-SSH-Port` header when a load balan
 external_ssh_port: 22
 ```
 
+### `external_url`
+
+**Type:** `string`  
+**Default:** none
+
+Externally advertised HTTP origin used in published links, passkey URLs and generated connection instructions; its host is also the advertised SSH host. Unset uses the first `passkeys.rp_origins` entry, else the local `http_port`.
+
+```yaml
+external_url: https://docs.example.com
+```
+
 ### `tls_cert`
 
 **Type:** `string`  
@@ -665,9 +676,9 @@ passkeys:
 ### `passkeys.rp_id`
 
 **Type:** `string`  
-**Default:** `localhost`
+**Default:** none
 
-WebAuthn relying-party ID, normally the public domain of the dashboard.
+WebAuthn relying-party ID, normally the public domain of the dashboard. Unset uses the host of the advertised HTTP origin.
 
 ```yaml
 passkeys:
@@ -689,9 +700,9 @@ passkeys:
 ### `passkeys.rp_origins`
 
 **Type:** `list of strings`  
-**Default:** `["http://localhost:8080"]`
+**Default:** none
 
-Origins allowed to start WebAuthn ceremonies.
+Origins allowed to start WebAuthn ceremonies. Unset uses `external_url`, else the local `http_port` origin.
 
 ```yaml
 passkeys:

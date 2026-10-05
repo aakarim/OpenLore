@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -442,7 +443,10 @@ func newServerWithRoot(rootDir string, rootFS vfs.FileSystem, lowerFS fs.FS, opt
 
 	// Register skills as shell commands
 	for name, skill := range skillReg.All() {
-		cmds.RegisterSkill(name, skill.Description, skill.Content)
+		// Skills that tell agents how to reach this server carry an
+		// {{ ssh_target }} placeholder for the effective SSH arguments.
+		content := sshTargetPlaceholder.ReplaceAllLiteralString(skill.Content, cfg.SSHTarget())
+		cmds.RegisterSkill(name, skill.Description, content)
 	}
 
 	s.fs = s.merge
@@ -539,18 +543,15 @@ func (s *Server) SetRootBashFS(fsys vfs.FileSystem) {
 	s.merge.SetRoot(fsys)
 }
 
+// sshTargetPlaceholder matches the {{ ssh_target }} skill variable, with
+// optional inner whitespace as in Knap (https://knap.md/variables).
+var sshTargetPlaceholder = regexp.MustCompile(`\{\{\s*ssh_target\s*\}\}`)
+
 // SetSessionFSFn registers a per-session filesystem decorator. When set,
 // the server calls fn(identity, baseFS) for each new SSH session and uses
 // the returned filesystem for that session's shell.
 func (s *Server) SetSessionFSFn(fn SessionFSFn) {
 	s.sessionFSFn = fn
-}
-
-func (s *Server) advertisedSSHPort() int {
-	if s.config.ExternalSSHPort != 0 {
-		return s.config.ExternalSSHPort
-	}
-	return s.config.Port
 }
 
 func publicKeyMatches(configured string, presented gossh.PublicKey) bool {
@@ -1702,7 +1703,7 @@ func (s *Server) ListenAndServe() error {
 				TLSKey:         s.config.TLSKey,
 				ClientCABundle: s.config.MTLS.CABundle,
 				HostKeyPath:    s.config.HostKeyPath,
-				SSHPort:        s.advertisedSSHPort(),
+				SSHPort:        s.config.AdvertisedSSHPort(),
 				Logger:         s.logger,
 				ExtraHandlers:  map[string]http.Handler{},
 			}
@@ -1805,25 +1806,9 @@ func (s *Server) ListenAndServe() error {
 			}
 
 			if s.passkeys != nil {
-				// Build the HTTP base URL for the passkey shell command.
-				// If rp_origins are configured, use the first one as the base URL
-				// (handles TLS termination at a load balancer).
-				var baseURL string
-				if len(s.config.Passkeys.RPOrigins) > 0 {
-					baseURL = strings.TrimRight(s.config.Passkeys.RPOrigins[0], "/")
-				} else {
-					scheme := "http"
-					if s.config.TLSCert != "" {
-						scheme = "https"
-					}
-					baseURL = fmt.Sprintf("%s://localhost:%d", scheme, s.config.HTTPPort)
-					if s.config.Passkeys.RPID != "" && s.config.Passkeys.RPID != "localhost" {
-						baseURL = fmt.Sprintf("%s://%s", scheme, s.config.Passkeys.RPID)
-						if (scheme == "http" && s.config.HTTPPort != 80) || (scheme == "https" && s.config.HTTPPort != 443) {
-							baseURL = fmt.Sprintf("%s:%d", baseURL, s.config.HTTPPort)
-						}
-					}
-				}
+				// Links printed to agents use the advertised address, not the
+				// local listener (handles TLS termination at a load balancer).
+				baseURL := s.config.HTTPBaseURL()
 
 				passkeys.RegisterShellCommand(s.passkeys, baseURL)
 
@@ -2033,7 +2018,7 @@ func (s *Server) openLoreMetadata(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	routes := map[string]string{"legal": "/legal/"}
-	ssh := map[string]any{"port": s.advertisedSSHPort()}
+	ssh := map[string]any{"port": s.config.AdvertisedSSHPort()}
 	if s.config.HostKeyPath != "" {
 		routes["host_key"] = "/host-key"
 		ssh["host_key_url"] = "/host-key"

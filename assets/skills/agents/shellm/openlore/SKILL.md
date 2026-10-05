@@ -15,10 +15,10 @@ SSH session.
 
 ## Target server
 
-Set `OPENLORE_SSH` to the SSH arguments for your OpenLore server, for example:
+Set `OPENLORE_SSH` to the SSH arguments for this OpenLore server:
 
 ```bash
-export OPENLORE_SSH="-p 2222 localhost"
+export OPENLORE_SSH="{{ ssh_target }}"
 ```
 
 Then run commands non-interactively:
