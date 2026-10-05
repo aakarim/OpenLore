@@ -6,6 +6,7 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"github.com/aakarim/go-openlore/assets"
 	"github.com/aakarim/go-openlore/pkg/shell"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -95,6 +96,28 @@ func TestMCPToolAnnotations(t *testing.T) {
 				t.Errorf("list_commands openWorldHint = %v, want false", listAnnotations.OpenWorldHint)
 			}
 		})
+	}
+}
+
+func TestMCPServerInfoVersionMatchesBuild(t *testing.T) {
+	server := NewMCPServer(NewFSAdapter(fstest.MapFS{}))
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	serverSession, err := server.Connect(t.Context(), serverTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer serverSession.Close()
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1.0.0"}, nil)
+	clientSession, err := client.Connect(t.Context(), clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clientSession.Close()
+
+	got := clientSession.InitializeResult().ServerInfo.Version
+	if want := assets.Version(); got != want {
+		t.Fatalf("MCP serverInfo.version = %q, want build version %q", got, want)
 	}
 }
 

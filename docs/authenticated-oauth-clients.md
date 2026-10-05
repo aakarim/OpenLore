@@ -66,8 +66,9 @@ the full refresh chain as required for rotation-based replay detection.
 
 ## Next steps
 
-- [Workload identity federation](workload-identity-federation.md) covers
-  identity for CI jobs and cloud workloads that cannot hold a client secret.
-- [Configuration and identity](configuration-and-identity.md) explains the
-  identities these clients resolve into.
+- [Auth](auth.md) explains how every credential resolves to an identity, and
+  its [workload identity federation](auth.md#workload-identity-federation)
+  section covers CI jobs and cloud workloads that cannot hold a client secret.
+- [Roles, docsets, and identities](auth.md#roles-docsets-and-identities)
+  explains the identities these clients resolve into.
 - [openlore.yml reference](openlore-yml.md) documents every OAuth key.

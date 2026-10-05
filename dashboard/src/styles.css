@@ -26,6 +26,7 @@
   --selected: #fff0e7;
   --purple: #685477;
   --purple-soft: #f1ecf5;
+  --action-purple: #685477;
   --on-purple: #ffffff;
   --human: #348456;
   --agent: #685477;
@@ -45,7 +46,6 @@
   --selected: #382b24;
   --purple: #baa6ce;
   --purple-soft: #302936;
-  --on-purple: #222222;
   --human: #74bd91;
   --agent: #baa6ce;
   --unknown: #a0a8b4;
@@ -153,14 +153,14 @@ select:focus-visible,
   position: absolute;
   inset: 0;
   z-index: -1;
-  background: var(--purple);
+  background: var(--action-purple);
   clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 0 100%);
 }
 .view-file:hover:not(:disabled) {
   background: transparent;
 }
 .view-file:hover:not(:disabled)::before {
-  background: color-mix(in srgb, var(--purple) 85%, var(--ink));
+  background: color-mix(in srgb, var(--action-purple) 85%, #222222);
 }
 .coverage-note {
   color: var(--muted);
@@ -1097,9 +1097,17 @@ select:focus-visible,
   padding: 9px 15px;
   text-decoration: none;
 }
+.detail-actions .primary {
+  background: var(--action-purple);
+  border-color: var(--action-purple);
+  color: var(--on-purple);
+}
 button.primary:hover:not(:disabled) {
   background: var(--orange);
   border-color: var(--rule);
+}
+.detail-actions button.primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--action-purple) 85%, #222222);
 }
 .timeline {
   list-style: none;
@@ -1116,6 +1124,32 @@ button.primary:hover:not(:disabled) {
 .timeline span,
 .timeline time {
   color: var(--muted);
+}
+.outline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.outline button {
+  display: block;
+  width: 100%;
+  border: 0;
+  border-left: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  padding: 6px 10px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.outline button:hover {
+  color: var(--ink);
+}
+.outline button[aria-current="location"] {
+  border-left-color: var(--orange);
+  color: var(--ink);
 }
 .mobile-nav,
 .mobile-only {

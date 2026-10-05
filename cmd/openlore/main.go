@@ -640,7 +640,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Serve your docs to AI agents over SSH.\n\n")
 		fmt.Fprintf(os.Stderr, "Arguments:\n")
 		fmt.Fprintf(os.Stderr, "  directory    Directory to serve (default: current directory)\n\n")
-		fmt.Fprintf(os.Stderr, "Flags:\n")
+		fmt.Fprintf(os.Stderr, "Flags (override openlore.yml, which overrides the defaults shown):\n")
 		flag.PrintDefaults()
 	}
 
@@ -674,7 +674,7 @@ func main() {
 		openlore.WithEmbeddedConfig(embeddedCfg, assets.DefaultMOTD()),
 	}
 
-	if *port != 0 {
+	if isFlagSet("port") || isFlagSet("p") {
 		opts = append(opts, openlore.WithPort(*port))
 	}
 	if isFlagSet("metrics-port") {

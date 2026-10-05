@@ -284,6 +284,6 @@ srv := openlore.NewMCPServer(fs,
 
 - [Claude Code with OpenLore](start-claude-code.md) walks through the MCP
   connection end to end.
-- [Configuration and identity](configuration-and-identity.md) explains how to
-  give each connection its own identity and grants.
+- [Auth](auth.md) explains how to give each connection its own identity and
+  grants.
 - [Commands](commands.md) lists every command an agent can run once connected.

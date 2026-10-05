@@ -151,6 +151,13 @@ write, and a link target may be written next. Rejecting or even warning on the
 first write would be noise, so bundle rules leave no trace on the write path
 and are the job of `lore validate`.
 
+The consequence: **a write that exits 0 is saved, not validated.** A file
+with a broken link is accepted by every write verb and reported only by
+`lore validate`. Run `lore validate <docset root>` after the last write of a
+change and treat its exit status as the finish condition. The
+[write → validate → finish workflow](writing.md#write--validate--finish) in
+the writing guide shows the loop with real output.
+
 On write, the engine resolves the effective rule set for each file in the
 operation and evaluates its file-scope rules. A finding from an `enforce: true`
 rule rejects the whole operation (a batch is one decision; the first violation

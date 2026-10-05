@@ -96,7 +96,7 @@ ssh -p 2222 localhost "lore docsets"
 
 The output lists `public` as the only docset.
 
-Learn more about [configuration and identity](configuration-and-identity.md).
+Learn more about [identities, roles and docsets](auth.md).
 
 ---
 

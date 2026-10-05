@@ -56,11 +56,34 @@ ssh -p <port> <host> "lore package list"                      # compiled-in rule
 ssh -p <port> <host> "lore package doc size/lines"            # a member's parameters and example
 ```
 
-File-scoped rules run on every write and under `lore validate`. Bundle-scoped
-rules (OKF bundle structure, link resolution) run only under `lore validate`,
-because they need to inspect related files. Validate a folder before
-publishing with `lore validate /path/to/folder` (name the docset or folder,
-not `/`).
+### Saved is not validated
+
+A write that exits 0 is saved and passed every check on that one file
+(permissions, conflict check, file-scoped rules such as `okf` and `size/*`).
+Checks that need to see other files — link resolution, OKF bundle structure,
+alias portability — never run on write. They run only when you run
+`lore validate`. A file with a broken link therefore saves fine and fails
+validation afterwards. Treat the exit status of `lore validate` as the
+finish condition, not the exit status of the write.
+
+Write → validate → finish:
+
+```bash
+# 1. Write every file the change needs (exit 0 = saved, file checks passed)
+cat retry-policy.md | ssh -p <port> <host> "cat > /docs/retry-policy.md"
+# 2. Validate the docset root (not / and not just the subfolder)
+ssh -p <port> <host> "lore validate /docs"
+# 3. Fix each reported finding, then re-run step 2 until it prints "0 errors"
+# 4. Done only when `lore validate` exits 0
+```
+
+A finding looks like `retry-policy.md:6:6: error [openlore/broken-link] local
+link "queue-design.md" does not resolve`, followed by a `see: lore package doc
+<member>` line and a `N errors, M warnings` total. Errors exit 1; warnings
+alone exit 0. Validate the docset root: validating a subfolder reports a link
+to a sibling folder as `link-outside-bundle`, and `lore validate /` is refused
+when docsets carry bundle rules. Write all files in a batch before validating;
+a broken link to a file you have not written yet is expected until it lands.
 
 ### When a write is rejected
 

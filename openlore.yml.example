@@ -212,7 +212,7 @@ host_key_path: .ssh/openlore_ed25519
 # OpenLore tokens at the token endpoint (grant_type=jwt-bearer). Each issuer's
 # JWKS is discovered and its assertions are verified (issuer + our audience) and
 # mapped to identities via `match` rules in lore.json. See
-# docs/workload-identity-federation.md.
+# docs/auth.md (Workload Identity Federation).
 # oidc_issuers:
 #   - issuer_url: https://token.actions.githubusercontent.com
 #     jwks:

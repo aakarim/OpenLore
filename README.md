@@ -323,26 +323,64 @@ The container workflow publishes `latest` from `main`; releases also publish
 
 ## Documentation
 
-| Guide | Contents |
+The same pages, in the same groups, are published at
+[openlore.sh/docs](https://openlore.sh/docs/).
+
+### Introduction
+
+| Page | Contents |
 |---|---|
-| [Changelog](docs/changelog.md) | Current version, release notes, compatibility notes, and versioned docs |
 | [What is OpenLore](docs/introduction.md) | Serve, connect, scope, govern and observe in one page |
-| [Claude Code with OpenLore](docs/start-claude-code.md) | Connect Claude Code over MCP and scope what it sees |
-| [Any agent with OpenLore over SSH](docs/start-ssh.md) | Connect a coding agent or CI job over SSH and give it an identity |
-| [Let an agent publish into an inbox](docs/publish-to-inbox.md) | Accept contributions from an agent without letting it edit anything else |
-| [Deploy OpenLore to Render](docs/render.md) | One-click Render deployment, first passkey sign-in, upgrades, and custom domains |
+| [Changelog](docs/changelog.md) | Current version, release notes, compatibility notes, and versioned docs |
+
+### Start
+
+| Page | Contents |
+|---|---|
+| [Claude Code](docs/start-claude-code.md) | Connect Claude Code over MCP and scope what it sees |
+| [Codex](docs/codex.md) | Connect Codex over MCP |
+| [Cursor](docs/cursor.md) | Connect Cursor over MCP |
+| [OpenCode](docs/opencode.md) | Connect OpenCode over MCP |
+| [Any agent over SSH](docs/start-ssh.md) | Connect a coding agent or CI job over SSH and give it an identity |
+
+### Concepts
+
+How OpenLore works: transports, identity, writes, rules, and observation.
+
+| Page | Contents |
+|---|---|
 | [Ways to use OpenLore](docs/usage.md) | SSH, MCP, web, SSHFS, embedded binaries, GitHub Action, MCPB, and library usage |
-| [Editing OpenLore files](docs/editors.md) | Direct VS Code and SFTP editor setup without a local project mirror |
-| [Command reference](docs/commands.md) | Complete shell, introspection, publishing, syntax, CLI command, and flag reference |
-| [Configuration and identity](docs/configuration-and-identity.md) | `openlore.yml`, authentication, roles, docsets, aliases, homes, and host verification |
-| [openlore.yml reference](docs/openlore-yml.md) | Generated reference for every key `openlore.yml` accepts |
-| [HTTP inbox uploads](docs/inbox.md) | Upload documents with bearer or HMAC credentials |
-| [Workload identity federation](docs/workload-identity-federation.md) | Authenticate CI and agents with short-lived external identity tokens |
-| [Writing and publishing](docs/writing.md) | Write modes, inboxes, conflict handling, approvals, and jobs |
-| [Plugins and knowledge formats](docs/plugins.md) | Plugin installation, interfaces, OKF validation, `lore validate`, and `lore meta` |
+| [Auth](docs/auth.md) | Authentication posture, how SSH keys, certificates, passkeys, OAuth tokens and inbox credentials resolve to an identity, roles, docsets, aliases, homes, and workload identity federation |
+| [Writing and publishing](docs/writing.md) | Write modes, inboxes, conflict handling, what a successful write does and does not check, and jobs |
 | [Folder rules](docs/folder-rules.md) | `.lore/config.yaml` and `lore.json` rules, layering, permissions, rejection messages, and growth limits |
+| [Plugins and formats](docs/plugins.md) | Provider interfaces, Open Knowledge Format validation, `lore validate`, `lore meta`, and the Agent Skills plugin |
+| [Dashboard and metrics](docs/dashboard.md) | Dashboard authentication, facts versus activity, and the file viewer |
+
+### How to
+
+Task walkthroughs.
+
+| Page | Contents |
+|---|---|
+| [Configure the server](docs/configure-the-server.md) | Create `openlore.yml`, precedence over embedded config and flags, analytics, and debug logging |
+| [Let an agent publish into an inbox](docs/publish-to-inbox.md) | Accept contributions from an agent without letting it edit anything else |
+| [Browse and edit from an editor](docs/editors.md) | Direct VS Code and SFTP editor setup without a local project mirror |
+| [Run headlong / shellm](docs/shellm.md) | Use OpenLore over SSH from headlong's shellm engine, including its housekeeping skill |
+| [Deploy OpenLore to Render](docs/render.md) | One-click Render deployment, first passkey sign-in, upgrades, and custom domains |
+
+### Reference
+
+Lookup material: commands, keys, endpoints, interfaces, and internals.
+
+| Page | Contents |
+|---|---|
+| [Command reference](docs/commands.md) | Complete shell, introspection, publishing, syntax, CLI command, and flag reference |
+| [openlore.yml reference](docs/openlore-yml.md) | Generated reference for every key `openlore.yml` accepts |
 | [Rules standard library](docs/rules-stdlib.md) | Generated reference for compiled-in rule members and their parameters |
+| [HTTP inbox API](docs/inbox.md) | `POST /inbox/{docset}` with bearer or HMAC credentials, and the token endpoints |
+| [OAuth clients](docs/authenticated-oauth-clients.md) | CIMD client identity, `private_key_jwt`, mTLS corroboration, and signing-key rotation |
 | [Write system internals](docs/write-system.md) | Filesystem layering, write seam, admission middleware, and async jobs |
+| [Build the dashboard](docs/dashboard-build.md) | Frontend build and backend-only Go builds |
 | [Security evaluation](SECURITY.md) | Threat model and security properties |
 
 ## Security

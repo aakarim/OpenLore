@@ -4,7 +4,7 @@
 
 Every key `openlore.yml` accepts, in the order the server reads them. Durations are Go duration strings such as `30s` or `24h`; byte sizes accept `KB`, `MB` and `GB` suffixes.
 
-`openlore.yml` holds deployment settings. Identities, roles and docsets belong in `lore.json`; see [Configuration and identity](configuration-and-identity.md).
+`openlore.yml` holds deployment settings; see [Configure the server](configure-the-server.md). Identities, roles and docsets belong in `lore.json`; see [Auth](auth.md).
 
 ---
 
@@ -48,7 +48,7 @@ experimental: ["analytics"]
 **Type:** `integer`  
 **Default:** `2222`
 
-TCP port for the SSH server that agents connect to.
+TCP port for the SSH server that agents connect to, from 1 to 65535; `0` is rejected because SSH cannot be disabled.
 
 ```yaml
 port: 22
@@ -59,7 +59,7 @@ port: 22
 **Type:** `integer`  
 **Default:** `3000`
 
-TCP port for the Prometheus metrics endpoint; `0` disables it.
+TCP port for the Prometheus metrics endpoint, up to 65535; `0` disables it.
 
 ```yaml
 metrics_port: 0
@@ -147,7 +147,7 @@ data_dir: /var/lib/openlore
 **Type:** `integer`  
 **Default:** `8080`
 
-TCP port for the HTTP server that hosts the dashboard, MCP endpoint and JSON API; `0` disables it.
+TCP port for the HTTP server that hosts the dashboard, MCP endpoint and JSON API, up to 65535; `0` disables it.
 
 ```yaml
 http_port: 80
@@ -257,7 +257,7 @@ write_conflict_policy: last_write_wins
 **Type:** `integer`  
 **Default:** `8`
 
-Maximum number of concurrent background jobs started with `spawn`.
+Maximum number of concurrent background jobs started with `spawn`; must be positive.
 
 ```yaml
 max_jobs: 16
@@ -394,7 +394,7 @@ analytics:
 **Type:** `integer`  
 **Default:** `1024`
 
-Number of events the pipeline buffers before back-pressure applies.
+Number of events the pipeline buffers before back-pressure applies; must be positive.
 
 ```yaml
 analytics:
@@ -457,7 +457,7 @@ Indexing of analytics segments for queries.
 **Type:** `integer`  
 **Default:** `2`
 
-Number of concurrent indexing workers.
+Number of concurrent indexing workers; must be positive.
 
 ```yaml
 analytics:
