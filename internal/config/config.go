@@ -573,7 +573,7 @@ type fileConfig struct {
 	Debug               bool                   `yaml:"debug"`
 	Experimental        []string               `yaml:"experimental"`
 	Analytics           analyticsYAML          `yaml:"analytics"`
-	Port                int                    `yaml:"port"`
+	Port                *int                   `yaml:"port"`
 	MetricsPort         *int                   `yaml:"metrics_port"`
 	HostKeyPath         string                 `yaml:"host_key_path"`
 	MOTD                string                 `yaml:"motd"`
@@ -597,7 +597,7 @@ type fileConfig struct {
 	Shellexec           *ShellexecConfig       `yaml:"shellexec"`
 	Readonly            *bool                  `yaml:"readonly"`
 	WriteConflictPolicy string                 `yaml:"write_conflict_policy"`
-	MaxJobs             int                    `yaml:"max_jobs"`
+	MaxJobs             *int                   `yaml:"max_jobs"`
 	Rules               rulesYAML              `yaml:"rules"`
 	// Tokens + OIDCIssuers are server infrastructure (bearer-token issuance for
 	// the MCP + HTTP API), hence configured here rather than in lore.json.
@@ -614,7 +614,7 @@ type analyticsYAML struct {
 	Ship     struct{ Interval, Remote string }            `yaml:"ship"`
 	Pipeline struct {
 		Enabled *bool `yaml:"enabled"`
-		Buffer  int   `yaml:"buffer"`
+		Buffer  *int  `yaml:"buffer"`
 	} `yaml:"pipeline"`
 	ShutdownTimeout string `yaml:"shutdown_timeout"`
 	Aggregations    struct {
@@ -622,7 +622,7 @@ type analyticsYAML struct {
 		Store           string `yaml:"store"`
 	} `yaml:"aggregations"`
 	Index struct {
-		Workers int `yaml:"workers"`
+		Workers *int `yaml:"workers"`
 	} `yaml:"index"`
 	History struct {
 		Blobs     *bool  `yaml:"blobs"`
@@ -657,8 +657,8 @@ func applyAnalyticsConfig(cfg *Config, in analyticsYAML) error {
 		cfg.Analytics.Dir = in.Dir
 	}
 	cfg.Analytics.Pipeline.Enabled = in.Pipeline.Enabled
-	if in.Pipeline.Buffer > 0 {
-		cfg.Analytics.Pipeline.Buffer = in.Pipeline.Buffer
+	if err := applyPositiveInt("analytics.pipeline.buffer", in.Pipeline.Buffer, &cfg.Analytics.Pipeline.Buffer); err != nil {
+		return err
 	}
 	cfg.Analytics.History.Blobs = in.History.Blobs
 	if in.Log.Compress != "" {
@@ -670,8 +670,8 @@ func applyAnalyticsConfig(cfg *Config, in analyticsYAML) error {
 	if in.Aggregations.Store != "" {
 		cfg.Analytics.Aggregations.Store = in.Aggregations.Store
 	}
-	if in.Index.Workers > 0 {
-		cfg.Analytics.Index.Workers = in.Index.Workers
+	if err := applyPositiveInt("analytics.index.workers", in.Index.Workers, &cfg.Analytics.Index.Workers); err != nil {
+		return err
 	}
 	if in.Export.Prometheus != nil {
 		cfg.Analytics.Export.Prometheus = *in.Export.Prometheus
@@ -820,6 +820,18 @@ func New(opts ...Option) (Config, error) {
 		cfg.Experimental = append(cfg.Experimental, strings.Split(value, ",")...)
 	}
 
+	if cfg.Port < 1 || cfg.Port > 65535 {
+		return Config{}, fmt.Errorf("port must be between 1 and 65535 (SSH cannot be disabled), got %d", cfg.Port)
+	}
+	for _, p := range []struct {
+		name string
+		port int
+	}{{"metrics_port", cfg.MetricsPort}, {"http_port", cfg.HTTPPort}} {
+		if p.port < 0 || p.port > 65535 {
+			return Config{}, fmt.Errorf("%s must be between 0 (disabled) and 65535, got %d", p.name, p.port)
+		}
+	}
+
 	if (cfg.MCPEnabled || cfg.APIEnabled) && cfg.MCPRequireAuth != nil && *cfg.MCPRequireAuth && cfg.Tokens == nil {
 		return Config{}, errors.New("mcp.require_auth requires tokens to be configured")
 	}
@@ -867,8 +879,8 @@ func WithConfigFile(path string) Option {
 			cfg.ConfigVersion = fc.ConfigVersion
 		}
 		cfg.Debug = fc.Debug
-		if fc.Port != 0 {
-			cfg.Port = fc.Port
+		if fc.Port != nil {
+			cfg.Port = *fc.Port // range-checked in New
 		}
 		if fc.MetricsPort != nil {
 			cfg.MetricsPort = *fc.MetricsPort
@@ -943,8 +955,8 @@ func WithConfigFile(path string) Option {
 			}
 			cfg.WriteConflictPolicy = p
 		}
-		if fc.MaxJobs > 0 {
-			cfg.MaxJobs = fc.MaxJobs
+		if err := applyPositiveInt("max_jobs", fc.MaxJobs, &cfg.MaxJobs); err != nil {
+			return err
 		}
 		if err := applySkillsConfig(cfg, fc.Plugins.Skills); err != nil {
 			return err
@@ -996,8 +1008,8 @@ func WithEmbeddedConfig(data []byte, motdFallback string) Option {
 				cfg.ConfigVersion = fc.ConfigVersion
 			}
 			cfg.Debug = fc.Debug
-			if fc.Port != 0 {
-				cfg.Port = fc.Port
+			if fc.Port != nil {
+				cfg.Port = *fc.Port // range-checked in New
 			}
 			if fc.MetricsPort != nil {
 				cfg.MetricsPort = *fc.MetricsPort
@@ -1075,8 +1087,8 @@ func WithEmbeddedConfig(data []byte, motdFallback string) Option {
 				}
 				cfg.WriteConflictPolicy = p
 			}
-			if fc.MaxJobs > 0 {
-				cfg.MaxJobs = fc.MaxJobs
+			if err := applyPositiveInt("max_jobs", fc.MaxJobs, &cfg.MaxJobs); err != nil {
+				return err
 			}
 			applyPasskeysConfig(cfg, fc.Passkeys)
 			applyMCPConfig(cfg, fc.MCP)
@@ -1112,6 +1124,20 @@ func decodeFileConfig(data []byte) (fileConfig, []string, error) {
 		return fileConfig{}, nil, err
 	}
 	return fc, append([]string(nil), typeErr.Errors...), nil
+}
+
+// applyPositiveInt copies an optional integer setting into target. Omitted
+// (nil) keeps the default; an explicit zero or negative value is rejected
+// rather than silently replaced by the default.
+func applyPositiveInt(key string, value *int, target *int) error {
+	if value == nil {
+		return nil
+	}
+	if *value <= 0 {
+		return fmt.Errorf("%s must be a positive integer, got %d (omit the key to use the default %d)", key, *value, *target)
+	}
+	*target = *value
+	return nil
 }
 
 // WithPort sets the SSH server port.
