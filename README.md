@@ -75,9 +75,9 @@ There's no vector database, ingestion pipeline or SDK. Your knowledge stays as o
 
 - [What is OpenLore](docs/introduction.md)
 - [Claude Code](docs/start-claude-code.md)
-- [Codex]
-- [Cursor]
-- [OpenCode]
+- [Codex](/docs/codex.md)
+- [Cursor](/docs/cursor.md)
+- [OpenCode](/docs/opencode.md)
 - [Any agent over SSH](docs/start-ssh.md)
 - [Let an agent publish into an inbox](docs/publish-to-inbox.md)
 - [Deploy to Render](docs/render.md)
