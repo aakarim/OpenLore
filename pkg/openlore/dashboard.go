@@ -97,6 +97,17 @@ func (s *Server) dashboardLorePath() string {
 
 // Dashboard data endpoints are independent of the optional built frontend.
 // A plain Go build continues to expose the existing backend and lore browser.
+// warnIfDashboardMissing reports at startup that this binary was built without
+// the dashboard frontend, so /dashboard/ will return 404.
+func (s *Server) warnIfDashboardMissing(frontend fs.FS) {
+	if frontend != nil {
+		return
+	}
+	s.logger.Warn("dashboard assets are not embedded in this binary; /dashboard/ will return 404",
+		"http_port", s.config.HTTPPort,
+		"fix", "use a release binary, Homebrew, or container, or build with `make distribution`")
+}
+
 func (s *Server) dashboardRoutes(frontend fs.FS) HTTPRouteRegistrar {
 	return func(mux *http.ServeMux) {
 		for route, handler := range map[string]http.HandlerFunc{

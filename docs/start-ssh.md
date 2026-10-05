@@ -4,11 +4,7 @@ Connect a coding agent, a CI job or a script to a shared knowledge base with not
 
 We are going to serve a docs directory, connect to it from a shell, give one agent its own identity, and teach the agent when to use the server.
 
-Before you start, install OpenLore.
-
-```bash
-go install github.com/aakarim/go-openlore/cmd/openlore@latest
-```
+Before you start, [install OpenLore](quickstart.md#install).
 
 ---
 

@@ -185,7 +185,7 @@ func (c Config) Source() string {
 // LocalHTTPURL is the HTTP origin of this process's own listener.
 func (c Config) LocalHTTPURL() string {
 	scheme, defaultPort := "http", 80
-	if c.TLSCert != "" {
+	if c.TLSCert != "" && c.TLSKey != "" {
 		scheme, defaultPort = "https", 443
 	}
 	if c.HTTPPort == defaultPort {

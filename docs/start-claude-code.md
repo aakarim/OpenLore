@@ -4,11 +4,7 @@ Give Claude Code a shared knowledge base over MCP.
 
 We are going to serve a docs directory, connect Claude Code to it over MCP, teach Claude when to use it, and limit what it can see.
 
-Before you start, install OpenLore.
-
-```bash
-go install github.com/aakarim/go-openlore/cmd/openlore@latest
-```
+Before you start, [install OpenLore](quickstart.md#install).
 
 ---
 
