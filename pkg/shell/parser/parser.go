@@ -548,6 +548,13 @@ func parseWordParts(s string, inDblQuote bool) []WordPart {
 		ch := s[i]
 
 		if ch == '\\' && i+1 < len(s) {
+			// Inside double quotes POSIX keeps the backslash unless it
+			// precedes $, `, ", \ or newline.
+			if inDblQuote && !strings.ContainsRune("$`\"\\\n", rune(s[i+1])) {
+				lit.WriteByte(ch)
+				i++
+				continue
+			}
 			flushLit()
 			i++
 			parts = append(parts, &Escaped{Value: string(s[i])})

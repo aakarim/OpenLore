@@ -142,6 +142,30 @@ func TestDoubleQuoteExpansion(t *testing.T) {
 	}
 }
 
+// Inside double quotes POSIX removes a backslash only before $, `, ", \ or
+// newline; before any other character the backslash is kept (OPE-48).
+func TestDoubleQuoteBackslash(t *testing.T) {
+	sh := shell.NewShell(testFS())
+	sh.SetEnv("WHO", "world")
+	cases := []struct{ cmd, want string }{
+		{`echo 'single \q'; echo "double \q"; echo "double \\q"; echo "x\|y"`, "single \\q\ndouble \\q\ndouble \\q\nx\\|y"},
+		{`echo "a\qb"`, `a\qb`},
+		{`echo "\$WHO \"hi\" \\ $WHO"`, `$WHO "hi" \ world`},
+		{`echo "foo\.bar"`, `foo\.bar`},
+		{`echo "a\'b"`, `a\'b`},
+		{`printf 'ab\ncd\n' | grep "ab\|cd"`, "ab\ncd"},
+		{`printf 'fooxbar\nfoo.bar\n' | grep "foo\.bar"`, "foo.bar"},
+		{`echo "$(echo "a\qb")"`, `a\qb`},
+	}
+	for _, c := range cases {
+		var out bytes.Buffer
+		sh.ExecPipeline(c.cmd, &out, &bytes.Buffer{}, nil)
+		if got := strings.TrimRight(out.String(), "\n"); got != c.want {
+			t.Errorf("%s: got %q, want %q", c.cmd, got, c.want)
+		}
+	}
+}
+
 func TestSingleQuoteNoExpansion(t *testing.T) {
 	sh := shell.NewShell(testFS())
 	sh.SetEnv("WHO", "world")

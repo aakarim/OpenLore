@@ -36,6 +36,10 @@ necessarily the current version. Dates are the GitHub publication dates in UTC.
 - Fixed `awk` regex patterns matching every line, variables staying at 0, and
   string comparisons on `$0` never matching. Unsupported `awk` constructs now
   exit 2 with an error instead of producing wrong output.
+- Fixed the shell removing a backslash inside double quotes before ordinary
+  characters. As in POSIX shells, the backslash is now removed only before `$`,
+  `` ` ``, `"`, `\` or a newline, so `grep "a\|b"` and `grep "foo\.bar"` match
+  the same lines as their single-quoted forms.
 - Activity and command analytics work for time ranges with more than 50,000
   events, and failed analytics no longer reload every second.
 - Analytics no longer show "Preparing analytics" indefinitely on busy servers.
