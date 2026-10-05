@@ -61,7 +61,7 @@ Or let your agent do the whole setup:
 ssh openlore.sh teach | claude
 ```
 
-Not on Homebrew? See [Installation](#installation) for Linux, Windows and Go.
+Not on Homebrew? See the [Quickstart](docs/quickstart.md#install) for Linux and Windows.
 
 ## Why not just keep Markdown in your repo?
 
@@ -184,55 +184,9 @@ See [Writing and publishing](docs/writing.md) for user-facing setup and
 
 ## Installation
 
-### Install with Homebrew
-
-Homebrew is supported on macOS and Linux:
-
-```bash
-brew install --cask aakarim/tap/lore
-```
-
-### Install a Linux release
-
-Download and install the latest x86-64 release:
-
-```bash
-curl -L https://github.com/aakarim/OpenLore/releases/latest/download/openlore_linux_amd64.tar.gz | tar xz
-sudo install openlore /usr/local/bin/openlore
-```
-
-Arm64 archives are published as `openlore_linux_arm64.tar.gz`.
-
-### Install a Windows release
-
-Download and extract the latest 64-bit Windows release from PowerShell:
-
-```powershell
-Invoke-WebRequest `
-  -Uri https://github.com/aakarim/OpenLore/releases/latest/download/openlore_windows_amd64.zip `
-  -OutFile openlore.zip
-Expand-Archive openlore.zip -DestinationPath .
-.\openlore.exe version
-```
-
-### Install with Go
-
-Requires Go 1.26 or later:
-
-```bash
-go install github.com/aakarim/go-openlore/cmd/openlore@latest
-```
-
-### Build from source
-
-```bash
-git clone https://github.com/aakarim/go-openlore.git
-cd go-openlore
-go build -o openlore ./cmd/openlore
-```
-
-This normal Go build is backend-only and does not require Node. Release binaries
-and containers include the dashboard; see [Dashboard build and distribution](docs/dashboard-build.md).
+See the [Quickstart](docs/quickstart.md#install) for Homebrew, Linux and
+Windows releases, and which installations include the dashboard. To build
+OpenLore yourself, see [Building from source](docs/building-from-source.md).
 
 ### Embed docs in a binary
 
@@ -241,6 +195,7 @@ the docs and serves them read-only at `/docs` when run with no directory
 argument:
 
 ```bash
+make dashboard-build   # optional: include the web UI
 go build -o my-docs ./cmd/openlore
 ```
 
@@ -337,6 +292,7 @@ The same pages, in the same groups, are published at
 
 | Page | Contents |
 |---|---|
+| [Quickstart](docs/quickstart.md) | Install OpenLore, serve a folder, and connect an agent |
 | [Claude Code](docs/start-claude-code.md) | Connect Claude Code over MCP and scope what it sees |
 | [Codex](docs/codex.md) | Connect Codex over MCP |
 | [Cursor](docs/cursor.md) | Connect Cursor over MCP |
@@ -366,6 +322,7 @@ Task walkthroughs.
 | [Let an agent publish into an inbox](docs/publish-to-inbox.md) | Accept contributions from an agent without letting it edit anything else |
 | [Browse and edit from an editor](docs/editors.md) | Direct VS Code and SFTP editor setup without a local project mirror |
 | [Run headlong / shellm](docs/shellm.md) | Use OpenLore over SSH from headlong's shellm engine, including its housekeeping skill |
+| [Build from source](docs/building-from-source.md) | Build the web UI and binary yourself, or build without the web UI |
 | [Deploy OpenLore to Render](docs/render.md) | One-click Render deployment, first passkey sign-in, upgrades, and custom domains |
 
 ### Reference

@@ -392,7 +392,13 @@ architecture:
    selected release.
 2. Remove that clone's embedded `assets/config/openlore.yml` before building,
    because a binary cannot load embedded and external configuration together.
-3. Build `./cmd/openlore` into an ignored local path.
+3. Build the web UI first so the local server includes the dashboard like the
+   published image: in the clone, run `npm --prefix dashboard ci` and
+   `npm --prefix dashboard run build`. Without this step Go builds a binary
+   with no dashboard and `/dashboard/` returns 404. If Node and npm are not
+   installed, tell the user the local server will have no dashboard, then
+   continue; the deployed image still includes it.
+   Then build `./cmd/openlore` into an ignored local path.
 4. Create an ignored `.local/openlore.local.yml` derived from root
    `openlore.yml`, replacing `/var/lib/openlore` paths with absolute paths below
    this project's `.local/`. Do not modify the tracked production config.

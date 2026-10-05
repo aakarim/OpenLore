@@ -79,8 +79,12 @@ container image.
 Place docs in `assets/lore/` and build:
 
 ```bash
+make dashboard-build   # optional: include the web UI
 go build -o my-docs ./cmd/openlore
 ```
+
+Without `make dashboard-build` the binary has no dashboard. See
+[Building from source](building-from-source.md).
 
 The resulting binary contains the docs and serves them at `/docs` when run with
 no directory argument. Embedded docs are always read-only.

@@ -4,9 +4,8 @@ OpenLore serves your documentation to AI agents over SSH.
 
 ## Install
 
-```bash
-go install github.com/aakarim/go-openlore/cmd/openlore@latest
-```
+See the
+[Quickstart](https://github.com/aakarim/OpenLore/blob/main/docs/quickstart.md#install).
 
 ## Serve Your Docs
 
