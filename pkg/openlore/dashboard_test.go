@@ -239,6 +239,121 @@ func TestDashboardAuthenticationAndReadOnlyMethods(t *testing.T) {
 	}
 }
 
+func TestDashboardReadinessNamesTheNextStep(t *testing.T) {
+	s, _, _ := newDashboardTestServer(t)
+	s.config.HTTPPort = 8080
+	s.config.Port = 2222
+	s.config.Passkeys.RPOrigins = []string{"http://docs.example.com/"}
+
+	expect := func(got DashboardReadiness, reason string, steps ...string) {
+		t.Helper()
+		if got.Ready || !strings.Contains(got.Reason, reason) || len(got.NextSteps) != len(steps) {
+			t.Fatalf("readiness %+v; want reason~%q and %d steps", got, reason, len(steps))
+		}
+		for i, step := range steps {
+			if !strings.Contains(got.NextSteps[i], step) {
+				t.Fatalf("step %d = %q; want it to mention %q", i+1, got.NextSteps[i], step)
+			}
+		}
+	}
+	// Each state names only the one thing that blocks it, in the order an
+	// operator fixes them.
+	s.config.HTTPPort = 0
+	expect(s.dashboardReadiness(true), "HTTP is disabled", "http_port: 8080")
+	s.config.HTTPPort = 8080
+	expect(s.dashboardReadiness(false), "not included in this build", "make distribution")
+	s.authEnforced = false
+	expect(s.dashboardReadiness(true), "no authentication is configured", "auth_file: ./lore.json")
+	s.authEnforced = true
+	// Passkeys are on by default: the fix is undoing an explicit opt-out.
+	expect(s.dashboardReadiness(true), "turned off", "remove `passkeys.enabled: false`")
+
+	pk, err := passkeys.New(passkeys.Config{RPID: "localhost", RPOrigins: []string{"http://localhost"}, PasskeysFile: t.TempDir() + "/passkeys.json", SessionTTL: time.Hour}, []byte("key"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.passkeys = pk
+	// Registering a passkey is a guide: register over SSH as an existing
+	// identity, open the link at an allowed origin, then sign in.
+	got := s.dashboardReadiness(true)
+	expect(got, "no passkey is registered",
+		"ssh -p 2222 docs.example.com passkey register --identity alice",
+		"http://docs.example.com/",
+		"http://docs.example.com/dashboard/")
+	if got.URL != "http://docs.example.com/dashboard/" {
+		t.Fatalf("dashboard URL did not follow rp_origins: %q", got.URL)
+	}
+	// Without any identity the guide starts by creating one.
+	s.auth.Identities = nil
+	expect(s.dashboardReadiness(true), "no passkey is registered",
+		"openlore identity add --name <identity>",
+		"passkey register --identity <identity>",
+		"rp_origins",
+		"sign in")
+
+	// A credential persisted by an earlier run counts: readiness reads the
+	// same store the login page does.
+	registered := filepath.Join(t.TempDir(), "passkeys.json")
+	if err := os.WriteFile(registered, []byte(`{"credentials":[{"name":"laptop","identity":"alice"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if s.passkeys, err = passkeys.New(passkeys.Config{RPID: "localhost", RPOrigins: []string{"http://localhost"}, PasskeysFile: registered, SessionTTL: time.Hour}, []byte("key"), nil); err != nil {
+		t.Fatal(err)
+	}
+	got = s.dashboardReadiness(true)
+	if !got.Ready || got.Reason != "" || len(got.NextSteps) != 0 {
+		t.Fatalf("registered passkey did not make the dashboard ready: %+v", got)
+	}
+}
+
+func TestDashboardErrorsCarryNextStepsOnlyWhenSignInIsImpossible(t *testing.T) {
+	s, mux, _ := newDashboardTestServer(t)
+	s.config.HTTPPort = 8080
+	type errorBody struct {
+		Error     string   `json:"error"`
+		LoginURL  string   `json:"login_url"`
+		NextSteps []string `json:"next_steps"`
+	}
+	decode := func(w *httptest.ResponseRecorder) errorBody {
+		t.Helper()
+		if !strings.Contains(w.Header().Get("Content-Type"), "application/json") {
+			t.Fatalf("error body is not JSON: %q", w.Header().Get("Content-Type"))
+		}
+		var body errorBody
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decoding %q: %v", w.Body.String(), err)
+		}
+		return body
+	}
+
+	// Auth on, passkeys off: a browser cannot sign in, so no login_url.
+	w := dashboardRequest(mux, "GET", "/dashboard/api/session", "")
+	body := decode(w)
+	if w.Code != 401 || body.LoginURL != "" || len(body.NextSteps) != 1 || !strings.Contains(body.NextSteps[0], "passkeys.enabled: false") {
+		t.Fatalf("passkey-less 401 = %d %+v", w.Code, body)
+	}
+
+	// Passkeys on: the login page explains registration itself.
+	pk, err := passkeys.New(passkeys.Config{RPID: "localhost", RPOrigins: []string{"http://localhost"}, PasskeysFile: t.TempDir() + "/passkeys.json", SessionTTL: time.Hour}, []byte("key"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.passkeys = pk
+	w = dashboardRequest(mux, "GET", "/dashboard/api/session", "")
+	body = decode(w)
+	if w.Code != 401 || body.LoginURL != "/passkey/login" || body.NextSteps != nil {
+		t.Fatalf("sign-in-capable 401 = %d %+v", w.Code, body)
+	}
+
+	// No auth file at all.
+	s.authEnforced = false
+	w = dashboardRequest(mux, "GET", "/dashboard/api/session", "")
+	body = decode(w)
+	if w.Code != 404 || len(body.NextSteps) != 1 || !strings.Contains(body.NextSteps[0], "auth_file: ./lore.json") {
+		t.Fatalf("authless 404 = %d %+v", w.Code, body)
+	}
+}
+
 func TestShellAnalyticsRequiresLiveAdministrativeCapability(t *testing.T) {
 	s, _, _ := newDashboardTestServer(t)
 	disabled := false

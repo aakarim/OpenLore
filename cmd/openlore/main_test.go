@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/aakarim/go-openlore/internal/config"
+	openlore "github.com/aakarim/go-openlore/pkg/openlore"
 	gossh "golang.org/x/crypto/ssh"
 )
 
@@ -169,25 +170,40 @@ func TestCommandPolicyValidationFailures(t *testing.T) {
 
 func TestWriteHTTPBannerReportsDashboardAvailability(t *testing.T) {
 	cfg := config.Config{HTTPPort: 8080, MCPEnabled: true, MCPPath: "/mcp/"}
+	ready := openlore.DashboardReadiness{Ready: true, URL: "http://localhost:8080/dashboard/"}
 	for _, tc := range []struct {
-		name         string
-		cfg          config.Config
-		hasDashboard bool
-		want         string
+		name      string
+		cfg       config.Config
+		dashboard openlore.DashboardReadiness
+		want      string
 	}{
-		{"embedded", cfg, true, "  HTTP:       http://localhost:8080\n" +
+		{"ready", cfg, ready, "  HTTP:       http://localhost:8080\n" +
 			"  Dashboard:  http://localhost:8080/dashboard/\n" +
 			"  MCP:        http://localhost:8080/mcp\n"},
-		{"backend-only", cfg, false, "  HTTP:       http://localhost:8080\n" +
+		{"backend-only", cfg, openlore.DashboardReadiness{
+			Reason:    "not included in this build (go install/go build are backend-only)",
+			NextSteps: []string{"install a release binary"},
+		}, "  HTTP:       http://localhost:8080\n" +
 			"  Dashboard:  not included in this build (go install/go build are backend-only)\n" +
+			"              next step: install a release binary\n" +
 			"  MCP:        http://localhost:8080/mcp\n"},
-		{"tls", config.Config{HTTPPort: 8443, TLSCert: "c.pem", TLSKey: "k.pem"}, true, "  HTTP:       https://localhost:8443\n" +
-			"  Dashboard:  https://localhost:8443/dashboard/\n"},
-		{"http disabled", config.Config{}, false, ""},
+		{"guide", cfg, openlore.DashboardReadiness{
+			Reason:    "no passkey is registered yet",
+			NextSteps: []string{"run the register command", "open the link"},
+		}, "  HTTP:       http://localhost:8080\n" +
+			"  Dashboard:  no passkey is registered yet\n" +
+			"              next steps:\n" +
+			"              1. run the register command\n" +
+			"              2. open the link\n" +
+			"  MCP:        http://localhost:8080/mcp\n"},
+		{"tls", config.Config{HTTPPort: 8443, TLSCert: "c.pem", TLSKey: "k.pem"}, openlore.DashboardReadiness{Ready: true, URL: "https://localhost:8443/dashboard/"},
+			"  HTTP:       https://localhost:8443\n" +
+				"  Dashboard:  https://localhost:8443/dashboard/\n"},
+		{"http disabled", config.Config{}, openlore.DashboardReadiness{}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var out bytes.Buffer
-			writeHTTPBanner(&out, tc.cfg, tc.hasDashboard)
+			writeHTTPBanner(&out, tc.cfg, tc.dashboard)
 			if out.String() != tc.want {
 				t.Fatalf("banner:\n%s\nwant:\n%s", out.String(), tc.want)
 			}

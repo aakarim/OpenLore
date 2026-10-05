@@ -1262,6 +1262,23 @@ button.primary:hover:not(:disabled) {
   color: var(--muted);
   margin-bottom: 28px;
 }
+.startup .next-step {
+  color: var(--ink);
+  background: var(--panel);
+  text-align: left;
+  padding: 12px 16px;
+  margin-bottom: 28px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow-wrap: anywhere;
+}
+.startup .next-step ol {
+  margin: 8px 0 0;
+  padding-left: 22px;
+}
+.startup .next-step li + li {
+  margin-top: 6px;
+}
 .identity-note {
   display: block;
   color: var(--muted);

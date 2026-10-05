@@ -106,7 +106,12 @@ export function App() {
       document.removeEventListener("visibilitychange", visible);
     };
   }, [session.refresh]);
-  if (session.error)
+  if (session.error) {
+    const error = session.error instanceof APIError ? session.error : null;
+    // Next steps mean the server is not configured for browser sign-in yet,
+    // so a login link would only lead to another error.
+    const steps = error?.nextSteps ?? [];
+    const canSignIn = error?.status === 401 && steps.length === 0;
     return (
       <main className="startup">
         <div className="brand">
@@ -115,14 +120,25 @@ export function App() {
             /
           </span>
         </div>
-        <h1>
-          {session.error instanceof APIError && session.error.status === 401
-            ? "Sign in to OpenLore"
-            : "Dashboard unavailable"}
-        </h1>
+        <h1>{canSignIn ? "Sign in to OpenLore" : "Dashboard not ready"}</h1>
         <p>{session.error.message}</p>
-        {session.error instanceof APIError && session.error.status === 401 ? (
-          <a className="primary button" href={loginURL(session.error.loginURL)}>
+        {steps.length === 1 && (
+          <p className="next-step">
+            <strong>Next step:</strong> {steps[0]}
+          </p>
+        )}
+        {steps.length > 1 && (
+          <div className="next-step">
+            <strong>Next steps:</strong>
+            <ol>
+              {steps.map((step) => (
+                <li key={step}>{step}</li>
+              ))}
+            </ol>
+          </div>
+        )}
+        {canSignIn ? (
+          <a className="primary button" href={loginURL(error.loginURL)}>
             Continue to sign in
           </a>
         ) : (
@@ -130,6 +146,7 @@ export function App() {
         )}
       </main>
     );
+  }
   if (!session.data)
     return (
       <main className="startup" role="status">

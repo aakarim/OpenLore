@@ -5,6 +5,48 @@ the **Analytics / Files** dashboard. Existing published file URLs keep working;
 `passkeys.lore_path` is respected. See [building the dashboard](dashboard-build.md)
 for the source-only frontend build and backend-only Go builds.
 
+## Is the dashboard ready?
+
+SSH and MCP work as soon as `openlore` starts. Dashboard data does not: it
+needs an `auth_file` with identities and a registered passkey to sign in with.
+The startup banner says which state you are in and what moves you forward:
+
+```text
+  Dashboard:  no authentication is configured; dashboard data needs identities to sign in as
+              next step: set `auth_file: ./lore.json` in openlore.yml and restart (see docs/configuration-and-identity.md)
+```
+
+The checks run in the order you fix them: `http_port` enabled, a build with the
+frontend embedded (see [Building from source](building-from-source.md)),
+`auth_file` set, passkeys not turned off, and at least one passkey registered.
+Once all pass, the banner prints the dashboard URL instead.
+
+Passkeys are on by default. The banner only mentions `passkeys.enabled` when
+you set it to `false` yourself, and the step is to remove that line and
+restart. There is nothing to enable on a fresh install.
+
+The last state, no passkey registered yet, is a short guide rather than one
+line, because registration happens in two places (an SSH shell and a browser):
+
+```text
+  Dashboard:  no passkey is registered yet
+              next steps:
+              1. from any SSH shell, run `ssh -p 2222 localhost passkey register --identity adil` (any identity in lore.json, with or without an SSH key)
+              2. within 5 minutes, open the printed link in a browser on the device whose passkey you want to use; the link must be opened at an origin listed in `passkeys.rp_origins` (currently http://localhost:8080)
+              3. open http://localhost:8080/dashboard/ and sign in with that passkey; the session lasts `passkeys.session_ttl`
+```
+
+If `auth_file` exists but holds no identities, the guide starts with
+`openlore identity add` so there is an identity to register the passkey for.
+The passkey login page (`/passkey/login`) shows the same steps, with the `ssh`
+command filled in for the address you opened it at, plus a prompt you can give
+an agent that runs the command for you and hands back the link.
+
+Opening the dashboard before it is ready shows the same steps in the browser,
+and `/dashboard/api/*` returns them as a `next_steps` array in the JSON error
+body. When sign-in is possible, the 401 body carries `login_url` instead and
+the dashboard sends you to the login page.
+
 ## Authentication and authority
 
 The HTML/JavaScript shell contains no document or analytics data and can be

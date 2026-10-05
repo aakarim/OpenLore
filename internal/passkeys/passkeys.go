@@ -49,6 +49,9 @@ type Config struct {
 	LorePath     string
 	PasskeysFile string
 	SessionTTL   time.Duration
+	// SSHPort is the port people reach the shell on. The login page uses it
+	// to print a runnable `passkey register` command when none is registered.
+	SSHPort int
 }
 
 // Passkeys orchestrates WebAuthn registration and login ceremonies and serves
@@ -126,6 +129,12 @@ func (p *Passkeys) SetTokenIssuer(ti TokenIssuer) {
 
 func (p *Passkeys) SetLoginObserver(observer func(context.Context, string, string)) {
 	p.onLogin = observer
+}
+
+// CredentialCount reports how many passkeys are registered. Zero means no
+// browser can sign in yet, which is the same fact the login page shows.
+func (p *Passkeys) CredentialCount() int {
+	return len(p.store.AllCredentials())
 }
 
 // Shutdown stops background goroutines.
@@ -258,7 +267,7 @@ func (p *Passkeys) handleLoginPage(w http.ResponseWriter, r *http.Request) {
 
 func (p *Passkeys) handleLoginStatus(w http.ResponseWriter, r *http.Request) {
 	creds := p.store.AllCredentials()
-	writeJSON(w, map[string]any{"count": len(creds), "has_passkeys": len(creds) > 0})
+	writeJSON(w, map[string]any{"count": len(creds), "has_passkeys": len(creds) > 0, "ssh_port": p.cfg.SSHPort})
 }
 
 func (p *Passkeys) handleLoginBegin(w http.ResponseWriter, r *http.Request) {

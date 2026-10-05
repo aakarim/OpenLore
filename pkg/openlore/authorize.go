@@ -240,7 +240,8 @@ var authorizeChoiceTmpl = template.Must(template.New("authorize").Parse(`<!DOCTY
 <title>Connect — OpenLore</title>
 ` + webstyle.Link + `</head>
 <body class="centered"><div class="card">
-  <h1>📜 OpenLore</h1>
+  <div class="brand">OpenLore<span class="brand-slash" aria-hidden="true">/</span></div>
+  <h1>Connect</h1>
   <p class="subtitle">How do you want to connect?</p>
   {{if .Passkeys}}<a class="btn" href="{{.LoginURL}}">Log in with passkey</a>{{end}}
   <form method="post" action="{{.PublicPath}}">
