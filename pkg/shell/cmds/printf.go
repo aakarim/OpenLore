@@ -88,6 +88,13 @@ func applyPrintf(format string, args []string, argIdx *int) string {
 			if j < len(format) {
 				spec := format[i : j+1]
 				ch := format[j]
+				if ch == '%' {
+					// Literal percent: consumes no argument, so decide this
+					// before touching argIdx.
+					sb.WriteByte('%')
+					i = j + 1
+					continue
+				}
 				var arg string
 				if *argIdx < len(args) {
 					arg = args[*argIdx]
@@ -109,9 +116,6 @@ func applyPrintf(format string, args []string, argIdx *int) string {
 				case 'x', 'o':
 					n, _ := strconv.ParseFloat(arg, 64)
 					sb.WriteString(fmt.Sprintf(spec, int64(n)))
-				case '%':
-					sb.WriteByte('%')
-					*argIdx-- // no arg consumed
 				default:
 					sb.WriteString(spec)
 				}

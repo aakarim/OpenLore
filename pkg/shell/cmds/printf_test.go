@@ -25,6 +25,23 @@ func TestPrintfFormatWithoutConversionsAndExtraArgsTerminates(t *testing.T) {
 	}
 }
 
+// `%%` consumes no argument. It used to decrement the argument index
+// unconditionally, so with no operands the index went to -1 and the next
+// pass (or a following %s) indexed args[-1] and panicked.
+func TestPrintfLiteralPercent(t *testing.T) {
+	for _, tc := range []struct{ cmd, want string }{
+		{"printf '%%'", "%"},
+		{"printf '100%%\\n'", "100%\n"},
+		{"printf '%%%s\\n' a", "%a\n"},
+		{"printf '%s%%\\n' a b", "a%\nb%\n"},
+	} {
+		out, errOut, code := execCmd(t, testFS(), tc.cmd)
+		if code != 0 || out != tc.want {
+			t.Errorf("%s: code=%d out=%q stderr=%q, want %q", tc.cmd, code, out, errOut, tc.want)
+		}
+	}
+}
+
 func TestPrintfDoubleDashEndsOptions(t *testing.T) {
 	out, _, code := execCmd(t, testFS(), "printf -- '-%s-\\n' x")
 	if code != 0 || out != "-x-\n" {
