@@ -372,3 +372,25 @@ func TestDashboardEventSourceDiscardsStalePolicySnapshot(t *testing.T) {
 		t.Fatal("scan mutated caller snapshot")
 	}
 }
+
+func TestAnalyticsPolicyKeyIsStableAcrossEqualConfigurations(t *testing.T) {
+	key := func(readonly bool) string {
+		server, alice, _ := analyticsScopeServer()
+		// Pointer fields are reallocated by every configuration load.
+		docs := server.auth.Docsets["docs"]
+		docs.Readonly = new(readonly)
+		server.auth.Docsets["docs"] = docs
+		policy, err := server.currentPolicy(alice)
+		if err != nil {
+			t.Fatal(err)
+		}
+		alice.policySnapshot = &policy
+		return server.analyticsPolicyKey(alice)
+	}
+	if key(true) != key(true) {
+		t.Fatal("equal configurations produced different analytics keys")
+	}
+	if key(true) == key(false) {
+		t.Fatal("different configurations shared an analytics key")
+	}
+}

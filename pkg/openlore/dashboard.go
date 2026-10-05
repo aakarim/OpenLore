@@ -631,9 +631,21 @@ func (s *Server) dashboardAnalyticsStatus(w http.ResponseWriter, r *http.Request
 	}{Activity: s.analytics.ActivityStatus(r.Context())})
 }
 
+// analyticsPolicyKey identifies the caller's effective policy and the docset
+// configuration, so cached analytics are never shared across policies. It
+// hashes values rather than their Go representation: %#v prints nested
+// pointers as addresses, which changed the key on every restart.
 func (s *Server) analyticsPolicyKey(id Identity) string {
-	value := fmt.Sprintf("%#v|%#v", id.policySnapshot, s.currentAuth().Docsets)
-	return fmt.Sprintf("%x", sha256.Sum256([]byte(value)))
+	value, err := json.Marshal(struct {
+		Policy  *AuthorizationPolicy
+		Docsets any
+	}{id.policySnapshot, s.currentAuth().Docsets})
+	if err != nil {
+		// Unreachable for configuration decoded from JSON or YAML; stay
+		// unique per policy rather than risk sharing views.
+		value = fmt.Appendf(nil, "%#v|%#v", id.policySnapshot, s.currentAuth().Docsets)
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(value))
 }
 
 type dashboardRole struct {

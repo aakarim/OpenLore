@@ -170,7 +170,60 @@ type Aggregation struct {
 	Params                   []ParamSpec
 	Requires                 []string
 	Compute                  func(context.Context, EventSource, ContentFacts, Params) (Table, error)
+	// Incremental, when set, lets durable dashboard views cache the
+	// aggregation's state per settled day and merge it instead of rescanning
+	// the whole window. Compute must equal a single partial over the window.
+	Incremental *Incremental
 }
+
+// Partial is the mergeable state of an incremental aggregation over one time
+// range. Merge adds the state of a later, adjacent range, so merging the
+// partials of consecutive ranges equals one partial over their union.
+// Partials round-trip through JSON; configuration from Params must live in
+// unexported fields set by Incremental.New.
+type Partial interface {
+	Add(Event)
+	Merge(later Partial)
+}
+
+type Incremental struct {
+	// Types are the event types Add consumes.
+	Types []string
+	New   func(Params) Partial
+	Table func(context.Context, Partial, ContentFacts, Params) (Table, error)
+	// Check, when set, rejects parameters before any events are scanned.
+	Check func(context.Context, ContentFacts, Params) error
+}
+
+// singleScan installs a's Compute as one partial over the whole window
+// without allowing daily partials to be cached.
+func singleScan(a Aggregation, inc Incremental) Aggregation {
+	a = incremental(a, inc)
+	a.Incremental = nil
+	return a
+}
+
+// incremental installs a's Compute as a single partial over the window.
+func incremental(a Aggregation, inc Incremental) Aggregation {
+	a.Incremental = &inc
+	a.Compute = func(ctx context.Context, src EventSource, facts ContentFacts, p Params) (Table, error) {
+		if inc.Check != nil {
+			if err := inc.Check(ctx, facts, p); err != nil {
+				return Table{}, err
+			}
+		}
+		partial := inc.New(p)
+		if err := src.Scan(ctx, EventFilter{From: p.Since, To: p.Until, Types: inc.Types}, func(e Event) error {
+			partial.Add(e)
+			return nil
+		}); err != nil {
+			return Table{}, err
+		}
+		return inc.Table(ctx, partial, facts, p)
+	}
+	return a
+}
+
 type RunOptions struct{ Fresh bool }
 
 type AggregationStore interface {
@@ -257,6 +310,18 @@ func (r *Registry) Status(name string) Status {
 	}
 	return StatusOK
 }
+
+// incrementalFor returns the incremental form of a runnable aggregation.
+func (r *Registry) incrementalFor(name string) *Incremental {
+	r.mu.RLock()
+	a, ok := r.items[name]
+	r.mu.RUnlock()
+	if !ok || r.Status(name) != StatusOK {
+		return nil
+	}
+	return a.Incremental
+}
+
 func (r *Registry) Run(ctx context.Context, name string, p Params, opts RunOptions) (Materialized, error) {
 	return r.run(ctx, name, p, opts, r.facts, true)
 }

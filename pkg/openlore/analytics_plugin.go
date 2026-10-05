@@ -378,14 +378,8 @@ func (p *analyticsPlugin) runAggregation(r *http.Request, name string) (analytic
 		if !p.service.Started() || !p.service.HasDurableViews() {
 			return p.service.Registry().RunWithSource(r.Context(), name, params, p.server.DashboardEventSource(id, prefix), p.scopedFacts(r))
 		}
-		key := fmt.Sprintf("v1:%s:%s:%d:%d:%#v", p.server.analyticsPolicyKey(id), name, int64(params.Until.Sub(params.Since)/time.Second), params.Limit, params.Extra)
-		return p.service.DashboardMaterialized(r.Context(), key, params.Until.Sub(params.Since), func(ctx context.Context) (analytics.Materialized, error) {
-			now := time.Now()
-			jobParams := params
-			jobParams.Until = now
-			jobParams.Since = now.Add(-params.Until.Sub(params.Since))
-			return p.service.Registry().RunWithSource(ctx, name, jobParams, p.server.DashboardEventSource(id, prefix), p.scopedFacts(r))
-		})
+		scope := fmt.Sprintf("v2:%s:%s:%#v", p.server.analyticsPolicyKey(id), name, params.Extra)
+		return p.service.DashboardMaterialized(r.Context(), scope, name, params, p.server.DashboardEventSource(id, prefix), p.scopedFacts(r))
 	}
 	return p.service.Registry().Run(r.Context(), name, params, analytics.RunOptions{Fresh: r.URL.Query().Get("fresh") == "true"})
 }
