@@ -63,8 +63,10 @@ A write that exits 0 is saved and passed every check on that one file
 Checks that need to see other files — link resolution, OKF bundle structure,
 alias portability — never run on write. They run only when you run
 `lore validate`. A file with a broken link therefore saves fine and fails
-validation afterwards. Treat the exit status of `lore validate` as the
-finish condition, not the exit status of the write.
+validation afterwards. This is deliberate: each write is one file, and
+rejecting a link to a file that does not exist yet would make it impossible to
+create a bundle one file at a time. Treat the exit status of `lore validate`
+as the finish condition, not the exit status of the write.
 
 Write → validate → finish:
 

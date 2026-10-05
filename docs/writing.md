@@ -145,7 +145,7 @@ through; it never appears in the command's output.
 | Check | Why it cannot run on write |
 |---|---|
 | `link/resolves` (`openlore/broken-link`, `openlore/link-outside-bundle`) | The target is a different file, which may be written next |
-| `okf/bundle` (root `index.md`, `log.md`, `okf_version`) | Adding a concept legitimately breaks the index until the index is updated in a later write |
+| `okf/bundle` (root `index.md`, `log.md`, `okf_version`) | Which file is the bundle root, and which spec version applies, is a property of the whole tree, not of the file being written |
 | `link/alias` (`openlore/alias-referrer`, `openlore/alias-target`, warnings) | Portability across servers, not a property of one file |
 | `.lore/config.yaml` diagnostics for every config in the folder | The configs were valid when written; validate re-checks them together |
 
@@ -155,6 +155,31 @@ arrived outside OpenLore (a git checkout, `sshfs`). It writes nothing and never
 records a size baseline. Exit status is 1 if any `error` finding was reported
 and 0 if there were only warnings or none. It does not fetch URLs; external
 links are never checked.
+
+### Why a write does not reject a broken link
+
+A write is one file. OpenLore commits each file with its own compare-and-swap;
+there is no multi-file transaction, so there is never a moment at which "the
+whole bundle" is proposed and can be judged. The write seam sees the proposed
+content of the file being written and the bundle as it currently is on disk.
+
+Judging the bundle at that moment would make ordinary editing impossible:
+
+- The first file of a bundle always links to files that do not exist yet. Two
+  documents that link to each other could never be created in any order, and
+  an `index.md` could never be written before the concepts it links to.
+- Deleting or renaming a file breaks every referrer until each referrer is
+  rewritten.
+- A new bundle has no root `index.md` and no `okf_version` until that file is
+  written, so no earlier file could be judged against the right spec version.
+
+So a save answers a narrower question — *is this file well-formed, and is this
+identity allowed to put it here?* — and `lore validate` answers *is this bundle
+consistent now?* A successful write is allowed to leave the bundle temporarily
+inconsistent; that is the state a bundle is in between the first and last
+write of any multi-file change. The write prints nothing about the checks it
+skipped, which is why the workflow below ends with `lore validate` rather than
+with the last write.
 
 ### Write → validate → finish
 
