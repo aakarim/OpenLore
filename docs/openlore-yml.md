@@ -169,7 +169,7 @@ external_ssh_port: 22
 **Type:** `string`  
 **Default:** none
 
-Externally advertised HTTP origin used in published links, passkey URLs and generated connection instructions; its host is also the advertised SSH host. Unset uses the first `passkeys.rp_origins` entry, else the local `http_port`.
+Externally advertised HTTP origin (no path) used in published links, passkey URLs and generated connection instructions; its host is also the advertised SSH host. Unset uses the first `passkeys.rp_origins` entry, else the local `http_port`.
 
 ```yaml
 external_url: https://docs.example.com
@@ -702,7 +702,7 @@ passkeys:
 **Type:** `list of strings`  
 **Default:** none
 
-Origins allowed to start WebAuthn ceremonies. Unset uses `external_url`, else the local `http_port` origin.
+Origins allowed to start WebAuthn ceremonies; must include `external_url` when both are set. Unset uses `external_url`, else the local `http_port` origin.
 
 ```yaml
 passkeys:

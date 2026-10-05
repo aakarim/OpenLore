@@ -14,7 +14,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -443,10 +442,7 @@ func newServerWithRoot(rootDir string, rootFS vfs.FileSystem, lowerFS fs.FS, opt
 
 	// Register skills as shell commands
 	for name, skill := range skillReg.All() {
-		// Skills that tell agents how to reach this server carry an
-		// {{ ssh_target }} placeholder for the effective SSH arguments.
-		content := sshTargetPlaceholder.ReplaceAllLiteralString(skill.Content, cfg.SSHTarget())
-		cmds.RegisterSkill(name, skill.Description, content)
+		cmds.RegisterSkill(name, skill.Description, skill.Content)
 	}
 
 	s.fs = s.merge
@@ -542,10 +538,6 @@ func (s *Server) SetRootFS(fsys fs.FS) {
 func (s *Server) SetRootBashFS(fsys vfs.FileSystem) {
 	s.merge.SetRoot(fsys)
 }
-
-// sshTargetPlaceholder matches the {{ ssh_target }} skill variable, with
-// optional inner whitespace as in Knap (https://knap.md/variables).
-var sshTargetPlaceholder = regexp.MustCompile(`\{\{\s*ssh_target\s*\}\}`)
 
 // SetSessionFSFn registers a per-session filesystem decorator. When set,
 // the server calls fn(identity, baseFS) for each new SSH session and uses
@@ -1281,6 +1273,7 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 	sh.SetSkillsRemoteConfig(s.config.Plugins.Skills.RemoteTimeout, s.config.Plugins.Skills.RemoteMaxBytes)
 	sh.SetMetaFilters(s.sessionMetaFilters(id))
 	sh.SetPublishTargets(s.sessionPublishTargets(id))
+	sh.SetSSHTarget(s.config.SSHTarget())
 	sh.SetMetaExtenders(s.metaExtenders)
 	sh.SetValidators(s.validators)
 	a := id.attribution()

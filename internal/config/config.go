@@ -9,6 +9,7 @@ import (
 	"mime"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -890,8 +891,10 @@ func New(opts ...Option) (Config, error) {
 
 	if cfg.ExternalURL != "" {
 		u, err := url.Parse(cfg.ExternalURL)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
-			return Config{}, fmt.Errorf("external_url %q must be an absolute http or https URL", cfg.ExternalURL)
+		// Server routes are appended to it, so it must be a bare origin.
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" ||
+			(u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" || u.User != nil || u.Opaque != "" {
+			return Config{}, fmt.Errorf("external_url %q must be an http or https origin such as https://docs.example.com", cfg.ExternalURL)
 		}
 	}
 	// Passkey ceremonies run against the advertised HTTP address, so derive
@@ -901,6 +904,13 @@ func New(opts ...Option) (Config, error) {
 	}
 	if cfg.Passkeys.RPID == "" {
 		cfg.Passkeys.RPID = cfg.AdvertisedHost()
+	}
+	// Generated passkey links open at the advertised address, which WebAuthn
+	// rejects unless it is an allowed origin.
+	if cfg.Passkeys.Enabled && !slices.ContainsFunc(cfg.Passkeys.RPOrigins, func(origin string) bool {
+		return strings.TrimRight(origin, "/") == cfg.HTTPBaseURL()
+	}) {
+		return Config{}, fmt.Errorf("external_url %q must be listed in passkeys.rp_origins when passkeys are enabled", cfg.ExternalURL)
 	}
 
 	if (cfg.MCPEnabled || cfg.APIEnabled) && cfg.MCPRequireAuth != nil && *cfg.MCPRequireAuth && cfg.Tokens == nil {

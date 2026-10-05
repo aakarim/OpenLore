@@ -55,15 +55,32 @@ func TestExternalURLIsAdvertised(t *testing.T) {
 	}
 
 	// Explicit passkey settings win over the derived defaults.
-	cfg, err = New(WithEmbeddedConfig([]byte("external_url: https://docs.example.com\npasskeys:\n  rp_id: example.com\n  rp_origins: [\"https://example.com\"]\n"), ""))
+	cfg, err = New(WithEmbeddedConfig([]byte("external_url: https://docs.example.com\npasskeys:\n  rp_id: example.com\n  rp_origins: [\"https://example.com\", \"https://docs.example.com/\"]\n"), ""))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cfg.Passkeys.RPID != "example.com" || cfg.Passkeys.RPOrigins[0] != "https://example.com" || cfg.HTTPBaseURL() != "https://docs.example.com" {
 		t.Errorf("explicit passkeys = %+v base=%q", cfg.Passkeys, cfg.HTTPBaseURL())
 	}
+}
 
-	if _, err := New(WithEmbeddedConfig([]byte("external_url: docs.example.com\n"), "")); err == nil {
-		t.Error("expected error for external_url without scheme")
+func TestExternalURLValidation(t *testing.T) {
+	for _, yml := range []string{
+		"external_url: docs.example.com\n",
+		"external_url: ftp://docs.example.com\n",
+		"external_url: https://docs.example.com/base\n",
+		"external_url: https://docs.example.com/?a=b\n",
+		"external_url: https://docs.example.com/#top\n",
+		"external_url: https://user@docs.example.com\n",
+		// Passkey links would open at an origin WebAuthn rejects.
+		"external_url: https://docs.example.com\npasskeys:\n  rp_origins: [\"https://example.com\"]\n",
+	} {
+		if _, err := New(WithEmbeddedConfig([]byte(yml), "")); err == nil {
+			t.Errorf("expected error for %q", yml)
+		}
+	}
+	// The mismatch is irrelevant when passkeys are disabled.
+	if _, err := New(WithEmbeddedConfig([]byte("external_url: https://docs.example.com\npasskeys:\n  enabled: false\n  rp_origins: [\"https://example.com\"]\n"), "")); err != nil {
+		t.Errorf("passkeys disabled: %v", err)
 	}
 }

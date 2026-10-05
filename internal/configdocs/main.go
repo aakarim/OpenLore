@@ -204,7 +204,7 @@ var entries = map[string]entry{
 	},
 	"external_url": {
 		Default:     "",
-		Description: "Externally advertised HTTP origin used in published links, passkey URLs and generated connection instructions; its host is also the advertised SSH host. Unset uses the first `passkeys.rp_origins` entry, else the local `http_port`.",
+		Description: "Externally advertised HTTP origin (no path) used in published links, passkey URLs and generated connection instructions; its host is also the advertised SSH host. Unset uses the first `passkeys.rp_origins` entry, else the local `http_port`.",
 		Example:     "https://docs.example.com",
 	},
 	"mcp": {
@@ -312,7 +312,7 @@ var entries = map[string]entry{
 	},
 	"passkeys.rp_origins": {
 		Default:     "",
-		Description: "Origins allowed to start WebAuthn ceremonies. Unset uses `external_url`, else the local `http_port` origin.",
+		Description: "Origins allowed to start WebAuthn ceremonies; must include `external_url` when both are set. Unset uses `external_url`, else the local `http_port` origin.",
 		Example:     `["https://docs.example.com"]`,
 	},
 	"passkeys.lore_path": {

@@ -4,14 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/aakarim/go-openlore/internal/config"
-	"github.com/aakarim/go-openlore/pkg/shell/cmds"
 )
 
 func TestOpenLoreMetadataDescribesEnabledPublicRoutes(t *testing.T) {
@@ -46,32 +44,35 @@ func TestOpenLoreMetadataDescribesEnabledPublicRoutes(t *testing.T) {
 }
 
 // TestAgentsSkillUsesEffectiveSSHTarget pins that generated connection
-// instructions follow the configured SSH port rather than the 2222 default.
+// instructions follow each server's configured SSH port rather than the 2222
+// default, even though skill commands live in the process-global registry.
 func TestAgentsSkillUsesEffectiveSSHTarget(t *testing.T) {
-	s, err := NewServer("", config.WithDataDir(t.TempDir()), config.WithPort(2223), config.WithHTTPPort(8081))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = s.Shutdown(context.Background()) })
-	var out bytes.Buffer
-	if code := cmds.Registry["agents"](nil, nil, &out, io.Discard, nil); code != 0 {
-		t.Fatalf("agents exited %d", code)
-	}
-	for _, want := range []string{"ssh -p 2223 localhost\n", "sshfs -p 2223 localhost:/ "} {
-		if !strings.Contains(out.String(), want) {
-			t.Errorf("agents output missing %q", want)
+	newServer := func(port int) *Server {
+		s, err := NewServer("", config.WithDataDir(t.TempDir()), config.WithPort(port))
+		if err != nil {
+			t.Fatal(err)
 		}
+		t.Cleanup(func() { _ = s.Shutdown(context.Background()) })
+		return s
 	}
-	if strings.Contains(out.String(), "2222") || strings.Contains(out.String(), "{{") {
-		t.Errorf("agents output has stale connection details:\n%s", out.String())
-	}
-}
-
-func TestSSHTargetPlaceholderAllowsInnerWhitespace(t *testing.T) {
-	in := "ssh {{ssh_target}}; ssh {{ ssh_target }}; ssh {{\tssh_target  }}; {{ ssh_targets }}"
-	want := "ssh X; ssh X; ssh X; {{ ssh_targets }}"
-	if got := sshTargetPlaceholder.ReplaceAllLiteralString(in, "X"); got != want {
-		t.Fatalf("got %q, want %q", got, want)
+	first := newServer(2223)
+	second := newServer(2224)
+	for _, tc := range []struct {
+		server *Server
+		want   string
+	}{{first, "-p 2223 localhost"}, {second, "-p 2224 localhost"}} {
+		var out, errOut bytes.Buffer
+		if code := tc.server.buildSessionShell(Identity{}).ExecPipeline("agents", &out, &errOut, nil); code != 0 {
+			t.Fatalf("agents exited %d: %s", code, errOut.String())
+		}
+		for _, want := range []string{"ssh " + tc.want + "\n", "sshfs " + tc.want + ":/ "} {
+			if !strings.Contains(out.String(), want) {
+				t.Errorf("agents output missing %q", want)
+			}
+		}
+		if strings.Contains(out.String(), "2222") || strings.Contains(out.String(), "{{") {
+			t.Errorf("agents output has stale connection details:\n%s", out.String())
+		}
 	}
 }
 

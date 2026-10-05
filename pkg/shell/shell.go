@@ -54,6 +54,7 @@ type Shell struct {
 	skillsManagement     bool
 	skillsRemoteTimeout  time.Duration
 	skillsRemoteMaxBytes int64
+	sshTarget            string
 	attribution          cmds.JobAttribution
 	configReload         cmds.ConfigReloadBackend
 	history              cmds.HistoryBackend
@@ -165,6 +166,13 @@ func (s *Shell) SetPublishTargets(t []cmds.PublishTarget) { s.publishTargets = t
 
 // PublishTargets reports the per-session publish inboxes. Implements CmdContext.
 func (s *Shell) PublishTargets() []cmds.PublishTarget { return s.publishTargets }
+
+// SetSSHTarget installs the ssh arguments that reach this host, substituted
+// into skills that carry the {{ ssh_target }} placeholder.
+func (s *Shell) SetSSHTarget(target string) { s.sshTarget = target }
+
+// SSHTarget reports the ssh arguments installed by SetSSHTarget.
+func (s *Shell) SSHTarget() string { return s.sshTarget }
 
 // SetMetaExtenders installs the plugin-contributed extenders applied by `lore
 // meta`.

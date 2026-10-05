@@ -33,9 +33,11 @@ const passkeyHelp = `
     passkey revoke "MacBook"                          Delete a passkey by label
 
   Setup:
-    Passkeys are enabled by default for the server's advertised HTTP
-    address (external_url in openlore.yml, else the local http_port). To
-    pin the relying party explicitly:
+    Passkeys are enabled by default. Registration links use the server's
+    advertised HTTP address: external_url in openlore.yml, else the first
+    passkeys.rp_origins entry, else http://localhost:<http_port>. To pin
+    the relying party explicitly (rp_origins must include external_url
+    when both are set):
 
       passkeys:
         enabled: true
