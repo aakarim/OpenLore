@@ -89,7 +89,7 @@ func NewMCPServer(fs vfs.FileSystem, opts ...MCPOption) *mcp.Server {
 	server := mcp.NewServer(
 		&mcp.Implementation{
 			Name:    serverName,
-			Version: "1.0.0",
+			Version: assets.Version(),
 			Icons: []mcp.Icon{{
 				Source:   "data:image/svg+xml;base64," + base64.StdEncoding.EncodeToString(assets.OiyaIcon()),
 				MIMEType: "image/svg+xml",
