@@ -1584,7 +1584,13 @@ func (s *Server) ListenAndServe() error {
 			}
 			preparedRoutes = append(preparedRoutes, register)
 		}
-		preparedRoutes = append(preparedRoutes, s.dashboardRoutes(assets.Dashboard()))
+		frontend := assets.Dashboard()
+		if frontend == nil {
+			s.logger.Warn("dashboard assets are not embedded in this binary; /dashboard/ will return 404",
+				"http_port", s.config.HTTPPort,
+				"fix", "use a release binary, Homebrew, or container, or build with `make distribution`")
+		}
+		preparedRoutes = append(preparedRoutes, s.dashboardRoutes(frontend))
 	}
 	opts := []ssh.Option{
 		wish.WithAddress(fmt.Sprintf(":%d", s.config.Port)),

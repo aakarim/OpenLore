@@ -30,8 +30,8 @@ the frontend checks and tests.
 On a clean checkout, `go build`, `go install`, and `make build` are backend-only
 workflows. They work without generated frontend files, and `assets.Dashboard()`
 returns `nil` in such builds. If `assets/dashboard/dist` already exists from a
-frontend build, Go embeds it automatically; rebuild it after changing frontend
-source. Remove that generated directory to return to a backend-only build.
+frontend build, Go embeds it automatically. See
+[Building from source](building-from-source.md) for the user-facing steps.
 
 Use `make distribution` from `nix develop` to build the dashboard and then an
 OpenLore binary with those files embedded. CI release binaries, containers, and

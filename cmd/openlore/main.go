@@ -785,6 +785,11 @@ func main() {
 	}
 	if cfg.HTTPPort > 0 {
 		fmt.Printf("  HTTP:       http://localhost:%d\n", cfg.HTTPPort)
+		if assets.Dashboard() != nil {
+			fmt.Printf("  Dashboard:  http://localhost:%d/dashboard/\n", cfg.HTTPPort)
+		} else {
+			fmt.Println("  Dashboard:  not included in this build (go install/go build are backend-only)")
+		}
 	}
 	if cfg.MCPEnabled && cfg.MCPPath != "" && cfg.HTTPPort > 0 {
 		fmt.Printf("  MCP:        http://localhost:%d%s\n", cfg.HTTPPort, "/"+strings.Trim(cfg.MCPPath, "/"))
