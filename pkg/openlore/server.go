@@ -546,13 +546,6 @@ func (s *Server) SetSessionFSFn(fn SessionFSFn) {
 	s.sessionFSFn = fn
 }
 
-func (s *Server) advertisedSSHPort() int {
-	if s.config.ExternalSSHPort != 0 {
-		return s.config.ExternalSSHPort
-	}
-	return s.config.Port
-}
-
 func publicKeyMatches(configured string, presented gossh.PublicKey) bool {
 	parsed, _, _, _, err := gossh.ParseAuthorizedKey([]byte(configured))
 	return err == nil && bytes.Equal(parsed.Marshal(), presented.Marshal())
@@ -1280,6 +1273,7 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 	sh.SetSkillsRemoteConfig(s.config.Plugins.Skills.RemoteTimeout, s.config.Plugins.Skills.RemoteMaxBytes)
 	sh.SetMetaFilters(s.sessionMetaFilters(id))
 	sh.SetPublishTargets(s.sessionPublishTargets(id))
+	sh.SetSSHTarget(s.config.SSHTarget())
 	sh.SetMetaExtenders(s.metaExtenders)
 	sh.SetValidators(s.validators)
 	a := id.attribution()
@@ -1704,7 +1698,7 @@ func (s *Server) ListenAndServe() error {
 				TLSKey:         s.config.TLSKey,
 				ClientCABundle: s.config.MTLS.CABundle,
 				HostKeyPath:    s.config.HostKeyPath,
-				SSHPort:        s.advertisedSSHPort(),
+				SSHPort:        s.config.AdvertisedSSHPort(),
 				Logger:         s.logger,
 				ExtraHandlers:  map[string]http.Handler{},
 			}
@@ -1807,25 +1801,9 @@ func (s *Server) ListenAndServe() error {
 			}
 
 			if s.passkeys != nil {
-				// Build the HTTP base URL for the passkey shell command.
-				// If rp_origins are configured, use the first one as the base URL
-				// (handles TLS termination at a load balancer).
-				var baseURL string
-				if len(s.config.Passkeys.RPOrigins) > 0 {
-					baseURL = strings.TrimRight(s.config.Passkeys.RPOrigins[0], "/")
-				} else {
-					scheme := "http"
-					if s.config.TLSCert != "" {
-						scheme = "https"
-					}
-					baseURL = fmt.Sprintf("%s://localhost:%d", scheme, s.config.HTTPPort)
-					if s.config.Passkeys.RPID != "" && s.config.Passkeys.RPID != "localhost" {
-						baseURL = fmt.Sprintf("%s://%s", scheme, s.config.Passkeys.RPID)
-						if (scheme == "http" && s.config.HTTPPort != 80) || (scheme == "https" && s.config.HTTPPort != 443) {
-							baseURL = fmt.Sprintf("%s:%d", baseURL, s.config.HTTPPort)
-						}
-					}
-				}
+				// Links printed to agents use the advertised address, not the
+				// local listener (handles TLS termination at a load balancer).
+				baseURL := s.config.HTTPBaseURL()
 
 				passkeys.RegisterShellCommand(s.passkeys, baseURL)
 
@@ -2035,7 +2013,7 @@ func (s *Server) openLoreMetadata(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	routes := map[string]string{"legal": "/legal/"}
-	ssh := map[string]any{"port": s.advertisedSSHPort()}
+	ssh := map[string]any{"port": s.config.AdvertisedSSHPort()}
 	if s.config.HostKeyPath != "" {
 		routes["host_key"] = "/host-key"
 		ssh["host_key_url"] = "/host-key"

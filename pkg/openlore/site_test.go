@@ -1,9 +1,12 @@
 package openlore
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/aakarim/go-openlore/internal/config"
@@ -36,6 +39,39 @@ func TestOpenLoreMetadataDescribesEnabledPublicRoutes(t *testing.T) {
 	for route, want := range map[string]string{"mcp": "/mcp", "api": "/api/", "host_key": "/host-key", "legal": "/legal/"} {
 		if metadata.Routes[route] != want {
 			t.Errorf("route %q = %q, want %q", route, metadata.Routes[route], want)
+		}
+	}
+}
+
+// TestAgentsSkillUsesEffectiveSSHTarget pins that generated connection
+// instructions follow each server's configured SSH port rather than the 2222
+// default, even though skill commands live in the process-global registry.
+func TestAgentsSkillUsesEffectiveSSHTarget(t *testing.T) {
+	newServer := func(port int) *Server {
+		s, err := NewServer("", config.WithDataDir(t.TempDir()), config.WithPort(port))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = s.Shutdown(context.Background()) })
+		return s
+	}
+	first := newServer(2223)
+	second := newServer(2224)
+	for _, tc := range []struct {
+		server *Server
+		want   string
+	}{{first, "-p 2223 localhost"}, {second, "-p 2224 localhost"}} {
+		var out, errOut bytes.Buffer
+		if code := tc.server.buildSessionShell(Identity{}).ExecPipeline("agents", &out, &errOut, nil); code != 0 {
+			t.Fatalf("agents exited %d: %s", code, errOut.String())
+		}
+		for _, want := range []string{"ssh " + tc.want + "\n", "sshfs " + tc.want + ":/ "} {
+			if !strings.Contains(out.String(), want) {
+				t.Errorf("agents output missing %q", want)
+			}
+		}
+		if strings.Contains(out.String(), "2222") || strings.Contains(out.String(), "{{") {
+			t.Errorf("agents output has stale connection details:\n%s", out.String())
 		}
 	}
 }

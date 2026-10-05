@@ -779,11 +779,19 @@ func main() {
 		fmt.Printf("  Directory:  (embedded docs)\n")
 	}
 	fmt.Printf("  config: %s\n", cfg.Source())
-	fmt.Printf("  SSH:        ssh -p %d localhost\n", cfg.Port)
+	fmt.Printf("  SSH:        ssh %s\n", cfg.LocalSSHTarget())
 	if cfg.MetricsPort > 0 {
 		fmt.Printf("  Metrics:    http://localhost:%d/metrics\n", cfg.MetricsPort)
 	}
 	writeHTTPBanner(os.Stdout, cfg, assets.Dashboard() != nil)
+	// Generated instructions and links use the advertised address; show it
+	// whenever it differs from the local listeners above.
+	if cfg.SSHTarget() != cfg.LocalSSHTarget() {
+		fmt.Printf("  Public SSH: ssh %s\n", cfg.SSHTarget())
+	}
+	if cfg.HTTPPort > 0 && cfg.HTTPBaseURL() != cfg.LocalHTTPURL() {
+		fmt.Printf("  Public URL: %s\n", cfg.HTTPBaseURL())
+	}
 	fmt.Println()
 
 	slog.Info("starting openlore",
@@ -817,11 +825,7 @@ func writeHTTPBanner(w io.Writer, cfg config.Config, hasDashboard bool) {
 	if cfg.HTTPPort <= 0 {
 		return
 	}
-	scheme := "http"
-	if cfg.TLSCert != "" && cfg.TLSKey != "" {
-		scheme = "https"
-	}
-	base := fmt.Sprintf("%s://localhost:%d", scheme, cfg.HTTPPort)
+	base := cfg.LocalHTTPURL()
 	fmt.Fprintf(w, "  HTTP:       %s\n", base)
 	if hasDashboard {
 		fmt.Fprintf(w, "  Dashboard:  %s/dashboard/\n", base)

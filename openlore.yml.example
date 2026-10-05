@@ -29,6 +29,15 @@ port: 2222
 # HTTP front page port for human users (default 8080). Set to 0 to disable.
 # http_port: 8080
 
+# Externally advertised address, used in published links, passkey URLs and
+# generated connection instructions (`ssh <host> agents`). Its host is also the
+# advertised SSH host; pair it with external_ssh_port when a load balancer
+# remaps the SSH port. Unset, the first passkeys.rp_origins entry is used if
+# configured, otherwise http://localhost:<http_port> and localhost:<port>. When
+# passkeys are enabled and rp_origins is set, it must include external_url.
+# external_url: https://docs.example.com
+# external_ssh_port: 22
+
 # Prometheus metrics port. Set to 0 to disable.
 metrics_port: 3000
 
@@ -155,9 +164,12 @@ host_key_path: .ssh/openlore_ed25519
 
 # ── Passkeys / WebAuthn ───────────────────────────────
 #
-# Browser passkeys default to enabled for http://localhost:8080. Users can
-# register from SSH (`passkey`) and browse at /lore/. Set `enabled: false` to
-# disable them. For deployment, configure the public HTTPS domain explicitly:
+# Browser passkeys default to enabled for the advertised HTTP address
+# (external_url, else http://localhost:<http_port>). Users can register from
+# SSH (`passkey`) and browse at /lore/. Set `enabled: false` to disable them.
+# To override the derived relying party explicitly (without external_url, the
+# first rp_origins entry then becomes the advertised HTTP and SSH address; with
+# it, rp_origins must include external_url):
 #
 # passkeys:
 #   enabled: true

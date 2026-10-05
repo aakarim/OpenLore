@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"regexp"
 	"sort"
 	"strings"
 	"syscall"
@@ -30,9 +31,22 @@ func RegisterSkill(name, description, content string) {
 	Register(name, makeSkillCmd(content))
 }
 
+// sshTargetPlaceholder matches the {{ ssh_target }} skill variable, with
+// optional inner whitespace as in Knap (https://knap.md/variables).
+var sshTargetPlaceholder = regexp.MustCompile(`\{\{\s*ssh_target\s*\}\}`)
+
+// sshTargetContext is implemented by hosts that know the SSH arguments
+// clients use to reach them. It is resolved per session, not at registration,
+// because the command registry is process-global.
+type sshTargetContext interface{ SSHTarget() string }
+
 func makeSkillCmd(content string) CmdFunc {
-	return func(_ CmdContext, _ []string, w io.Writer, _ io.Writer, _ io.Reader) int {
-		fmt.Fprint(w, content)
+	return func(ctx CmdContext, _ []string, w io.Writer, _ io.Writer, _ io.Reader) int {
+		target := "<server>"
+		if c, ok := ctx.(sshTargetContext); ok && c.SSHTarget() != "" {
+			target = c.SSHTarget()
+		}
+		fmt.Fprint(w, sshTargetPlaceholder.ReplaceAllLiteralString(content, target))
 		return 0
 	}
 }
