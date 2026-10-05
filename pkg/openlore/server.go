@@ -478,6 +478,7 @@ func newServerWithRoot(rootDir string, rootFS vfs.FileSystem, lowerFS fs.FS, opt
 			LorePath:     cfg.Passkeys.LorePath,
 			PasskeysFile: pkFile,
 			SessionTTL:   sessionTTL,
+			SSHPort:      s.config.AdvertisedSSHPort(),
 		}, sessionKey, logger)
 		if err != nil {
 			return nil, fmt.Errorf("setting up passkeys: %w", err)
@@ -1716,6 +1717,7 @@ func (s *Server) ListenAndServe() error {
 			httpCfg.ExtraHandlers["/assets/openlore/app.css"] = appCSS
 			// Compatibility for existing login and permissions links.
 			httpCfg.ExtraHandlers["/assets/openlore.css"] = appCSS
+			httpCfg.ExtraHandlers["/assets/openlore/familjen-grotesk.woff2"] = staticAppAsset("font/woff2", webstyle.Familjen)
 			httpCfg.ExtraHandlers["/assets/openlore/outfit.woff2"] = staticAppAsset("font/woff2", webstyle.Outfit)
 			httpCfg.ExtraHandlers["/.well-known/openlore"] = http.HandlerFunc(s.openLoreMetadata)
 

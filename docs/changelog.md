@@ -31,6 +31,13 @@ necessarily the current version. Dates are the GitHub publication dates in UTC.
 
 ## Unreleased
 
+- The startup banner now reports whether the dashboard is ready and, when it
+  is not, the next steps: set `auth_file`, remove an explicit
+  `passkeys.enabled: false` (passkeys are on by default), or a numbered guide
+  for registering the first passkey over SSH and signing in. The dashboard
+  shows the same steps instead of a bare error, the passkey login page walks
+  through registration with the `ssh` command filled in, and the dashboard no
+  longer links to a login page on servers with passkeys turned off.
 - Added this changelog and guidance for matching documentation to an installed
   version.
 - Fixed `printf` looping forever and exhausting memory when the format contains

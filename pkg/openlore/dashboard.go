@@ -72,15 +72,23 @@ func (s *Server) dashboardAuth(next http.HandlerFunc) http.Handler {
 		w.Header().Set("Cache-Control", "private, no-store")
 		w.Header().Set("Vary", "Cookie, Authorization")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
+		// The shell is public, so a next step names config keys only,
+		// never file contents or paths.
 		if !s.authEnforced {
-			dashboardError(w, http.StatusNotFound, "dashboard requires configured authentication")
+			_, nextSteps := s.dashboardSignInBlocker()
+			dashboardErrorJSON(w, http.StatusNotFound, map[string]any{"error": "dashboard requires configured authentication", "next_steps": nextSteps})
 			return
 		}
 		id, ok := s.dashboardIdentity(r)
 		if !ok {
-			w.Header().Set("Content-Type", "application/json; charset=utf-8")
-			w.WriteHeader(http.StatusUnauthorized)
-			dashboardJSON(w, map[string]string{"error": "authentication required", "login_url": "/passkey/login"})
+			if s.passkeys == nil {
+				// A bearer token still works, but a browser has no way to sign
+				// in, so do not send it to a login page that does not exist.
+				_, nextSteps := s.dashboardSignInBlocker()
+				dashboardErrorJSON(w, http.StatusUnauthorized, map[string]any{"error": "authentication required", "next_steps": nextSteps})
+				return
+			}
+			dashboardErrorJSON(w, http.StatusUnauthorized, map[string]any{"error": "authentication required", "login_url": "/passkey/login"})
 			return
 		}
 		next(w, r.WithContext(contextWithIdentity(r.Context(), id)))
@@ -183,9 +191,13 @@ func dashboardJSON(w http.ResponseWriter, value any) {
 }
 
 func dashboardError(w http.ResponseWriter, status int, message string) {
+	dashboardErrorJSON(w, status, map[string]any{"error": message})
+}
+
+func dashboardErrorJSON(w http.ResponseWriter, status int, body map[string]any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
-	dashboardJSON(w, map[string]string{"error": message})
+	dashboardJSON(w, body)
 }
 
 func (s *Server) dashboardSession(w http.ResponseWriter, r *http.Request) {

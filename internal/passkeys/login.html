@@ -5,12 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Login — OpenLore</title>
 <link rel="stylesheet" href="/assets/openlore/app.css">
+<script>try{var t=localStorage.getItem("openlore-theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t}catch(e){}</script>
 </head>
 <body class="centered">
 <div class="card">
-  <h1>📜 OpenLore</h1>
+  <div class="brand">OpenLore<span class="brand-slash" aria-hidden="true">/</span></div>
 
   <div id="login-view" class="hidden">
+    <h1>Sign in</h1>
     <p class="subtitle">Authenticate with your passkey to browse documentation</p>
     <button id="login-btn" onclick="startLogin()">Login with Passkey</button>
     <div id="status"></div>
@@ -19,9 +21,16 @@
   <div id="no-passkeys-view" class="hidden">
     <div class="setup-box">
       <h2>No passkeys registered</h2>
-      <p>Ask your agent to register a passkey for you:</p>
+      <p>Passkeys are enabled; one just needs to be registered. From any machine that can reach the server over SSH:</p>
+      <ol class="setup-steps">
+        <li>Run the registration command as an identity from <code>lore.json</code> (with or without an SSH key):
+          <pre><code id="register-command">ssh -p 2222 HOST passkey register --identity &lt;identity&gt;</code></pre>
+        </li>
+        <li>Within 5 minutes, open the link it prints <strong>in this browser</strong>, at this same address, and approve the passkey prompt.</li>
+        <li>Come back here and log in.</li>
+      </ol>
+      <p>Or ask your agent, which runs the same command and gives you the link:</p>
       <pre><code>Register a passkey so I can browse the docs in my browser.</code></pre>
-      <p>Your agent will run <code>passkey register</code> and give you a link to complete setup on this device.</p>
     </div>
     <p class="info">Once registered, refresh this page to log in.</p>
   </div>
@@ -46,6 +55,9 @@ async function init() {
     if (data.has_passkeys) {
       document.getElementById('login-view').classList.remove('hidden');
     } else {
+      const port = data.ssh_port || 2222;
+      document.getElementById('register-command').textContent =
+        `ssh -p ${port} ${location.hostname} passkey register --identity <identity>`;
       document.getElementById('no-passkeys-view').classList.remove('hidden');
     }
   } catch {
