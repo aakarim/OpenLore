@@ -97,7 +97,7 @@ var entries = map[string]entry{
 	},
 	"analytics.pipeline.buffer": {
 		Default:     "1024",
-		Description: "Number of events the pipeline buffers before back-pressure applies.",
+		Description: "Number of events the pipeline buffers before back-pressure applies; must be positive.",
 		Example:     "4096",
 	},
 	"analytics.shutdown_timeout": {
@@ -123,7 +123,7 @@ var entries = map[string]entry{
 	},
 	"analytics.index.workers": {
 		Default:     "2",
-		Description: "Number of concurrent indexing workers.",
+		Description: "Number of concurrent indexing workers; must be positive.",
 		Example:     "4",
 	},
 	"analytics.history": {
@@ -149,7 +149,7 @@ var entries = map[string]entry{
 	},
 	"port": {
 		Default:     "2222",
-		Description: "TCP port for the SSH server that agents connect to.",
+		Description: "TCP port for the SSH server that agents connect to; `0` is rejected because SSH cannot be disabled.",
 		Example:     "22",
 	},
 	"metrics_port": {
@@ -424,7 +424,7 @@ var entries = map[string]entry{
 	},
 	"max_jobs": {
 		Default:     "8",
-		Description: "Maximum number of concurrent background jobs started with `spawn`.",
+		Description: "Maximum number of concurrent background jobs started with `spawn`; must be positive.",
 		Example:     "16",
 	},
 	"rules": {

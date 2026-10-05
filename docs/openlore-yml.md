@@ -48,7 +48,7 @@ experimental: ["analytics"]
 **Type:** `integer`  
 **Default:** `2222`
 
-TCP port for the SSH server that agents connect to.
+TCP port for the SSH server that agents connect to; `0` is rejected because SSH cannot be disabled.
 
 ```yaml
 port: 22
@@ -246,7 +246,7 @@ write_conflict_policy: last_write_wins
 **Type:** `integer`  
 **Default:** `8`
 
-Maximum number of concurrent background jobs started with `spawn`.
+Maximum number of concurrent background jobs started with `spawn`; must be positive.
 
 ```yaml
 max_jobs: 16
@@ -383,7 +383,7 @@ analytics:
 **Type:** `integer`  
 **Default:** `1024`
 
-Number of events the pipeline buffers before back-pressure applies.
+Number of events the pipeline buffers before back-pressure applies; must be positive.
 
 ```yaml
 analytics:
@@ -446,7 +446,7 @@ Indexing of analytics segments for queries.
 **Type:** `integer`  
 **Default:** `2`
 
-Number of concurrent indexing workers.
+Number of concurrent indexing workers; must be positive.
 
 ```yaml
 analytics:
