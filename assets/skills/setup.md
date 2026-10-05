@@ -228,8 +228,8 @@ matter; do not invent variants such as `grants` or `permissions`:
 Validate the complete JSON. A docset without an `access.allow` entry is
 reachable only as an identity's `home`, which is implicitly read/write for its
 owner. If the running server disagrees with this schema, trust
-`docs/configuration-and-identity.md` on the server (`cat
-/docs/configuration-and-identity.md` over SSH) over this template and report
+`docs/auth.md` on the server (`cat /docs/auth.md` over SSH) over this
+template and report
 the difference.
 
 Create all three paths below `.local/filesystem/`. Put a short `README.md` in the

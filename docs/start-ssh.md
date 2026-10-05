@@ -89,7 +89,7 @@ ssh -p 2222 -i ~/.ssh/backend_agent localhost whoami
 
 The output is `backend-agent`. Connect without the key and the same command prints `guest`.
 
-Learn more about [configuration and identity](configuration-and-identity.md).
+Learn more about [identities, roles and docsets](auth.md).
 
 ---
 

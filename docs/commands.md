@@ -137,11 +137,13 @@ lore package doc size/kilobytes
 
 ### `lore validate [dir]`
 
-Run folder rules over a docset or folder without writing anything. File rules run per file; bundle rules such as OKF bundle structure, local links and alias portability run once at the root.
+Run folder rules over a docset or folder without writing anything. File rules run per file; bundle rules such as OKF bundle structure, local links and alias portability run once at the root. Bundle rules never run on write, so a file that saved successfully can still fail here; see [Saved is not validated](writing.md#saved-is-not-validated).
 
 ```bash
 lore validate /docs/backend/decisions
 ```
+
+Exit status is 1 when any `error` finding is reported and 0 when there are only warnings or none. Name the docset root: links to files outside the named folder are reported as `openlore/link-outside-bundle`.
 
 ### `lore size baseline <path>`
 

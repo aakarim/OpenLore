@@ -14,11 +14,11 @@ curl -H 'Authorization: Bearer olin_ID_SECRET' -H 'Content-Type: text/markdown' 
 `X-OpenLore-Token-Id` and `X-OpenLore-Signature`. OAuth access tokens are used
 only for `POST/GET /inbox/tokens` and `DELETE /inbox/tokens/{id}`; inbox
 credentials are separate and revocable. See
-[Configuration and identity](configuration-and-identity.md#http-inbox-credentials).
+[HTTP inbox credentials](auth.md#http-inbox-credentials).
 
 ## Next steps
 
 - [Let an agent publish into an inbox](publish-to-inbox.md) is the step-by-step
   version of this page for a single agent over SSH.
-- [Workload identity federation](workload-identity-federation.md) shows how CI
-  jobs obtain the credentials the HTTP inbox accepts.
+- [Workload identity federation](auth.md#workload-identity-federation) shows
+  how CI jobs obtain an OpenLore token for the inbox credential endpoints.
