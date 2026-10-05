@@ -166,3 +166,31 @@ func TestCommandPolicyValidationFailures(t *testing.T) {
 		})
 	}
 }
+
+func TestWriteHTTPBannerReportsDashboardAvailability(t *testing.T) {
+	cfg := config.Config{HTTPPort: 8080, MCPEnabled: true, MCPPath: "/mcp/"}
+	for _, tc := range []struct {
+		name         string
+		cfg          config.Config
+		hasDashboard bool
+		want         string
+	}{
+		{"embedded", cfg, true, "  HTTP:       http://localhost:8080\n" +
+			"  Dashboard:  http://localhost:8080/dashboard/\n" +
+			"  MCP:        http://localhost:8080/mcp\n"},
+		{"backend-only", cfg, false, "  HTTP:       http://localhost:8080\n" +
+			"  Dashboard:  not included in this build (go install/go build are backend-only)\n" +
+			"  MCP:        http://localhost:8080/mcp\n"},
+		{"tls", config.Config{HTTPPort: 8443, TLSCert: "c.pem", TLSKey: "k.pem"}, true, "  HTTP:       https://localhost:8443\n" +
+			"  Dashboard:  https://localhost:8443/dashboard/\n"},
+		{"http disabled", config.Config{}, false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out bytes.Buffer
+			writeHTTPBanner(&out, tc.cfg, tc.hasDashboard)
+			if out.String() != tc.want {
+				t.Fatalf("banner:\n%s\nwant:\n%s", out.String(), tc.want)
+			}
+		})
+	}
+}

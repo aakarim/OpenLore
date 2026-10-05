@@ -783,17 +783,7 @@ func main() {
 	if cfg.MetricsPort > 0 {
 		fmt.Printf("  Metrics:    http://localhost:%d/metrics\n", cfg.MetricsPort)
 	}
-	if cfg.HTTPPort > 0 {
-		fmt.Printf("  HTTP:       http://localhost:%d\n", cfg.HTTPPort)
-		if assets.Dashboard() != nil {
-			fmt.Printf("  Dashboard:  http://localhost:%d/dashboard/\n", cfg.HTTPPort)
-		} else {
-			fmt.Println("  Dashboard:  not included in this build (go install/go build are backend-only)")
-		}
-	}
-	if cfg.MCPEnabled && cfg.MCPPath != "" && cfg.HTTPPort > 0 {
-		fmt.Printf("  MCP:        http://localhost:%d%s\n", cfg.HTTPPort, "/"+strings.Trim(cfg.MCPPath, "/"))
-	}
+	writeHTTPBanner(os.Stdout, cfg, assets.Dashboard() != nil)
 	fmt.Println()
 
 	slog.Info("starting openlore",
@@ -818,6 +808,28 @@ func main() {
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			slog.Warn("shutdown incomplete", "error", err)
 		}
+	}
+}
+
+// writeHTTPBanner prints the startup banner lines for endpoints served over
+// the HTTP port, including whether this build embeds the dashboard.
+func writeHTTPBanner(w io.Writer, cfg config.Config, hasDashboard bool) {
+	if cfg.HTTPPort <= 0 {
+		return
+	}
+	scheme := "http"
+	if cfg.TLSCert != "" && cfg.TLSKey != "" {
+		scheme = "https"
+	}
+	base := fmt.Sprintf("%s://localhost:%d", scheme, cfg.HTTPPort)
+	fmt.Fprintf(w, "  HTTP:       %s\n", base)
+	if hasDashboard {
+		fmt.Fprintf(w, "  Dashboard:  %s/dashboard/\n", base)
+	} else {
+		fmt.Fprintln(w, "  Dashboard:  not included in this build (go install/go build are backend-only)")
+	}
+	if cfg.MCPEnabled && cfg.MCPPath != "" {
+		fmt.Fprintf(w, "  MCP:        %s/%s\n", base, strings.Trim(cfg.MCPPath, "/"))
 	}
 }
 

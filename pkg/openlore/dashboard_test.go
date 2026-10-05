@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -1013,5 +1014,26 @@ func TestDashboardAnalyticsAliasUsesCanonicalScopedFacts(t *testing.T) {
 	}
 	if w.Code != 200 || len(result.Table.Rows) != 3 || result.Table.Rows[0][0] != "/public/other.md" || result.Table.Rows[1][0] != "/public/payload.html" || result.Table.Rows[2][0] != "/public/read me.md" {
 		t.Fatalf("alias facts must include three readable files, not the private child: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestWarnIfDashboardMissing(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		frontend fs.FS
+		warn     bool
+	}{
+		{"backend-only", nil, true},
+		{"embedded", fstest.MapFS{"index.html": {Data: []byte("<html></html>")}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			s := &Server{logger: slog.New(slog.NewTextHandler(&logs, nil)), config: config.Config{HTTPPort: 8080}}
+			s.warnIfDashboardMissing(tc.frontend)
+			got := strings.Contains(logs.String(), "level=WARN") && strings.Contains(logs.String(), "dashboard assets are not embedded")
+			if got != tc.warn {
+				t.Fatalf("warning logged = %v, want %v; logs: %q", got, tc.warn, logs.String())
+			}
+		})
 	}
 }
