@@ -821,7 +821,7 @@ func New(opts ...Option) (Config, error) {
 	}
 
 	if cfg.Port < 1 || cfg.Port > 65535 {
-		return Config{}, fmt.Errorf("port must be between 1 and 65535, got %d", cfg.Port)
+		return Config{}, fmt.Errorf("port must be between 1 and 65535 (SSH cannot be disabled), got %d", cfg.Port)
 	}
 	for _, p := range []struct {
 		name string
@@ -879,8 +879,8 @@ func WithConfigFile(path string) Option {
 			cfg.ConfigVersion = fc.ConfigVersion
 		}
 		cfg.Debug = fc.Debug
-		if err := applyPositiveInt("port", fc.Port, &cfg.Port); err != nil {
-			return err
+		if fc.Port != nil {
+			cfg.Port = *fc.Port // range-checked in New
 		}
 		if fc.MetricsPort != nil {
 			cfg.MetricsPort = *fc.MetricsPort
@@ -1008,8 +1008,8 @@ func WithEmbeddedConfig(data []byte, motdFallback string) Option {
 				cfg.ConfigVersion = fc.ConfigVersion
 			}
 			cfg.Debug = fc.Debug
-			if err := applyPositiveInt("port", fc.Port, &cfg.Port); err != nil {
-				return err
+			if fc.Port != nil {
+				cfg.Port = *fc.Port // range-checked in New
 			}
 			if fc.MetricsPort != nil {
 				cfg.MetricsPort = *fc.MetricsPort

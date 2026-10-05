@@ -149,12 +149,12 @@ var entries = map[string]entry{
 	},
 	"port": {
 		Default:     "2222",
-		Description: "TCP port for the SSH server that agents connect to; `0` is rejected because SSH cannot be disabled.",
+		Description: "TCP port for the SSH server that agents connect to, from 1 to 65535; `0` is rejected because SSH cannot be disabled.",
 		Example:     "22",
 	},
 	"metrics_port": {
 		Default:     "3000",
-		Description: "TCP port for the Prometheus metrics endpoint; `0` disables it.",
+		Description: "TCP port for the Prometheus metrics endpoint, up to 65535; `0` disables it.",
 		Example:     "0",
 	},
 	"host_key_path": {
@@ -194,7 +194,7 @@ var entries = map[string]entry{
 	},
 	"http_port": {
 		Default:     "8080",
-		Description: "TCP port for the HTTP server that hosts the dashboard, MCP endpoint and JSON API; `0` disables it.",
+		Description: "TCP port for the HTTP server that hosts the dashboard, MCP endpoint and JSON API, up to 65535; `0` disables it.",
 		Example:     "80",
 	},
 	"external_ssh_port": {

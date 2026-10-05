@@ -62,8 +62,9 @@ func writeTestConfig(t *testing.T, body string) string {
 	return file
 }
 
-// TestExplicitZeroIsNotTreatedAsOmitted pins that an explicit 0 for a setting
-// that cannot be zero is rejected instead of silently replaced by the default.
+// TestExplicitZeroIsNotTreatedAsOmitted pins that an explicit non-positive
+// value (0 or negative) for a setting that must be positive is rejected
+// instead of silently replaced by the default.
 func TestExplicitZeroIsNotTreatedAsOmitted(t *testing.T) {
 	for _, tc := range []struct{ yaml, key string }{
 		{"port: 0\n", "port"},

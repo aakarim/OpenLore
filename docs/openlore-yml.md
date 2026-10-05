@@ -48,7 +48,7 @@ experimental: ["analytics"]
 **Type:** `integer`  
 **Default:** `2222`
 
-TCP port for the SSH server that agents connect to; `0` is rejected because SSH cannot be disabled.
+TCP port for the SSH server that agents connect to, from 1 to 65535; `0` is rejected because SSH cannot be disabled.
 
 ```yaml
 port: 22
@@ -59,7 +59,7 @@ port: 22
 **Type:** `integer`  
 **Default:** `3000`
 
-TCP port for the Prometheus metrics endpoint; `0` disables it.
+TCP port for the Prometheus metrics endpoint, up to 65535; `0` disables it.
 
 ```yaml
 metrics_port: 0
@@ -147,7 +147,7 @@ data_dir: /var/lib/openlore
 **Type:** `integer`  
 **Default:** `8080`
 
-TCP port for the HTTP server that hosts the dashboard, MCP endpoint and JSON API; `0` disables it.
+TCP port for the HTTP server that hosts the dashboard, MCP endpoint and JSON API, up to 65535; `0` disables it.
 
 ```yaml
 http_port: 80
