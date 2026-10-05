@@ -133,31 +133,58 @@ func searchQueriesTable(filled *bool) Incremental {
 	}
 }
 
-// lineCoverage is the union of line ranges read at one content hash.
+// lineCoverage is the union of line ranges read at one content hash. Reads
+// append ranges; normalize sorts and coalesces them once, before the
+// coverage is stored, merged or used.
 type lineCoverage struct {
 	Whole  bool     `json:"whole,omitempty"`
 	Ranges [][2]int `json:"ranges,omitempty"`
 }
 
-func (c *lineCoverage) add(start, end int) {
-	merged := make([][2]int, 0, len(c.Ranges)+1)
-	for _, r := range c.Ranges {
-		if r[1]+1 < start || end+1 < r[0] {
-			merged = append(merged, r)
-			continue
-		}
-		start, end = min(start, r[0]), max(end, r[1])
-	}
-	merged = append(merged, [2]int{start, end})
-	sort.Slice(merged, func(i, j int) bool { return merged[i][0] < merged[j][0] })
-	c.Ranges = merged
+func (c *lineCoverage) add(start, end int) { c.Ranges = append(c.Ranges, [2]int{start, end}) }
+
+func (c *lineCoverage) normalize() {
+	sort.Slice(c.Ranges, func(i, j int) bool { return c.Ranges[i][0] < c.Ranges[j][0] })
+	c.Ranges = coalesceRanges(c.Ranges[:0], c.Ranges)
 }
 
+// coalesceRanges appends sorted ranges to dst, joining overlapping and
+// adjacent ones. dst may alias ranges.
+func coalesceRanges(dst, ranges [][2]int) [][2]int {
+	for _, r := range ranges {
+		if last := len(dst) - 1; last >= 0 && r[0] <= dst[last][1]+1 {
+			dst[last][1] = max(dst[last][1], r[1])
+		} else {
+			dst = append(dst, r)
+		}
+	}
+	return dst
+}
+
+func (c lineCoverage) MarshalJSON() ([]byte, error) {
+	c.Ranges = append([][2]int(nil), c.Ranges...)
+	c.normalize()
+	type plain lineCoverage
+	return json.Marshal(plain(c))
+}
+
+// merge takes the union with later in linear time over sorted ranges.
 func (c *lineCoverage) merge(later *lineCoverage) {
 	c.Whole = c.Whole || later.Whole
-	for _, r := range later.Ranges {
-		c.add(r[0], r[1])
+	c.normalize()
+	later.normalize()
+	sorted := make([][2]int, 0, len(c.Ranges)+len(later.Ranges))
+	i, j := 0, 0
+	for i < len(c.Ranges) || j < len(later.Ranges) {
+		if j == len(later.Ranges) || i < len(c.Ranges) && c.Ranges[i][0] <= later.Ranges[j][0] {
+			sorted = append(sorted, c.Ranges[i])
+			i++
+		} else {
+			sorted = append(sorted, later.Ranges[j])
+			j++
+		}
 	}
+	c.Ranges = coalesceRanges(sorted[:0], sorted)
 }
 
 type scalarObservation struct {
@@ -278,6 +305,7 @@ func (f *fileUsagePartial) usage(ctx context.Context, facts ContentFacts) ([]Doc
 					u.ContentHash = state.Hash
 					covered := make([]bool, state.Lines)
 					if coverage := file.Coverage[state.Hash]; coverage != nil {
+						coverage.normalize()
 						for _, r := range coverage.Ranges {
 							for line := max(r[0], 1); line <= min(r[1], state.Lines); line++ {
 								covered[line-1] = true
@@ -468,19 +496,35 @@ var leastUsedFolders = Incremental{Types: fileUsageTypes, New: newPrefixFileUsag
 // groups. A byte-size limit alone cannot bound newline-heavy files adequately.
 const maxLineUsageLines = 100_000
 
-type lineRead struct {
+// lineReads counts reads of one range of one content hash.
+type lineReads struct {
 	Hash   string    `json:"hash"`
 	Start  int       `json:"start"`
 	End    int       `json:"end"`
 	Ranged bool      `json:"ranged,omitempty"`
-	Time   time.Time `json:"time"`
+	Count  int       `json:"count"`
+	Last   time.Time `json:"last"`
 }
 
-// lineReadsPartial records reads of one file; only reads of its current
+// lineReadsPartial counts reads of one file by content hash and range, so
+// repeated reads of the same range are kept once. Only reads of the current
 // content hash count, which is decided when the table is built.
 type lineReadsPartial struct {
-	path  string
-	Reads []lineRead `json:"reads"`
+	path   string
+	Ranges map[string]*lineReads `json:"ranges"`
+}
+
+func (l *lineReadsPartial) add(read lineReads) {
+	key := fmt.Sprintf("%s\x00%d\x00%d\x00%t", read.Hash, read.Start, read.End, read.Ranged)
+	current := l.Ranges[key]
+	if current == nil {
+		l.Ranges[key] = &read
+		return
+	}
+	current.Count += read.Count
+	if read.Last.After(current.Last) {
+		current.Last = read.Last
+	}
 }
 
 func (l *lineReadsPartial) Add(e Event) {
@@ -488,11 +532,16 @@ func (l *lineReadsPartial) Add(e Event) {
 		return
 	}
 	start, end, ranged := eventLineRange(e)
-	l.Reads = append(l.Reads, lineRead{Hash: fieldString(e, "content_hash"), Start: start, End: end, Ranged: ranged, Time: e.Time})
+	if !ranged {
+		start, end = 0, 0
+	}
+	l.add(lineReads{Hash: fieldString(e, "content_hash"), Start: start, End: end, Ranged: ranged, Count: 1, Last: e.Time})
 }
 
 func (l *lineReadsPartial) Merge(later Partial) {
-	l.Reads = append(l.Reads, later.(*lineReadsPartial).Reads...)
+	for _, read := range later.(*lineReadsPartial).Ranges {
+		l.add(*read)
+	}
 }
 
 func checkLineUsage(ctx context.Context, facts ContentFacts, p Params) (DocScalars, error) {
@@ -516,7 +565,9 @@ func checkLineUsage(ctx context.Context, facts ContentFacts, p Params) (DocScala
 func usedLines(most bool) Incremental {
 	return Incremental{
 		Types: []string{"doc.read", "doc.hit"},
-		New:   func(p Params) Partial { return &lineReadsPartial{path: vfs.CleanPath(p.Extra["path"])} },
+		New: func(p Params) Partial {
+			return &lineReadsPartial{path: vfs.CleanPath(p.Extra["path"]), Ranges: map[string]*lineReads{}}
+		},
 		Check: func(ctx context.Context, facts ContentFacts, p Params) error {
 			_, err := checkLineUsage(ctx, facts, p)
 			return err
@@ -533,7 +584,7 @@ func usedLines(most bool) Incremental {
 				last  *time.Time
 			}
 			lines := make([]lineUsage, lineCount)
-			for _, read := range partial.(*lineReadsPartial).Reads {
+			for _, read := range partial.(*lineReadsPartial).Ranges {
 				if read.Hash != current.ContentHash {
 					continue
 				}
@@ -548,9 +599,9 @@ func usedLines(most bool) Incremental {
 					end = lineCount
 				}
 				for i := start; i <= end; i++ {
-					lines[i-1].reads++
-					if lines[i-1].last == nil || read.Time.After(*lines[i-1].last) {
-						last := read.Time
+					lines[i-1].reads += read.Count
+					if lines[i-1].last == nil || read.Last.After(*lines[i-1].last) {
+						last := read.Last
 						lines[i-1].last = &last
 					}
 				}

@@ -645,7 +645,12 @@ const incrementalRefreshInterval = time.Minute
 const dayTurnBudget = 5 * time.Second
 
 // dayRetention bounds the cached daily partials kept for dashboard views.
-const dayRetention = 366
+// Windows longer than maxDayWindow are not built from daily partials: their
+// oldest days would be pruned between the turns that build them.
+const (
+	dayRetention = 366
+	maxDayWindow = (dayRetention - 1) * 24 * time.Hour
+)
 
 // aggregationRefreshInterval spaces full rebuilds of a materialized view
 // that is not incremental. A rebuild rescans the whole window, so longer
@@ -1029,6 +1034,9 @@ func (s *Service) DashboardMaterialized(ctx context.Context, scope, name string,
 		return result, nil
 	}
 	inc := s.registry.incrementalFor(name)
+	if window > maxDayWindow {
+		inc = nil
+	}
 	refresh := aggregationRefreshInterval(window)
 	if inc != nil {
 		refresh = incrementalRefreshInterval

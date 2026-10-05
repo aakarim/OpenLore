@@ -44,8 +44,9 @@ range rescans only the current day and the partial day at the start of the
 range, and every time range shares the same cached days; a day is rebuilt if
 late events arrive for it. Cached results survive restarts and are discarded
 only when the caller's access policy or the docset configuration changes.
-Tables from plugins that do not support per-day results are rebuilt in full,
-at most every 15 minutes for long ranges. Building views that have no result yet runs
+Session counts, ranges longer than a year, and tables from plugins that do not
+support per-day results are rebuilt in full, at most every 15 minutes for long
+ranges. Building views that have no result yet runs
 first, but background work such as event indexing still gets a regular turn. Durable event indexing
 streams from the append-only event log with idempotent event keys and a durable
 checkpoint. The legacy `analytics.aggregations.store: file` keeps the older

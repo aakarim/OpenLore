@@ -323,3 +323,41 @@ func TestIncrementalAggregationsMergeExactly(t *testing.T) {
 		})
 	}
 }
+
+func TestRepeatedReadsAreStoredOnce(t *testing.T) {
+	p := Params{Extra: map[string]string{"path": "/docs/a.md"}}
+	lines := builtinIncremental("most-used-lines").New(p).(*lineReadsPartial)
+	files := builtinIncremental("most-used-files").New(p).(*fileUsagePartial)
+	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	for i := range 1000 {
+		unit := map[string]any{"lines": map[string]any{"start": float64(1 + i%2), "end": float64(2 + i%2)}}
+		e := Event{Time: start.Add(time.Duration(i) * time.Second), Type: "doc.read", Fields: map[string]any{"path": "/docs/a.md", "content_hash": "h", "unit": unit}}
+		lines.Add(e)
+		files.Add(e)
+	}
+	if len(lines.Ranges) != 2 {
+		t.Fatalf("line reads kept %d ranges, want 2", len(lines.Ranges))
+	}
+	encoded, err := json.Marshal(files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"ranges":[[1,3]]`) {
+		t.Fatalf("coverage was not coalesced: %s", encoded)
+	}
+}
+
+func TestSessionsAreNotCachedPerDay(t *testing.T) {
+	if builtinIncremental("sessions-over-time") != nil {
+		t.Fatal("session visibility depends on the whole window and must not be cached per day")
+	}
+}
+
+func builtinIncremental(name string) *Incremental {
+	for _, aggregation := range BuiltinAggregations() {
+		if aggregation.Name == name {
+			return aggregation.Incremental
+		}
+	}
+	panic("unknown aggregation " + name)
+}

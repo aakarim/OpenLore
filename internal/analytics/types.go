@@ -195,6 +195,14 @@ type Incremental struct {
 	Check func(context.Context, ContentFacts, Params) error
 }
 
+// singleScan installs a's Compute as one partial over the whole window
+// without allowing daily partials to be cached.
+func singleScan(a Aggregation, inc Incremental) Aggregation {
+	a = incremental(a, inc)
+	a.Incremental = nil
+	return a
+}
+
 // incremental installs a's Compute as a single partial over the window.
 func incremental(a Aggregation, inc Incremental) Aggregation {
 	a.Incremental = &inc

@@ -52,7 +52,10 @@ func BuiltinAggregations() []Aggregation {
 		incremental(Aggregation{Name: "top-commands", Title: "Top commands", Description: "Most frequently executed commands", Requires: []string{"command.exec"}}, topCommands),
 		incremental(Aggregation{Name: "unknown-commands", Title: "Unknown commands", Description: "Commands and syntax OpenLore did not recognise", Requires: []string{"command.unknown"}}, unknownCommands),
 		incremental(Aggregation{Name: "commands-by-principal", Title: "Commands by principal", Description: "Command usage by principal and transport", Requires: []string{"command.exec"}}, commandsByPrincipal),
-		incremental(Aggregation{Name: "sessions-over-time", Title: "Sessions over time", Description: "Session and command activity", Requires: []string{"session.start", "command.exec"}}, sessionsOverTime),
+		// Whether a session is visible depends on all of its activity in the
+		// window, which a day's partial cannot know, so sessions are scanned
+		// over the whole window instead of cached per day.
+		singleScan(Aggregation{Name: "sessions-over-time", Title: "Sessions over time", Description: "Session and command activity", Requires: []string{"session.start", "command.exec"}}, sessionsOverTime),
 		{Name: "tree-size", Title: "Tree size", Description: "Current content size", Requires: []string{"facts"}, Params: []ParamSpec{{Name: "path", Default: "/"}, {Name: "depth", Default: "1"}}, Compute: treeSize},
 		{Name: "largest-docs", Title: "Largest documents", Description: "Documents with the greatest context cost", Requires: []string{"facts"}, Params: []ParamSpec{{Name: "path", Default: "/"}}, Compute: largestDocs},
 		incremental(Aggregation{Name: "size-over-time", Title: "Size over time", Description: "Knowledge-base growth", Requires: []string{"doc.scalars"}}, sizeOverTime),

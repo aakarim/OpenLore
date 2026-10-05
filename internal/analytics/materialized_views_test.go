@@ -879,13 +879,14 @@ func TestIncrementalAggregationViewReusesSettledDays(t *testing.T) {
 	if scans != int(last-first)+2 {
 		t.Fatalf("cold build scanned %d ranges, want %d days plus both edges", scans, last-first)
 	}
+	view := build()
 	want := 0
 	for _, event := range events {
-		if !event.Time.Before(params.Since) {
+		// Fixture events can be in the future during the first UTC hour.
+		if !event.Time.Before(view.Window.Since) && !event.Time.After(view.Window.Until) {
 			want++
 		}
 	}
-	view := build()
 	if view.Analytics.State != "ready" || len(view.Table.Rows) != 1 || view.Table.Rows[0][1] != float64(want) {
 		t.Fatalf("published view=%+v rows=%v", view.Analytics, view.Table.Rows)
 	}
@@ -895,5 +896,33 @@ func TestIncrementalAggregationViewReusesSettledDays(t *testing.T) {
 	build()
 	if scans != 2 {
 		t.Fatalf("3-day build scanned %d ranges, want only the two unsettled edges", scans)
+	}
+}
+
+func TestAggregationWindowsBeyondDayRetentionRebuildInFull(t *testing.T) {
+	service := newIndexedTestService(t, testFS{})
+	ctx := context.Background()
+	indexEvents(t, service, Event{ID: "one", Time: time.Now().UTC().Add(-time.Hour), Type: "command.exec", Fields: map[string]any{"command": "cat"}})
+	service.eventIndex.caughtUp.Store(true)
+	now := time.Now()
+	params := Params{Since: now.Add(-400 * 24 * time.Hour), Until: now}
+	if _, err := service.DashboardMaterialized(ctx, "scope", "top-commands", params, service.eventIndex, nil); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		item, ok := service.processor.pop()
+		if !ok {
+			break
+		}
+		item.run(ctx)
+		service.processor.finish(item.key)
+	}
+	view, err := service.DashboardMaterialized(ctx, "scope", "top-commands", params, service.eventIndex, nil)
+	if err != nil || view.Analytics.State != "ready" || len(view.Table.Rows) != 1 {
+		t.Fatalf("400-day view=%+v rows=%v err=%v", view.Analytics, view.Table.Rows, err)
+	}
+	var days int
+	if err := service.store.(*SQLiteAggregationStore).db.QueryRow(`SELECT COUNT(*) FROM dashboard_days`).Scan(&days); err != nil || days != 0 {
+		t.Fatalf("400-day window cached %d days err=%v", days, err)
 	}
 }
