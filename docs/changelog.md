@@ -33,6 +33,9 @@ necessarily the current version. Dates are the GitHub publication dates in UTC.
 
 - Added this changelog and guidance for matching documentation to an installed
   version.
+- Fixed `printf` looping forever and exhausting memory when the format contains
+  no conversions but arguments are given (for example `printf -- 'a\n'`).
+  `printf --` now ends option parsing as in POSIX shells.
 - Fixed `awk` regex patterns matching every line, variables staying at 0, and
   string comparisons on `$0` never matching. Unsupported `awk` constructs now
   exit 2 with an error instead of producing wrong output.
