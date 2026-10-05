@@ -36,6 +36,18 @@ necessarily the current version. Dates are the GitHub publication dates in UTC.
 - Fixed `printf` looping forever and exhausting memory when the format contains
   no conversions but arguments are given (for example `printf -- 'a\n'`).
   `printf --` now ends option parsing as in POSIX shells.
+- Documented that a successful write is saved but not fully validated: file
+  checks run on write, while link resolution, OKF bundle structure and alias
+  checks run only under `lore validate`. The [writing guide](writing.md#saved-is-not-validated)
+  and the `openlore` skill now carry a write → validate → finish workflow.
+- Regrouped the documentation into Introduction, Start, Concepts, How to and
+  Reference. Added the [Auth](auth.md) concept page, which explains how each
+  credential resolves to an identity and now holds the workload identity
+  federation guide (the old `workload-identity-federation` page redirects
+  there). Moved the inbox API, OAuth clients and write system pages to
+  Reference. Split the old configuration and identity page: server setup is
+  now the [Configure the server](configure-the-server.md) how-to, and
+  posture, roles, docsets, identities and inbox credentials live in Auth.
 - Fixed `awk` regex patterns matching every line, variables staying at 0, and
   string comparisons on `$0` never matching. Unsupported `awk` constructs now
   exit 2 with an error instead of producing wrong output.

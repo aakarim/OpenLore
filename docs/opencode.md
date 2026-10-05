@@ -68,7 +68,7 @@ auth_file: ./lore.json
 ```
 
 `ssh -p 2222 localhost "lore docsets"` should now list `public` as the only
-docset. See [Configuration and Identity](configuration-and-identity.md) for
+docset. See [Auth](auth.md) for
 roles, grants and docsets.
 
 ## Sign OpenCode in

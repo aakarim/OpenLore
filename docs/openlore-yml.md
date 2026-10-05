@@ -4,7 +4,7 @@
 
 Every key `openlore.yml` accepts, in the order the server reads them. Durations are Go duration strings such as `30s` or `24h`; byte sizes accept `KB`, `MB` and `GB` suffixes.
 
-`openlore.yml` holds deployment settings. Identities, roles and docsets belong in `lore.json`; see [Configuration and identity](configuration-and-identity.md).
+`openlore.yml` holds deployment settings; see [Configure the server](configure-the-server.md). Identities, roles and docsets belong in `lore.json`; see [Auth](auth.md).
 
 ---
 
