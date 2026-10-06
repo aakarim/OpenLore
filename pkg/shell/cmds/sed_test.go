@@ -224,6 +224,7 @@ func TestSedPreservesSemicolonsInDelimitedValues(t *testing.T) {
 		{"address", "echo 'left;right' | sed -n '/left;right/p'", "left;right\n"},
 		{"pattern", "echo 'foo;bar' | sed 's/foo;bar/matched/'", "matched\n"},
 		{"escaped address delimiter", "echo 'path/with;semi' | sed -n '/path\\/with;semi/p'", "path/with;semi\n"},
+		{"replacement after address whitespace", "echo x | sed '1 s/x/a;b/'", "a;b\n"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -311,6 +312,10 @@ func TestSedRejectsUnsupportedCommands(t *testing.T) {
 		{"missing command", `2`, "missing command"},
 		{"unknown s flag", `s/o/0/w`, "unknown option to 's': 'w'"},
 		{"numeric s flag", `s/o/0/2`, "unknown option to 's': '2'"},
+		{"flag after extra delimiter", `s/o/0/g/w`, "unknown option to 's': '/'"},
+		{"unterminated s", `s/o`, "unterminated 's' command"},
+		{"text after d", `dTYPO`, "extra characters after command 'd'"},
+		{"text after p", `1pq`, "extra characters after command 'p'"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

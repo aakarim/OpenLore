@@ -362,6 +362,9 @@ func indexSedCommandSeparator(expr string) int {
 		}
 	}
 
+	for i < len(expr) && (expr[i] == ' ' || expr[i] == '\t') {
+		i++
+	}
 	if i < len(expr) && expr[i] == 's' && i+1 < len(expr) {
 		delim := expr[i+1]
 		end := indexUnescapedSedDelimiter(expr, i+2, delim)
@@ -466,64 +469,45 @@ func parseSedExpr(expr string) (sedCmd, error) {
 		}
 	case 's':
 		cmd.command = 's'
+		patternEnd := -1
 		if i+1 < len(expr) {
-			delim := expr[i+1]
-			cmd.delimiter = delim
-			parts := splitSedSubst(expr[i+2:], delim)
-			if len(parts) >= 2 {
-				cmd.pattern = parts[0]
-				cmd.replacement = parts[1]
-			}
-			if len(parts) >= 3 {
-				for _, f := range parts[2] {
-					switch f {
-					case 'g':
-						cmd.sFlags.global = true
-					case 'i', 'I':
-						cmd.sFlags.caseInsensitive = true
-					default:
-						return cmd, fmt.Errorf("unknown option to 's': %q in expression '%s' (supported: g, i, I)", f, expr)
-					}
-				}
+			cmd.delimiter = expr[i+1]
+			patternEnd = indexUnescapedSedDelimiter(expr, i+2, cmd.delimiter)
+		}
+		if patternEnd < 0 {
+			return cmd, fmt.Errorf("unterminated 's' command in expression '%s'", expr)
+		}
+		cmd.pattern = expr[i+2 : patternEnd]
+		// A missing closing delimiter is tolerated: the replacement runs to
+		// the end of the expression and there are no flags.
+		replacementEnd := indexUnescapedSedDelimiter(expr, patternEnd+1, cmd.delimiter)
+		if replacementEnd < 0 {
+			cmd.replacement = expr[patternEnd+1:]
+			break
+		}
+		cmd.replacement = expr[patternEnd+1 : replacementEnd]
+		// Every byte after the closing delimiter is a flag, including any
+		// further delimiters, so nothing is silently dropped.
+		for _, f := range expr[replacementEnd+1:] {
+			switch f {
+			case 'g':
+				cmd.sFlags.global = true
+			case 'i', 'I':
+				cmd.sFlags.caseInsensitive = true
+			default:
+				return cmd, fmt.Errorf("unknown option to 's': %q in expression '%s' (supported: g, i, I)", f, expr)
 			}
 		}
-	case 'd':
-		cmd.command = 'd'
-	case 'p':
-		cmd.command = 'p'
+	case 'd', 'p':
+		cmd.command = expr[i]
+		if strings.TrimSpace(expr[i+1:]) != "" {
+			return cmd, fmt.Errorf("extra characters after command '%c' in expression '%s'", expr[i], expr)
+		}
 	default:
 		return cmd, fmt.Errorf("unsupported command %q in expression '%s' (supported: s, a, d, p)", expr[i], expr)
 	}
 
 	return cmd, nil
-}
-
-func splitSedSubst(s string, delim byte) []string {
-	var parts []string
-	var cur strings.Builder
-	escaped := false
-	for i := 0; i < len(s); i++ {
-		if escaped {
-			cur.WriteByte(s[i])
-			escaped = false
-			continue
-		}
-		if s[i] == '\\' {
-			escaped = true
-			cur.WriteByte(s[i])
-			continue
-		}
-		if s[i] == delim {
-			parts = append(parts, cur.String())
-			cur.Reset()
-			continue
-		}
-		cur.WriteByte(s[i])
-	}
-	if cur.Len() > 0 {
-		parts = append(parts, cur.String())
-	}
-	return parts
 }
 
 func sedReplacementToRE2(replacement string, delimiter byte) string {
