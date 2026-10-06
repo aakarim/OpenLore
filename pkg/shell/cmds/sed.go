@@ -53,7 +53,11 @@ func CmdSed(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io
 		return 1
 	}
 
-	cmds := parseSedCommands(expressions)
+	cmds, err := parseSedCommands(expressions)
+	if err != nil {
+		fmt.Fprintf(errW, "sed: %s\n", err)
+		return 1
+	}
 
 	// In-place: process each file separately, buffering the full transformed
 	// output and committing it as one atomic write (no in-place streaming).
@@ -278,7 +282,7 @@ func sedAddressMatch(cmd sedCmd, lineNum, totalLines int, line string) bool {
 	return true
 }
 
-func parseSedCommands(expressions []string) []sedCmd {
+func parseSedCommands(expressions []string) ([]sedCmd, error) {
 	var cmds []sedCmd
 	for _, expr := range expressions {
 		for {
@@ -289,7 +293,11 @@ func parseSedCommands(expressions []string) []sedCmd {
 
 			separator := indexSedCommandSeparator(expr)
 			if separator < 0 {
-				cmds = append(cmds, parseSedExpr(expr))
+				cmd, err := parseSedExpr(expr)
+				if err != nil {
+					return nil, err
+				}
+				cmds = append(cmds, cmd)
 				break
 			}
 
@@ -298,18 +306,25 @@ func parseSedCommands(expressions []string) []sedCmd {
 				expr = expr[separator+1:]
 				continue
 			}
-			cmd := parseSedExpr(prefix)
+			cmd, err := parseSedExpr(prefix)
+			if err != nil {
+				return nil, err
+			}
 			if cmd.command == 'a' {
 				// Append text consumes the rest of this expression. Semicolons
 				// in Markdown or code snippets are payload, not separators.
-				cmds = append(cmds, parseSedExpr(expr))
+				cmd, err = parseSedExpr(expr)
+				if err != nil {
+					return nil, err
+				}
+				cmds = append(cmds, cmd)
 				break
 			}
 			cmds = append(cmds, cmd)
 			expr = expr[separator+1:]
 		}
 	}
-	return cmds
+	return cmds, nil
 }
 
 // indexSedCommandSeparator returns the first semicolon separating sed
@@ -347,6 +362,9 @@ func indexSedCommandSeparator(expr string) int {
 		}
 	}
 
+	for i < len(expr) && (expr[i] == ' ' || expr[i] == '\t') {
+		i++
+	}
 	if i < len(expr) && expr[i] == 's' && i+1 < len(expr) {
 		delim := expr[i+1]
 		end := indexUnescapedSedDelimiter(expr, i+2, delim)
@@ -383,7 +401,10 @@ func indexUnescapedSedDelimiter(expr string, start int, delim byte) int {
 	return -1
 }
 
-func parseSedExpr(expr string) sedCmd {
+// parseSedExpr parses one sed command. Commands and substitution flags that
+// are not implemented are reported as errors rather than silently ignored, so
+// callers never see exit 0 for an edit that was not made.
+func parseSedExpr(expr string) (sedCmd, error) {
 	var cmd sedCmd
 	i := 0
 
@@ -428,8 +449,11 @@ func parseSedExpr(expr string) sedCmd {
 		}
 	}
 
+	for i < len(expr) && (expr[i] == ' ' || expr[i] == '\t') {
+		i++
+	}
 	if i >= len(expr) {
-		return cmd
+		return cmd, fmt.Errorf("missing command in expression '%s'", expr)
 	}
 
 	switch expr[i] {
@@ -445,60 +469,45 @@ func parseSedExpr(expr string) sedCmd {
 		}
 	case 's':
 		cmd.command = 's'
+		patternEnd := -1
 		if i+1 < len(expr) {
-			delim := expr[i+1]
-			cmd.delimiter = delim
-			parts := splitSedSubst(expr[i+2:], delim)
-			if len(parts) >= 2 {
-				cmd.pattern = parts[0]
-				cmd.replacement = parts[1]
-			}
-			if len(parts) >= 3 {
-				for _, f := range parts[2] {
-					switch f {
-					case 'g':
-						cmd.sFlags.global = true
-					case 'i', 'I':
-						cmd.sFlags.caseInsensitive = true
-					}
-				}
+			cmd.delimiter = expr[i+1]
+			patternEnd = indexUnescapedSedDelimiter(expr, i+2, cmd.delimiter)
+		}
+		if patternEnd < 0 {
+			return cmd, fmt.Errorf("unterminated 's' command in expression '%s'", expr)
+		}
+		cmd.pattern = expr[i+2 : patternEnd]
+		// A missing closing delimiter is tolerated: the replacement runs to
+		// the end of the expression and there are no flags.
+		replacementEnd := indexUnescapedSedDelimiter(expr, patternEnd+1, cmd.delimiter)
+		if replacementEnd < 0 {
+			cmd.replacement = expr[patternEnd+1:]
+			break
+		}
+		cmd.replacement = expr[patternEnd+1 : replacementEnd]
+		// Every byte after the closing delimiter is a flag, including any
+		// further delimiters, so nothing is silently dropped.
+		for _, f := range expr[replacementEnd+1:] {
+			switch f {
+			case 'g':
+				cmd.sFlags.global = true
+			case 'i', 'I':
+				cmd.sFlags.caseInsensitive = true
+			default:
+				return cmd, fmt.Errorf("unknown option to 's': %q in expression '%s' (supported: g, i, I)", f, expr)
 			}
 		}
-	case 'd':
-		cmd.command = 'd'
-	case 'p':
-		cmd.command = 'p'
+	case 'd', 'p':
+		cmd.command = expr[i]
+		if strings.TrimSpace(expr[i+1:]) != "" {
+			return cmd, fmt.Errorf("extra characters after command '%c' in expression '%s'", expr[i], expr)
+		}
+	default:
+		return cmd, fmt.Errorf("unsupported command %q in expression '%s' (supported: s, a, d, p)", expr[i], expr)
 	}
 
-	return cmd
-}
-
-func splitSedSubst(s string, delim byte) []string {
-	var parts []string
-	var cur strings.Builder
-	escaped := false
-	for i := 0; i < len(s); i++ {
-		if escaped {
-			cur.WriteByte(s[i])
-			escaped = false
-			continue
-		}
-		if s[i] == '\\' {
-			escaped = true
-			cur.WriteByte(s[i])
-			continue
-		}
-		if s[i] == delim {
-			parts = append(parts, cur.String())
-			cur.Reset()
-			continue
-		}
-		cur.WriteByte(s[i])
-	}
-	if cur.Len() > 0 {
-		parts = append(parts, cur.String())
-	}
-	return parts
+	return cmd, nil
 }
 
 func sedReplacementToRE2(replacement string, delimiter byte) string {
