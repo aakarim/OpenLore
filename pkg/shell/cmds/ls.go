@@ -16,18 +16,26 @@ func CmdLs(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.
 	jsonFlag := false
 	var targets []string
 	for _, a := range args {
-		switch a {
-		case "-l":
-			longFormat = true
-		case "-la", "-al":
-			longFormat = true
-			allFlag = true
-		case "-a":
-			allFlag = true
-		case "--stats":
+		switch {
+		case a == "--stats":
 			statsFlag = true
-		case "--json":
+		case a == "--json":
 			jsonFlag = true
+		case len(a) > 1 && a[0] == '-' && a[1] != '-':
+			// Combined short flags: -l, -a, -la, -l1, ...
+			for _, r := range a[1:] {
+				switch r {
+				case 'l':
+					longFormat = true
+				case 'a':
+					allFlag = true
+				case '1':
+					// Output is already one entry per line.
+				default:
+					fmt.Fprintf(errW, "ls: invalid option -- '%c'\nusage: ls [-l|-a|-1|--stats|--json] [path...]\n", r)
+					return 1
+				}
+			}
 		default:
 			targets = append(targets, a)
 		}

@@ -22,6 +22,12 @@ func TestXargsI(t *testing.T) {
 	if out != "<  spaced  >\n" {
 		t.Errorf("xargs -I whitespace: got %q", out)
 	}
+
+	// GNU form with the replacement string attached to the flag.
+	out, errs, code := execCmd(t, testFS(), "echo hello | xargs -I{} echo 'got: {}'")
+	if code != 0 || out != "got: hello\n" {
+		t.Errorf("xargs -I{}: code=%d out=%q err=%q", code, out, errs)
+	}
 }
 
 func TestXargsTreatsInputAsArgumentsNotShellSource(t *testing.T) {

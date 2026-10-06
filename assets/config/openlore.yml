@@ -5,7 +5,7 @@ version: "1"
 debug: true
 
 port: 2222
-external_ssh_port: 22
+# external_ssh_port: 22  # set only when a load balancer remaps `port`
 http_port: 8080
 metrics_port: 0
 default_cwd: /

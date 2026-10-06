@@ -59,6 +59,7 @@ type Shell struct {
 	history              cmds.HistoryBackend
 	jobs                 cmds.JobBackend
 	size                 cmds.SizeBackend
+	advertisedSSHPort    int
 	analytics            *analytics.Service
 	analyticsAuthorizer  func() bool
 	facts                analytics.ContentFacts
@@ -198,6 +199,11 @@ func (s *Shell) SetJobBackend(b cmds.JobBackend)                   { s.jobs = b 
 func (s *Shell) JobBackend() cmds.JobBackend                       { return s.jobs }
 func (s *Shell) SetSizeBackend(b cmds.SizeBackend)                 { s.size = b }
 func (s *Shell) SizeBackend() cmds.SizeBackend                     { return s.size }
+
+// SetAdvertisedSSHPort records the SSH port agents should connect to, which
+// skill documents render into their connection examples. 0 means unknown.
+func (s *Shell) SetAdvertisedSSHPort(port int) { s.advertisedSSHPort = port }
+func (s *Shell) AdvertisedSSHPort() int        { return s.advertisedSSHPort }
 func (s *Shell) SetAnalytics(service *analytics.Service) {
 	s.analytics = service
 	if service != nil && s.facts == nil {

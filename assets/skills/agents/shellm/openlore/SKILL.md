@@ -18,7 +18,7 @@ SSH session.
 Set `OPENLORE_SSH` to the SSH arguments for your OpenLore server, for example:
 
 ```bash
-export OPENLORE_SSH="-p 2222 localhost"
+export OPENLORE_SSH="-p {{.Port}} <host>"
 ```
 
 Then run commands non-interactively:
@@ -36,42 +36,61 @@ variables does not persist between invocations, so use absolute paths.
 # Discover what is available
 ssh $OPENLORE_SSH "tree -L 2 /"
 
-# Search across all docs
-ssh $OPENLORE_SSH "grep -rn 'search term' /docs"
+# Search across the docs
+ssh $OPENLORE_SSH "grep -rn 'search term' {{.Mount}}"
 
 # Read a specific file
-ssh $OPENLORE_SSH "cat /docs/README.md"
+ssh $OPENLORE_SSH "cat {{.File}}"
 
 # Find files by name
-ssh $OPENLORE_SSH "find / -name '*.md'"
+ssh $OPENLORE_SSH "find {{.Mount}} -name '*.md'"
 
 # Query structured frontmatter as NDJSON
-ssh $OPENLORE_SSH "lore meta /docs | jq -r '.path'"
+ssh $OPENLORE_SSH "lore meta {{.Mount}} | jq -r '.path'"
 ```
-
+{{if .Mounts}}
+Documentation is mounted at {{range $i, $m := .Mounts}}{{if $i}}, {{end}}`{{$m}}`{{end}}; run
+`ssh $OPENLORE_SSH "lore docsets"` to see each mount with your access level.
+{{end}}
 Pipes, `jq`, `sed`, `awk`, `sort`, `xargs`, and most other coreutils work
 inside the remote command. Run `ssh $OPENLORE_SSH "help"` for the full list.
 
 ## Publishing findings
-
-If your identity has publish or write access, store results back into the
-knowledge base:
+{{if .Publish}}
+This identity can publish to {{range $i, $t := .Publish}}{{if $i}}, {{end}}`/{{$t.Name}}/`{{end}}. The
+argument is one path, `/<docset>/<file>`, where the docset name is the first
+segment; the file lands in that docset's inbox for human review:
 
 ```bash
 # List docsets you can publish to
 ssh $OPENLORE_SSH "publish"
 
 # Publish a report from stdin
-cat report.md | ssh $OPENLORE_SSH "publish <docset> reports/report.md"
+cat report.md | ssh $OPENLORE_SSH "publish /{{.PublishDocset}}/reports/report.md"
 ```
 
 Writes are atomic and conflict-aware; a rejected write returns a non-zero exit
 status with an explanation on stderr.
+{{else if .Writable}}
+This identity can write directly to {{range $i, $m := .Writable}}{{if $i}}, {{end}}`{{$m}}`{{end}} with
+the ordinary write verbs:
 
-## Sharing run trajectories
+```bash
+cat report.md | ssh $OPENLORE_SSH "cat > {{sub (index .Writable 0) "report.md"}}"
+```
 
-If the server has a writable `trajectories` docset, publish completed shellm
-trajectory directories so teammates and other agents can read them. Sync the
+Writes are atomic and conflict-aware; a rejected write returns a non-zero exit
+status with an explanation on stderr.
+{{else}}
+This identity is read-only. Ask the server operator for a `publish` grant to
+store findings; `ssh $OPENLORE_SSH "publish"` then lists the docsets you can
+write to, and `publish /<docset>/<file>` publishes stdin into that docset's
+inbox for human review.
+{{end}}
+{{if exists "/trajectories"}}## Sharing run trajectories
+
+This server has a `/trajectories` docset. Publish completed shellm trajectory
+directories there so teammates and other agents can read them. Sync the
 whole directory — `trajectory.jsonl`, `blobs/`, and nested child-run
 directories — uploading blobs before the JSONL that references them:
 
@@ -100,7 +119,7 @@ Read shared trajectories from any session:
 ssh $OPENLORE_SSH "cat /trajectories/<run>/trajectory.jsonl | jq -r 'select(.type == \"final\") | .content'"
 ```
 
-## Notes
+{{end}}## Notes
 
 - The remote shell is OpenLore's sandboxed in-memory interpreter, not a real
   operating system: there is no process execution, network access, or shell

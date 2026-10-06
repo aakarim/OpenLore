@@ -49,20 +49,21 @@ Then ask the initial question again (options A and B).
    Default port: 2222 (openlore.sh uses 22).
 2. Verify the connection:
    ```bash
-   ssh -p 2222 <address>
+   ssh -p {{.Port}} <address>
    ```
 3. Show them how to explore:
    ```bash
    tree -L 2 /          # list all documentation
-   grep -r "term" /docs # search across docs
-   cat /docs/README.md  # read a file
+   lore docsets         # mounts and access levels
+   grep -r "term" /     # search across docs
+   cat <path>           # read a file
    help                 # full command list
    ```
 4. Offer to onboard their agents. The server carries its own instructions —
    fetch and follow them:
    ```bash
-   ssh -p 2222 <address> openlore-skill  # portable Agent Skills file
-   ssh -p 2222 <address> agents          # AGENTS.md snippet
+   ssh -p {{.Port}} <address> openlore-skill  # portable Agent Skills file
+   ssh -p {{.Port}} <address> agents          # AGENTS.md snippet
    ```
 5. Finish with a short ✅ plain-language summary of what now works.
 

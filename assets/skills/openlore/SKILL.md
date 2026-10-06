@@ -11,38 +11,55 @@ independent session, so use absolute paths.
 
 ## Server
 
-<!-- Fill this in when installing the skill. -->
+<!-- Fill in <host> when installing the skill. -->
 
-- Address: `ssh -p <port> <host>`
+- Address: `ssh -p {{.Port}} <host>`
 - Key: none (keyless) — or `-i <path-to-key>` for an identity
-- Main paths: `<run 'tree -L 2 /' once and record the layout here>`
+- Main paths: {{if .Mounts}}{{range $i, $m := .Mounts}}{{if $i}}, {{end}}`{{$m}}`{{end}} (run `lore docsets` for access levels){{else}}`<run 'tree -L 2 /' once and record the layout here>`{{end}}
 
 ## Reading and searching
 
 ```bash
-ssh -p <port> <host> "tree -L 2 /"                     # discover layout
-ssh -p <port> <host> "grep -rn 'search term' /docs"    # search
-ssh -p <port> <host> "cat /docs/README.md"             # read
-ssh -p <port> <host> "find / -name '*.md'"             # locate files
-ssh -p <port> <host> "lore meta /docs | jq -r '.path'" # frontmatter as NDJSON
+ssh -p {{.Port}} <host> "tree -L 2 /"                        # discover layout
+ssh -p {{.Port}} <host> "grep -rn 'search term' {{.Mount}}"    # search
+ssh -p {{.Port}} <host> "cat {{.File}}"                        # read
+ssh -p {{.Port}} <host> "find {{.Mount}} -name '*.md'"         # locate files
+ssh -p {{.Port}} <host> "lore meta {{.Mount}} | jq -r '.path'" # frontmatter as NDJSON
 ```
 
 Pipes, `jq`, `sed`, `awk`, `sort`, and most coreutils work inside the remote
-command. Run `ssh -p <port> <host> "help"` for the full list.
+command. Run `ssh -p {{.Port}} <host> "help"` for the full list.
 
 ## Publishing findings
-
-If your identity has publish or write access:
+{{if .Publish}}
+This identity can publish to {{range $i, $t := .Publish}}{{if $i}}, {{end}}`/{{$t.Name}}/`{{end}}. The
+argument is one path, `/<docset>/<file>`, where the docset name is the first
+segment:
 
 ```bash
-ssh -p <port> <host> "publish"                                   # list writable paths
-cat report.md | ssh -p <port> <host> "publish /<docset>/report.md"  # publish from stdin
+ssh -p {{.Port}} <host> "publish"                                        # list writable paths
+cat report.md | ssh -p {{.Port}} <host> "publish /{{.PublishDocset}}/report.md"  # publish from stdin
 ```
 
 Published files land in an inbox for human review. Writes are atomic and
 conflict-aware; a rejected write returns a non-zero exit status with an
 explanation on stderr.
+{{else if .Writable}}
+This identity can write directly to {{range $i, $m := .Writable}}{{if $i}}, {{end}}`{{$m}}`{{end}} with
+the ordinary write verbs:
 
+```bash
+cat report.md | ssh -p {{.Port}} <host> "cat > {{sub (index .Writable 0) "report.md"}}"
+```
+
+Writes are atomic and conflict-aware; a rejected write returns a non-zero exit
+status with an explanation on stderr.
+{{else}}
+This identity is read-only. Ask the server operator for a `publish` grant to
+store findings; `ssh -p {{.Port}} <host> "publish"` then lists the docsets you
+can write to, and `publish /<docset>/<file>` publishes stdin into that
+docset's inbox for human review.
+{{end}}
 ## Folder rules
 
 Folders can carry rules: size caps, OKF conformance, link checks. They are
@@ -51,9 +68,9 @@ files inside the content tree; a folder's config applies to it and everything
 beneath it. Before writing to an unfamiliar folder, look:
 
 ```bash
-ssh -p <port> <host> "cat /docs/backend/.lore/config.yaml"   # rules for this folder, if any
-ssh -p <port> <host> "lore package list"                      # compiled-in rule members
-ssh -p <port> <host> "lore package doc size/lines"            # a member's parameters and example
+ssh -p {{.Port}} <host> "cat {{sub .Mount ".lore/config.yaml"}} 2>/dev/null || echo no folder rules"   # rules for this folder, if any
+ssh -p {{.Port}} <host> "lore package list"                           # compiled-in rule members
+ssh -p {{.Port}} <host> "lore package doc size/lines"                 # a member's parameters and example
 ```
 
 File-scoped rules run on every write and under `lore validate`. Bundle-scoped
@@ -67,11 +84,11 @@ not `/`).
 The error names the rule, the limit, what to do, and how to override:
 
 ```text
-rules: /docs/backend/decisions/adr-001.md: size/lines (adr-length @ /docs/backend/.lore/config.yaml)
+rules: {{sub .Mount "decisions/adr-001.md"}}: size/lines (adr-length @ {{sub .Mount ".lore/config.yaml"}})
   812 lines exceeds the limit of 800 (baseline 640 lines × growth 1.25, set 2026-08-30 on create)
   this file cannot grow past 800 lines under this rule
   suggested: keep adr-001.md under 800 lines; move the new material into a sibling file such as adr-001-details.md and add a link to it from adr-001.md so readers can drill in
-  override: a role in config.edit can run `lore size baseline reset /docs/backend/decisions/adr-001.md`
+  override: a role in config.edit can run `lore size baseline reset {{sub .Mount "decisions/adr-001.md"}}`
   see: lore package doc size/lines
 ```
 
@@ -88,7 +105,7 @@ If your identity has a role in the docset's `config.edit`, you can add rules to
 a folder by writing its `.lore/config.yaml`:
 
 ```bash
-cat <<'EOF' | ssh -p <port> <host> "cat > /docs/backend/decisions/.lore/config.yaml"
+cat <<'EOF' | ssh -p {{.Port}} <host> "cat > {{sub .Mount "<folder>/.lore/config.yaml"}}"
 version: 1
 rules:
   adr-length:
@@ -97,7 +114,7 @@ rules:
     use: size/lines
     with: { max: initial, growth: 1.1 }
 EOF
-ssh -p <port> <host> "lore validate /docs/backend/decisions"
+ssh -p {{.Port}} <host> "lore validate {{sub .Mount "<folder>"}}"
 ```
 
 Rule keys are `match`, `exclude`, `use`, `with`, `enforce` and `default`; take

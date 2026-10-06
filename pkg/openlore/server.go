@@ -1276,6 +1276,7 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 	// Per-session docset views for `lore docsets` and publish inboxes for
 	// `publish`. Computed once here, where the access authority lives.
 	sh.SetDocsets(s.sessionDocsets(id))
+	sh.SetAdvertisedSSHPort(s.advertisedSSHPort())
 	sh.SetSkillsManagementEnabled(s.config.Plugins.Skills.Enabled)
 	sh.SetSkillsRemoteConfig(s.config.Plugins.Skills.RemoteTimeout, s.config.Plugins.Skills.RemoteMaxBytes)
 	sh.SetMetaFilters(s.sessionMetaFilters(id))

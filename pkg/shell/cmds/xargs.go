@@ -27,6 +27,12 @@ func CmdXargs(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin 
 	var cmdParts []string
 
 	for i := 0; i < len(args); i++ {
+		// GNU xargs accepts the replacement string attached to the flag
+		// (`-I{}`) as well as separated (`-I {}`).
+		if strings.HasPrefix(args[i], "-I") && len(args[i]) > 2 {
+			replaceStr = args[i][2:]
+			continue
+		}
 		switch args[i] {
 		case "-I":
 			if i+1 < len(args) {

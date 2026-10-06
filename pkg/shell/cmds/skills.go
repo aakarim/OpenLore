@@ -30,9 +30,11 @@ func RegisterSkill(name, description, content string) {
 	Register(name, makeSkillCmd(content))
 }
 
+// makeSkillCmd serves a skill document rendered against the calling session,
+// so its examples name this server's real mounts, files, and publish targets.
 func makeSkillCmd(content string) CmdFunc {
-	return func(_ CmdContext, _ []string, w io.Writer, _ io.Writer, _ io.Reader) int {
-		fmt.Fprint(w, content)
+	return func(ctx CmdContext, _ []string, w io.Writer, _ io.Writer, _ io.Reader) int {
+		fmt.Fprint(w, renderSkill(ctx, content))
 		return 0
 	}
 }
