@@ -53,7 +53,11 @@ func CmdSed(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io
 		return 1
 	}
 
-	cmds := parseSedCommands(expressions)
+	cmds, err := parseSedCommands(expressions)
+	if err != nil {
+		fmt.Fprintf(errW, "sed: %s\n", err)
+		return 1
+	}
 
 	// In-place: process each file separately, buffering the full transformed
 	// output and committing it as one atomic write (no in-place streaming).
@@ -278,7 +282,7 @@ func sedAddressMatch(cmd sedCmd, lineNum, totalLines int, line string) bool {
 	return true
 }
 
-func parseSedCommands(expressions []string) []sedCmd {
+func parseSedCommands(expressions []string) ([]sedCmd, error) {
 	var cmds []sedCmd
 	for _, expr := range expressions {
 		for {
@@ -289,7 +293,11 @@ func parseSedCommands(expressions []string) []sedCmd {
 
 			separator := indexSedCommandSeparator(expr)
 			if separator < 0 {
-				cmds = append(cmds, parseSedExpr(expr))
+				cmd, err := parseSedExpr(expr)
+				if err != nil {
+					return nil, err
+				}
+				cmds = append(cmds, cmd)
 				break
 			}
 
@@ -298,18 +306,25 @@ func parseSedCommands(expressions []string) []sedCmd {
 				expr = expr[separator+1:]
 				continue
 			}
-			cmd := parseSedExpr(prefix)
+			cmd, err := parseSedExpr(prefix)
+			if err != nil {
+				return nil, err
+			}
 			if cmd.command == 'a' {
 				// Append text consumes the rest of this expression. Semicolons
 				// in Markdown or code snippets are payload, not separators.
-				cmds = append(cmds, parseSedExpr(expr))
+				cmd, err = parseSedExpr(expr)
+				if err != nil {
+					return nil, err
+				}
+				cmds = append(cmds, cmd)
 				break
 			}
 			cmds = append(cmds, cmd)
 			expr = expr[separator+1:]
 		}
 	}
-	return cmds
+	return cmds, nil
 }
 
 // indexSedCommandSeparator returns the first semicolon separating sed
@@ -383,7 +398,10 @@ func indexUnescapedSedDelimiter(expr string, start int, delim byte) int {
 	return -1
 }
 
-func parseSedExpr(expr string) sedCmd {
+// parseSedExpr parses one sed command. Commands and substitution flags that
+// are not implemented are reported as errors rather than silently ignored, so
+// callers never see exit 0 for an edit that was not made.
+func parseSedExpr(expr string) (sedCmd, error) {
 	var cmd sedCmd
 	i := 0
 
@@ -428,8 +446,11 @@ func parseSedExpr(expr string) sedCmd {
 		}
 	}
 
+	for i < len(expr) && (expr[i] == ' ' || expr[i] == '\t') {
+		i++
+	}
 	if i >= len(expr) {
-		return cmd
+		return cmd, fmt.Errorf("missing command in expression '%s'", expr)
 	}
 
 	switch expr[i] {
@@ -460,6 +481,8 @@ func parseSedExpr(expr string) sedCmd {
 						cmd.sFlags.global = true
 					case 'i', 'I':
 						cmd.sFlags.caseInsensitive = true
+					default:
+						return cmd, fmt.Errorf("unknown option to 's': %q in expression '%s' (supported: g, i, I)", f, expr)
 					}
 				}
 			}
@@ -468,9 +491,11 @@ func parseSedExpr(expr string) sedCmd {
 		cmd.command = 'd'
 	case 'p':
 		cmd.command = 'p'
+	default:
+		return cmd, fmt.Errorf("unsupported command %q in expression '%s' (supported: s, a, d, p)", expr[i], expr)
 	}
 
-	return cmd
+	return cmd, nil
 }
 
 func splitSedSubst(s string, delim byte) []string {
