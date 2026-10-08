@@ -1,9 +1,9 @@
 ---
 name: openlore
-description: Query and publish to this project's OpenLore knowledge base over SSH. Use when a task needs project documentation, runbooks, shared team knowledge, or a place to publish findings for others.
+description: Query and publish to this project's OpenLore knowledge repository over SSH. Use when a task needs project documentation, runbooks, shared team knowledge, or a place to publish findings for others.
 ---
 
-# OpenLore Knowledge Base
+# OpenLore Knowledge Repository
 
 OpenLore serves a documentation and knowledge filesystem over SSH. Run normal
 shell commands inside a one-shot SSH session. Each invocation is an

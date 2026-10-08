@@ -279,7 +279,7 @@ fs := openlore.NewDirFS("./docs", openlore.FilesConfig{
 })
 
 srv := openlore.NewMCPServer(fs,
-	openlore.WithMCPServerName("Company Knowledge Base"),
+	openlore.WithMCPServerName("Company Knowledge Repository"),
 	openlore.WithMCPInstructions("Use grep and cat to explore the docs."),
 )
 ```

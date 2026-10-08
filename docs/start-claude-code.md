@@ -1,6 +1,6 @@
 # Claude Code with OpenLore
 
-Give Claude Code a shared knowledge base over MCP.
+Give Claude Code a shared knowledge repository over MCP.
 
 We are going to serve a docs directory, connect Claude Code to it over MCP, teach Claude when to use it, and limit what it can see.
 
@@ -37,7 +37,7 @@ claude mcp add --transport http openlore http://localhost:8080/mcp
 Now start Claude Code and ask it something about your docs.
 
 ```text
-> What does the knowledge base say about our retry policy?
+> What does the knowledge repository say about our retry policy?
 ```
 
 Claude runs `grep -r 'retry' /` through the `shell` tool and answers from the result.
@@ -54,7 +54,7 @@ Every OpenLore server has an `agents` command that prints a ready-made instructi
 ssh -p 2222 localhost agents >> CLAUDE.md
 ```
 
-The section tells Claude when to search the knowledge base and which commands to use.
+The section tells Claude when to search the knowledge repository and which commands to use.
 
 ---
 

@@ -1,6 +1,6 @@
 ---
 name: openlore-housekeeping
-description: Audit and maintain a shared OpenLore knowledge base. Use on a schedule or on request to find stale docs, broken links, unreviewed inbox items, and missing skill coverage, then publish an audit report.
+description: Audit and maintain a shared OpenLore knowledge repository. Use on a schedule or on request to find stale docs, broken links, unreviewed inbox items, and missing skill coverage, then publish an audit report.
 metadata:
   shelllm:
     requires:
@@ -9,7 +9,7 @@ metadata:
 
 # OpenLore Housekeeping
 
-Keep a shared knowledge base healthy. Run each check below, collect findings,
+Keep a shared knowledge repository healthy. Run each check below, collect findings,
 and publish one report. Requires the `openlore` skill (server access via
 `$OPENLORE_SSH`).
 

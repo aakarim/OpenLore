@@ -50,7 +50,7 @@ homebrew_casks:
     binaries:
       - openlore
     homepage: https://github.com/aakarim/OpenLore
-    description: Agent-native knowledge base that keeps shared context current and inspectable
+    description: Agent-native knowledge repository that keeps shared context current and inspectable
     # The release workflow publishes the cask after `brew style --fix` moves
     # this block into Homebrew's stanza order. GoReleaser `hooks` emit
     # `postflight`, which Homebrew's tap syntax check rejects.
