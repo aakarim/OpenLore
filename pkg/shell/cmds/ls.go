@@ -7,6 +7,7 @@ import (
 	"io"
 	"path"
 	"sort"
+	"strings"
 
 	"github.com/aakarim/go-openlore/internal/analytics"
 	"github.com/aakarim/go-openlore/pkg/vfs"
@@ -76,6 +77,11 @@ func CmdLs(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.
 	}
 
 	l := &lsRun{ctx: ctx, o: o, w: w, errW: errW, facts: analyticsFacts(ctx)}
+	type operand struct {
+		target, path string
+		f            *vfs.FileInfo
+	}
+	var operands []operand
 	for _, target := range targets {
 		p := ctx.Resolve(target)
 		f, err := ctx.FS().Stat(p)
@@ -84,18 +90,38 @@ func CmdLs(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.
 			l.exitCode = 1
 			continue
 		}
-		if !f.Dir || o.dirSelf {
-			name := f.Name()
-			if f.Dir {
-				name = target
+		operands = append(operands, operand{target, p, f})
+	}
+	if o.bySize || o.byTime {
+		sort.SliceStable(operands, func(i, j int) bool {
+			return o.less(operands[i].f, operands[j].f, operands[i].target, operands[j].target)
+		})
+	}
+	for _, op := range operands {
+		if !op.f.Dir || o.dirSelf {
+			name := op.f.Name()
+			if op.f.Dir {
+				name = op.target
 			}
-			l.printEntry(f, p, name)
+			l.printEntry(op.f, op.path, name)
 			l.printed = true
 			continue
 		}
-		l.listDir(p, target, len(targets) > 1 || o.recursive)
+		l.listDir(op.path, op.target, len(targets) > 1 || o.recursive)
 	}
 	return l.exitCode
+}
+
+// less orders entries for -S (largest first) or -t (newest first), breaking
+// ties by name.
+func (o lsOptions) less(a, b *vfs.FileInfo, aName, bName string) bool {
+	switch {
+	case o.bySize && a.FileSize != b.FileSize:
+		return a.FileSize > b.FileSize
+	case !o.bySize && o.byTime && !a.FileModTime.Equal(b.FileModTime):
+		return a.FileModTime.After(b.FileModTime)
+	}
+	return aName < bName
 }
 
 func lsUnsupportedFlag(errW io.Writer, flag string) int {
@@ -119,24 +145,14 @@ func (l *lsRun) listDir(p, display string, header bool) {
 		l.exitCode = 1
 		return
 	}
-	switch {
-	case l.o.bySize:
+	if l.o.bySize || l.o.byTime {
 		sort.SliceStable(entries, func(i, j int) bool {
-			if entries[i].FileSize != entries[j].FileSize {
-				return entries[i].FileSize > entries[j].FileSize
-			}
-			return entries[i].FileName < entries[j].FileName
-		})
-	case l.o.byTime:
-		sort.SliceStable(entries, func(i, j int) bool {
-			if !entries[i].FileModTime.Equal(entries[j].FileModTime) {
-				return entries[i].FileModTime.After(entries[j].FileModTime)
-			}
-			return entries[i].FileName < entries[j].FileName
+			return l.o.less(&entries[i], &entries[j], entries[i].FileName, entries[j].FileName)
 		})
 	}
 
-	if header {
+	// JSON output is a stream of records, so it has no headers or separators.
+	if header && !(l.o.json && l.facts != nil) {
 		if l.printed {
 			fmt.Fprintln(l.w)
 		}
@@ -159,7 +175,7 @@ func (l *lsRun) listDir(p, display string, header bool) {
 // printEntry prints one file or directory. full is its resolved path and name
 // is how it is shown.
 func (l *lsRun) printEntry(f *vfs.FileInfo, full, name string) {
-	if f.Dir && (l.o.classify || !l.o.long) {
+	if f.Dir && (l.o.classify || !l.o.long) && !strings.HasSuffix(name, "/") {
 		name += "/"
 	}
 	needFacts := l.facts != nil && (l.o.json || (l.o.long && l.o.stats))

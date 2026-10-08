@@ -1,10 +1,16 @@
 package cmds_test
 
 import (
+	"bytes"
+	"encoding/json"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/aakarim/go-openlore/internal/analytics"
+	"github.com/aakarim/go-openlore/pkg/shell"
 )
 
 func TestLs(t *testing.T) {
@@ -90,5 +96,55 @@ func TestLsSortAndFormat(t *testing.T) {
 	out, _, _ = execCmd(t, fs, "ls -ldF /s")
 	if !strings.HasPrefix(out, "dr-xr-xr-x") || !strings.HasSuffix(strings.TrimSpace(out), " /s/") {
 		t.Errorf("ls -ldF /s: got %q", out)
+	}
+}
+
+func TestLsSortsOperands(t *testing.T) {
+	fs := newMapFS()
+	fs.AddDir("/")
+	fs.AddFile("/s/small.md", "x")
+	fs.AddFile("/s/big.md", strings.Repeat("x", 2048))
+	fs.AddDir("/older")
+	fs.AddDir("/newer")
+	fs.Files["/older"].FileModTime = time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC)
+	fs.Files["/newer"].FileModTime = time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	assertOutput(t, fs, "ls -S /s/small.md /s/big.md", "big.md\nsmall.md")
+	assertOutput(t, fs, "ls -td /older /newer", "/newer/\n/older/")
+}
+
+func TestLsDirOperandTrailingSlash(t *testing.T) {
+	fs := testFS()
+	assertOutput(t, fs, "ls -d /", "/")
+	assertOutput(t, fs, "ls -d /docs/", "/docs/")
+	out, _, _ := execCmd(t, fs, "ls -ldF /docs/")
+	if !strings.HasSuffix(strings.TrimSpace(out), " /docs/") {
+		t.Errorf("ls -ldF /docs/: got %q", out)
+	}
+}
+
+func TestLsRecursiveJSONIsAStream(t *testing.T) {
+	fs := newMapFS()
+	fs.AddDir("/")
+	fs.AddFile("/p/a.md", "a\n")
+	fs.AddFile("/p/sub/b.md", "b\nb\n")
+	sh := shell.NewShell(fs)
+	sh.SetFacts(analytics.NewContentFacts(fs))
+
+	var out, errOut bytes.Buffer
+	if code := sh.Exec("ls -R --json /p", &out, &errOut, nil); code != 0 {
+		t.Fatalf("ls -R --json exited %d: %s", code, errOut.String())
+	}
+	dec := json.NewDecoder(&out)
+	var paths []string
+	for dec.More() {
+		var facts analytics.DocScalars
+		if err := dec.Decode(&facts); err != nil {
+			t.Fatalf("ls -R --json output is not a JSON stream: %v", err)
+		}
+		paths = append(paths, facts.Path)
+	}
+	if !slices.Contains(paths, "/p/a.md") || !slices.Contains(paths, "/p/sub/b.md") {
+		t.Errorf("ls -R --json paths = %v, want /p/a.md and /p/sub/b.md", paths)
 	}
 }
