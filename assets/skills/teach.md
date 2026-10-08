@@ -11,7 +11,7 @@ stop and wait for the person's answer. Open with:
 
 > 👋📜 **Welcome to OpenLore!**
 >
-> OpenLore is a minimal, customisable, agent-native knowledge base that keeps
+> OpenLore is a minimal, customisable, agent-native knowledge repository that keeps
 > your context current and inspectable.
 
 Then ask the initial question and wait:

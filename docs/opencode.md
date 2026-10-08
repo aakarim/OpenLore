@@ -1,6 +1,6 @@
 # Using OpenLore with OpenCode
 
-OpenCode connects to OpenLore as a remote MCP server, so it can search and read a shared knowledge base with ordinary shell commands. Because the knowledge lives on the OpenLore server rather than in each project, OpenCode and any other agent you connect read the same, current files.
+OpenCode connects to OpenLore as a remote MCP server, so it can search and read a shared knowledge repository with ordinary shell commands. Because the knowledge lives on the OpenLore server rather than in each project, OpenCode and any other agent you connect read the same, current files.
 
 ## Connect OpenCode
 
@@ -26,7 +26,7 @@ Add OpenLore to `opencode.json` at the root of your project, or to
 }
 ```
 
-Ask OpenCode something your docs answer, such as "what does the knowledge base say
+Ask OpenCode something your docs answer, such as "what does the knowledge repository say
 about our retry policy?". It should search with `grep -r` through the `shell`
 tool and answer from the result.
 
@@ -38,7 +38,7 @@ OpenCode reads `AGENTS.md` from your project automatically. Every OpenLore serve
 ssh -p 2222 localhost agents >> AGENTS.md
 ```
 
-The section tells OpenCode when to search the knowledge base and which commands to
+The section tells OpenCode when to search the knowledge repository and which commands to
 use. See [Any agent over SSH](start-ssh.md) for the other instruction formats.
 
 ## Limit what OpenCode can see

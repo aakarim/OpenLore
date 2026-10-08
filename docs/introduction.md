@@ -1,6 +1,6 @@
 # What is OpenLore
 
-OpenLore is a minimal, customisable, agent-native knowledge base that keeps your context current and inspectable. You point it at a directory of Markdown, and every agent on your team reads the same files over SSH or MCP.
+OpenLore is a minimal, customisable, agent-native knowledge repository that keeps your context current and inspectable. You point it at a directory of Markdown, and every agent on your team reads the same files over SSH or MCP.
 
 > **Note:** OpenLore is a single Go binary. There is no vector database, ingestion pipeline or SDK.
 

@@ -99,7 +99,7 @@ func NewMCPServer(fs vfs.FileSystem, opts ...MCPOption) *mcp.Server {
 		serverOpts,
 	)
 
-	shellDesc := "Execute a command in OpenLore's restricted knowledge-base shell. This is not Bash and cannot run arbitrary executables. Supports ls, cat, grep, find, tree, head, tail, wc, stat, sort, uniq, cut, sed, awk, jq, xargs, pipes, loops, and more; use list_commands for the available surface."
+	shellDesc := "Execute a command in OpenLore's restricted knowledge-repository shell. This is not Bash and cannot run arbitrary executables. Supports ls, cat, grep, find, tree, head, tail, wc, stat, sort, uniq, cut, sed, awk, jq, xargs, pipes, loops, and more; use list_commands for the available surface."
 	if cfg.shellDescription != "" {
 		shellDesc = cfg.shellDescription
 	}

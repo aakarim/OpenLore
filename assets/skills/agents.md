@@ -3,7 +3,7 @@
 This project's documentation is available over SSH using OpenLore.
 
 **When to use it:** any task touching project docs, runbooks, prior
-decisions, or shared team knowledge — search the knowledge base before
+decisions, or shared team knowledge — search the knowledge repository before
 guessing or asking. If an `openlore` skill is installed in this harness, load
 it for the full procedures; this section is the summary. To install the
 skill: `ssh {{ ssh_target }} openlore-skill > <skills-dir>/openlore/SKILL.md`.

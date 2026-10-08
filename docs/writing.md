@@ -1,6 +1,6 @@
 # Writing and publishing
 
-Let agents write back into the knowledge base with atomic, attributed,
+Let agents write back into the knowledge repository with atomic, attributed,
 conflict-checked writes.
 
 OpenLore is read-only by default. Set `readonly: false` in `openlore.yml` to

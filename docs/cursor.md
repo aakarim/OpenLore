@@ -1,6 +1,6 @@
 # Using OpenLore with Cursor
 
-Cursor connects to OpenLore over MCP, so its agent can search and read a shared knowledge base with ordinary shell commands. Because the knowledge lives on the OpenLore server rather than in each project, Cursor and any other agent you connect read the same, current files.
+Cursor connects to OpenLore over MCP, so its agent can search and read a shared knowledge repository with ordinary shell commands. Because the knowledge lives on the OpenLore server rather than in each project, Cursor and any other agent you connect read the same, current files.
 
 ## Connect Cursor
 
@@ -26,7 +26,7 @@ OpenLore available in every project:
 Reload the window. OpenLore then appears in Cursor's MCP settings with its
 tools listed.
 
-Ask Cursor something your docs answer, such as "what does the knowledge base say
+Ask Cursor something your docs answer, such as "what does the knowledge repository say
 about our retry policy?". It should search with `grep -r` through the `shell`
 tool and answer from the result.
 
@@ -38,7 +38,7 @@ Cursor reads `AGENTS.md` from your project. Every OpenLore server prints a ready
 ssh -p 2222 localhost agents >> AGENTS.md
 ```
 
-The section tells Cursor when to search the knowledge base and which commands to
+The section tells Cursor when to search the knowledge repository and which commands to
 use. See [Any agent over SSH](start-ssh.md) for the other instruction formats.
 
 ## Limit what Cursor can see

@@ -178,7 +178,7 @@ Expected output: `openlore 0.7.3`.
 
 Agents are good at adding detail and bad at knowing when a shared file has enough. A focused engineering plan grows marketing context; an architecture document becomes an implementation dump; every later agent pays to read all of it.
 
-OpenLore v0.6.0 governs that problem at write time. Set a budget for matching files and OpenLore checks every incoming write before it reaches the shared knowledge base.
+OpenLore v0.6.0 governs that problem at write time. Set a budget for matching files and OpenLore checks every incoming write before it reaches the shared knowledge repository.
 
 ### What is new
 

@@ -1,6 +1,6 @@
 # Any agent with OpenLore over SSH
 
-Connect a coding agent, a CI job or a script to a shared knowledge base with nothing but `ssh`.
+Connect a coding agent, a CI job or a script to a shared knowledge repository with nothing but `ssh`.
 
 We are going to serve a docs directory, connect to it from a shell, give one agent its own identity, and teach the agent when to use the server.
 
@@ -97,7 +97,7 @@ Every OpenLore server has an `agents` command that prints a ready-made instructi
 ssh -p 2222 localhost agents >> AGENTS.md
 ```
 
-The section tells the agent when to search the knowledge base and which commands to use. For an agent on another machine, replace `localhost` with the server's hostname.
+The section tells the agent when to search the knowledge repository and which commands to use. For an agent on another machine, replace `localhost` with the server's hostname.
 
 ---
 

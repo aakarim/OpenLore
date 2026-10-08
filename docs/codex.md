@@ -1,6 +1,6 @@
 # Using OpenLore with Codex
 
-Codex connects to OpenLore over MCP, so it can search and read a shared knowledge base with the same shell commands it already uses in your repository. Because the knowledge lives on the OpenLore server rather than in each project, Codex and any other agent you connect read the same, current files.
+Codex connects to OpenLore over MCP, so it can search and read a shared knowledge repository with the same shell commands it already uses in your repository. Because the knowledge lives on the OpenLore server rather than in each project, Codex and any other agent you connect read the same, current files.
 
 ## Connect Codex
 
@@ -28,7 +28,7 @@ url = "http://localhost:8080/mcp"
 
 Run `codex mcp list` to check that Codex sees the server.
 
-Ask Codex something your docs answer, such as "what does the knowledge base say
+Ask Codex something your docs answer, such as "what does the knowledge repository say
 about our retry policy?". It should search with `grep -r` through the `shell`
 tool and answer from the result.
 
@@ -40,7 +40,7 @@ Codex reads `AGENTS.md` at the start of every session. Every OpenLore server pri
 ssh -p 2222 localhost agents >> AGENTS.md
 ```
 
-The section tells Codex when to search the knowledge base and which commands to
+The section tells Codex when to search the knowledge repository and which commands to
 use. See [Any agent over SSH](start-ssh.md) for the other instruction formats.
 
 ## Limit what Codex can see
