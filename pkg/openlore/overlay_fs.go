@@ -217,13 +217,13 @@ func (o *OverlayFS) WriteFileAtomic(p string, content []byte, opts vfs.WriteOpts
 func (o *OverlayFS) Mkdir(p string) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	if err := o.materializeDocsetRoot(p); err != nil {
+		return err
+	}
 	parent := path.Dir(vfs.CleanPath(p))
 	info, err := o.Stat(parent)
 	if err != nil || !info.Dir {
 		return fmt.Errorf("mkdir parent %s is not a directory", parent)
-	}
-	if err := o.materializeDocsetRoot(p); err != nil {
-		return err
 	}
 	if err := o.upper.materializeDir(parent); err != nil {
 		return err
@@ -248,9 +248,14 @@ func (o *OverlayFS) materializeDocsetRoot(p string) error {
 	if root == "/" {
 		return nil
 	}
+	// A declared root missing from both layers is created in the upper layer,
+	// so a docset newly added to lore.json is writable without host access.
 	info, err := o.Stat(root)
-	if err != nil || !info.Dir {
-		return fmt.Errorf("docset root does not exist: %s", root)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	if err == nil && !info.Dir {
+		return fmt.Errorf("docset root is not a directory: %s", root)
 	}
 	return o.upper.materializeDir(root)
 }

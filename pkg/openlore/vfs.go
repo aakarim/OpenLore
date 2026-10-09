@@ -208,7 +208,8 @@ func (d *DirFS) WriteFileAtomic(p string, content []byte, opts vfs.WriteOpts) (s
 }
 
 // Mkdir creates a folder at p using plain mkdir semantics (the parent must
-// exist). It errors if p is not strictly below a docset root.
+// exist; a declared docset root always does). It errors if p is not strictly
+// below a docset root.
 func (d *DirFS) Mkdir(p string) error {
 	clean := vfs.CleanPath(p)
 	if clean == "/" {
@@ -227,6 +228,13 @@ func (d *DirFS) Mkdir(p string) error {
 		return vfs.ErrReadOnly
 	}
 
+	// A declared docset root counts as an existing parent even before its
+	// first write has created it on disk.
+	if root, _ := d.docsetRootFor(clean); root != "/" {
+		if err := os.MkdirAll(d.resolve(root), 0o755); err != nil {
+			return fmt.Errorf("mkdir: %w", err)
+		}
+	}
 	full := d.resolve(p)
 	if err := os.Mkdir(full, 0o755); err != nil {
 		return fmt.Errorf("mkdir: %w", err)
@@ -338,10 +346,10 @@ func (d *DirFS) materializeDir(p string) error {
 	return os.MkdirAll(d.resolve(clean), 0o755)
 }
 
-// MkdirAll creates p and any missing ancestors (mkdir -p). The enclosing docset
-// root must already exist — MkdirAll will not create a docset root — and every
-// folder it creates sits strictly below that root. An existing directory is a
-// no-op success.
+// MkdirAll creates p and any missing ancestors (mkdir -p). p must sit strictly
+// below a declared docset root; a declared root that is missing on disk is
+// created (as WriteFileAtomic already does), so a docset added to lore.json is
+// usable without touching the host. An existing directory is a no-op success.
 func (d *DirFS) MkdirAll(p string) error {
 	clean := vfs.CleanPath(p)
 	if clean == "/" {
@@ -350,8 +358,7 @@ func (d *DirFS) MkdirAll(p string) error {
 	if isTrashPath(clean) || hasReservedPath(p) || hasTraversal(p) || isIgnored(p, d.files) {
 		return fmt.Errorf("access denied: %s", p)
 	}
-	root, ok := d.docsetRootFor(clean)
-	if !ok {
+	if _, ok := d.docsetRootFor(clean); !ok {
 		return fmt.Errorf("cannot create folder outside a docset: %s", p)
 	}
 
@@ -363,14 +370,6 @@ func (d *DirFS) MkdirAll(p string) error {
 	d.commitMu.Lock()
 	defer d.commitMu.Unlock()
 
-	// The docset root must exist on disk so MkdirAll only creates strictly
-	// below it (never a docset root itself).
-	if root != "/" {
-		info, err := os.Stat(d.resolve(root))
-		if err != nil || !info.IsDir() {
-			return fmt.Errorf("docset root does not exist: %s", root)
-		}
-	}
 	if err := os.MkdirAll(d.resolve(p), 0o755); err != nil {
 		return fmt.Errorf("mkdir: %w", err)
 	}
