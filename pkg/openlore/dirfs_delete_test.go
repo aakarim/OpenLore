@@ -2,9 +2,11 @@ package openlore
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
+	"testing/fstest"
 
 	"github.com/aakarim/go-openlore/internal/config"
 	"github.com/aakarim/go-openlore/pkg/vfs"
@@ -33,13 +35,57 @@ func TestDirFS_MkdirAll_BoundaryAndParents(t *testing.T) {
 	if err := d.MkdirAll("/chan/a/b"); err != nil {
 		t.Fatalf("MkdirAll existing: %v", err)
 	}
-	// Cannot create a new docset (its root does not exist).
+	// Cannot create a new docset (/other is not a declared docset root).
 	if err := d.MkdirAll("/other/x"); err == nil {
-		t.Fatal("MkdirAll /other/x: want error (docset root missing)")
+		t.Fatal("MkdirAll /other/x: want error (not a declared docset)")
 	}
 	// Cannot create a docset root.
 	if err := d.MkdirAll("/chan"); err == nil {
 		t.Fatal("MkdirAll /chan: want error (is a docset root)")
+	}
+}
+
+// A docset declared in lore.json whose root is not on disk yet must accept
+// mkdir and mkdir -p below it (OPE-53), on both writable substrates.
+func TestMkdir_MaterializesMissingDeclaredDocsetRoot(t *testing.T) {
+	for _, overlay := range []bool{false, true} {
+		dir := t.TempDir()
+		d := NewDirFS(dir, config.FilesConfig{}).WithDocsetRoots([]string{"/acme", "/beta", "/gamma"})
+		var w vfs.WritableFS = d
+		if overlay {
+			w = NewOverlayFS(d, NewFSAdapter(fstest.MapFS{}, config.FilesConfig{}))
+		}
+		if err := w.SetWriteable(); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.MkdirAll("/acme/brand/assets"); err != nil {
+			t.Fatalf("overlay=%v MkdirAll below missing root: %v", overlay, err)
+		}
+		if err := w.Mkdir("/beta/brand"); err != nil {
+			t.Fatalf("overlay=%v Mkdir below missing root: %v", overlay, err)
+		}
+		for _, p := range []string{"acme/brand/assets", "beta/brand"} {
+			if info, err := os.Stat(filepath.Join(dir, p)); err != nil || !info.IsDir() {
+				t.Fatalf("overlay=%v %s not created on disk: %v", overlay, p, err)
+			}
+		}
+		if err := w.MkdirAll("/undeclared/x"); err == nil {
+			t.Fatalf("overlay=%v MkdirAll under undeclared root: want error", overlay)
+		}
+		// A mkdir that fails (missing deeper parent) or is denied by policy
+		// must not leave the docset root behind.
+		if err := w.Mkdir("/gamma/missing/leaf"); err == nil {
+			t.Fatalf("overlay=%v Mkdir with missing parent: want error", overlay)
+		}
+		if err := w.Mkdir("/gamma/.lore"); err == nil {
+			t.Fatalf("overlay=%v Mkdir of reserved path: want error", overlay)
+		}
+		if err := w.MkdirAll("/gamma/.lore/x"); err == nil {
+			t.Fatalf("overlay=%v MkdirAll of reserved path: want error", overlay)
+		}
+		if _, err := os.Stat(filepath.Join(dir, "gamma")); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("overlay=%v failed mkdir left /gamma on disk: %v", overlay, err)
+		}
 	}
 }
 
