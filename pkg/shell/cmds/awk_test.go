@@ -81,9 +81,27 @@ func TestAwkExpressions(t *testing.T) {
 	assertOutput(t, fs, `printf 'a\n' | awk '{ x = "0.0"; if (x) print "string is true" }'`, "string is true\n")
 }
 
+// OPE-51: next stops the remaining rules and statements for the current
+// record, including from inside if and loop bodies.
+func TestAwkNext(t *testing.T) {
+	fs := testFS()
+	assertOutput(t, fs, `printf 'one\ntwo\nthree\n' | awk 'NR==2{print "X"; next} {print}'`, "one\nX\nthree\n")
+	assertOutput(t, fs, `printf 'one\ntwo\nthree\n' | awk '{if (NR==2) next; print}'`, "one\nthree\n")
+	assertOutput(t, fs, `printf 'a\nb\n' | awk '{ if (NR==1) { print "skip"; next } else print "else" } { print }'`, "skip\nelse\nb\n")
+	assertOutput(t, fs, `printf 'a b c\nd\n' | awk '{ for (i = 1; i <= NF; i++) { if ($i == "b") next; print $i } } END { print NR }'`, "a\nd\n2\n")
+	// Each loop body counts before next, so a loop that kept iterating
+	// after next would count 3 per record instead of 1.
+	assertOutput(t, fs, `printf 'x\ny\n' | awk '{ i = 0; while (i < 3) { n++; i++; next } } END { print n }'`, "2\n")
+	assertOutput(t, fs, `printf 'x\ny\n' | awk '{ for (i = 0; i < 3; i++) { n++; next } } END { print n }'`, "2\n")
+	assertOutput(t, fs, `printf 'x\ny\n' | awk '{ a[1] = 1; a[2] = 1; a[3] = 1; for (k in a) { n++; next } } END { print n }'`, "2\n")
+	assertOutput(t, fs, `printf 'a\nb\n' | awk '{ n++; next; print "never" } END { print n }'`, "2\n")
+}
+
 func TestAwkUnsupportedConstructsFail(t *testing.T) {
 	for _, cmd := range []string{
-		`printf 'x\n' | awk '{ print; next }'`,
+		`printf 'x\n' | awk 'BEGIN { next }'`,
+		`printf 'x\n' | awk 'END { next }'`,
+		`printf 'x\n' | awk '{ nextfile }'`,
 		`printf 'x\n' | awk '{ print "a" > "/docs/out" }'`,
 		`printf 'x\n' | awk '{ print foo(1) }'`,
 		`printf 'x\n' | awk '{ getline line }'`,
