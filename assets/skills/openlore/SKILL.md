@@ -85,9 +85,13 @@ Write → validate → finish:
 
 ```bash
 # 1. Write every file the change needs (exit 0 = saved, file checks passed)
-cat retry-policy.md | ssh {{ ssh_target }} "cat > {{sub .Mount "retry-policy.md"}}"
+{{if .Publish}}cat retry-policy.md | ssh {{ ssh_target }} "publish /{{.PublishDocset}}/retry-policy.md"
 # 2. Validate the docset root (not / and not just the subfolder)
-ssh {{ ssh_target }} "lore validate {{.Mount}}"
+ssh {{ ssh_target }} "lore validate {{.Mount}}"{{else if .Writable}}cat retry-policy.md | ssh {{ ssh_target }} "cat > {{sub (index .Writable 0) "retry-policy.md"}}"
+# 2. Validate the docset root (not / and not just the subfolder)
+ssh {{ ssh_target }} "lore validate {{index .Writable 0}}"{{else}}#    (this identity is read-only; see "Publishing findings" above)
+# 2. Validate the docset root (not / and not just the subfolder)
+ssh {{ ssh_target }} "lore validate {{.Mount}}"{{end}}
 # 3. Fix each reported finding, then re-run step 2 until it prints "0 errors"
 # 4. Done only when `lore validate` exits 0
 ```

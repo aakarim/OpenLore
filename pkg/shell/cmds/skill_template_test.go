@@ -35,10 +35,10 @@ func runSkillDoc(t *testing.T, name, doc string, configure func(*shell.Shell)) s
 }
 
 func TestSkillTemplateRendersSessionMountsAndPublishSyntax(t *testing.T) {
-	doc := "port={{.Port}} mount={{.Mount}} file={{.File}} mounts={{join .Mounts \",\"}} " +
+	doc := "ssh={{ ssh_target }} mount={{.Mount}} file={{.File}} mounts={{join .Mounts \",\"}} " +
 		"publish={{.PublishDocset}} writable={{join .Writable \",\"}} sub={{sub .Mount \"x.md\"}}\n"
 	out := runSkillDoc(t, "tpl-session", doc, func(sh *shell.Shell) {
-		sh.SetAdvertisedSSHPort(2299)
+		sh.SetSSHTarget("-p 2299 docs.example")
 		sh.SetDocsets([]cmds.DocsetInfo{
 			{Name: "notes", Paths: []string{"/notes"}, Grants: []string{"ro"}},
 			{Name: "backend", Paths: []string{"/backend"}, Grants: []string{"rw"}, Writable: true},
@@ -49,7 +49,7 @@ func TestSkillTemplateRendersSessionMountsAndPublishSyntax(t *testing.T) {
 	})
 	// The example file skips the hidden entry and the non-Markdown file at the
 	// mount root in favour of the nested Markdown file.
-	want := "port=2299 mount=/backend file=/backend/research/notes.md mounts=/backend,/notes " +
+	want := "ssh=-p 2299 docs.example mount=/backend file=/backend/research/notes.md mounts=/backend,/notes " +
 		"publish=backend writable=/backend sub=/backend/x.md\n"
 	if out != want {
 		t.Fatalf("rendered:\n%s\nwant:\n%s", out, want)
@@ -89,8 +89,8 @@ func TestSkillTemplateStandaloneShellUsesPlaceholders(t *testing.T) {
 	// No host: no port, no docsets, no publish targets. The document must still
 	// render with visible placeholders rather than invented paths. The walk is
 	// breadth-first, so the shallowest Markdown file wins.
-	out := runSkillDoc(t, "tpl-standalone", "{{.Port}} {{.Mount}} {{.File}} [{{.PublishDocset}}]\n", nil)
-	if out != "<port> / /notes/api.md []\n" {
+	out := runSkillDoc(t, "tpl-standalone", "{{ ssh_target }} {{.Mount}} {{.File}} [{{.PublishDocset}}]\n", nil)
+	if out != "<server> / /notes/api.md []\n" {
 		t.Fatalf("rendered %q", out)
 	}
 }
@@ -117,19 +117,19 @@ func TestSkillDocumentThatIsNotATemplateIsServedVerbatim(t *testing.T) {
 	}
 }
 
-func TestRuntimeSkillIsNeverTemplated(t *testing.T) {
-	// A runtime skill from --skills-dir may contain valid template actions
-	// that are meant literally; RegisterSkill must not interpret them.
-	doc := "port={{.Port}} {{if true}}kept{{end}}\n"
+func TestRuntimeSkillOnlySubstitutesSSHTarget(t *testing.T) {
+	// A runtime skill from --skills-dir gets the documented {{ ssh_target }}
+	// variable filled in, but any other template action is left literal.
+	doc := "ssh {{ ssh_target }} mount={{.Mount}} {{if true}}kept{{end}}\n"
 	cmds.RegisterSkill("raw-runtime", "runtime skill", doc)
 	var out bytes.Buffer
 	sh := shell.NewShell(testFS())
-	sh.SetAdvertisedSSHPort(2299)
+	sh.SetSSHTarget("-p 2299 localhost")
 	if code := sh.ExecPipeline("raw-runtime", &out, &bytes.Buffer{}, nil); code != 0 {
 		t.Fatalf("exit=%d", code)
 	}
-	if out.String() != doc {
-		t.Fatalf("rendered %q, want verbatim %q", out.String(), doc)
+	if want := "ssh -p 2299 localhost mount={{.Mount}} {{if true}}kept{{end}}\n"; out.String() != want {
+		t.Fatalf("rendered %q, want %q", out.String(), want)
 	}
 }
 

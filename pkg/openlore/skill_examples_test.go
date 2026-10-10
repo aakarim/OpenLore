@@ -195,20 +195,22 @@ func TestSkillDocumentsRenderAgainstRealMounts(t *testing.T) {
 			t.Run(command+"/"+who, func(t *testing.T) {
 				sh := skillSession(t, s, who)
 				doc := renderSkillFor(t, sh, command)
-				for _, bad := range []string{"/docs", "{{", "}}", "publish <docset>", "-p 2222"} {
+				for _, bad := range []string{"/docs", "{{", "}}", "publish <docset>", "-p 2222", "<host>", "<server>"} {
 					if strings.Contains(doc, bad) {
 						t.Errorf("%s for %s still contains %q:\n%s", command, who, bad, doc)
 					}
 				}
-				if strings.Contains(doc, "ssh -p") && !strings.Contains(doc, "-p 2299") {
-					t.Errorf("%s for %s does not advertise the configured SSH port", command, who)
+				// The housekeeping skill reaches the server only through
+				// $OPENLORE_SSH, which the shellm skill sets.
+				if command != "agents-shellm-housekeeping" && !strings.Contains(doc, "-p 2299 localhost") {
+					t.Errorf("%s for %s does not advertise the configured SSH target", command, who)
 				}
 				if strings.Contains(doc, "/trajectories") || strings.Contains(doc, "/skills") {
 					t.Errorf("%s for %s mentions a folder this server does not have:\n%s", command, who, doc)
 				}
 				if command == "teach" {
-					if !strings.Contains(doc, "ssh -p 2299 <address>") {
-						t.Errorf("teach does not render the port into its ssh examples:\n%s", doc)
+					if !strings.Contains(doc, "ssh -p 2299 localhost\n") {
+						t.Errorf("teach does not render the ssh target into its examples:\n%s", doc)
 					}
 					return
 				}
