@@ -39,7 +39,7 @@ Directories retain a trailing `/`, hidden entries appear only after an explicit
 | `uniq` | Filter duplicate lines (`-c`, `-d`, `-i`, `-u`) |
 | `cut` | Select fields or characters (`-d DEL`, `-f FIELDS`, `-c CHARS`, `-s`) |
 | `sed` | Stream editor (`-n`, `-e`, `s/pat/repl/flags`, `-i`); replacement text supports `\n` (newline), `\t` (tab), `\\` (backslash), escaped delimiters, and backslash-newline continuations |
-| `awk` | Pattern scanning (`-F SEP`, `-v VAR=VAL`); supports regex and expression patterns, variables, arrays, `if`/`for`/`while`, and common built-ins such as `sub`, `gsub`, `split`, and `substr`. Unsupported constructs (`next`, `exit`, `getline`, output redirection, range patterns, user functions) print an error and exit 2 |
+| `awk` | Pattern scanning (`-F SEP`, `-v VAR=VAL`); supports regex and expression patterns, variables, arrays, `if`/`for`/`while`, `next`, and common built-ins such as `sub`, `gsub`, `split`, and `substr`. Unsupported constructs (`nextfile`, `exit`, `getline`, output redirection, range patterns, user functions) print an error and exit 2 |
 | `tr` | Translate characters (`-d`, `-s`, `-c`) |
 | `rev` / `tac` | Reverse characters per line / reverse line order |
 | `nl` | Number lines (`-b`, `-n`, `-w`, `-s`) |

@@ -71,6 +71,15 @@ type awkInterpreter struct {
 	// execution stops and awk exits 2 instead of printing wrong output.
 	err     string
 	regexps map[string]*regexp.Regexp
+	// nextRecord is set by the next statement. It stops the remaining
+	// statements and rules for the current record.
+	nextRecord bool
+}
+
+// stopped reports whether the current action must stop running statements,
+// because of an error or a next statement.
+func (a *awkInterpreter) stopped() bool {
+	return a.err != "" || a.nextRecord
 }
 
 func (a *awkInterpreter) fail(format string, args ...any) {
@@ -215,6 +224,9 @@ func (a *awkInterpreter) run(lines []string) int {
 	for _, rule := range a.rules {
 		if rule.isBegin {
 			a.execAction(rule.action)
+			if a.nextRecord {
+				a.fail("next used in BEGIN action")
+			}
 			if a.err != "" {
 				return a.reportError()
 			}
@@ -226,6 +238,7 @@ func (a *awkInterpreter) run(lines []string) int {
 		a.nr++
 		a.line = line
 		a.splitFields(line)
+		a.nextRecord = false
 
 		for _, rule := range a.rules {
 			if rule.isBegin || rule.isEnd {
@@ -238,13 +251,20 @@ func (a *awkInterpreter) run(lines []string) int {
 			if a.err != "" {
 				return a.reportError()
 			}
+			if a.nextRecord {
+				break
+			}
 		}
 	}
+	a.nextRecord = false
 
 	// Run END rules
 	for _, rule := range a.rules {
 		if rule.isEnd {
 			a.execAction(rule.action)
+			if a.nextRecord {
+				a.fail("next used in END action")
+			}
 			if a.err != "" {
 				return a.reportError()
 			}
@@ -302,7 +322,7 @@ func (a *awkInterpreter) execAction(action string) {
 			i++
 		}
 		a.execStatement(stmt)
-		if a.err != "" {
+		if a.stopped() {
 			return
 		}
 	}
@@ -355,6 +375,11 @@ func splitAwkStatements(action string) []string {
 func (a *awkInterpreter) execStatement(stmt string) {
 	stmt = strings.TrimSpace(stmt)
 	if stmt == "" {
+		return
+	}
+
+	if stmt == "next" {
+		a.nextRecord = true
 		return
 	}
 
@@ -1651,7 +1676,7 @@ func (a *awkInterpreter) execWhile(stmt string) {
 			return
 		}
 		a.execBody(body)
-		if a.err != "" {
+		if a.stopped() {
 			return
 		}
 	}
@@ -1673,7 +1698,7 @@ func (a *awkInterpreter) execFor(stmt string) {
 		for _, key := range keys {
 			a.vars[parts[0]] = key
 			a.execBody(body)
-			if a.err != "" {
+			if a.stopped() {
 				return
 			}
 		}
@@ -1696,7 +1721,7 @@ func (a *awkInterpreter) execFor(stmt string) {
 			return
 		}
 		a.execBody(body)
-		if a.err != "" {
+		if a.stopped() {
 			return
 		}
 		a.execStatement(parts[2])

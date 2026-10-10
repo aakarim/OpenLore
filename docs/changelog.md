@@ -55,6 +55,9 @@ necessarily the current version. Dates are the GitHub publication dates in UTC.
   Reference. Split the old configuration and identity page: server setup is
   now the [Configure the server](configure-the-server.md) how-to, and
   posture, roles, docsets, identities and inbox credentials live in Auth.
+- `awk` now supports `next`, which skips the remaining statements and rules for
+  the current record, so `awk 'NR==2{print "new"; next} {print}'` replaces one
+  line. Previously it exited 2 as unsupported.
 - Fixed `awk` regex patterns matching every line, variables staying at 0, and
   string comparisons on `$0` never matching. Unsupported `awk` constructs now
   exit 2 with an error instead of producing wrong output.
