@@ -1,6 +1,7 @@
 package openlore
 
 import (
+	"strings"
 	"testing"
 	"testing/fstest"
 
@@ -385,5 +386,24 @@ func TestScopedReadFS_HidesSiblingDocsets(t *testing.T) {
 	}
 	if !sawAlfie {
 		t.Fatalf("root listing should show the granted docset: %+v", entries)
+	}
+}
+
+func TestAnalyticsCapabilityWarnings(t *testing.T) {
+	roles := func(caps map[string][]string) *config.AuthConfig {
+		auth := &config.AuthConfig{Roles: map[string]config.RoleSpec{}}
+		for name, c := range caps {
+			auth.Roles[name] = config.RoleSpec{Allow: config.CapabilityRules{Capabilities: c}}
+		}
+		return auth
+	}
+	// The reported instance: the admin role kept the retired capability.
+	got := analyticsCapabilityWarnings(roles(map[string][]string{"adil": {"lore:config:edit", "lore:analytics:view"}, "reader": nil}))
+	if len(got) != 2 || !strings.Contains(got[0], `role "adil" grants lore:analytics:view`) || !strings.Contains(got[1], "no role grants lore:analytics:admin") {
+		t.Fatalf("warnings = %q", got)
+	}
+	// One role holding lore:analytics:admin is enough; other roles need not.
+	if got := analyticsCapabilityWarnings(roles(map[string][]string{"ops": {"lore:analytics:admin"}, "reader": nil})); len(got) != 0 {
+		t.Fatalf("warnings with an admin holder = %q", got)
 	}
 }

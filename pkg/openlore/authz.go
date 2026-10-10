@@ -238,23 +238,31 @@ func (s *Server) hasCurrentCapability(id Identity, capability string) bool {
 }
 
 func (s *Server) hasCapabilityForPolicy(policy AuthorizationPolicy, capability string) bool {
+	return s.capabilityDenial(policy, capability) == ""
+}
+
+// capabilityDenial names the condition that withholds capability from policy,
+// or returns "" when the capability is granted.
+func (s *Server) capabilityDenial(policy AuthorizationPolicy, capability string) string {
 	for _, denied := range policy.DenyCapabilities {
 		if denied == capability {
-			return false
+			return fmt.Sprintf("the delegate entry for this actor denies capability %s (deny_capabilities)", capability)
 		}
 	}
 	allowed := false
+	var roles []string
 	for _, roleName := range policy.Roles {
 		role, ok := s.currentAuth().Roles[roleName]
 		if !ok {
 			if roleName == "guest" {
 				continue
 			}
-			return false
+			return fmt.Sprintf("role %s is not defined", roleName)
 		}
+		roles = append(roles, roleName)
 		for _, denied := range role.Deny.Capabilities {
 			if denied == capability {
-				return false
+				return fmt.Sprintf("role %s denies capability %s (roles.%s.deny.capabilities)", roleName, capability, roleName)
 			}
 		}
 		for _, value := range role.Allow.Capabilities {
@@ -263,7 +271,63 @@ func (s *Server) hasCapabilityForPolicy(policy AuthorizationPolicy, capability s
 			}
 		}
 	}
-	return allowed
+	if allowed {
+		return ""
+	}
+	if len(roles) == 0 {
+		return fmt.Sprintf("identity %s has no role granting capability %s; grant it in roles.<role>.allow.capabilities", policy.IdentityName, capability)
+	}
+	return fmt.Sprintf("role(s) %s lack capability %s; grant it in roles.<role>.allow.capabilities", strings.Join(roles, ", "), capability)
+}
+
+// analyticsAdminDenial explains why id may not run instance-wide shell
+// analytics, or returns nil when it may. Current policy is read on every call.
+func (s *Server) analyticsAdminDenial(id Identity) error {
+	var reasons []string
+	id.policySnapshot = nil
+	if policy, err := s.currentPolicy(id); err != nil {
+		reasons = append(reasons, "cannot resolve current authorization: "+err.Error())
+	} else if reason := s.capabilityDenial(policy, "lore:analytics:admin"); reason != "" {
+		reasons = append(reasons, reason)
+	}
+	if !scopeGrantsWrite(id.Scopes) {
+		scope := strings.Join(id.Scopes, " ")
+		if scope == "" {
+			scope = "empty"
+		}
+		reasons = append(reasons, fmt.Sprintf("token scope is %s (full scope required); reconnect with full scope", scope))
+	}
+	if len(reasons) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%s. Docset-scoped readers: use the web dashboard or analytics API instead", strings.Join(reasons, "; "))
+}
+
+// analyticsCapabilityWarnings reports policies that leave the shell analytics
+// command without an operator, including grants of the retired
+// lore:analytics:view capability.
+func analyticsCapabilityWarnings(auth *config.AuthConfig) []string {
+	names := make([]string, 0, len(auth.Roles))
+	for name := range auth.Roles {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var warnings []string
+	admin := false
+	for _, name := range names {
+		for _, capability := range auth.Roles[name].Allow.Capabilities {
+			switch capability {
+			case "lore:analytics:view":
+				warnings = append(warnings, fmt.Sprintf("role %q grants lore:analytics:view, which no longer grants anything; the shell analytics command requires lore:analytics:admin", name))
+			case "lore:analytics:admin":
+				admin = true
+			}
+		}
+	}
+	if !admin {
+		warnings = append(warnings, "no role grants lore:analytics:admin, so no identity can run the shell analytics command; add it to roles.<role>.allow.capabilities")
+	}
+	return warnings
 }
 
 // displayPath returns a path mapping's cleaned display (virtual) path, falling

@@ -3,6 +3,7 @@ package cmds_test
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -78,7 +79,7 @@ func TestAnalyticsReplayReportsParseError(t *testing.T) {
 	fs := newMapFS()
 	sh := shell.NewShell(fs)
 	sh.SetAnalytics(newAnalyticsService(t, fs))
-	sh.SetAnalyticsAuthorizer(func() bool { return true })
+	sh.SetAnalyticsAuthorizer(func() error { return nil })
 
 	var out, errOut bytes.Buffer
 	if code := sh.Exec("analytics replay --since definitely-not-a-duration", &out, &errOut, nil); code == 0 {
@@ -110,5 +111,37 @@ func TestAnalyticsGlobalOperationsFailClosed(t *testing.T) {
 		if code := sh.Exec("analytics "+command, &out, &errOut, nil); code == 0 || out.Len() != 0 || !strings.Contains(errOut.String(), "lore:analytics:admin") {
 			t.Fatalf("unprivileged %s: %d %q %q", command, code, out.String(), errOut.String())
 		}
+	}
+}
+
+func TestAnalyticsHelpAndDiscovery(t *testing.T) {
+	sh := shell.NewShell(newMapFS())
+	sh.SetAnalytics(newAnalyticsService(t, newMapFS()))
+	sh.SetAnalyticsAuthorizer(func() error { return errors.New("role(s) reader lack capability lore:analytics:admin") })
+	run := func(command string) (int, string, string) {
+		var out, errOut bytes.Buffer
+		code := sh.Exec(command, &out, &errOut, nil)
+		return code, out.String(), errOut.String()
+	}
+
+	// Usage is available to an identity that cannot run any subcommand.
+	for _, command := range []string{"analytics --help", "analytics help", "analytics -h"} {
+		if code, out, errOut := run(command); code != 0 || !strings.Contains(out, "show <name>") || !strings.Contains(out, "lore:analytics:admin") || errOut != "" {
+			t.Fatalf("%s: %d %q %q", command, code, out, errOut)
+		}
+	}
+	if code, out, errOut := run("analytics list"); code == 0 || out != "" || errOut != "analytics: denied: role(s) reader lack capability lore:analytics:admin\n" {
+		t.Fatalf("denial did not carry the authorizer's reason: %d %q %q", code, out, errOut)
+	}
+	if _, out, _ := run("help"); !strings.Contains(out, "analytics") || !strings.Contains(out, "operator-only") {
+		t.Fatalf("help does not list analytics: %q", out)
+	}
+
+	sh.SetAnalyticsAuthorizer(func() error { return nil })
+	if code, _, errOut := run("analytics tree-size"); code == 0 || !strings.Contains(errOut, "run: analytics show tree-size") {
+		t.Fatalf("aggregation used as subcommand: %d %q", code, errOut)
+	}
+	if code, _, errOut := run("analytics bogus"); code == 0 || strings.Contains(errOut, "analytics show") || !strings.Contains(errOut, "usage: analytics") {
+		t.Fatalf("unknown subcommand: %d %q", code, errOut)
 	}
 }

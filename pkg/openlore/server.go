@@ -334,6 +334,11 @@ func newServerWithRoot(rootDir string, rootFS vfs.FileSystem, lowerFS fs.FS, opt
 		}
 		service.SetKnowledgeScopes(knowledgeScopes)
 		s.analytics = service
+		if s.authEnforced {
+			for _, warning := range analyticsCapabilityWarnings(s.auth) {
+				logger.Warn("analytics authorization", "warning", warning)
+			}
+		}
 		if err := s.registerPlugin(&analyticsPlugin{service: service, server: s}); err != nil {
 			return nil, err
 		}
@@ -1189,9 +1194,7 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 	}
 	if s.analytics != nil && s.authEnforced && id.IdentityName != "" && id.IdentityName != "guest" {
 		sh.SetAnalytics(s.analytics)
-		sh.SetAnalyticsAuthorizer(func() bool {
-			return scopeGrantsWrite(id.Scopes) && s.hasCurrentCapability(id, "lore:analytics:admin")
-		})
+		sh.SetAnalyticsAuthorizer(func() error { return s.analyticsAdminDenial(id) })
 	}
 	if s.analytics != nil {
 		sh.SetFacts(s.analytics.NewContentFacts(sessionFS))

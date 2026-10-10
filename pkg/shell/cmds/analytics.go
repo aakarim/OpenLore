@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"sort"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -82,13 +81,21 @@ func CmdAnalytics(ctx CmdContext, args []string, w, errW io.Writer, _ io.Reader)
 		fmt.Fprintln(errW, "analytics: analytics is not enabled")
 		return 1
 	}
-	admin, ok := ctx.(interface{ AnalyticsAdminAllowed() bool })
-	if !ok || !admin.AnalyticsAdminAllowed() {
-		fmt.Fprintln(errW, "analytics: global operations require lore:analytics:admin and full scope")
+	if len(args) > 0 && (args[0] == "help" || args[0] == "--help" || args[0] == "-h") {
+		fmt.Fprint(w, analyticsHelp)
+		return 0
+	}
+	admin, ok := ctx.(interface{ AnalyticsAdminDenial() error })
+	if !ok {
+		fmt.Fprintln(errW, "analytics: denied: instance-wide analytics requires lore:analytics:admin and full token scope")
+		return 1
+	}
+	if err := admin.AnalyticsAdminDenial(); err != nil {
+		fmt.Fprintln(errW, "analytics: denied:", err)
 		return 1
 	}
 	if len(args) == 0 {
-		fmt.Fprintln(errW, "usage: analytics list|show|refresh|replay|rebuild|export|status|ship")
+		fmt.Fprintln(errW, analyticsUsage)
 		return 1
 	}
 	switch args[0] {
@@ -200,12 +207,34 @@ func CmdAnalytics(ctx CmdContext, args []string, w, errW io.Writer, _ io.Reader)
 		fmt.Fprintln(w, "shipped")
 		return 0
 	default:
-		names := []string{"list", "show", "refresh", "replay", "rebuild", "export", "status", "ship"}
-		sort.Strings(names)
 		fmt.Fprintln(errW, "analytics: unknown subcommand", args[0])
+		for _, a := range service.Registry().List() {
+			if a.Name == args[0] {
+				fmt.Fprintf(errW, "analytics: %s is an aggregation; run: analytics show %s\n", a.Name, a.Name)
+				return 1
+			}
+		}
+		fmt.Fprintln(errW, analyticsUsage)
 		return 1
 	}
 }
+
+const analyticsUsage = "usage: analytics list|show|refresh|replay|rebuild|export|status|ship"
+
+const analyticsHelp = analyticsUsage + `
+  list                               List aggregations and their status
+  show <name> [--since 30d] [--until RFC3339|now] [--limit N] [--param k=v] [--fresh] [--json]
+                                     Run one aggregation
+  refresh [name ...]                 Recompute aggregations
+  replay [--since 30d]               Replay recorded events into metrics
+  rebuild --from-remote              Restore events from the remote copy, then replay
+  export [--since 30d] [--until T] [--type T]
+                                     Print raw events as JSON lines
+  status                             Show pipeline health
+  ship                               Ship pending events now
+Operator-only: every subcommand requires the lore:analytics:admin capability and
+full token scope. Docset-scoped readers use the web dashboard or analytics API.
+`
 
 func analyticsService(ctx CmdContext) *analytics.Service {
 	provider, _ := ctx.(interface{ Analytics() *analytics.Service })
