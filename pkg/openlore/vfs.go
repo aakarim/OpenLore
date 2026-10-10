@@ -229,8 +229,9 @@ func (d *DirFS) Mkdir(p string) error {
 	}
 
 	// A declared docset root counts as an existing parent even before its
-	// first write has created it on disk.
-	if root, _ := d.docsetRootFor(clean); root != "/" {
+	// first write has created it on disk. Only create it when it is the
+	// immediate parent, so a mkdir that fails leaves nothing behind.
+	if root, _ := d.docsetRootFor(clean); root != "/" && root == path.Dir(clean) {
 		if err := os.MkdirAll(d.resolve(root), 0o755); err != nil {
 			return fmt.Errorf("mkdir: %w", err)
 		}

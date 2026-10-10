@@ -2,6 +2,7 @@ package openlore
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -49,7 +50,7 @@ func TestDirFS_MkdirAll_BoundaryAndParents(t *testing.T) {
 func TestMkdir_MaterializesMissingDeclaredDocsetRoot(t *testing.T) {
 	for _, overlay := range []bool{false, true} {
 		dir := t.TempDir()
-		d := NewDirFS(dir, config.FilesConfig{}).WithDocsetRoots([]string{"/acme", "/beta"})
+		d := NewDirFS(dir, config.FilesConfig{}).WithDocsetRoots([]string{"/acme", "/beta", "/gamma"})
 		var w vfs.WritableFS = d
 		if overlay {
 			w = NewOverlayFS(d, NewFSAdapter(fstest.MapFS{}, config.FilesConfig{}))
@@ -70,6 +71,20 @@ func TestMkdir_MaterializesMissingDeclaredDocsetRoot(t *testing.T) {
 		}
 		if err := w.MkdirAll("/undeclared/x"); err == nil {
 			t.Fatalf("overlay=%v MkdirAll under undeclared root: want error", overlay)
+		}
+		// A mkdir that fails (missing deeper parent) or is denied by policy
+		// must not leave the docset root behind.
+		if err := w.Mkdir("/gamma/missing/leaf"); err == nil {
+			t.Fatalf("overlay=%v Mkdir with missing parent: want error", overlay)
+		}
+		if err := w.Mkdir("/gamma/.lore"); err == nil {
+			t.Fatalf("overlay=%v Mkdir of reserved path: want error", overlay)
+		}
+		if err := w.MkdirAll("/gamma/.lore/x"); err == nil {
+			t.Fatalf("overlay=%v MkdirAll of reserved path: want error", overlay)
+		}
+		if _, err := os.Stat(filepath.Join(dir, "gamma")); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("overlay=%v failed mkdir left /gamma on disk: %v", overlay, err)
 		}
 	}
 }
