@@ -89,10 +89,12 @@ inbox for human review.
 {{end}}
 {{if exists "/trajectories"}}## Sharing run trajectories
 
-This server has a `/trajectories` docset. Publish completed shellm trajectory
-directories there so teammates and other agents can read them. Sync the
-whole directory — `trajectory.jsonl`, `blobs/`, and nested child-run
-directories — uploading blobs before the JSONL that references them:
+This server has a `/trajectories` docset where completed shellm trajectory
+directories are shared so teammates and other agents can read them.
+{{if writable "/trajectories"}}
+This identity can write to it directly. Sync the whole directory —
+`trajectory.jsonl`, `blobs/`, and nested child-run directories — uploading
+blobs before the JSONL that references them:
 
 ```bash
 sync_traj() {
@@ -112,7 +114,10 @@ trajectories on the host, even when generated code runs in Docker). For a
 still-growing `trajectory.jsonl`, append new lines with `tee -a`, which is
 always a conflict-safe atomic append. Never point `SHELLM_TRAJ_DIR` at a
 network mount of OpenLore; sync copies instead.
-
+{{else}}
+This identity cannot write to `/trajectories`; ask the server operator for a
+`rw` grant on it before trying to sync runs there.
+{{end}}
 Read shared trajectories from any session:
 
 ```bash

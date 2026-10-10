@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"strings"
 )
+
+const lsUsage = "usage: ls [-l|-a|-1|--stats|--json] [path...]\n"
 
 func CmdLs(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.Reader) int {
 	factsProvider := analyticsFacts(ctx)
@@ -21,7 +24,10 @@ func CmdLs(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.
 			statsFlag = true
 		case a == "--json":
 			jsonFlag = true
-		case len(a) > 1 && a[0] == '-' && a[1] != '-':
+		case strings.HasPrefix(a, "--"):
+			fmt.Fprintf(errW, "ls: unrecognized option '%s'\n%s", a, lsUsage)
+			return 1
+		case len(a) > 1 && a[0] == '-':
 			// Combined short flags: -l, -a, -la, -l1, ...
 			for _, r := range a[1:] {
 				switch r {
@@ -32,7 +38,7 @@ func CmdLs(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.
 				case '1':
 					// Output is already one entry per line.
 				default:
-					fmt.Fprintf(errW, "ls: invalid option -- '%c'\nusage: ls [-l|-a|-1|--stats|--json] [path...]\n", r)
+					fmt.Fprintf(errW, "ls: invalid option -- '%c'\n%s", r, lsUsage)
 					return 1
 				}
 			}

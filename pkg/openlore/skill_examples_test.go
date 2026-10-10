@@ -16,7 +16,7 @@ import (
 )
 
 // The instruction documents a server hands to agents (`agents`,
-// `openlore-skill`, `agents-shellm`, `agents-shellm-housekeeping`) are copied
+// `openlore-skill`, `agents-shellm`, `agents-shellm-housekeeping`, `teach`) are copied
 // into persistent agent context, so every example must run as written against
 // the server that produced it. These tests boot a server whose docsets are
 // mounted at /backend and /notes (not /docs), render each document for a
@@ -24,9 +24,9 @@ import (
 // bash example through that identity's session shell.
 
 // bootSkillServer serves /backend (with an inbox) and /notes from a temp root,
-// plus a read-only docset per extra mount, each seeded with one file. alice
-// may publish to backend and read everything else; bob may write notes
-// directly; anyone else is a read-only guest.
+// plus a docset per extra mount, each seeded with one file. alice may publish
+// to backend and read everything else; bob may write notes and the extra
+// mounts directly; anyone else is a read-only guest.
 func bootSkillServer(t *testing.T, extraMounts ...string) *Server {
 	t.Helper()
 	root := t.TempDir()
@@ -67,7 +67,7 @@ func bootSkillServer(t *testing.T, extraMounts ...string) *Server {
 		if err := os.WriteFile(seed, []byte("---\nname: example\ndescription: x\n---\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		auth.Docsets[strings.TrimPrefix(m, "/")] = config.DocsetSpec{Paths: mount(m), Access: config.DocsetAccess{Allow: map[string]string{"guest": "ro", "publisher": "ro", "editor": "ro"}}}
+		auth.Docsets[strings.TrimPrefix(m, "/")] = config.DocsetSpec{Paths: mount(m), Access: config.DocsetAccess{Allow: map[string]string{"guest": "ro", "publisher": "ro", "editor": "rw"}}}
 	}
 	authFile := filepath.Join(t.TempDir(), "lore.json")
 	writeAuthFixture(t, authFile, auth)
@@ -183,9 +183,14 @@ func TestExampleCommandsUnwrapsSSHAndSkipsLocalOnlyLines(t *testing.T) {
 	}
 }
 
+// skillCommands lists every embedded document rendered per session. teach is
+// an onboarding script with no access branches, so only the generic
+// assertions apply to it.
+var skillCommands = []string{"agents", "openlore-skill", "agents-shellm", "agents-shellm-housekeeping", "teach"}
+
 func TestSkillDocumentsRenderAgainstRealMounts(t *testing.T) {
 	s := bootSkillServer(t)
-	for _, command := range []string{"agents", "openlore-skill", "agents-shellm", "agents-shellm-housekeeping"} {
+	for _, command := range skillCommands {
 		for _, who := range []string{"alice", "bob", "guest"} {
 			t.Run(command+"/"+who, func(t *testing.T) {
 				sh := skillSession(t, s, who)
@@ -197,6 +202,15 @@ func TestSkillDocumentsRenderAgainstRealMounts(t *testing.T) {
 				}
 				if strings.Contains(doc, "ssh -p") && !strings.Contains(doc, "-p 2299") {
 					t.Errorf("%s for %s does not advertise the configured SSH port", command, who)
+				}
+				if strings.Contains(doc, "/trajectories") || strings.Contains(doc, "/skills") {
+					t.Errorf("%s for %s mentions a folder this server does not have:\n%s", command, who, doc)
+				}
+				if command == "teach" {
+					if !strings.Contains(doc, "ssh -p 2299 <address>") {
+						t.Errorf("teach does not render the port into its ssh examples:\n%s", doc)
+					}
+					return
 				}
 				// Each identity sees the publishing branch that matches its access.
 				want := map[string]string{
@@ -213,9 +227,6 @@ func TestSkillDocumentsRenderAgainstRealMounts(t *testing.T) {
 				if who != "alice" && strings.Contains(doc, "publish /backend/") {
 					t.Errorf("%s for %s shows alice's publish example:\n%s", command, who, doc)
 				}
-				if strings.Contains(doc, "/trajectories") || strings.Contains(doc, "/skills") {
-					t.Errorf("%s for %s mentions a folder this server does not have:\n%s", command, who, doc)
-				}
 			})
 		}
 	}
@@ -223,7 +234,7 @@ func TestSkillDocumentsRenderAgainstRealMounts(t *testing.T) {
 
 func TestSkillDocumentExamplesRunAgainstTheServer(t *testing.T) {
 	s := bootSkillServer(t)
-	for _, command := range []string{"agents", "openlore-skill", "agents-shellm", "agents-shellm-housekeeping"} {
+	for _, command := range skillCommands {
 		for _, who := range []string{"alice", "bob", "guest"} {
 			t.Run(command+"/"+who, func(t *testing.T) {
 				sh := skillSession(t, s, who)
@@ -244,28 +255,50 @@ func TestSkillDocumentExamplesRunAgainstTheServer(t *testing.T) {
 }
 
 // The trajectory and skills-collection sections exist only on servers that
-// have those folders, and their examples must run there.
+// have those folders, and their examples must run there. The trajectory sync
+// procedure writes directly, so only an identity that can write
+// /trajectories sees it; everyone else is told how to get access.
 func TestSkillDocumentsIncludeOptionalSectionsWhenFoldersExist(t *testing.T) {
 	s := bootSkillServer(t, "/trajectories", "/skills")
-	sh := skillSession(t, s, "alice")
-	for command, section := range map[string]string{
-		"agents-shellm":              "## Sharing run trajectories",
-		"agents-shellm-housekeeping": "## Check skill coverage",
-	} {
-		doc := renderSkillFor(t, sh, command)
-		if !strings.Contains(doc, section) {
-			t.Errorf("%s omits %q on a server that has the folder:\n%s", command, section, doc)
+	for _, who := range []string{"alice", "bob"} {
+		sh := skillSession(t, s, who)
+		for command, section := range map[string]string{
+			"agents-shellm":              "## Sharing run trajectories",
+			"agents-shellm-housekeeping": "## Check skill coverage",
+		} {
+			doc := renderSkillFor(t, sh, command)
+			if !strings.Contains(doc, section) {
+				t.Errorf("%s for %s omits %q on a server that has the folder:\n%s", command, who, section, doc)
+			}
+			examples := exampleCommands(doc)
+			t.Logf("%s/%s: running %d examples: %q", command, who, len(examples), examples)
+			for _, example := range examples {
+				var out, errOut bytes.Buffer
+				if code := sh.ExecPipeline(example, &out, &errOut, strings.NewReader("")); code != 0 {
+					t.Errorf("%s example %q exit=%d stderr=%q stdout=%q", command, example, code, errOut.String(), out.String())
+				}
+			}
 		}
-		examples := exampleCommands(doc)
-		t.Logf("%s: running %d examples: %q", command, len(examples), examples)
-		for _, example := range examples {
+		doc := renderSkillFor(t, sh, "agents-shellm")
+		canSync := strings.Contains(doc, "sync_traj()")
+		if who == "bob" && !canSync {
+			t.Errorf("agents-shellm hides the sync procedure from bob, who can write /trajectories:\n%s", doc)
+		}
+		if who == "alice" && (canSync || !strings.Contains(doc, "cannot write to `/trajectories`")) {
+			t.Errorf("agents-shellm shows alice a direct-write sync procedure for a read-only mount:\n%s", doc)
+		}
+		// bob's sync procedure must actually work against the server.
+		if who == "bob" {
 			var out, errOut bytes.Buffer
-			if code := sh.ExecPipeline(example, &out, &errOut, strings.NewReader("")); code != 0 {
-				t.Errorf("%s example %q exit=%d stderr=%q stdout=%q", command, example, code, errOut.String(), out.String())
+			if code := sh.ExecPipeline("mkdir -p /trajectories/run-1/blobs", &out, &errOut, nil); code != 0 {
+				t.Errorf("mkdir exit=%d stderr=%q", code, errOut.String())
+			}
+			if code := sh.ExecPipeline("tee /trajectories/run-1/trajectory.jsonl >/dev/null", &out, &errOut, strings.NewReader("{}\n")); code != 0 {
+				t.Errorf("tee exit=%d stderr=%q", code, errOut.String())
 			}
 		}
 	}
-	doc := renderSkillFor(t, sh, "agents-shellm-housekeeping")
+	doc := renderSkillFor(t, skillSession(t, s, "alice"), "agents-shellm-housekeeping")
 	if !strings.Contains(doc, "## Check trajectory freshness") {
 		t.Errorf("housekeeping omits the trajectory section:\n%s", doc)
 	}

@@ -25,18 +25,25 @@ type SkillEntry struct{ Name, Description, Content string }
 
 var Skills []SkillEntry
 
+// RegisterSkill serves a skill document verbatim. Runtime skills loaded from
+// --skills-dir use this so their content is never interpreted.
 func RegisterSkill(name, description, content string) {
 	Skills = append(Skills, SkillEntry{name, description, content})
-	Register(name, makeSkillCmd(content))
+	Register(name, func(_ CmdContext, _ []string, w io.Writer, _ io.Writer, _ io.Reader) int {
+		fmt.Fprint(w, content)
+		return 0
+	})
 }
 
-// makeSkillCmd serves a skill document rendered against the calling session,
-// so its examples name this server's real mounts, files, and publish targets.
-func makeSkillCmd(content string) CmdFunc {
-	return func(ctx CmdContext, _ []string, w io.Writer, _ io.Writer, _ io.Reader) int {
+// RegisterTemplatedSkill serves a skill document rendered against the calling
+// session, so its examples name this server's real mounts, files, and publish
+// targets. Only the embedded, session-aware documents opt in.
+func RegisterTemplatedSkill(name, description, content string) {
+	Skills = append(Skills, SkillEntry{name, description, content})
+	Register(name, func(ctx CmdContext, _ []string, w io.Writer, _ io.Writer, _ io.Reader) int {
 		fmt.Fprint(w, renderSkill(ctx, content))
 		return 0
-	}
+	})
 }
 
 // CmdSkills prints agent-facing usage with no arguments while management

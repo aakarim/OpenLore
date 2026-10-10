@@ -423,25 +423,26 @@ func newServerWithRoot(rootDir string, rootFS vfs.FileSystem, lowerFS fs.FS, opt
 		s.merge.MountSystem("jobs", NewJobsFS(s.jobs))
 	}
 
-	// Load skills
-	skillReg := skills.NewRegistry()
-
-	// Load embedded skills
+	// Embedded skills are session-aware templates; runtime skills from
+	// --skills-dir are served verbatim and override embedded ones by name.
+	embeddedSkills := skills.NewRegistry()
 	if embSkills := assets.Skills(); embSkills != nil {
-		if err := skillReg.LoadFromFS(embSkills); err != nil {
+		if err := embeddedSkills.LoadFromFS(embSkills); err != nil {
 			return nil, fmt.Errorf("loading embedded skills: %w", err)
 		}
 	}
-
-	// Load runtime skills from directory
+	runtimeSkills := skills.NewRegistry()
 	if cfg.SkillsDir != "" {
-		if err := skillReg.LoadFromDir(cfg.SkillsDir); err != nil {
+		if err := runtimeSkills.LoadFromDir(cfg.SkillsDir); err != nil {
 			return nil, fmt.Errorf("loading skills from %s: %w", cfg.SkillsDir, err)
 		}
 	}
-
-	// Register skills as shell commands
-	for name, skill := range skillReg.All() {
+	for name, skill := range embeddedSkills.All() {
+		if _, overridden := runtimeSkills.Get(name); !overridden {
+			cmds.RegisterTemplatedSkill(name, skill.Description, skill.Content)
+		}
+	}
+	for name, skill := range runtimeSkills.All() {
 		cmds.RegisterSkill(name, skill.Description, skill.Content)
 	}
 

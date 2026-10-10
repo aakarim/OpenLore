@@ -22,7 +22,7 @@ func runSkillDoc(t *testing.T, name, doc string, configure func(*shell.Shell)) s
 	fs.AddFile("/backend/research/notes.md", "# notes\n")
 	fs.AddDir("/notes")
 	fs.AddFile("/notes/api.md", "# api\n")
-	cmds.RegisterSkill(name, "test skill", doc)
+	cmds.RegisterTemplatedSkill(name, "test skill", doc)
 	sh := shell.NewShell(fs)
 	if configure != nil {
 		configure(sh)
@@ -69,6 +69,22 @@ func TestSkillTemplatePrefersMountContainingCwd(t *testing.T) {
 	}
 }
 
+func TestSkillTemplateResolvesAliasCwdToCanonicalMount(t *testing.T) {
+	// A session that has cd'd into an alias belongs to the canonical mount
+	// behind it, not to the first mount in sorted order.
+	out := runSkillDoc(t, "tpl-alias-cwd", "{{.Mount}} {{join .Mounts \",\"}} {{writable \"/notes/x\"}} {{writable \"/backend\"}}\n", func(sh *shell.Shell) {
+		sh.SetDocsets([]cmds.DocsetInfo{
+			{Name: "backend", Paths: []string{"/backend"}},
+			{Name: "notes", Paths: []string{"/notes"}, Writable: true},
+			{Name: "notes", Paths: []string{"/n"}, AliasTarget: "/notes", Writable: true},
+		})
+		sh.SetCwd("/n/sub")
+	})
+	if out != "/notes /backend,/notes true false\n" {
+		t.Fatalf("rendered %q", out)
+	}
+}
+
 func TestSkillTemplateStandaloneShellUsesPlaceholders(t *testing.T) {
 	// No host: no port, no docsets, no publish targets. The document must still
 	// render with visible placeholders rather than invented paths. The walk is
@@ -89,8 +105,8 @@ func TestSkillTemplateEmptyMountFallsBackToPlaceholderFile(t *testing.T) {
 }
 
 func TestSkillDocumentThatIsNotATemplateIsServedVerbatim(t *testing.T) {
-	// A runtime skill from --skills-dir may contain "{{" that is not a Go
-	// template action; it must be emitted unchanged instead of disappearing.
+	// An embedded document with a template mistake must be emitted unchanged
+	// instead of disappearing.
 	doc := "literal {{ not a template\n"
 	if out := runSkillDoc(t, "tpl-raw", doc, nil); out != doc {
 		t.Fatalf("rendered %q, want verbatim %q", out, doc)
@@ -98,6 +114,22 @@ func TestSkillDocumentThatIsNotATemplateIsServedVerbatim(t *testing.T) {
 	doc = "{{.NoSuchField}}\n"
 	if out := runSkillDoc(t, "tpl-badfield", doc, nil); out != doc {
 		t.Fatalf("rendered %q, want verbatim %q", out, doc)
+	}
+}
+
+func TestRuntimeSkillIsNeverTemplated(t *testing.T) {
+	// A runtime skill from --skills-dir may contain valid template actions
+	// that are meant literally; RegisterSkill must not interpret them.
+	doc := "port={{.Port}} {{if true}}kept{{end}}\n"
+	cmds.RegisterSkill("raw-runtime", "runtime skill", doc)
+	var out bytes.Buffer
+	sh := shell.NewShell(testFS())
+	sh.SetAdvertisedSSHPort(2299)
+	if code := sh.ExecPipeline("raw-runtime", &out, &bytes.Buffer{}, nil); code != 0 {
+		t.Fatalf("exit=%d", code)
+	}
+	if out.String() != doc {
+		t.Fatalf("rendered %q, want verbatim %q", out.String(), doc)
 	}
 }
 

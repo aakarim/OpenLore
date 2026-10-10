@@ -29,4 +29,8 @@ func TestLsFlags(t *testing.T) {
 	if code == 0 || !strings.Contains(errOut, "invalid option -- 't'") {
 		t.Errorf("ls -t: code %d, stderr %q", code, errOut)
 	}
+	_, errOut, code = execCmd(t, fs, "ls --recursive /docs")
+	if code == 0 || !strings.Contains(errOut, "unrecognized option '--recursive'") {
+		t.Errorf("ls --recursive: code %d, stderr %q", code, errOut)
+	}
 }

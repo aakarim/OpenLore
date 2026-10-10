@@ -53,11 +53,18 @@ func NewSkillData(ctx CmdContext) SkillData {
 	if p, ok := ctx.(sshPortContext); ok && p.AdvertisedSSHPort() > 0 {
 		d.Port = strconv.Itoa(p.AdvertisedSSHPort())
 	}
+	// Alias rows are hidden from the mount list, but a session that has cd'd
+	// into an alias still belongs to the canonical mount behind it.
+	aliases := map[string]string{}
 	for _, ds := range ctx.Docsets() {
-		if ds.AliasTarget != "" || len(ds.Paths) == 0 {
+		if len(ds.Paths) == 0 {
 			continue
 		}
 		mount := vfs.CleanPath(ds.Paths[0])
+		if ds.AliasTarget != "" {
+			aliases[mount] = vfs.CleanPath(ds.AliasTarget)
+			continue
+		}
 		d.Mounts = append(d.Mounts, mount)
 		if ds.Writable {
 			d.Writable = append(d.Writable, mount)
@@ -68,6 +75,12 @@ func NewSkillData(ctx CmdContext) SkillData {
 	if len(d.Mounts) > 0 {
 		d.Mount = d.Mounts[0]
 		cwd := vfs.CleanPath(ctx.Cwd())
+		for alias, target := range aliases {
+			if cwd == alias || stringsHasRoot(cwd, alias) {
+				cwd = target
+				break
+			}
+		}
 		for _, m := range d.Mounts {
 			if cwd == m || stringsHasRoot(cwd, m) {
 				d.Mount = m
@@ -129,25 +142,36 @@ func exampleFile(fsys vfs.FileSystem, root string) string {
 	return placeholder
 }
 
-// renderSkill executes a skill document as a text/template against the
-// session. Documents that are not valid templates (for example a runtime skill
-// from --skills-dir that happens to contain "{{") are emitted verbatim, as is
-// any document whose execution fails, so a template mistake degrades to the
-// old static behaviour instead of hiding the skill.
+// renderSkill executes an embedded skill document as a text/template against
+// the session. A document that fails to parse or execute is emitted verbatim,
+// so a template mistake degrades to the old static behaviour instead of
+// hiding the skill. Runtime skills never reach here (see RegisterSkill).
 func renderSkill(ctx CmdContext, content string) string {
-	tmpl, err := template.New("skill").Funcs(skillFuncs(ctx)).Parse(content)
+	data := NewSkillData(ctx)
+	tmpl, err := template.New("skill").Funcs(skillFuncs(ctx, data)).Parse(content)
 	if err != nil {
 		return content
 	}
 	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, NewSkillData(ctx)); err != nil {
+	if err := tmpl.Execute(&buf, data); err != nil {
 		return content
 	}
 	return buf.String()
 }
 
-func skillFuncs(ctx CmdContext) template.FuncMap {
+func skillFuncs(ctx CmdContext, data SkillData) template.FuncMap {
 	return template.FuncMap{
+		// writable reports whether the session may write a path directly, so a
+		// document only shows mkdir/tee procedures where they would succeed.
+		"writable": func(p string) bool {
+			p = vfs.CleanPath(p)
+			for _, m := range data.Writable {
+				if p == m || stringsHasRoot(p, m) {
+					return true
+				}
+			}
+			return false
+		},
 		// join renders a list of mounts for prose, e.g. "/backend, /notes".
 		"join": func(items []string, sep string) string { return strings.Join(items, sep) },
 		// sub joins a relative path beneath a mount without doubling slashes
