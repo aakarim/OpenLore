@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
+	"slices"
 	"sort"
 	"strings"
 	"syscall"
@@ -320,7 +321,8 @@ func analyticsCapabilityWarnings(auth *config.AuthConfig) []string {
 			case "lore:analytics:view":
 				warnings = append(warnings, fmt.Sprintf("role %q grants lore:analytics:view, which no longer grants anything; the shell analytics command requires lore:analytics:admin", name))
 			case "lore:analytics:admin":
-				admin = true
+				// A role that also denies the capability grants it to nobody.
+				admin = admin || !slices.Contains(auth.Roles[name].Deny.Capabilities, capability)
 			}
 		}
 	}

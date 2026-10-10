@@ -406,4 +406,12 @@ func TestAnalyticsCapabilityWarnings(t *testing.T) {
 	if got := analyticsCapabilityWarnings(roles(map[string][]string{"ops": {"lore:analytics:admin"}, "reader": nil})); len(got) != 0 {
 		t.Fatalf("warnings with an admin holder = %q", got)
 	}
+	// A role that allows and denies the capability is not an operator.
+	selfDenied := &config.AuthConfig{Roles: map[string]config.RoleSpec{"ops": {
+		Allow: config.CapabilityRules{Capabilities: []string{"lore:analytics:admin"}},
+		Deny:  config.CapabilityRules{Capabilities: []string{"lore:analytics:admin"}},
+	}}}
+	if got := analyticsCapabilityWarnings(selfDenied); len(got) != 1 || !strings.Contains(got[0], "no role grants lore:analytics:admin") {
+		t.Fatalf("warnings with a self-denied admin role = %q", got)
+	}
 }
