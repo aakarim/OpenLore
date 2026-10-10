@@ -301,11 +301,12 @@ The same pages, in the same groups, are published at
 
 ### Concepts
 
-How OpenLore works: transports, identity, writes, rules, and observation.
+How OpenLore works: docsets, transports, identity, writes, rules, and observation.
 
 | Page | Contents |
 |---|---|
-| [Ways to use OpenLore](docs/usage.md) | SSH, MCP, web, SSHFS, embedded binaries, GitHub Action, MCPB, and library usage |
+| [Docsets](docs/docsets.md) | What a docset is, why access is organised around them, and how nesting, grants, aliases and fail-closed validation work |
+| [Transports](docs/transports.md) | How SSH, SFTP, MCP, the JSON API and the web share one filesystem, the MCP tools, command results, sessions, and instruction commands |
 | [Auth](docs/auth.md) | Authentication posture, how SSH keys, certificates, passkeys, OAuth tokens and inbox credentials resolve to an identity, roles, docsets, aliases, homes, and workload identity federation |
 | [Writing and publishing](docs/writing.md) | Write modes, inboxes, conflict handling, what a successful write does and does not check, and jobs |
 | [Folder rules](docs/folder-rules.md) | `.lore/config.yaml` and `lore.json` rules, layering, permissions, rejection messages, and growth limits |
@@ -318,6 +319,7 @@ Task walkthroughs.
 
 | Page | Contents |
 |---|---|
+| [Ways to use OpenLore](docs/usage.md) | Set up SSH, MCP over HTTP and stdio, the web view, SSHFS, embedded binaries, the GitHub Action, MCPB, and library usage |
 | [Configure the server](docs/configure-the-server.md) | Create `openlore.yml`, precedence over embedded config and flags, analytics, and debug logging |
 | [Let an agent publish into an inbox](docs/publish-to-inbox.md) | Accept contributions from an agent without letting it edit anything else |
 | [Browse and edit from an editor](docs/editors.md) | Direct VS Code and SFTP editor setup without a local project mirror |
