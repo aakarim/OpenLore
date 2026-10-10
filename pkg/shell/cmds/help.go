@@ -109,6 +109,12 @@ func CmdHelp(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 	fmt.Fprintln(w, "  exit / quit                              Close session")
 	fmt.Fprintln(w, "  Unquoted * and ? globs expand; bare patterns use the current directory")
 	fmt.Fprintln(w, "")
+	if analyticsService(ctx) != nil {
+		fmt.Fprintln(w, "ANALYTICS (operator-only)")
+		fmt.Fprintln(w, "  analytics list|show <name>|status|...    Instance-wide usage analytics; analytics help for usage")
+		fmt.Fprintln(w, "    Requires lore:analytics:admin and full token scope; docset readers use the web dashboard")
+		fmt.Fprintln(w, "")
+	}
 	fmt.Fprintln(w, "AGENT SKILLS")
 	fmt.Fprintln(w, "  skills                                   Show Agent Skills usage and installed instructions")
 	fmt.Fprintln(w, "")

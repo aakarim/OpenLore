@@ -3,6 +3,7 @@ package shell
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"path"
@@ -61,7 +62,7 @@ type Shell struct {
 	jobs                 cmds.JobBackend
 	size                 cmds.SizeBackend
 	analytics            *analytics.Service
-	analyticsAuthorizer  func() bool
+	analyticsAuthorizer  func() error
 	facts                analytics.ContentFacts
 	metricEmitter        func(context.Context, string, map[string]any)
 	invocationObserver   func(string, string)
@@ -215,10 +216,17 @@ func (s *Shell) SetAnalytics(service *analytics.Service) {
 func (s *Shell) Analytics() *analytics.Service { return s.analytics }
 
 // SetAnalyticsAuthorizer installs a live authorization check for instance-wide
-// analytics operations. Without one, those operations are denied.
-func (s *Shell) SetAnalyticsAuthorizer(fn func() bool) { s.analyticsAuthorizer = fn }
-func (s *Shell) AnalyticsAdminAllowed() bool {
-	return s.analyticsAuthorizer != nil && s.analyticsAuthorizer()
+// analytics operations. fn returns nil to allow, or an error naming the failed
+// condition. Without an authorizer, those operations are denied.
+func (s *Shell) SetAnalyticsAuthorizer(fn func() error) { s.analyticsAuthorizer = fn }
+
+// AnalyticsAdminDenial returns nil when instance-wide analytics is allowed, or
+// an error that names why it is denied.
+func (s *Shell) AnalyticsAdminDenial() error {
+	if s.analyticsAuthorizer == nil {
+		return errors.New("instance-wide analytics requires lore:analytics:admin and full token scope, and this shell host has no analytics authorizer")
+	}
+	return s.analyticsAuthorizer()
 }
 func (s *Shell) SetFacts(facts analytics.ContentFacts) { s.facts = facts }
 func (s *Shell) Facts() analytics.ContentFacts         { return s.facts }
