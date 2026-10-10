@@ -6,6 +6,11 @@ export type TreeEntry = {
   bytes: number;
 };
 export type TreeResponse = { path: string; entries: TreeEntry[] };
+export type FilesResponse = {
+  path: string;
+  entries: { path: string; name: string }[];
+  truncated: boolean;
+};
 export type ContextNode = {
   path: string;
   name: string;

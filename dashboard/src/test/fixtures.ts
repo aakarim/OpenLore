@@ -96,6 +96,16 @@ export function mockAPI(
             },
       );
     }
+    if (path.endsWith("/files"))
+      return json({
+        path: url.searchParams.get("path"),
+        entries: [
+          { path: "/guide/other.md", name: "other.md" },
+          { path: file.path, name: file.name },
+          { path: "/notes/strategy.md", name: "strategy.md" },
+        ],
+        truncated: false,
+      });
     if (path.endsWith("/context"))
       return options.contextError
         ? json({ error: "too large" }, 413)

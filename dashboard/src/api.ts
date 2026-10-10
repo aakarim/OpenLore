@@ -3,6 +3,7 @@ import type {
   AnalyticsProcessingStatus,
   ContextNode,
   FileResponse,
+  FilesResponse,
   HistoryResponse,
   Materialized,
   Session,
@@ -71,6 +72,8 @@ export const api = {
   session: (signal?: AbortSignal) => request<Session>("session", signal),
   tree: (path: string, signal?: AbortSignal) =>
     request<TreeResponse>(`tree?${query({ path })}`, signal),
+  files: (path: string, signal?: AbortSignal) =>
+    request<FilesResponse>(`files?${query({ path })}`, signal),
   context: (path: string, signal?: AbortSignal) =>
     request<ContextNode>(`context?${query({ path })}`, signal),
   file: (path: string, signal?: AbortSignal) =>

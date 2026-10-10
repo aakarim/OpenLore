@@ -14,7 +14,9 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -215,7 +217,7 @@ func dashboardRequest(h http.Handler, method, endpoint, token string) *httptest.
 
 func TestDashboardAuthenticationAndReadOnlyMethods(t *testing.T) {
 	s, mux, token := newDashboardTestServer(t)
-	for _, endpoint := range []string{"session", "tree", "context", "file", "raw", "history", "access", "usage", "analytics-status"} {
+	for _, endpoint := range []string{"session", "tree", "files", "context", "file", "raw", "history", "access", "usage", "analytics-status"} {
 		t.Run(endpoint, func(t *testing.T) {
 			for _, supplied := range []string{"", "invalid"} {
 				w := dashboardRequest(mux, "GET", "/dashboard/api/"+endpoint+"?path=/public/other.md", supplied)
@@ -408,7 +410,7 @@ func TestShellAnalyticsRequiresLiveAdministrativeCapability(t *testing.T) {
 
 func TestDashboardScopesFilesFactsAndHistory(t *testing.T) {
 	s, mux, token := newDashboardTestServer(t)
-	for _, endpoint := range []string{"tree", "context", "file", "raw", "history", "access", "usage"} {
+	for _, endpoint := range []string{"tree", "files", "context", "file", "raw", "history", "access", "usage"} {
 		for _, target := range []string{"/secret/top.txt", "/public/private/secret.md", "/docs/private/secret.md"} {
 			w := dashboardRequest(mux, "GET", "/dashboard/api/"+endpoint+"?path="+url.QueryEscape(target), token)
 			if w.Code != 404 || strings.Contains(w.Body.String(), "SENSITIVE") {
@@ -542,6 +544,58 @@ func TestDashboardPreviewRawAndTimeline(t *testing.T) {
 	w = dashboardRequest(mux, "GET", "/dashboard/api/history?path=/public/other.md", token)
 	if w.Code != 200 || !strings.Contains(w.Body.String(), `"action":"create"`) || !strings.Contains(w.Body.String(), `"hash":"hash-1"`) || !strings.Contains(w.Body.String(), `"attribution":"alice"`) {
 		t.Fatalf("timeline JSON is missing metadata: %s", w.Body.String())
+	}
+}
+
+func TestDashboardFilesListsReadableScopeFlat(t *testing.T) {
+	s, mux, token := newDashboardTestServer(t)
+	type listing struct {
+		Path      string          `json:"path"`
+		Entries   []dashboardFile `json:"entries"`
+		Truncated bool            `json:"truncated"`
+	}
+	list := func(target string) (int, listing) {
+		t.Helper()
+		w := dashboardRequest(mux, "GET", "/dashboard/api/files?path="+url.QueryEscape(target), token)
+		var got listing
+		if w.Code == 200 {
+			if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return w.Code, got
+	}
+	code, got := list("/")
+	if code != 200 || got.Truncated {
+		t.Fatalf("workspace listing: %d truncated=%v", code, got.Truncated)
+	}
+	var paths []string
+	for _, entry := range got.Entries {
+		paths = append(paths, entry.Path)
+		if entry.Name != path.Base(entry.Path) {
+			t.Fatalf("name %q does not match %q", entry.Name, entry.Path)
+		}
+		if strings.Contains(entry.Path, "private") || strings.Contains(entry.Path, "secret") {
+			t.Fatalf("listing leaked a carved-out docset: %q", entry.Path)
+		}
+	}
+	want := []string{"/public/other.md", "/public/payload.html", "/public/read me.md"}
+	if !slices.Equal(paths, want) {
+		t.Fatalf("files = %q, want %q (sorted, files only, no directories)", paths, want)
+	}
+	// A file is not a scope.
+	if code, _ := list("/public/other.md"); code != 404 {
+		t.Fatalf("file scope status %d", code)
+	}
+	// The listing stops at the cap and says so instead of claiming completeness.
+	files := fstest.MapFS{}
+	for i := range dashboardMaxFiles + 5 {
+		files[fmt.Sprintf("bulk/%05d.md", i)] = &fstest.MapFile{Data: []byte("x")}
+	}
+	s.merge.Mount("public", NewFSAdapter(files))
+	code, got = list("/public/bulk")
+	if code != 200 || !got.Truncated || len(got.Entries) != dashboardMaxFiles {
+		t.Fatalf("capped listing: %d truncated=%v entries=%d", code, got.Truncated, len(got.Entries))
 	}
 }
 

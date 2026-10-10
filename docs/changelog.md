@@ -38,6 +38,11 @@ necessarily the current version. Dates are the GitHub publication dates in UTC.
   JSON API endpoints and instruction commands formerly in
   [Ways to use OpenLore](usage.md). Ways to use OpenLore moved from Concepts to
   How to.
+- The dashboard has a fuzzy file finder: press Ctrl+P (⌘P on macOS) or the
+  Find button, type part of a name or path, and press Enter to open the file
+  or scope Analytics to it. It is backed by a new `GET /dashboard/api/files`
+  endpoint that lists readable files below a scope, capped at 10,000 with a
+  `truncated` flag.
 - The startup banner now reports whether the dashboard is ready and, when it
   is not, the next steps: set `auth_file`, remove an explicit
   `passkeys.enabled: false` (passkeys are on by default), or a numbered guide
