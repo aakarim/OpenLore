@@ -182,6 +182,16 @@ server audit log as `rules.baseline.reset`:
 baseline reset: previous 412, new 812, new cap 893 lines
 ```
 
+### `history [--principal <name>] [--actor <name>]`
+
+Print the commit journal as NDJSON, newest first, with one object per write to a docset you can read. `--principal` keeps writes by one identity and `--actor` keeps writes made through one delegated client.
+
+```bash
+history --actor claude-code@claude.ai | jq -r .target | sort | uniq -c | sort -rn
+```
+
+Each object has `commit_id`, `time`, `attribution`, `target`, `action` and `hash`. `attribution` is the principal, or `principal/actor` for a write made through an OAuth client. The journal is kept only when `readonly` is `false`; `analytics.history.retention` bounds how far back it reaches.
+
 ## Skills management
 
 These commands require `plugins.skills.enabled: true`. Mutating commands also
