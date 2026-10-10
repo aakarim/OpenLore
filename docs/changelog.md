@@ -31,6 +31,13 @@ necessarily the current version. Dates are the GitHub publication dates in UTC.
 
 ## Unreleased
 
+- Added the [Docsets](docsets.md) concept page, which explains what a docset
+  is, why access is organised around docsets, and how nesting, grants, aliases
+  and startup validation work. Added the [Transports](transports.md) concept
+  page, which holds the MCP tools, command result format, session behaviour,
+  JSON API endpoints and instruction commands formerly in
+  [Ways to use OpenLore](usage.md). Ways to use OpenLore moved from Concepts to
+  How to.
 - The startup banner now reports whether the dashboard is ready and, when it
   is not, the next steps: set `auth_file`, remove an explicit
   `passkeys.enabled: false` (passkeys are on by default), or a numbered guide

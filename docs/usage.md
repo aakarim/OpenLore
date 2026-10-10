@@ -1,7 +1,8 @@
 # Ways to Use OpenLore
 
-Every mode serves the same virtual filesystem. Choose the transport and
-packaging that fit the client.
+Set up each way of serving, packaging and connecting to OpenLore. Every mode
+serves the same virtual filesystem; [Transports](transports.md) explains how the
+transports relate, what they return and how long shell state lasts.
 
 ## Serve a directory over SSH, web, and MCP
 
@@ -46,18 +47,15 @@ Use `ls`, `cat`, `grep`, `find`, and pipes to explore. Run `help` for the full
 command list.
 ```
 
-An OpenLore server can also serve instruction commands for agents. They print
-to stdout rather than appearing in the filesystem, so you pipe them straight
-into an agent or save them as a `SKILL.md`:
+Save a server's [instruction commands](transports.md#instruction-commands) as
+agent instructions or skills:
 
 ```bash
 ssh <server> agents > AGENTS.md
 ssh <server> agents-shellm > .skills/openlore/SKILL.md
 ```
 
-Run `skills` on the server for the full list of built-in and configured
-instruction commands. See [shellm.md](shellm.md) for Docker caveats and
-trajectory sharing.
+See [shellm.md](shellm.md) for Docker caveats and trajectory sharing.
 
 Pipe an instruction command from a public OpenLore server into your coding
 agent, for example:
@@ -129,48 +127,14 @@ mcp:
   require_auth: true
 ```
 
-`require_auth: true` forces OAuth login for both MCP-over-HTTP and the JSON API
-while retaining the separately configured SSH posture. `false` permits
-anonymous access to both HTTP transports. If omitted, both inherit the keyless
-posture. When the posture requires a token but no `tokens` block is configured,
-both transports fail closed and answer every request with 401 (the server logs
-a warning at startup); configure `tokens` or set `require_auth: false`.
+`require_auth: true` forces OAuth for both MCP over HTTP and the JSON API. See
+[Authentication posture](auth.md#authentication-posture) for how it combines
+with the SSH posture and what happens when no `tokens` block is configured.
 `--mcp-path /custom` changes the MCP path; MCP over HTTP requires the HTTP
 server to remain enabled.
 
-The MCP server exposes:
-
-| Tool | Description |
-|---|---|
-| `shell` | Execute a command against the virtual filesystem |
-| `list_commands` | List commands supported by that server |
-
-The `shell` tool returns completed command invocations as normal MCP results,
-including when the command exits non-zero. Its structured content keeps
-`stdout`, `stderr`, and `exit_code` separate. The existing `output` field and
-text content contain stdout followed by stderr for compatibility, without a
-synthetic exit-code line. MCP `isError` is reserved for failures of the tool
-invocation itself rather than command exit status.
-
-For Streamable HTTP connections, the shell's `OPENLORE_SESSION_ID` environment
-variable is the MCP server session ID. It remains stable across tool calls, so
-session-scoped files or command logs can be addressed from the shell, for
-example with `cat /sessions/$OPENLORE_SESSION_ID/history` when such a history
-mount is configured.
-
-The plain JSON `POST /api/shell` endpoint and persistent-session
-`POST /api/sessions/{id}/shell` endpoint use the same result contract and
-return HTTP 200 for completed commands:
-
-```json
-{
-  "output": "...",
-  "stdout": "...",
-  "stderr": "...",
-  "is_error": false,
-  "exit_code": 1
-}
-```
+The MCP tools, the command result format, session behaviour and the JSON API
+endpoints are described in [Transports](transports.md).
 
 ## MCP over stdio
 
@@ -240,9 +204,10 @@ openlore --http-port 3000 ./docs
 openlore --http-port 0 ./docs
 ```
 
-In addition to browsing content, the page displays the SSH host key and provides
-it at `GET /host-key`. Serve this endpoint over TLS when using it as the trust
-anchor for an SSH connection.
+In addition to browsing content, the page displays the SSH host key and serves
+it at `GET /host-key`. See
+[Verify the SSH host key over HTTPS](auth.md#verify-the-ssh-host-key-over-https)
+before using it as the trust anchor for SSH connections.
 
 ## Use OpenLore as a Go library
 
@@ -286,6 +251,8 @@ srv := openlore.NewMCPServer(fs,
 
 ## Next steps
 
+- [Transports](transports.md) explains the MCP tools, command results and
+  session behaviour shared by these modes.
 - [Claude Code with OpenLore](start-claude-code.md) walks through the MCP
   connection end to end.
 - [Auth](auth.md) explains how to give each connection its own identity and

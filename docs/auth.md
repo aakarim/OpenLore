@@ -108,6 +108,10 @@ and signing-key rotation are in [OAuth clients](authenticated-oauth-clients.md).
 
 ## Roles, docsets, and identities
 
+[Docsets](docsets.md) explains what a docset is, why access is organised around
+them, and how the most specific docset governs a path. This section covers the
+`lore.json` keys.
+
 ```json
 {
   "allow_keyless": true,
@@ -534,5 +538,5 @@ When `mcp.require_auth` is true, both `/mcp` and `/api` require a token.
   `private_key_jwt`, mTLS corroboration and signing-key rotation.
 - [openlore.yml reference](openlore-yml.md#tokens) documents the `tokens`,
   `oidc_issuers`, `passkeys`, `auth` and `mcp` keys.
-- [Ways to use OpenLore](usage.md#mcp-over-http) shows the MCP and JSON API
-  endpoints the exchanged token is used with.
+- [Transports](transports.md) describes the MCP and JSON API endpoints the
+  exchanged token is used with.

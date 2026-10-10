@@ -65,7 +65,7 @@ Once more than one agent is connected, you will want them to see different thing
 
 A docset is a set of paths with an access rule. An identity is an SSH key, passkey or OAuth login with roles. An agent connecting as `backend-agent` sees `/backend`; anyone else sees `/public` and nothing more.
 
-Learn more about [identities, roles and docsets](auth.md).
+Learn more about [docsets](docsets.md) and [identities and roles](auth.md).
 
 ---
 
