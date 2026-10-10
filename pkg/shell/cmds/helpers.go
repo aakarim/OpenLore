@@ -44,10 +44,14 @@ func ReadInputLines(ctx CmdContext, files []string, stdin io.Reader, errW io.Wri
 
 // PrintLong prints a file in long format (used by ls -l).
 func PrintLong(w io.Writer, f *vfs.FileInfo) {
+	printLongSized(w, f, fmt.Sprintf("%8d", f.FileSize), f.FileName)
+}
+
+func printLongSized(w io.Writer, f *vfs.FileInfo, size, name string) {
 	mode := "-r--r--r--"
 	if f.Dir {
 		mode = "dr-xr-xr-x"
 	}
 	t := f.FileModTime.Format("Jan  2 15:04")
-	fmt.Fprintf(w, "%s  1 lore lore %8d %s %s\n", mode, f.FileSize, t, f.FileName)
+	fmt.Fprintf(w, "%s  1 lore lore %s %s %s\n", mode, size, t, name)
 }

@@ -10,6 +10,7 @@ func CmdHelp(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "FILESYSTEM")
 	fmt.Fprintln(w, "  ls [-l|-a|-R|-S|-t|-F|-1|-h|-d] [path]  List directory contents")
+	fmt.Fprintln(w, "    -R recursive; -S by size; -t by time; -h human sizes; -d dir itself")
 	fmt.Fprintln(w, "  cat [-n|-A] <file>                      Display file contents")
 	fmt.Fprintln(w, "  head [-n N|-c N] <file>                 Display first N lines (default 10)")
 	fmt.Fprintln(w, "  tail [-n N|-c N|+N] <file>              Display last N lines (default 10)")
