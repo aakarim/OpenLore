@@ -178,6 +178,12 @@ by the dashboard's content policy. Timeline is metadata only. It may be
 unavailable on read-only deployments or when history storage is disabled; it
 does not promise historical bodies, diffs, or restoration.
 
+Press Ctrl+P (⌘P on macOS) or the Find button in the top bar to fuzzy-find a
+file by name or path; Enter opens it on the Files view or scopes Analytics to it.
+The finder downloads a flat listing of the files you can read, capped at
+10,000; when a workspace exceeds the cap the finder says it is searching only
+the first 10,000 rather than presenting a partial list as complete.
+
 Desktop supports open file tabs and an Info/Timeline panel. Mobile uses native
 page scrolling with Folders, Open files, and Details sheets; Analytics replaces
 the Open files control with its contextual category picker.

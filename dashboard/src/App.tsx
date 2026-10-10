@@ -10,6 +10,7 @@ import {
 } from "./Analytics";
 import { APIError, api } from "./api";
 import { FileReader, MobileDetails, Sheet } from "./FileReader";
+import { FuzzyFinder, finderShortcut, isFinderShortcut } from "./FuzzyFinder";
 import { useAsync } from "./hooks";
 import {
   CloseIcon,
@@ -20,6 +21,7 @@ import {
   LinkIcon,
   MenuIcon,
   RefreshIcon,
+  SearchIcon,
   SettingsIcon,
 } from "./icons";
 import { ThemeToggle } from "./ThemeToggle";
@@ -166,6 +168,7 @@ function Workspace({ session }: { session: Session }) {
   const [ready, setReady] = useState(false);
   const [routeError, setRouteError] = useState("");
   const [sheet, setSheet] = useState<SheetName>(null);
+  const [finder, setFinder] = useState(false);
   const [mode, setMode] = useState<"preview" | "source">("preview");
   const [collapsed, setCollapsed] = useState(false);
   const [days, setDays] = useState(30);
@@ -250,6 +253,15 @@ function Workspace({ session }: { session: Session }) {
     const timer = setTimeout(() => setToast(""), 3000);
     return () => clearTimeout(timer);
   }, [toast]);
+  useEffect(() => {
+    const shortcut = (event: KeyboardEvent) => {
+      if (!isFinderShortcut(event)) return;
+      event.preventDefault();
+      setFinder(true);
+    };
+    addEventListener("keydown", shortcut);
+    return () => removeEventListener("keydown", shortcut);
+  }, []);
 
   const navigate = useCallback(
     (view: View, path: string, tab: AnalyticsTab = route.tab) => {
@@ -284,6 +296,10 @@ function Workspace({ session }: { session: Session }) {
   };
   const selectFile = (path: string) =>
     route.view === "analytics" ? navigate("analytics", path) : openFile(path);
+  const findFile = (path: string) => {
+    setFinder(false);
+    selectFile(path);
+  };
   useEffect(() => {
     let controller: AbortController | undefined;
     const pop = async () => {
@@ -392,6 +408,17 @@ function Workspace({ session }: { session: Session }) {
             Files{prefs.openPaths.length ? ` ${prefs.openPaths.length}` : ""}
           </button>
         </nav>
+        <button
+          className="finder-toggle"
+          aria-label="Find file"
+          aria-keyshortcuts="Control+P Meta+P"
+          title={`Find file (${finderShortcut})`}
+          onClick={() => setFinder(true)}
+        >
+          <SearchIcon />
+          <span>Find</span>
+          <kbd aria-hidden="true">{finderShortcut}</kbd>
+        </button>
         <span className="identity">{session.identity}</span>
         <ThemeToggle />
       </header>
@@ -698,6 +725,15 @@ function Workspace({ session }: { session: Session }) {
           )}
           <AnalyticsStatusPanel />
         </Sheet>
+      )}
+      {finder && (
+        <FuzzyFinder
+          identity={session.identity}
+          scope="/"
+          recent={prefs.openPaths}
+          onFile={findFile}
+          onClose={() => setFinder(false)}
+        />
       )}
       {toast && (
         <div className="toast" role="status">

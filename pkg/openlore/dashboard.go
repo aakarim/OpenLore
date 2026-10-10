@@ -120,6 +120,7 @@ func (s *Server) dashboardRoutes(frontend fs.FS) HTTPRouteRegistrar {
 	return func(mux *http.ServeMux) {
 		for route, handler := range map[string]http.HandlerFunc{
 			"session": s.dashboardSession, "tree": s.dashboardTree,
+			"files":   s.dashboardFiles,
 			"context": s.dashboardContext, "file": s.dashboardFile,
 			"raw": s.dashboardRaw, "history": s.dashboardHistory,
 			"access": s.dashboardAccess, "usage": s.dashboardUsage,
@@ -240,6 +241,53 @@ func (s *Server) dashboardTree(w http.ResponseWriter, r *http.Request) {
 		nodes = append(nodes, dashboardNode{Path: path.Join(target, entry.Name()), Name: entry.Name(), Directory: entry.Dir, Bytes: entry.Size()})
 	}
 	dashboardJSON(w, map[string]any{"path": target, "entries": nodes})
+}
+
+// dashboardMaxFiles bounds the flat listing the fuzzy finder downloads. The
+// response says when it stopped early so the UI never presents a partial
+// workspace as complete.
+const dashboardMaxFiles = 10000
+
+var errDashboardFilesFull = errors.New("file listing limit reached")
+
+type dashboardFile struct {
+	Path string `json:"path"`
+	Name string `json:"name"`
+}
+
+// dashboardFiles lists every readable file below the requested scope as a flat
+// list for client-side fuzzy finding. The scope is the per-docset seam: a
+// future docset filter resolves to that docset's roots and walks each of them
+// the same way, so neither the response shape nor the client has to change.
+func (s *Server) dashboardFiles(w http.ResponseWriter, r *http.Request) {
+	_, scoped, target := s.dashboardPath(r)
+	info, err := scoped.Stat(target)
+	if err != nil || !info.Dir {
+		dashboardError(w, http.StatusNotFound, "folder unavailable")
+		return
+	}
+	files := make([]dashboardFile, 0)
+	walkErr := vfs.WalkDir(scoped, target, func(p string, info *vfs.FileInfo, err error) error {
+		if ctxErr := r.Context().Err(); ctxErr != nil {
+			return ctxErr
+		}
+		// An unreadable or vanished subtree is omitted; the rest of the
+		// workspace stays searchable.
+		if err != nil || info.Dir {
+			return nil
+		}
+		if len(files) >= dashboardMaxFiles {
+			return errDashboardFilesFull
+		}
+		files = append(files, dashboardFile{Path: p, Name: path.Base(p)})
+		return nil
+	})
+	if walkErr != nil && !errors.Is(walkErr, errDashboardFilesFull) {
+		dashboardError(w, http.StatusNotFound, "folder unavailable")
+		return
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+	dashboardJSON(w, map[string]any{"path": target, "entries": files, "truncated": errors.Is(walkErr, errDashboardFilesFull)})
 }
 
 var errDashboardSize = errors.New("context is too large; select a narrower folder")
