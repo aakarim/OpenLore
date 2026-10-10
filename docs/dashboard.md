@@ -105,7 +105,11 @@ immediately unreachable. Browser previews do not count as agent reads.
 The shell `analytics` command is an instance-wide operator interface, not a
 docset-scoped reader interface. All subcommands require the explicit
 `lore:analytics:admin` capability and full token scope; current policy is checked
-on every invocation, including revocation and deny rules. Neither docset access
+on every invocation, including revocation and deny rules. A denial names the
+failed condition (missing capability, deny rule, or token scope), and
+`analytics help` prints usage without either. The server logs a warning at
+startup and on `lore config reload` when no role grants `lore:analytics:admin`
+or a role still grants `lore:analytics:view`. Neither docset access
 nor the former `lore:analytics:view` capability grants this authority. Operators
 may grant it through their chosen role's `allow.capabilities`. Scoped readers
 use the dashboard/API instead. Standalone shell hosts must explicitly install

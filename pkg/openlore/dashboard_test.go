@@ -24,6 +24,7 @@ import (
 	"github.com/aakarim/go-openlore/internal/analytics"
 	"github.com/aakarim/go-openlore/internal/config"
 	"github.com/aakarim/go-openlore/internal/passkeys"
+	"github.com/aakarim/go-openlore/pkg/shell"
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
 
@@ -369,29 +370,40 @@ func TestShellAnalyticsRequiresLiveAdministrativeCapability(t *testing.T) {
 	}
 	id.Scopes = []string{ScopeFull}
 	sh := s.buildSessionShell(id)
-	check := func(want bool) {
+	// check runs analytics status; want "" expects success, otherwise the
+	// denial must name the failed condition and must not blame the token scope
+	// unless the scope is what failed.
+	check := func(sh *shell.Shell, want string) {
 		t.Helper()
 		var out, errOut bytes.Buffer
-		if code := sh.Exec("analytics status", &out, &errOut, nil); (code == 0) != want {
-			t.Fatalf("allowed=%v: %d %s %s", want, code, out.String(), errOut.String())
+		code := sh.Exec("analytics status", &out, &errOut, nil)
+		if want == "" {
+			if code != 0 {
+				t.Fatalf("want allowed: %d %s %s", code, out.String(), errOut.String())
+			}
+			return
+		}
+		if code == 0 || !strings.Contains(errOut.String(), want) {
+			t.Fatalf("want denial %q: %d %s %s", want, code, out.String(), errOut.String())
+		}
+		if !strings.Contains(want, "token scope") && strings.Contains(errOut.String(), "token scope") {
+			t.Fatalf("full-scope denial blamed the token scope: %s", errOut.String())
 		}
 	}
 	s.auth.Roles["reader"] = config.RoleSpec{Allow: config.CapabilityRules{Capabilities: []string{"lore:analytics:view"}}}
-	check(false)
+	check(sh, "role(s) reader lack capability lore:analytics:admin")
 	s.auth.Roles["reader"] = config.RoleSpec{Allow: config.CapabilityRules{Capabilities: []string{"lore:analytics:admin"}}}
-	check(true)
+	check(sh, "")
 	id.Scopes = []string{ScopeRead}
 	readShell := s.buildSessionShell(id)
-	if readShell.AnalyticsAdminAllowed() {
-		t.Fatal("read token granted global administration")
-	}
+	check(readShell, "token scope is read (full scope required)")
 	s.auth.Roles["reader"] = config.RoleSpec{
 		Allow: config.CapabilityRules{Capabilities: []string{"lore:analytics:admin"}},
 		Deny:  config.CapabilityRules{Capabilities: []string{"lore:analytics:admin"}},
 	}
-	check(false)
+	check(sh, "role reader denies capability lore:analytics:admin")
 	s.auth.Roles["reader"] = config.RoleSpec{}
-	check(false)
+	check(sh, "lack capability lore:analytics:admin")
 }
 
 func TestDashboardScopesFilesFactsAndHistory(t *testing.T) {
