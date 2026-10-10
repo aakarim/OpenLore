@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { vi } from "vitest";
 import { App } from "./App";
 import { mockAPI } from "./test/fixtures";
 
@@ -84,6 +85,77 @@ test("choosing a file on the analytics view scopes analytics instead of opening 
     "/guide/start.md",
   );
   expect(screen.queryByRole("tab", { name: "start.md" })).toBeNull();
+});
+
+test("Tab stays inside the finder and arrows before the listing loads still select the first result", async () => {
+  // Gate the listing so keys can arrive while the result list is empty. A
+  // distinct identity sidesteps the module-level listing cache filled by the
+  // other tests.
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const spy = mockAPI();
+  const base = spy.getMockImplementation()!;
+  spy.mockImplementation(async (input, init) => {
+    const path = new URL(String(input), location.origin).pathname;
+    if (path.endsWith("/session"))
+      return new Response(
+        JSON.stringify({ identity: "gated@example.test", lore_path: "/lore", access: false }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    if (path.endsWith("/files")) await gate;
+    return base(input, init);
+  });
+  render(<App />);
+  await screen.findByRole("complementary", { name: "Knowledge tree" });
+  const user = userEvent.setup();
+  shortcut();
+  const dialog = await screen.findByRole("dialog", { name: "Find file" });
+  const input = within(dialog).getByRole("combobox", { name: "Find file" });
+  expect(input).toHaveFocus();
+  await within(dialog).findByText("Loading files…");
+  await user.keyboard("{ArrowDown}{End}{Enter}");
+  expect(screen.getByRole("dialog", { name: "Find file" })).toBeVisible();
+  await user.keyboard("{Tab}");
+  expect(input).toHaveFocus();
+  await user.keyboard("{Shift>}{Tab}{/Shift}");
+  expect(input).toHaveFocus();
+  release();
+  await within(dialog).findByText(/3 files\. Type to search\./);
+  const options = within(dialog).getAllByRole("option");
+  expect(options[0]).toHaveAttribute("aria-selected", "true");
+  await user.keyboard("{Enter}");
+  expect(screen.queryByRole("dialog", { name: "Find file" })).toBeNull();
+  expect(location.pathname).toBe("/lore/guide/other.md");
+});
+
+test("opening the finder over a sheet and choosing a file releases scroll and focus once", async () => {
+  mockAPI();
+  const scrollTo = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+  render(<App />);
+  await screen.findByRole("complementary", { name: "Knowledge tree" });
+  const user = userEvent.setup();
+  const folders = within(
+    screen.getByRole("navigation", { name: "Mobile workspace" }),
+  ).getByRole("button", { name: "Folders" });
+  await user.click(folders);
+  const sheet = await screen.findByRole("dialog", { name: "Folders" });
+  expect(sheet).toHaveFocus();
+  expect(document.body.style.position).toBe("fixed");
+  await openFinder();
+  // Escape closes only the finder and hands focus back to the sheet.
+  await user.keyboard("{Escape}");
+  expect(screen.queryByRole("dialog", { name: "Find file" })).toBeNull();
+  expect(sheet).toHaveFocus();
+  expect(document.body.style.position).toBe("fixed");
+  await openFinder();
+  scrollTo.mockClear();
+  await user.keyboard("strt{Enter}");
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(await screen.findByRole("heading", { name: "Start" })).toBeVisible();
+  expect(document.body.style.position).toBe("");
+  expect(document.body.style.overflow).toBe("");
+  expect(scrollTo).toHaveBeenCalledTimes(1);
+  expect(folders).toHaveFocus();
 });
 
 test("a truncated listing says so instead of claiming the whole workspace", async () => {

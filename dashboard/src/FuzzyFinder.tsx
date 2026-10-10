@@ -83,7 +83,11 @@ export function FuzzyFinder({
     const starters = [...recent].reverse().filter((path) => known.has(path));
     return rankPaths(starters.length ? starters : paths, "", RESULT_LIMIT);
   }, [paths, recent, query]);
-  const current = results[Math.min(active, results.length - 1)];
+  // Clamp both ends: `active` may outlive a shrinking result list, and the
+  // arrow handlers below must never leave it below zero while the list is
+  // still loading.
+  const clamp = (i: number) => Math.max(0, Math.min(i, results.length - 1));
+  const current = results[clamp(active)];
   useEffect(() => {
     list.current
       ?.querySelector<HTMLElement>('[aria-selected="true"]')
@@ -98,19 +102,24 @@ export function FuzzyFinder({
         onClose();
         break;
       case "ArrowDown":
-        setActive((i) => Math.min(i + 1, results.length - 1));
+        setActive((i) => clamp(i + 1));
         break;
       case "ArrowUp":
-        setActive((i) => Math.max(i - 1, 0));
+        setActive((i) => clamp(i - 1));
         break;
       case "Home":
         setActive(0);
         break;
       case "End":
-        setActive(results.length - 1);
+        setActive(clamp(results.length - 1));
         break;
       case "Enter":
         choose(current);
+        break;
+      case "Tab":
+        // The input is the dialog's only tab stop, so Tab must not escape
+        // the modal to the page underneath.
+        input.current?.focus();
         break;
       default:
         return;
