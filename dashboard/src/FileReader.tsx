@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import { useAsync } from "./hooks";
 import { ChartIcon, CloseIcon, SettingsIcon } from "./icons";
@@ -295,6 +295,44 @@ function Timeline({ path }: { path: string }) {
     </>
   );
 }
+export type Heading = { level: number; text: string };
+const headingSelector = "h1,h2,h3,h4,h5,h6";
+export function markdownOutline(html: string): Heading[] {
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  return [...doc.body.querySelectorAll(headingSelector)].map((heading) => ({
+    level: Number(heading.tagName[1]),
+    text: heading.textContent?.trim() || "Untitled section",
+  }));
+}
+function Outline({
+  headings,
+  active,
+  onHeading,
+}: {
+  headings: Heading[];
+  active: number;
+  onHeading: (index: number) => void;
+}) {
+  if (!headings.length)
+    return <p className="empty">No headings in this document.</p>;
+  const top = Math.min(...headings.map((heading) => heading.level));
+  return (
+    <nav aria-label="Document outline">
+      <ol className="outline">
+        {headings.map((heading, index) => (
+          <li key={index} style={{ paddingLeft: (heading.level - top) * 14 }}>
+            <button
+              aria-current={index === active ? "location" : undefined}
+              onClick={() => onHeading(index)}
+            >
+              {heading.text}
+            </button>
+          </li>
+        ))}
+      </ol>
+    </nav>
+  );
+}
 export function Details({
   file,
   ratio = 4,
@@ -302,6 +340,9 @@ export function Details({
   onCopy,
   onAnalytics,
   onSettings,
+  outline,
+  activeHeading = -1,
+  onHeading,
 }: {
   file: FileResponse;
   ratio?: number;
@@ -309,24 +350,46 @@ export function Details({
   onCopy: (value: string) => void | Promise<void>;
   onAnalytics: () => void;
   onSettings?: () => void;
+  outline?: Heading[];
+  activeHeading?: number;
+  onHeading?: (index: number) => void;
 }) {
-  const [tab, setTab] = useState<"info" | "timeline">("info");
+  const [tab, setTab] = useState<"info" | "outline" | "timeline">("info");
+  const hasOutline = Boolean(outline && onHeading);
+  const current = tab === "outline" && !hasOutline ? "info" : tab;
   return (
     <>
       <div className="info-tabs" role="tablist">
-        <button aria-selected={tab === "info"} onClick={() => setTab("info")}>
+        <button
+          aria-selected={current === "info"}
+          onClick={() => setTab("info")}
+        >
           Info
         </button>
+        {hasOutline && (
+          <button
+            aria-selected={current === "outline"}
+            onClick={() => setTab("outline")}
+          >
+            Outline
+          </button>
+        )}
         <button
-          aria-selected={tab === "timeline"}
+          aria-selected={current === "timeline"}
           onClick={() => setTab("timeline")}
         >
           Timeline
         </button>
       </div>
-      {tab === "info" ? (
+      {current === "info" ? (
         <FileInfo
           {...{ file, ratio, contextWindow, onCopy, onAnalytics, onSettings }}
+        />
+      ) : current === "outline" ? (
+        <Outline
+          headings={outline!}
+          active={activeHeading}
+          onHeading={onHeading!}
         />
       ) : (
         <Timeline path={file.path} />
@@ -363,6 +426,50 @@ export function FileReader({
   const scrollRef = useRef<HTMLDivElement>(null);
   const onScrollRef = useRef(onScroll);
   onScrollRef.current = onScroll;
+  const outline = useMemo(
+    () => (state.data?.html ? markdownOutline(state.data.html) : undefined),
+    [state.data],
+  );
+  const [activeHeading, setActiveHeading] = useState(-1);
+  const pendingHeading = useRef<number | null>(null);
+  const headingElements = () => [
+    ...(scrollRef.current?.querySelectorAll<HTMLElement>(
+      headingSelector
+        .split(",")
+        .map((tag) => `.markdown ${tag}`)
+        .join(","),
+    ) ?? []),
+  ];
+  const trackHeading = () => {
+    const container = scrollRef.current;
+    if (!container || !outline?.length) return;
+    const top = container.getBoundingClientRect().top + 24;
+    let active = 0;
+    headingElements().forEach((heading, index) => {
+      if (heading.getBoundingClientRect().top <= top) active = index;
+    });
+    setActiveHeading(active);
+  };
+  const revealHeading = (index: number) => {
+    const container = scrollRef.current;
+    const heading = headingElements()[index];
+    if (!container || !heading) return;
+    container.scrollTop +=
+      heading.getBoundingClientRect().top -
+      container.getBoundingClientRect().top -
+      16;
+    setActiveHeading(index);
+  };
+  const scrollToHeading = (index: number) => {
+    if (mode === "preview") return revealHeading(index);
+    pendingHeading.current = index;
+    onMode("preview");
+  };
+  useEffect(() => {
+    if (mode !== "preview" || pendingHeading.current === null) return;
+    revealHeading(pendingHeading.current);
+    pendingHeading.current = null;
+  }, [mode, state.data]);
   useEffect(() => {
     if (!showPath) return;
     const dismiss = (event: KeyboardEvent) => {
@@ -376,6 +483,7 @@ export function FileReader({
     const mobile = matchMedia("(max-width: 760px)").matches;
     if (!mobile) {
       if (scrollRef.current) scrollRef.current.scrollTop = scrollPosition;
+      trackHeading();
       return;
     }
     window.scrollTo(0, scrollPosition);
@@ -454,8 +562,9 @@ export function FileReader({
           className="document-scroll"
           ref={scrollRef}
           onScroll={(event) => {
-            if (!matchMedia("(max-width: 760px)").matches)
-              onScroll(event.currentTarget.scrollTop);
+            if (matchMedia("(max-width: 760px)").matches) return;
+            onScroll(event.currentTarget.scrollTop);
+            if (mode === "preview") trackHeading();
           }}
         >
           {file.binary ? (
@@ -479,6 +588,9 @@ export function FileReader({
           contextWindow={contextWindow}
           onCopy={copy}
           onAnalytics={onAnalytics}
+          outline={file.binary ? undefined : outline}
+          activeHeading={activeHeading}
+          onHeading={scrollToHeading}
         />
       </aside>
     </div>

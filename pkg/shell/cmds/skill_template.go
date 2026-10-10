@@ -3,7 +3,6 @@ package cmds
 import (
 	"bytes"
 	"path"
-	"strconv"
 	"strings"
 	"text/template"
 
@@ -15,9 +14,6 @@ import (
 // mounts, files, and publish targets that exist for that caller rather than a
 // guessed layout such as /docs.
 type SkillData struct {
-	// Port is the advertised SSH port, or the literal placeholder "<port>"
-	// when the host did not supply one.
-	Port string
 	// Mounts lists the canonical mount paths the session can read, sorted.
 	// Alias rows are omitted.
 	Mounts []string
@@ -39,20 +35,13 @@ type SkillData struct {
 	Writable []string
 }
 
-// sshPortContext is implemented by hosts that know the SSH port agents should
-// connect to. A standalone shell does not.
-type sshPortContext interface{ AdvertisedSSHPort() int }
-
 // exampleFileLimit bounds the directory walk that picks File so a large mount
 // does not make a skill command slow.
 const exampleFileLimit = 512
 
 // NewSkillData gathers the per-session facts skill templates render against.
 func NewSkillData(ctx CmdContext) SkillData {
-	d := SkillData{Port: "<port>", Mount: "/"}
-	if p, ok := ctx.(sshPortContext); ok && p.AdvertisedSSHPort() > 0 {
-		d.Port = strconv.Itoa(p.AdvertisedSSHPort())
-	}
+	d := SkillData{Mount: "/"}
 	// Alias rows are hidden from the mount list, but a session that has cd'd
 	// into an alias still belongs to the canonical mount behind it.
 	aliases := map[string]string{}

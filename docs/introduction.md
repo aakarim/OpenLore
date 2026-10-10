@@ -1,6 +1,6 @@
 # What is OpenLore
 
-OpenLore is a minimal, customisable, agent-native knowledge base that keeps your context current and inspectable. You point it at a directory of Markdown, and every agent on your team reads the same files over SSH or MCP.
+OpenLore is a minimal, customisable, agent-native knowledge repository that keeps your context current and inspectable. You point it at a directory of Markdown, and every agent on your team reads the same files over SSH or MCP.
 
 > **Note:** OpenLore is a single Go binary. There is no vector database, ingestion pipeline or SDK.
 
@@ -65,7 +65,7 @@ Once more than one agent is connected, you will want them to see different thing
 
 A docset is a set of paths with an access rule. An identity is an SSH key, passkey or OAuth login with roles. An agent connecting as `backend-agent` sees `/backend`; anyone else sees `/public` and nothing more.
 
-Learn more about [configuration and identity](configuration-and-identity.md).
+Learn more about [docsets](docsets.md) and [identities and roles](auth.md).
 
 ---
 
@@ -111,4 +111,4 @@ Only if you enable it, only in docsets they have a grant on, and only through wh
 
 - [Connect Claude Code](start-claude-code.md) to a served directory over MCP.
 - [Connect any agent over SSH](start-ssh.md) and give it an identity.
-- Learn how [configuration and identity](configuration-and-identity.md) scope what each agent sees.
+- Learn how [identities, roles and docsets](auth.md) scope what each agent sees.

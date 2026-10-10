@@ -90,7 +90,9 @@ backend over a real directory. `WriteFileAtomic`:
 
 `Mkdir` uses plain mkdir semantics (parent must exist) but **refuses to create a
 docset root or anything at/above one** — you can only create folders strictly
-*inside* a docset.
+*inside* a docset. A declared docset root that is not on disk yet counts as an
+existing parent: the first authorised write below it (`mkdir`, `mkdir -p`, or a
+file write) creates it, so a docset added to `lore.json` needs no host setup.
 
 ### `MergeFS`: routing + control-plane mounts
 

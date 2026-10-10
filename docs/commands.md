@@ -39,7 +39,7 @@ Directories retain a trailing `/`, hidden entries appear only after an explicit
 | `uniq` | Filter duplicate lines (`-c`, `-d`, `-i`, `-u`) |
 | `cut` | Select fields or characters (`-d DEL`, `-f FIELDS`, `-c CHARS`, `-s`) |
 | `sed` | Stream editor (`-n`, `-e`, `s/pat/repl/flags`, `-i`); replacement text supports `\n` (newline), `\t` (tab), `\\` (backslash), escaped delimiters, and backslash-newline continuations |
-| `awk` | Pattern scanning (`-F SEP`, `-v VAR=VAL`); supports regex and expression patterns, variables, arrays, `if`/`for`/`while`, and common built-ins such as `sub`, `gsub`, `split`, and `substr`. Unsupported constructs (`next`, `exit`, `getline`, output redirection, range patterns, user functions) print an error and exit 2 |
+| `awk` | Pattern scanning (`-F SEP`, `-v VAR=VAL`); supports regex and expression patterns, variables, arrays, `if`/`for`/`while`, `next`, and common built-ins such as `sub`, `gsub`, `split`, and `substr`. Unsupported constructs (`nextfile`, `exit`, `getline`, output redirection, range patterns, user functions) print an error and exit 2 |
 | `tr` | Translate characters (`-d`, `-s`, `-c`) |
 | `rev` / `tac` | Reverse characters per line / reverse line order |
 | `nl` | Number lines (`-b`, `-n`, `-w`, `-s`) |
@@ -137,11 +137,13 @@ lore package doc size/kilobytes
 
 ### `lore validate [dir]`
 
-Run folder rules over a docset or folder without writing anything. File rules run per file; bundle rules such as OKF bundle structure, local links and alias portability run once at the root.
+Run folder rules over a docset or folder without writing anything. File rules run per file; bundle rules such as OKF bundle structure, local links and alias portability run once at the root. Bundle rules never run on write, so a file that saved successfully can still fail here; see [Saved is not validated](writing.md#saved-is-not-validated).
 
 ```bash
 lore validate /docs/backend/decisions
 ```
+
+Exit status is 1 when any `error` finding is reported and 0 when there are only warnings or none. Name the docset root: links to files outside the named folder are reported as `openlore/link-outside-bundle`.
 
 ### `lore size baseline <path>`
 
@@ -179,6 +181,16 @@ server audit log as `rules.baseline.reset`:
 ```text
 baseline reset: previous 412, new 812, new cap 893 lines
 ```
+
+### `history [--principal <name>] [--actor <name>]`
+
+Print the commit journal as NDJSON, newest first, with one object per write to a docset you can read. `--principal` keeps writes by one identity and `--actor` keeps writes made through one delegated client.
+
+```bash
+history --actor claude-code@claude.ai | jq -r .target | sort | uniq -c | sort -rn
+```
+
+Each object has `commit_id`, `time`, `attribution`, `target`, `action` and `hash`. `attribution` is the principal, or `principal/actor` for a write made through an OAuth client. The journal is kept only when `readonly` is `false`; `analytics.history.retention` bounds how far back it reaches.
 
 ## Skills management
 

@@ -31,8 +31,40 @@ necessarily the current version. Dates are the GitHub publication dates in UTC.
 
 ## Unreleased
 
+- Added the [Docsets](docsets.md) concept page, which explains what a docset
+  is, why access is organised around docsets, and how nesting, grants, aliases
+  and startup validation work. Added the [Transports](transports.md) concept
+  page, which holds the MCP tools, command result format, session behaviour,
+  JSON API endpoints and instruction commands formerly in
+  [Ways to use OpenLore](usage.md). Ways to use OpenLore moved from Concepts to
+  How to.
+- The startup banner now reports whether the dashboard is ready and, when it
+  is not, the next steps: set `auth_file`, remove an explicit
+  `passkeys.enabled: false` (passkeys are on by default), or a numbered guide
+  for registering the first passkey over SSH and signing in. The dashboard
+  shows the same steps instead of a bare error, the passkey login page walks
+  through registration with the `ssh` command filled in, and the dashboard no
+  longer links to a login page on servers with passkeys turned off.
 - Added this changelog and guidance for matching documentation to an installed
   version.
+- Fixed `printf` looping forever and exhausting memory when the format contains
+  no conversions but arguments are given (for example `printf -- 'a\n'`).
+  `printf --` now ends option parsing as in POSIX shells.
+- Documented that a successful write is saved but not fully validated: file
+  checks run on write, while link resolution, OKF bundle structure and alias
+  checks run only under `lore validate`. The [writing guide](writing.md#saved-is-not-validated)
+  and the `openlore` skill now carry a write → validate → finish workflow.
+- Regrouped the documentation into Introduction, Start, Concepts, How to and
+  Reference. Added the [Auth](auth.md) concept page, which explains how each
+  credential resolves to an identity and now holds the workload identity
+  federation guide (the old `workload-identity-federation` page redirects
+  there). Moved the inbox API, OAuth clients and write system pages to
+  Reference. Split the old configuration and identity page: server setup is
+  now the [Configure the server](configure-the-server.md) how-to, and
+  posture, roles, docsets, identities and inbox credentials live in Auth.
+- `awk` now supports `next`, which skips the remaining statements and rules for
+  the current record, so `awk 'NR==2{print "new"; next} {print}'` replaces one
+  line. Previously it exited 2 as unsupported.
 - Fixed `awk` regex patterns matching every line, variables staying at 0, and
   string comparisons on `$0` never matching. Unsupported `awk` constructs now
   exit 2 with an error instead of producing wrong output.
@@ -156,7 +188,7 @@ Expected output: `openlore 0.7.3`.
 
 Agents are good at adding detail and bad at knowing when a shared file has enough. A focused engineering plan grows marketing context; an architecture document becomes an implementation dump; every later agent pays to read all of it.
 
-OpenLore v0.6.0 governs that problem at write time. Set a budget for matching files and OpenLore checks every incoming write before it reaches the shared knowledge base.
+OpenLore v0.6.0 governs that problem at write time. Set a budget for matching files and OpenLore checks every incoming write before it reaches the shared knowledge repository.
 
 ### What is new
 

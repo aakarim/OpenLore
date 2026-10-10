@@ -1,6 +1,6 @@
 ---
 name: openlore
-description: Query and publish to an OpenLore knowledge base over SSH using ordinary shell commands. Use when a task needs project documentation, runbooks, shared team knowledge, or a place to publish findings.
+description: Query and publish to an OpenLore knowledge repository over SSH using ordinary shell commands. Use when a task needs project documentation, runbooks, shared team knowledge, or a place to publish findings.
 metadata:
   shelllm:
     requires:
@@ -15,10 +15,10 @@ SSH session.
 
 ## Target server
 
-Set `OPENLORE_SSH` to the SSH arguments for your OpenLore server, for example:
+Set `OPENLORE_SSH` to the SSH arguments for this OpenLore server:
 
 ```bash
-export OPENLORE_SSH="-p {{.Port}} <host>"
+export OPENLORE_SSH="{{ ssh_target }}"
 ```
 
 Then run commands non-interactively:
@@ -152,5 +152,5 @@ ssh $OPENLORE_SSH agents-shellm > .skills/openlore/SKILL.md
 ssh $OPENLORE_SSH agents-shellm-housekeeping > .skills/openlore-housekeeping/SKILL.md
 ```
 
-The companion `openlore-housekeeping` skill audits the knowledge base and
+The companion `openlore-housekeeping` skill audits the knowledge repository and
 publishes maintenance reports.

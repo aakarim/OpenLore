@@ -3,6 +3,7 @@ package shell
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"path"
@@ -54,14 +55,14 @@ type Shell struct {
 	skillsManagement     bool
 	skillsRemoteTimeout  time.Duration
 	skillsRemoteMaxBytes int64
+	sshTarget            string
 	attribution          cmds.JobAttribution
 	configReload         cmds.ConfigReloadBackend
 	history              cmds.HistoryBackend
 	jobs                 cmds.JobBackend
 	size                 cmds.SizeBackend
-	advertisedSSHPort    int
 	analytics            *analytics.Service
-	analyticsAuthorizer  func() bool
+	analyticsAuthorizer  func() error
 	facts                analytics.ContentFacts
 	metricEmitter        func(context.Context, string, map[string]any)
 	invocationObserver   func(string, string)
@@ -167,6 +168,13 @@ func (s *Shell) SetPublishTargets(t []cmds.PublishTarget) { s.publishTargets = t
 // PublishTargets reports the per-session publish inboxes. Implements CmdContext.
 func (s *Shell) PublishTargets() []cmds.PublishTarget { return s.publishTargets }
 
+// SetSSHTarget installs the ssh arguments that reach this host, substituted
+// into skills that carry the {{ ssh_target }} placeholder.
+func (s *Shell) SetSSHTarget(target string) { s.sshTarget = target }
+
+// SSHTarget reports the ssh arguments installed by SetSSHTarget.
+func (s *Shell) SSHTarget() string { return s.sshTarget }
+
 // SetMetaExtenders installs the plugin-contributed extenders applied by `lore
 // meta`.
 func (s *Shell) SetMetaExtenders(e []meta.Extender) { s.metaExtenders = e }
@@ -200,10 +208,6 @@ func (s *Shell) JobBackend() cmds.JobBackend                       { return s.jo
 func (s *Shell) SetSizeBackend(b cmds.SizeBackend)                 { s.size = b }
 func (s *Shell) SizeBackend() cmds.SizeBackend                     { return s.size }
 
-// SetAdvertisedSSHPort records the SSH port agents should connect to, which
-// skill documents render into their connection examples. 0 means unknown.
-func (s *Shell) SetAdvertisedSSHPort(port int) { s.advertisedSSHPort = port }
-func (s *Shell) AdvertisedSSHPort() int        { return s.advertisedSSHPort }
 func (s *Shell) SetAnalytics(service *analytics.Service) {
 	s.analytics = service
 	if service != nil && s.facts == nil {
@@ -213,10 +217,17 @@ func (s *Shell) SetAnalytics(service *analytics.Service) {
 func (s *Shell) Analytics() *analytics.Service { return s.analytics }
 
 // SetAnalyticsAuthorizer installs a live authorization check for instance-wide
-// analytics operations. Without one, those operations are denied.
-func (s *Shell) SetAnalyticsAuthorizer(fn func() bool) { s.analyticsAuthorizer = fn }
-func (s *Shell) AnalyticsAdminAllowed() bool {
-	return s.analyticsAuthorizer != nil && s.analyticsAuthorizer()
+// analytics operations. fn returns nil to allow, or an error naming the failed
+// condition. Without an authorizer, those operations are denied.
+func (s *Shell) SetAnalyticsAuthorizer(fn func() error) { s.analyticsAuthorizer = fn }
+
+// AnalyticsAdminDenial returns nil when instance-wide analytics is allowed, or
+// an error that names why it is denied.
+func (s *Shell) AnalyticsAdminDenial() error {
+	if s.analyticsAuthorizer == nil {
+		return errors.New("instance-wide analytics requires lore:analytics:admin and full token scope, and this shell host has no analytics authorizer")
+	}
+	return s.analyticsAuthorizer()
 }
 func (s *Shell) SetFacts(facts analytics.ContentFacts) { s.facts = facts }
 func (s *Shell) Facts() analytics.ContentFacts         { return s.facts }

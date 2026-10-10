@@ -11,7 +11,7 @@ stop and wait for the person's answer. Open with:
 
 > 👋📜 **Welcome to OpenLore!**
 >
-> OpenLore is a minimal, customisable, agent-native knowledge base that keeps
+> OpenLore is a minimal, customisable, agent-native knowledge repository that keeps
 > your context current and inspectable.
 
 Then ask the initial question and wait:
@@ -49,7 +49,7 @@ Then ask the initial question again (options A and B).
    Default port: 2222 (openlore.sh uses 22).
 2. Verify the connection:
    ```bash
-   ssh -p {{.Port}} <address>
+   ssh {{ ssh_target }}
    ```
 3. Show them how to explore:
    ```bash
@@ -62,8 +62,8 @@ Then ask the initial question again (options A and B).
 4. Offer to onboard their agents. The server carries its own instructions —
    fetch and follow them:
    ```bash
-   ssh -p {{.Port}} <address> openlore-skill  # portable Agent Skills file
-   ssh -p {{.Port}} <address> agents          # AGENTS.md snippet
+   ssh {{ ssh_target }} openlore-skill  # portable Agent Skills file
+   ssh {{ ssh_target }} agents          # AGENTS.md snippet
    ```
 5. Finish with a short ✅ plain-language summary of what now works.
 

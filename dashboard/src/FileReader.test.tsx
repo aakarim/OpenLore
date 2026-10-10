@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import { api } from "./api";
@@ -311,4 +317,74 @@ test("clipboard actions announce success and failure", async () => {
   expect(await screen.findByText("Agent path copied.")).toBeVisible();
   fireEvent.click(screen.getByRole("button", { name: "Copy URL" }));
   expect(await screen.findByText("Couldn’t copy url.")).toBeVisible();
+});
+
+test("markdown outline lists headings, jumps to them, and switches out of source mode", async () => {
+  const file: FileResponse = {
+    ...baseFile,
+    path: "/docs/guide.md",
+    name: "guide.md",
+    content_type: "text/markdown",
+    html: "<h1>Guide</h1><p>Intro</p><h2>Install <code>cli</code></h2><h3>Linux</h3>",
+  };
+  vi.spyOn(api, "file").mockResolvedValue(file);
+  const offsets: Record<string, number> = {
+    Guide: 0,
+    "Install cli": 200,
+    Linux: 500,
+  };
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+    function (this: HTMLElement) {
+      const scroller = this.closest(".document-scroll") as HTMLElement | null;
+      const offset = offsets[this.textContent ?? ""];
+      return {
+        top: offset === undefined ? 0 : offset - (scroller?.scrollTop ?? 0),
+      } as DOMRect;
+    },
+  );
+  const onMode = vi.fn();
+  const user = userEvent.setup();
+  const { rerender } = render(
+    <FileReader {...readerProps} path={file.path} onMode={onMode} />,
+  );
+  await user.click(await screen.findByRole("button", { name: "Outline" }));
+  const outline = screen.getByRole("navigation", { name: "Document outline" });
+  const items = within(outline).getAllByRole("button");
+  expect(items.map((item) => item.textContent)).toEqual([
+    "Guide",
+    "Install cli",
+    "Linux",
+  ]);
+  expect(items[2].parentElement).toHaveStyle({ paddingLeft: "28px" });
+
+  const scroller = document.querySelector<HTMLElement>(".document-scroll")!;
+  await user.click(items[1]);
+  expect(scroller.scrollTop).toBe(184);
+  expect(items[1]).toHaveAttribute("aria-current", "location");
+
+  rerender(
+    <FileReader
+      {...readerProps}
+      path={file.path}
+      mode="source"
+      onMode={onMode}
+    />,
+  );
+  await user.click(screen.getByRole("button", { name: "Linux" }));
+  expect(onMode).toHaveBeenCalledWith("preview");
+  rerender(<FileReader {...readerProps} path={file.path} onMode={onMode} />);
+  await waitFor(() => expect(scroller.scrollTop).toBe(484));
+  expect(screen.getByRole("button", { name: "Linux" })).toHaveAttribute(
+    "aria-current",
+    "location",
+  );
+});
+
+test("outline tab is only offered for markdown documents", async () => {
+  vi.spyOn(api, "file").mockResolvedValue(baseFile);
+  render(<FileReader {...readerProps} />);
+  await screen.findByText("Plain text knowledge");
+  expect(
+    screen.queryByRole("button", { name: "Outline" }),
+  ).not.toBeInTheDocument();
 });

@@ -62,8 +62,10 @@ func TestSedOptionTerminator(t *testing.T) {
 	})
 
 	t.Run("option-like expression", func(t *testing.T) {
+		// After --, "-n" is the expression (not the quiet option), so it is
+		// parsed as the unsupported command '-', as in GNU sed.
 		out, errOut, code := execCmd(t, fs, "echo foo | sed -- -n")
-		if code != 0 || out != "foo\n" || errOut != "" {
+		if code == 0 || out != "" || !strings.Contains(errOut, "sed: unsupported command '-' in expression '-n'") {
 			t.Fatalf("code=%d stdout=%q stderr=%q", code, out, errOut)
 		}
 	})
@@ -222,6 +224,7 @@ func TestSedPreservesSemicolonsInDelimitedValues(t *testing.T) {
 		{"address", "echo 'left;right' | sed -n '/left;right/p'", "left;right\n"},
 		{"pattern", "echo 'foo;bar' | sed 's/foo;bar/matched/'", "matched\n"},
 		{"escaped address delimiter", "echo 'path/with;semi' | sed -n '/path\\/with;semi/p'", "path/with;semi\n"},
+		{"replacement after address whitespace", "echo x | sed '1 s/x/a;b/'", "a;b\n"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -291,5 +294,54 @@ func TestSedAppendMultilineInPlace(t *testing.T) {
 	want := "# Hello World\nThis is a test file.\n* idea, with context (important); keep it\n* another idea\nLine 3\nLine 4\nLine 5\n"
 	if string(content) != want {
 		t.Fatalf("content = %q, want %q", content, want)
+	}
+}
+
+func TestSedRejectsUnsupportedCommands(t *testing.T) {
+	tests := []struct {
+		name    string
+		expr    string
+		wantErr string
+	}{
+		{"change", `2c\CHANGED`, "unsupported command 'c'"},
+		{"insert", `1i\BEFORE`, "unsupported command 'i'"},
+		{"transliterate", `y/o/0/`, "unsupported command 'y'"},
+		{"quit", `1q`, "unsupported command 'q'"},
+		{"unknown letter", `zzz`, "unsupported command 'z'"},
+		{"after a supported command", `s/o/0/;q`, "unsupported command 'q'"},
+		{"missing command", `2`, "missing command"},
+		{"unknown s flag", `s/o/0/w`, "unknown option to 's': 'w'"},
+		{"numeric s flag", `s/o/0/2`, "unknown option to 's': '2'"},
+		{"flag after extra delimiter", `s/o/0/g/w`, "unknown option to 's': '/'"},
+		{"unterminated s", `s/o`, "unterminated 's' command"},
+		{"text after d", `dTYPO`, "extra characters after command 'd'"},
+		{"text after p", `1pq`, "extra characters after command 'p'"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, errOut, code := execCmd(t, testFS(), "printf 'one\\ntwo\\n' | sed '"+tt.expr+"'")
+			if code == 0 || out != "" || !strings.Contains(errOut, tt.wantErr) {
+				t.Fatalf("code=%d stdout=%q stderr=%q, want non-zero exit, no output, and %q", code, out, errOut, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestSedInPlaceUnsupportedCommandLeavesFileUntouched(t *testing.T) {
+	fs := testFS()
+	original, err := fs.ReadFile("/docs/readme.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, errOut, code := execCmd(t, fs, `sed -i '2c\CHANGED' /docs/readme.md`)
+	if code == 0 || out != "" || !strings.Contains(errOut, "sed: unsupported command 'c'") {
+		t.Fatalf("code=%d stdout=%q stderr=%q, want named command error", code, out, errOut)
+	}
+	content, err := fs.ReadFile("/docs/readme.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != string(original) {
+		t.Fatalf("unsupported command modified file: got %q, want %q", content, original)
 	}
 }

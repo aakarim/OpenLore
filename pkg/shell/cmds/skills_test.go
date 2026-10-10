@@ -342,3 +342,21 @@ func TestSkillsImportSubmitsOneOrderedBatch(t *testing.T) {
 		t.Fatalf("batch=%+v", leaves)
 	}
 }
+
+func TestSkillSSHTargetPlaceholderIsResolvedPerSession(t *testing.T) {
+	cmds.RegisterSkill("test-ssh-target", "", "ssh {{ssh_target}}; ssh {{ ssh_target }}; ssh {{\tssh_target  }}; {{ ssh_targets }}")
+	for target, want := range map[string]string{
+		"-p 2223 localhost": "ssh -p 2223 localhost; ssh -p 2223 localhost; ssh -p 2223 localhost; {{ ssh_targets }}",
+		"":                  "ssh <server>; ssh <server>; ssh <server>; {{ ssh_targets }}",
+	} {
+		sh := shell.NewShell(newMapFS())
+		sh.SetSSHTarget(target)
+		var out, errOut bytes.Buffer
+		if code := sh.ExecPipeline("test-ssh-target", &out, &errOut, nil); code != 0 {
+			t.Fatalf("exit %d: %s", code, errOut.String())
+		}
+		if out.String() != want {
+			t.Errorf("target %q: got %q, want %q", target, out.String(), want)
+		}
+	}
+}

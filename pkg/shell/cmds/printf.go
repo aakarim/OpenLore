@@ -13,14 +13,24 @@ func CmdPrintf(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin
 		return 1
 	}
 
+	if args[0] == "--" {
+		args = args[1:]
+		if len(args) == 0 {
+			fmt.Fprintln(errW, "printf: missing format string")
+			return 1
+		}
+	}
 	format := args[0]
 	fmtArgs := args[1:]
 
+	// POSIX printf reuses the format while arguments remain. A format with no
+	// conversions consumes nothing, so without the progress check below
+	// `printf 'a' x` would loop forever and grow the output without bound.
 	argIdx := 0
-	for argIdx == 0 || argIdx < len(fmtArgs) {
-		result := applyPrintf(format, fmtArgs, &argIdx)
-		fmt.Fprint(w, result)
-		if argIdx >= len(fmtArgs) {
+	for {
+		before := argIdx
+		fmt.Fprint(w, applyPrintf(format, fmtArgs, &argIdx))
+		if argIdx >= len(fmtArgs) || argIdx == before {
 			break
 		}
 	}
@@ -78,6 +88,13 @@ func applyPrintf(format string, args []string, argIdx *int) string {
 			if j < len(format) {
 				spec := format[i : j+1]
 				ch := format[j]
+				if ch == '%' {
+					// Literal percent: consumes no argument, so decide this
+					// before touching argIdx.
+					sb.WriteByte('%')
+					i = j + 1
+					continue
+				}
 				var arg string
 				if *argIdx < len(args) {
 					arg = args[*argIdx]
@@ -99,9 +116,6 @@ func applyPrintf(format string, args []string, argIdx *int) string {
 				case 'x', 'o':
 					n, _ := strconv.ParseFloat(arg, 64)
 					sb.WriteString(fmt.Sprintf(spec, int64(n)))
-				case '%':
-					sb.WriteByte('%')
-					*argIdx-- // no arg consumed
 				default:
 					sb.WriteString(spec)
 				}

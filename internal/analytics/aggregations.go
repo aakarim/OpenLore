@@ -58,7 +58,7 @@ func BuiltinAggregations() []Aggregation {
 		singleScan(Aggregation{Name: "sessions-over-time", Title: "Sessions over time", Description: "Session and command activity", Requires: []string{"session.start", "command.exec"}}, sessionsOverTime),
 		{Name: "tree-size", Title: "Tree size", Description: "Current content size", Requires: []string{"facts"}, Params: []ParamSpec{{Name: "path", Default: "/"}, {Name: "depth", Default: "1"}}, Compute: treeSize},
 		{Name: "largest-docs", Title: "Largest documents", Description: "Documents with the greatest context cost", Requires: []string{"facts"}, Params: []ParamSpec{{Name: "path", Default: "/"}}, Compute: largestDocs},
-		incremental(Aggregation{Name: "size-over-time", Title: "Size over time", Description: "Knowledge-base growth", Requires: []string{"doc.scalars"}}, sizeOverTime),
+		incremental(Aggregation{Name: "size-over-time", Title: "Size over time", Description: "Knowledge-repository growth", Requires: []string{"doc.scalars"}}, sizeOverTime),
 		incremental(Aggregation{Name: "write-ratio", Title: "Write ratio", Description: "Human and agent writes", Requires: []string{"doc.scalars"}}, writeRatio),
 		incremental(Aggregation{Name: "top-search-queries", Title: "Top search queries", Description: "Most frequent search patterns", Requires: []string{"search.query"}}, searchQueriesTable(nil)),
 		incremental(Aggregation{Name: "top-unfilled-queries", Title: "Top unfilled queries", Description: "Search patterns that returned no results", Requires: []string{"search.query"}}, searchQueriesTable(new(false))),

@@ -183,14 +183,16 @@ type WritableFS interface {
 	WriteFileAtomic(name string, data []byte, opts WriteOpts) (newHash string, err error)
 
 	// Mkdir creates a folder. It uses plain mkdir semantics (the parent must
-	// exist) but errors if name is not strictly inside a docset — you cannot
+	// exist; a declared docset root counts as existing and is created on
+	// demand) but errors if name is not strictly inside a docset — you cannot
 	// create a docset, nor anything at or above a docset root, through the FS.
 	Mkdir(name string) error
 
 	// MkdirAll creates a folder and any missing ancestors (mkdir -p). Like
-	// Mkdir it errors if name is not strictly inside a docset: the enclosing
-	// docset root must already exist, and every folder it creates must sit
-	// strictly below that root. An already-existing directory is not an error.
+	// Mkdir it errors if name is not strictly inside a declared docset. A
+	// declared docset root missing on disk is created along with the folder,
+	// and every other folder it creates sits strictly below that root. An
+	// already-existing directory is not an error.
 	MkdirAll(name string) error
 
 	// Remove deletes a single file or empty directory at name. It errors if

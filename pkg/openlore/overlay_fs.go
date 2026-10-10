@@ -217,13 +217,22 @@ func (o *OverlayFS) WriteFileAtomic(p string, content []byte, opts vfs.WriteOpts
 func (o *OverlayFS) Mkdir(p string) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	parent := path.Dir(vfs.CleanPath(p))
+	// Validate policy first so a rejected mkdir never creates a docset root.
+	if err := o.upper.PreflightChange(vfs.Change{Target: p, Action: vfs.ChangeActionMkdir}); err != nil {
+		return err
+	}
+	clean := vfs.CleanPath(p)
+	parent := path.Dir(clean)
+	// A declared docset root is a valid parent even before it exists on disk.
+	// Deeper parents must already exist, so they are only checked.
+	if root, _ := o.upper.docsetRootFor(clean); root == parent {
+		if err := o.materializeDocsetRoot(p); err != nil {
+			return err
+		}
+	}
 	info, err := o.Stat(parent)
 	if err != nil || !info.Dir {
 		return fmt.Errorf("mkdir parent %s is not a directory", parent)
-	}
-	if err := o.materializeDocsetRoot(p); err != nil {
-		return err
 	}
 	if err := o.upper.materializeDir(parent); err != nil {
 		return err
@@ -234,6 +243,10 @@ func (o *OverlayFS) Mkdir(p string) error {
 func (o *OverlayFS) MkdirAll(p string) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	// Validate policy first so a rejected mkdir -p never creates a docset root.
+	if err := o.upper.PreflightChange(vfs.Change{Target: p, Action: vfs.ChangeActionMkdirAll}); err != nil {
+		return err
+	}
 	if err := o.materializeDocsetRoot(p); err != nil {
 		return err
 	}
@@ -248,9 +261,14 @@ func (o *OverlayFS) materializeDocsetRoot(p string) error {
 	if root == "/" {
 		return nil
 	}
+	// A declared root missing from both layers is created in the upper layer,
+	// so a docset newly added to lore.json is writable without host access.
 	info, err := o.Stat(root)
-	if err != nil || !info.Dir {
-		return fmt.Errorf("docset root does not exist: %s", root)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	if err == nil && !info.Dir {
+		return fmt.Errorf("docset root is not a directory: %s", root)
 	}
 	return o.upper.materializeDir(root)
 }

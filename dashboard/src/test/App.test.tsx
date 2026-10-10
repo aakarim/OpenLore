@@ -869,6 +869,62 @@ test("returning to the browser tab preserves workspace state during session refr
   );
 });
 
+test("an unconfigured server shows the operator's next step instead of a sign-in link", async () => {
+  const fetch = mockAPI();
+  const original = fetch.getMockImplementation()!;
+  let body: Record<string, unknown> = {
+    error: "dashboard requires configured authentication",
+    next_steps: ["set `auth_file: ./lore.json` in openlore.yml and restart"],
+  };
+  let status = 404;
+  fetch.mockImplementation((input, init) =>
+    String(input).endsWith("/dashboard/api/session")
+      ? Promise.resolve(new Response(JSON.stringify(body), { status }))
+      : original(input, init),
+  );
+  render(<App />);
+  expect(
+    await screen.findByRole("heading", { name: "Dashboard not ready" }),
+  ).toBeVisible();
+  expect(screen.getByText(/^Next step:/).closest("p")).toHaveTextContent(
+    "Next step: set `auth_file: ./lore.json` in openlore.yml and restart",
+  );
+  expect(screen.queryByRole("link")).not.toBeInTheDocument();
+
+  // Auth on but passkeys off is a 401 the browser cannot resolve by signing
+  // in, so it must not be mistaken for an expired session. Several steps
+  // render as an ordered list.
+  status = 401;
+  body = {
+    error: "authentication required",
+    next_steps: [
+      "remove `passkeys.enabled: false` from openlore.yml and restart",
+      "run `passkey register` over SSH",
+    ],
+  };
+  await userEvent.setup().click(screen.getByRole("button", { name: "Retry" }));
+  const list = await screen.findByRole("list");
+  expect(within(list).getAllByRole("listitem").map((li) => li.textContent)).toEqual([
+    "remove `passkeys.enabled: false` from openlore.yml and restart",
+    "run `passkey register` over SSH",
+  ]);
+  expect(screen.getByText("Next steps:")).toBeVisible();
+  expect(
+    screen.queryByRole("heading", { name: "Sign in to OpenLore" }),
+  ).not.toBeInTheDocument();
+  expect(screen.queryByRole("link")).not.toBeInTheDocument();
+
+  // Once sign-in is possible the usual login link returns.
+  body = { error: "authentication required", login_url: "/passkey/login" };
+  await userEvent.setup().click(screen.getByRole("button", { name: "Retry" }));
+  expect(
+    await screen.findByRole("heading", { name: "Sign in to OpenLore" }),
+  ).toBeVisible();
+  expect(
+    screen.getByRole("link", { name: "Continue to sign in" }),
+  ).toHaveAttribute("href", expect.stringContaining("/passkey/login"));
+});
+
 test("session refresh removes a document whose access was revoked", async () => {
   history.replaceState(null, "", "/lore/guide/start.md");
   const fetch = mockAPI();

@@ -86,7 +86,7 @@ func countLabel(count int, singular string) string {
 func init() {
 	RegisterLoreSub(LoreSub{
 		Name:    "validate",
-		Summary: "Lint a bundle with plugin-provided validators",
+		Summary: "Check a folder against file and bundle rules (links, OKF bundle) that writes do not run",
 		Run:     cmdLoreValidate,
 	})
 }

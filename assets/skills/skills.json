@@ -57,7 +57,7 @@
       "file": "agents/shellm/openlore/SKILL.md"
     },
     "agents-shellm-housekeeping": {
-      "description": "Get a headlong/shellm SKILL.md for knowledge-base housekeeping",
+      "description": "Get a headlong/shellm SKILL.md for knowledge-repository housekeeping",
       "file": "agents/shellm/openlore-housekeeping/SKILL.md"
     },
     "passkeys": {

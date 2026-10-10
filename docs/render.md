@@ -85,7 +85,7 @@ Edit `lore.json` to add identities, roles and docsets. From the Render **Shell**
   --auth /var/lib/openlore/config/lore.json
 ```
 
-Restart the service from the dashboard so the running server loads the new policy. Then mint an `admin` token as in step 2 and run `passkey register --identity alice --name alice-laptop` to create Alice's registration link. See [Configuration and identity](configuration-and-identity.md) for the full policy model.
+Restart the service from the dashboard so the running server loads the new policy. Then mint an `admin` token as in step 2 and run `passkey register --identity alice --name alice-laptop` to create Alice's registration link. See [Auth](auth.md) for the full policy model.
 
 ---
 

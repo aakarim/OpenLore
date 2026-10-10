@@ -92,6 +92,11 @@ func (s *Server) reloadAuth(attribution Attribution) error {
 	}
 	s.runtimeAuth.Store(next)
 	s.authorizationStore = fileAuthorizationStore{auth: next}
+	if s.analytics != nil && s.logger != nil {
+		for _, warning := range analyticsCapabilityWarnings(next) {
+			s.logger.Warn("analytics authorization", "warning", warning)
+		}
+	}
 	if s.passkeys != nil {
 		s.passkeys.SetAuthConfig(next)
 	}

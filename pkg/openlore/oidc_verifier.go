@@ -20,7 +20,7 @@ import (
 // engine can match. The default implementation (newOIDCVerifier) pins each
 // trusted issuer to its own JWKS and requires OUR audience, so a token minted
 // for one service cannot be replayed to another. Injectable so knowledge-backend
-// can supply its own verifier. See workload-identity-federation.md.
+// can supply its own verifier. See docs/auth.md.
 type OIDCVerifier interface {
 	// Verify validates the assertion's signature (against the issuer's JWKS),
 	// issuer, audience, and expiry, returning its claims. Failure unwraps to

@@ -19,7 +19,7 @@ skills show openlore   # verify
 ```
 
 `openlore` covers querying and publishing. `openlore-housekeeping` is a
-maintenance skill: it audits the knowledge base for stale docs, broken links,
+maintenance skill: it audits the knowledge repository for stale docs, broken links,
 stuck inbox items, unsynced trajectories, and missing skill files, then
 publishes a report for human review.
 

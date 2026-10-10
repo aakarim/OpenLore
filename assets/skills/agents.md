@@ -3,19 +3,18 @@
 This project's documentation is available over SSH using OpenLore.
 
 **When to use it:** any task touching project docs, runbooks, prior
-decisions, or shared team knowledge — search the knowledge base before
+decisions, or shared team knowledge — search the knowledge repository before
 guessing or asking. If an `openlore` skill is installed in this harness, load
 it for the full procedures; this section is the summary. To install the
-skill: `ssh -p {{.Port}} <host> openlore-skill > <skills-dir>/openlore/SKILL.md`.
+skill: `ssh {{ ssh_target }} openlore-skill > <skills-dir>/openlore/SKILL.md`.
 
 ### Connecting
 
 ```bash
-ssh -p {{.Port}} <host>
+ssh {{ ssh_target }}
 ```
 
-Replace `<host>` with this server's address. Each `ssh` invocation is an
-independent session, so use absolute paths.
+Each `ssh` invocation is an independent session, so use absolute paths.
 {{if .Mounts}}
 ### Layout
 
@@ -75,5 +74,5 @@ ls, cat, head, tail, grep, find, tree, stat, wc, sort, uniq, cut, sed, awk, tr, 
 Mount docs as a local filesystem:
 
 ```bash
-sshfs -p {{.Port}} <host>:/ /mnt/openlore -o ro
+sshfs {{ ssh_target }}:/ /mnt/openlore -o ro
 ```

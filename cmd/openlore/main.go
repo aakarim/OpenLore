@@ -640,7 +640,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Serve your docs to AI agents over SSH.\n\n")
 		fmt.Fprintf(os.Stderr, "Arguments:\n")
 		fmt.Fprintf(os.Stderr, "  directory    Directory to serve (default: current directory)\n\n")
-		fmt.Fprintf(os.Stderr, "Flags:\n")
+		fmt.Fprintf(os.Stderr, "Flags (override openlore.yml, which overrides the defaults shown):\n")
 		flag.PrintDefaults()
 	}
 
@@ -674,7 +674,7 @@ func main() {
 		openlore.WithEmbeddedConfig(embeddedCfg, assets.DefaultMOTD()),
 	}
 
-	if *port != 0 {
+	if isFlagSet("port") || isFlagSet("p") {
 		opts = append(opts, openlore.WithPort(*port))
 	}
 	if isFlagSet("metrics-port") {
@@ -779,15 +779,18 @@ func main() {
 		fmt.Printf("  Directory:  (embedded docs)\n")
 	}
 	fmt.Printf("  config: %s\n", cfg.Source())
-	fmt.Printf("  SSH:        ssh -p %d localhost\n", cfg.Port)
+	fmt.Printf("  SSH:        ssh %s\n", cfg.LocalSSHTarget())
 	if cfg.MetricsPort > 0 {
 		fmt.Printf("  Metrics:    http://localhost:%d/metrics\n", cfg.MetricsPort)
 	}
-	if cfg.HTTPPort > 0 {
-		fmt.Printf("  HTTP:       http://localhost:%d\n", cfg.HTTPPort)
+	writeHTTPBanner(os.Stdout, cfg, srv.DashboardReadiness())
+	// Generated instructions and links use the advertised address; show it
+	// whenever it differs from the local listeners above.
+	if cfg.SSHTarget() != cfg.LocalSSHTarget() {
+		fmt.Printf("  Public SSH: ssh %s\n", cfg.SSHTarget())
 	}
-	if cfg.MCPEnabled && cfg.MCPPath != "" && cfg.HTTPPort > 0 {
-		fmt.Printf("  MCP:        http://localhost:%d%s\n", cfg.HTTPPort, "/"+strings.Trim(cfg.MCPPath, "/"))
+	if cfg.HTTPPort > 0 && cfg.HTTPBaseURL() != cfg.LocalHTTPURL() {
+		fmt.Printf("  Public URL: %s\n", cfg.HTTPBaseURL())
 	}
 	fmt.Println()
 
@@ -813,6 +816,35 @@ func main() {
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			slog.Warn("shutdown incomplete", "error", err)
 		}
+	}
+}
+
+// writeHTTPBanner prints the startup banner lines for endpoints served over
+// the HTTP port. SSH and MCP work out of the box; the dashboard also needs a
+// frontend in the build and sign-in configured, so its line says whether it
+// is ready and, if not, what to do, rather than leaving that to a bare error
+// in the browser.
+func writeHTTPBanner(w io.Writer, cfg config.Config, dashboard openlore.DashboardReadiness) {
+	if cfg.HTTPPort <= 0 {
+		return
+	}
+	base := cfg.LocalHTTPURL()
+	fmt.Fprintf(w, "  HTTP:       %s\n", base)
+	if dashboard.Ready {
+		fmt.Fprintf(w, "  Dashboard:  %s\n", dashboard.URL)
+	} else {
+		fmt.Fprintf(w, "  Dashboard:  %s\n", dashboard.Reason)
+		if len(dashboard.NextSteps) == 1 {
+			fmt.Fprintf(w, "              next step: %s\n", dashboard.NextSteps[0])
+		} else {
+			fmt.Fprintln(w, "              next steps:")
+			for i, step := range dashboard.NextSteps {
+				fmt.Fprintf(w, "              %d. %s\n", i+1, step)
+			}
+		}
+	}
+	if cfg.MCPEnabled && cfg.MCPPath != "" {
+		fmt.Fprintf(w, "  MCP:        %s/%s\n", base, strings.Trim(cfg.MCPPath, "/"))
 	}
 }
 

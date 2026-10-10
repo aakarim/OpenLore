@@ -4,7 +4,7 @@
 
 Every key `openlore.yml` accepts, in the order the server reads them. Durations are Go duration strings such as `30s` or `24h`; byte sizes accept `KB`, `MB` and `GB` suffixes.
 
-`openlore.yml` holds deployment settings. Identities, roles and docsets belong in `lore.json`; see [Configuration and identity](configuration-and-identity.md).
+`openlore.yml` holds deployment settings; see [Configure the server](configure-the-server.md). Identities, roles and docsets belong in `lore.json`; see [Auth](auth.md).
 
 ---
 
@@ -48,7 +48,7 @@ experimental: ["analytics"]
 **Type:** `integer`  
 **Default:** `2222`
 
-TCP port for the SSH server that agents connect to.
+TCP port for the SSH server that agents connect to, from 1 to 65535; `0` is rejected because SSH cannot be disabled.
 
 ```yaml
 port: 22
@@ -59,7 +59,7 @@ port: 22
 **Type:** `integer`  
 **Default:** `3000`
 
-TCP port for the Prometheus metrics endpoint; `0` disables it.
+TCP port for the Prometheus metrics endpoint, up to 65535; `0` disables it.
 
 ```yaml
 metrics_port: 0
@@ -147,7 +147,7 @@ data_dir: /var/lib/openlore
 **Type:** `integer`  
 **Default:** `8080`
 
-TCP port for the HTTP server that hosts the dashboard, MCP endpoint and JSON API; `0` disables it.
+TCP port for the HTTP server that hosts the dashboard, MCP endpoint and JSON API, up to 65535; `0` disables it.
 
 ```yaml
 http_port: 80
@@ -162,6 +162,17 @@ SSH port advertised to clients through the `X-SSH-Port` header when a load balan
 
 ```yaml
 external_ssh_port: 22
+```
+
+### `external_url`
+
+**Type:** `string`  
+**Default:** none
+
+Externally advertised HTTP origin (no path) used in published links, passkey URLs and generated connection instructions; its host is also the advertised SSH host. Unset uses the first `passkeys.rp_origins` entry, else the local `http_port`.
+
+```yaml
+external_url: https://docs.example.com
 ```
 
 ### `tls_cert`
@@ -246,7 +257,7 @@ write_conflict_policy: last_write_wins
 **Type:** `integer`  
 **Default:** `8`
 
-Maximum number of concurrent background jobs started with `spawn`.
+Maximum number of concurrent background jobs started with `spawn`; must be positive.
 
 ```yaml
 max_jobs: 16
@@ -383,7 +394,7 @@ analytics:
 **Type:** `integer`  
 **Default:** `1024`
 
-Number of events the pipeline buffers before back-pressure applies.
+Number of events the pipeline buffers before back-pressure applies; must be positive.
 
 ```yaml
 analytics:
@@ -446,7 +457,7 @@ Indexing of analytics segments for queries.
 **Type:** `integer`  
 **Default:** `2`
 
-Number of concurrent indexing workers.
+Number of concurrent indexing workers; must be positive.
 
 ```yaml
 analytics:
@@ -665,9 +676,9 @@ passkeys:
 ### `passkeys.rp_id`
 
 **Type:** `string`  
-**Default:** `localhost`
+**Default:** none
 
-WebAuthn relying-party ID, normally the public domain of the dashboard.
+WebAuthn relying-party ID, normally the public domain of the dashboard. Unset uses the host of the advertised HTTP origin.
 
 ```yaml
 passkeys:
@@ -689,9 +700,9 @@ passkeys:
 ### `passkeys.rp_origins`
 
 **Type:** `list of strings`  
-**Default:** `["http://localhost:8080"]`
+**Default:** none
 
-Origins allowed to start WebAuthn ceremonies.
+Origins allowed to start WebAuthn ceremonies; must include `external_url` when both are set. Unset uses `external_url`, else the local `http_port` origin.
 
 ```yaml
 passkeys:

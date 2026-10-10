@@ -334,6 +334,11 @@ func newServerWithRoot(rootDir string, rootFS vfs.FileSystem, lowerFS fs.FS, opt
 		}
 		service.SetKnowledgeScopes(knowledgeScopes)
 		s.analytics = service
+		if s.authEnforced {
+			for _, warning := range analyticsCapabilityWarnings(s.auth) {
+				logger.Warn("analytics authorization", "warning", warning)
+			}
+		}
 		if err := s.registerPlugin(&analyticsPlugin{service: service, server: s}); err != nil {
 			return nil, err
 		}
@@ -479,6 +484,7 @@ func newServerWithRoot(rootDir string, rootFS vfs.FileSystem, lowerFS fs.FS, opt
 			LorePath:     cfg.Passkeys.LorePath,
 			PasskeysFile: pkFile,
 			SessionTTL:   sessionTTL,
+			SSHPort:      s.config.AdvertisedSSHPort(),
 		}, sessionKey, logger)
 		if err != nil {
 			return nil, fmt.Errorf("setting up passkeys: %w", err)
@@ -545,13 +551,6 @@ func (s *Server) SetRootBashFS(fsys vfs.FileSystem) {
 // the returned filesystem for that session's shell.
 func (s *Server) SetSessionFSFn(fn SessionFSFn) {
 	s.sessionFSFn = fn
-}
-
-func (s *Server) advertisedSSHPort() int {
-	if s.config.ExternalSSHPort != 0 {
-		return s.config.ExternalSSHPort
-	}
-	return s.config.Port
 }
 
 func publicKeyMatches(configured string, presented gossh.PublicKey) bool {
@@ -1196,9 +1195,7 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 	}
 	if s.analytics != nil && s.authEnforced && id.IdentityName != "" && id.IdentityName != "guest" {
 		sh.SetAnalytics(s.analytics)
-		sh.SetAnalyticsAuthorizer(func() bool {
-			return scopeGrantsWrite(id.Scopes) && s.hasCurrentCapability(id, "lore:analytics:admin")
-		})
+		sh.SetAnalyticsAuthorizer(func() error { return s.analyticsAdminDenial(id) })
 	}
 	if s.analytics != nil {
 		sh.SetFacts(s.analytics.NewContentFacts(sessionFS))
@@ -1277,11 +1274,11 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 	// Per-session docset views for `lore docsets` and publish inboxes for
 	// `publish`. Computed once here, where the access authority lives.
 	sh.SetDocsets(s.sessionDocsets(id))
-	sh.SetAdvertisedSSHPort(s.advertisedSSHPort())
 	sh.SetSkillsManagementEnabled(s.config.Plugins.Skills.Enabled)
 	sh.SetSkillsRemoteConfig(s.config.Plugins.Skills.RemoteTimeout, s.config.Plugins.Skills.RemoteMaxBytes)
 	sh.SetMetaFilters(s.sessionMetaFilters(id))
 	sh.SetPublishTargets(s.sessionPublishTargets(id))
+	sh.SetSSHTarget(s.config.SSHTarget())
 	sh.SetMetaExtenders(s.metaExtenders)
 	sh.SetValidators(s.validators)
 	a := id.attribution()
@@ -1586,7 +1583,9 @@ func (s *Server) ListenAndServe() error {
 			}
 			preparedRoutes = append(preparedRoutes, register)
 		}
-		preparedRoutes = append(preparedRoutes, s.dashboardRoutes(assets.Dashboard()))
+		frontend := assets.Dashboard()
+		s.warnIfDashboardMissing(frontend)
+		preparedRoutes = append(preparedRoutes, s.dashboardRoutes(frontend))
 	}
 	opts := []ssh.Option{
 		wish.WithAddress(fmt.Sprintf(":%d", s.config.Port)),
@@ -1704,7 +1703,7 @@ func (s *Server) ListenAndServe() error {
 				TLSKey:         s.config.TLSKey,
 				ClientCABundle: s.config.MTLS.CABundle,
 				HostKeyPath:    s.config.HostKeyPath,
-				SSHPort:        s.advertisedSSHPort(),
+				SSHPort:        s.config.AdvertisedSSHPort(),
 				Logger:         s.logger,
 				ExtraHandlers:  map[string]http.Handler{},
 			}
@@ -1722,6 +1721,7 @@ func (s *Server) ListenAndServe() error {
 			httpCfg.ExtraHandlers["/assets/openlore/app.css"] = appCSS
 			// Compatibility for existing login and permissions links.
 			httpCfg.ExtraHandlers["/assets/openlore.css"] = appCSS
+			httpCfg.ExtraHandlers["/assets/openlore/familjen-grotesk.woff2"] = staticAppAsset("font/woff2", webstyle.Familjen)
 			httpCfg.ExtraHandlers["/assets/openlore/outfit.woff2"] = staticAppAsset("font/woff2", webstyle.Outfit)
 			httpCfg.ExtraHandlers["/.well-known/openlore"] = http.HandlerFunc(s.openLoreMetadata)
 
@@ -1807,25 +1807,9 @@ func (s *Server) ListenAndServe() error {
 			}
 
 			if s.passkeys != nil {
-				// Build the HTTP base URL for the passkey shell command.
-				// If rp_origins are configured, use the first one as the base URL
-				// (handles TLS termination at a load balancer).
-				var baseURL string
-				if len(s.config.Passkeys.RPOrigins) > 0 {
-					baseURL = strings.TrimRight(s.config.Passkeys.RPOrigins[0], "/")
-				} else {
-					scheme := "http"
-					if s.config.TLSCert != "" {
-						scheme = "https"
-					}
-					baseURL = fmt.Sprintf("%s://localhost:%d", scheme, s.config.HTTPPort)
-					if s.config.Passkeys.RPID != "" && s.config.Passkeys.RPID != "localhost" {
-						baseURL = fmt.Sprintf("%s://%s", scheme, s.config.Passkeys.RPID)
-						if (scheme == "http" && s.config.HTTPPort != 80) || (scheme == "https" && s.config.HTTPPort != 443) {
-							baseURL = fmt.Sprintf("%s:%d", baseURL, s.config.HTTPPort)
-						}
-					}
-				}
+				// Links printed to agents use the advertised address, not the
+				// local listener (handles TLS termination at a load balancer).
+				baseURL := s.config.HTTPBaseURL()
 
 				passkeys.RegisterShellCommand(s.passkeys, baseURL)
 
@@ -2035,7 +2019,7 @@ func (s *Server) openLoreMetadata(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	routes := map[string]string{"legal": "/legal/"}
-	ssh := map[string]any{"port": s.advertisedSSHPort()}
+	ssh := map[string]any{"port": s.config.AdvertisedSSHPort()}
 	if s.config.HostKeyPath != "" {
 		routes["host_key"] = "/host-key"
 		ssh["host_key_url"] = "/host-key"

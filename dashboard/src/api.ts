@@ -15,6 +15,8 @@ export class APIError extends Error {
     message: string,
     public status: number,
     public loginURL?: string,
+    /** Operator actions, in order, the server says unblock the dashboard. */
+    public nextSteps?: string[],
   ) {
     super(message);
   }
@@ -27,7 +29,8 @@ async function request<T>(path: string, signal?: AbortSignal): Promise<T> {
     headers: { Accept: "application/json" },
   });
   if (!response.ok) {
-    let body: { error?: string; login_url?: string } = {};
+    let body: { error?: string; login_url?: string; next_steps?: string[] } =
+      {};
     try {
       body = await response.json();
     } catch {
@@ -39,6 +42,7 @@ async function request<T>(path: string, signal?: AbortSignal): Promise<T> {
       body.error || `Request failed (${response.status})`,
       response.status,
       body.login_url,
+      body.next_steps,
     );
   }
   return response.json() as Promise<T>;
