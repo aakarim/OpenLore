@@ -1,0 +1,179 @@
+package cmds
+
+import (
+	"bytes"
+	"path"
+	"strings"
+	"text/template"
+
+	"github.com/aakarim/go-openlore/pkg/vfs"
+)
+
+// SkillData is the view a skill document renders against. It is computed per
+// invocation from the calling session, so the examples an agent copies name
+// mounts, files, and publish targets that exist for that caller rather than a
+// guessed layout such as /docs.
+type SkillData struct {
+	// Mounts lists the canonical mount paths the session can read, sorted.
+	// Alias rows are omitted.
+	Mounts []string
+	// Mount is the mount the read examples target: the one containing the
+	// session's working directory when there is one, otherwise the first
+	// mount, otherwise "/".
+	Mount string
+	// File is an existing file beneath Mount for `cat` examples. When the
+	// mount holds no files it falls back to "<Mount>/<file>" so the example
+	// is visibly a placeholder.
+	File string
+	// Publish lists the inboxes the session may publish to.
+	Publish []PublishTarget
+	// PublishDocset is the name of the first publish target, or "" when the
+	// session cannot publish.
+	PublishDocset string
+	// Writable lists the mounts the session may write directly with the
+	// ordinary write verbs (redirects, tee, mkdir, …).
+	Writable []string
+}
+
+// exampleFileLimit bounds the directory walk that picks File so a large mount
+// does not make a skill command slow.
+const exampleFileLimit = 512
+
+// NewSkillData gathers the per-session facts skill templates render against.
+func NewSkillData(ctx CmdContext) SkillData {
+	d := SkillData{Mount: "/"}
+	// Alias rows are hidden from the mount list, but a session that has cd'd
+	// into an alias still belongs to the canonical mount behind it.
+	aliases := map[string]string{}
+	for _, ds := range ctx.Docsets() {
+		if len(ds.Paths) == 0 {
+			continue
+		}
+		mount := vfs.CleanPath(ds.Paths[0])
+		if ds.AliasTarget != "" {
+			aliases[mount] = vfs.CleanPath(ds.AliasTarget)
+			continue
+		}
+		d.Mounts = append(d.Mounts, mount)
+		if ds.Writable {
+			d.Writable = append(d.Writable, mount)
+		}
+	}
+	d.Mounts = uniqueSorted(d.Mounts)
+	d.Writable = uniqueSorted(d.Writable)
+	if len(d.Mounts) > 0 {
+		d.Mount = d.Mounts[0]
+		cwd := vfs.CleanPath(ctx.Cwd())
+		for alias, target := range aliases {
+			if cwd == alias || stringsHasRoot(cwd, alias) {
+				cwd = target
+				break
+			}
+		}
+		for _, m := range d.Mounts {
+			if cwd == m || stringsHasRoot(cwd, m) {
+				d.Mount = m
+				break
+			}
+		}
+	}
+	d.File = exampleFile(ctx.FS(), d.Mount)
+	d.Publish = ctx.PublishTargets()
+	if len(d.Publish) > 0 {
+		d.PublishDocset = d.Publish[0].Name
+	}
+	return d
+}
+
+// exampleFile returns the first Markdown file found beneath root by a bounded
+// breadth-first walk, falling back to any regular file, then to a visible
+// placeholder. Hidden entries and the synthetic /jobs mount are skipped so the
+// example points at content, not bookkeeping.
+func exampleFile(fsys vfs.FileSystem, root string) string {
+	placeholder := path.Join(root, "<file>")
+	if fsys == nil {
+		return placeholder
+	}
+	queue := []string{root}
+	seen := 0
+	fallback := ""
+	for len(queue) > 0 && seen < exampleFileLimit {
+		dir := queue[0]
+		queue = queue[1:]
+		entries, err := fsys.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			seen++
+			name := e.Name()
+			if strings.HasPrefix(name, ".") {
+				continue
+			}
+			p := path.Join(dir, name)
+			if e.IsDir() {
+				if p != "/jobs" {
+					queue = append(queue, p)
+				}
+				continue
+			}
+			if strings.HasSuffix(name, ".md") {
+				return p
+			}
+			if fallback == "" {
+				fallback = p
+			}
+		}
+	}
+	if fallback != "" {
+		return fallback
+	}
+	return placeholder
+}
+
+// renderSkill executes an embedded skill document as a text/template against
+// the session. A document that fails to parse or execute is emitted verbatim,
+// so a template mistake degrades to the old static behaviour instead of
+// hiding the skill. Runtime skills never reach here (see RegisterSkill).
+func renderSkill(ctx CmdContext, content string) string {
+	data := NewSkillData(ctx)
+	tmpl, err := template.New("skill").Funcs(skillFuncs(ctx, data)).Parse(content)
+	if err != nil {
+		return content
+	}
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return content
+	}
+	return buf.String()
+}
+
+func skillFuncs(ctx CmdContext, data SkillData) template.FuncMap {
+	return template.FuncMap{
+		// writable reports whether the session may write a path directly, so a
+		// document only shows mkdir/tee procedures where they would succeed.
+		"writable": func(p string) bool {
+			p = vfs.CleanPath(p)
+			for _, m := range data.Writable {
+				if p == m || stringsHasRoot(p, m) {
+					return true
+				}
+			}
+			return false
+		},
+		// join renders a list of mounts for prose, e.g. "/backend, /notes".
+		"join": func(items []string, sep string) string { return strings.Join(items, sep) },
+		// sub joins a relative path beneath a mount without doubling slashes
+		// when the mount is "/".
+		"sub": func(mount, rel string) string { return path.Join(mount, rel) },
+		// exists reports whether the session can see a path, so a document can
+		// include a section only when the folder it targets is really there.
+		"exists": func(p string) bool {
+			if ctx.FS() == nil {
+				return false
+			}
+			_, err := ctx.FS().Stat(vfs.CleanPath(p))
+			return err == nil
+		},
+	}
+}

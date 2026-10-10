@@ -207,6 +207,7 @@ func (s *Shell) SetJobBackend(b cmds.JobBackend)                   { s.jobs = b 
 func (s *Shell) JobBackend() cmds.JobBackend                       { return s.jobs }
 func (s *Shell) SetSizeBackend(b cmds.SizeBackend)                 { s.size = b }
 func (s *Shell) SizeBackend() cmds.SizeBackend                     { return s.size }
+
 func (s *Shell) SetAnalytics(service *analytics.Service) {
 	s.analytics = service
 	if service != nil && s.facts == nil {

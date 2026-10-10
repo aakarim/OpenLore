@@ -40,7 +40,7 @@ func CmdPublish(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdi
 			fmt.Fprintf(w, "  /%s/\n", t.Name)
 		}
 		fmt.Fprintln(w)
-		fmt.Fprintln(w, "Example: echo '# Title' | publish /knowledge/topic.md")
+		fmt.Fprintf(w, "Example: echo '# Title' | publish /%s/topic.md\n", writable[0].Name)
 		return 0
 	}
 

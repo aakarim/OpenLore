@@ -26,11 +26,6 @@ type SkillEntry struct{ Name, Description, Content string }
 
 var Skills []SkillEntry
 
-func RegisterSkill(name, description, content string) {
-	Skills = append(Skills, SkillEntry{name, description, content})
-	Register(name, makeSkillCmd(content))
-}
-
 // sshTargetPlaceholder matches the {{ ssh_target }} skill variable, with
 // optional inner whitespace as in Knap (https://knap.md/variables).
 var sshTargetPlaceholder = regexp.MustCompile(`\{\{\s*ssh_target\s*\}\}`)
@@ -40,15 +35,38 @@ var sshTargetPlaceholder = regexp.MustCompile(`\{\{\s*ssh_target\s*\}\}`)
 // because the command registry is process-global.
 type sshTargetContext interface{ SSHTarget() string }
 
-func makeSkillCmd(content string) CmdFunc {
-	return func(ctx CmdContext, _ []string, w io.Writer, _ io.Writer, _ io.Reader) int {
-		target := "<server>"
-		if c, ok := ctx.(sshTargetContext); ok && c.SSHTarget() != "" {
-			target = c.SSHTarget()
-		}
-		fmt.Fprint(w, sshTargetPlaceholder.ReplaceAllLiteralString(content, target))
-		return 0
+// substituteSSHTarget fills the {{ ssh_target }} variable with the ssh
+// arguments that reach this server, or a visible placeholder when the host
+// does not know them.
+func substituteSSHTarget(ctx CmdContext, content string) string {
+	target := "<server>"
+	if c, ok := ctx.(sshTargetContext); ok && c.SSHTarget() != "" {
+		target = c.SSHTarget()
 	}
+	return sshTargetPlaceholder.ReplaceAllLiteralString(content, target)
+}
+
+// RegisterSkill serves a skill document with only the {{ ssh_target }}
+// variable substituted. Runtime skills loaded from --skills-dir use this so
+// the rest of their content is never interpreted.
+func RegisterSkill(name, description, content string) {
+	Skills = append(Skills, SkillEntry{name, description, content})
+	Register(name, func(ctx CmdContext, _ []string, w io.Writer, _ io.Writer, _ io.Reader) int {
+		fmt.Fprint(w, substituteSSHTarget(ctx, content))
+		return 0
+	})
+}
+
+// RegisterTemplatedSkill serves a skill document rendered against the calling
+// session, so its examples name this server's real mounts, files, and publish
+// targets as well as its ssh target. Only the embedded, session-aware
+// documents opt in.
+func RegisterTemplatedSkill(name, description, content string) {
+	Skills = append(Skills, SkillEntry{name, description, content})
+	Register(name, func(ctx CmdContext, _ []string, w io.Writer, _ io.Writer, _ io.Reader) int {
+		fmt.Fprint(w, renderSkill(ctx, substituteSSHTarget(ctx, content)))
+		return 0
+	})
 }
 
 // CmdSkills prints agent-facing usage with no arguments while management
