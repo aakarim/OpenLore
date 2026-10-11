@@ -26,9 +26,16 @@ func CmdSource(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin
 			continue
 		}
 		exitCode = ctx.ExecPipeline(line, w, errW, nil)
+		// A sourced file runs in the caller's shell, so `exit` ends the file
+		// and leaves the request set for the caller to stop too.
+		if ec, ok := ctx.(exitContext); ok && ec.ExitRequested() {
+			break
+		}
 	}
 	return exitCode
 }
+
+type exitContext interface{ ExitRequested() bool }
 
 func CmdEval(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.Reader) int {
 	if len(args) == 0 {

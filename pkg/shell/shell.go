@@ -375,7 +375,8 @@ func (s *Shell) execStmt(stmt *parser.Stmt, w io.Writer, errW io.Writer, stdin i
 
 	code := s.execCmd(stmt.Cmd, w, errW, stdin)
 
-	if stmt.Negated {
+	// `! exit N` exits with N: exit never returns for `!` to negate.
+	if stmt.Negated && !s.exitRequested {
 		if code == 0 {
 			code = 1
 		} else {
@@ -591,10 +592,6 @@ func (s *Shell) execArgs(args []string, w io.Writer, errW io.Writer, stdin io.Re
 // with status N, or with $? when N is omitted, as in POSIX sh.
 func (s *Shell) exit(name string, args []string, errW io.Writer) int {
 	s.exitRequested = true
-	if len(args) > 1 {
-		fmt.Fprintf(errW, "%s: too many arguments\n", name)
-		return 1
-	}
 	if len(args) == 0 {
 		return s.lastExit
 	}
@@ -603,8 +600,16 @@ func (s *Shell) exit(name string, args []string, errW io.Writer) int {
 		fmt.Fprintf(errW, "%s: %s: numeric argument required\n", name, args[0])
 		return 2
 	}
+	if len(args) > 1 {
+		fmt.Fprintf(errW, "%s: too many arguments\n", name)
+		return 1
+	}
 	return code & 0xff
 }
+
+// ExitRequested reports whether the last executed line ran `exit` outside a
+// subshell. `source` uses it to stop the sourced file and the caller.
+func (s *Shell) ExitRequested() bool { return s.exitRequested }
 
 func (s *Shell) execBinary(bc *parser.BinaryCmd, w io.Writer, errW io.Writer, stdin io.Reader) int {
 	switch bc.Op {
