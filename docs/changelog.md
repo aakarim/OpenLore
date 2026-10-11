@@ -1,10 +1,10 @@
 # Changelog
 
-**Current release: [v0.7.3](https://github.com/aakarim/OpenLore/releases/tag/v0.7.3).**
+**Current release: [v0.7.4](https://github.com/aakarim/OpenLore/releases/tag/v0.7.4).**
 
 ## Which version do these docs describe?
 
-The documentation on `main` tracks development, with **v0.7.3** as the current
+The documentation on `main` tracks development, with **v0.7.4** as the current
 release baseline. It can include changes not yet released; those changes belong
 under **Unreleased** below. Version-specific behavior should be labelled with the
 release that introduced it, rather than assumed to work on older installations.
@@ -15,12 +15,12 @@ Check your installed binary:
 openlore version
 ```
 
-For v0.7.3, the output is `openlore 0.7.3`. If you connect to a remote server, ask
+For v0.7.4, the output is `openlore 0.7.4`. If you connect to a remote server, ask
 its operator for the server version too: your local binary may be a different
 version.
 
 For a fixed documentation snapshot, use the
-[v0.7.3 docs](https://github.com/aakarim/OpenLore/tree/v0.7.3/docs).
+[v0.7.4 docs](https://github.com/aakarim/OpenLore/tree/v0.7.4/docs).
 For an older installation, choose its release tag in GitHub's branch/tag selector
 instead of reading `main`. Release notes below highlight changes that may explain
 differences between the docs and your installation.
@@ -30,6 +30,12 @@ limitations, and verification statements describe their respective releases, not
 necessarily the current version. Dates are the GitHub publication dates in UTC.
 
 ## Unreleased
+
+No unreleased changes yet.
+
+## v0.7.4 — 2026-10-12
+
+[Release notes and downloads](https://github.com/aakarim/OpenLore/releases/tag/v0.7.4)
 
 - Added the [Docsets](docsets.md) concept page, which explains what a docset
   is, why access is organised around docsets, and how nesting, grants, aliases
@@ -88,12 +94,54 @@ necessarily the current version. Dates are the GitHub publication dates in UTC.
   analytics are no longer discarded every time the server restarts.
 - The analytics dashboard shows knowledge and recent activity without waiting
   for all activity history. A new **Status** panel shows how far history has
-  been processed.
+  been processed, and reports "Could not refresh" with the error when a refresh
+  fails while previous results stay visible.
 - Knowledge analytics no longer reprocess the whole workspace after a restart or
-  upgrade.
+  upgrade, and scans no longer fail when a file becomes hidden by policy;
+  scans queued under an older visibility policy restart from the current roots.
 - The Homebrew cask is now `lore` (`brew install --cask aakarim/tap/lore`) to
   avoid colliding with the unrelated `openlore` formula in homebrew-core. The
   installed binary is still `openlore`.
+- `exit` inside `( … )`, `$( … )` or a pipeline now ends only that subshell
+  and sets `$?`, instead of silently ending the whole command. `exit N` now
+  returns N (previously always 0), and `exit` inside a loop, `if` or sourced
+  file stops the rest of it.
+- `$?` now expands to the last exit status instead of always 0.
+- `sed` rejects unsupported commands and `s` flags with an error instead of
+  returning the input unchanged with exit 0.
+- `ls` implements every flag `help` lists (`-R -S -t -F -1 -h -d`), supports
+  combined flags, and rejects unknown flags instead of treating them as paths.
+  `xargs -I{}` (attached form) is accepted.
+- `mkdir` and `mkdir -p` create a docset root declared in `lore.json` that is
+  missing on disk, so a new docset no longer needs its directory created by hand.
+- `mv` works for identities with `lore:config:edit`; it previously failed with
+  "operation not supported".
+- `analytics` denials name the condition that failed (missing
+  `lore:analytics:admin`, a deny rule, or a non-full token scope), and
+  `analytics --help` works without analytics authority.
+- Added `external_url`, the externally advertised HTTP origin. Published-document
+  links, passkey origins and the SSH target in generated agent instructions now
+  follow the effective configuration instead of the default ports.
+- Agent instruction commands (`agents`, `openlore-skill`, `teach` and the
+  shellm guides) render from the session's real mounts, a writable publish
+  target and the advertised SSH port, and their examples are tested.
+- The MCP server reports the build version in `serverInfo` instead of `1.0.0`.
+- Added setup guides for [Codex](codex.md), [OpenCode](opencode.md) and
+  [Cursor](cursor.md), a [Deploy to Render](render.md) guide, and a Recipes
+  section starting with the [weekly briefing](weekly-briefing.md) recipe. The
+  `history` command is now documented in the command reference.
+- The dashboard matches the openlore.sh design, adds a system-aware dark mode,
+  an outline view for Markdown documents, a file path tooltip, and mobile
+  safe-area spacing.
+
+### Compatibility
+
+An explicit `0` (or other non-positive value) for `port`, `max_jobs`,
+`analytics.pipeline.buffer` or `analytics.index.workers` in `openlore.yml`, or
+`--port 0`, now fails startup with an error naming the key. Previously it was
+silently replaced by the default. Remove the key to keep the default.
+
+**Full changelog:** https://github.com/aakarim/OpenLore/compare/v0.7.3...v0.7.4
 
 ## v0.7.3 — 2026-10-01
 
