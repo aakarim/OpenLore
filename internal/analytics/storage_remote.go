@@ -31,7 +31,11 @@ func NewRemoteSource(store RemoteEventStore, prefixes ...string) EventSource {
 func RemoteSource(store RemoteEventStore) EventSource { return NewRemoteSource(store) }
 
 func (s *remoteSource) Scan(ctx context.Context, filter EventFilter, fn func(Event) error) error {
-	keys, err := s.store.List(ctx, s.prefix)
+	prefix := s.prefix
+	if prefix != "" {
+		prefix += "/"
+	}
+	keys, err := s.store.List(ctx, prefix)
 	if err != nil {
 		return err
 	}
@@ -51,15 +55,9 @@ func (s *remoteSource) Scan(ctx context.Context, filter EventFilter, fn func(Eve
 	sort.Strings(days)
 	for _, day := range days {
 		dayKeys := byDay[day]
-		var sealed []string
-		for _, key := range dayKeys {
-			if strings.HasSuffix(key, ".jsonl.zst") {
-				sealed = append(sealed, key)
-			}
-		}
-		if len(sealed) > 0 {
-			dayKeys = sealed
-		}
+		// A sealed segment does not cover the whole day: other writers,
+		// hourly segments and late events may still exist only as raw ranges.
+		// Read both formats and deduplicate their overlapping events below.
 		seen := map[string]struct{}{}
 		for _, key := range dayKeys {
 			if err := s.scanObject(ctx, key, filter, seen, fn); err != nil {

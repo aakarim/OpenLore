@@ -444,7 +444,7 @@ func TestWriteLogPersistsInternalActorKindForReplay(t *testing.T) {
 	fs := &wlRecordingFS{}
 	commitPath := filepath.Join(t.TempDir(), "commits.jsonl")
 	l := newWriteLog(fs, nil, nil, 1)
-	l.commitPath = commitPath
+	l.SetCommitJournal(fileCommitJournal(commitPath), nil, false)
 	if _, err := l.Submit(context.Background(), Attribution{Principal: "agent_skills_remote", internal: true}, writeCS("/internal")); err != nil {
 		t.Fatal(err)
 	}

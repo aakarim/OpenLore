@@ -5,11 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math/rand/v2"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"hegel.dev/go/hegel"
 )
 
 // builtin returns the Compute of a built-in aggregation.
@@ -175,6 +176,105 @@ func TestMostUsedLinesSortsCurrentRevisionByReadCount(t *testing.T) {
 	}
 }
 
+func TestCurrentRevisionLineUsageProperties(t *testing.T) {
+	hegel.Test(t, func(t *hegel.T) {
+		ctx := context.Background()
+		lineCount := hegel.Draw(t, hegel.Integers(1, 24))
+		facts := NewContentFacts(testFS{"/docs/a.md": []byte(strings.Repeat("line\n", lineCount))})
+		current, err := facts.Stat(ctx, "/docs/a.md")
+		if err != nil {
+			t.Fatal(err)
+		}
+		start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+		// FileUsage uses recorded scalar observations for line coverage.
+		events := summarySource{{Type: "doc.scalars", Time: start, Fields: map[string]any{"path": "/docs/a.md", "content_hash": current.ContentHash, "after": map[string]any{"lines": float64(lineCount)}}}}
+		counts := make([]int, lineCount)
+		lastRead := make([]time.Time, lineCount)
+		for i := range hegel.Draw(t, hegel.Integers(0, 50)) {
+			first := hegel.Draw(t, hegel.Integers(1, lineCount+3))
+			last := hegel.Draw(t, hegel.Integers(first, lineCount+5))
+			whole := hegel.Draw(t, hegel.Integers(0, 4)) == 0
+			stale := hegel.Draw(t, hegel.Booleans())
+			otherFile := hegel.Draw(t, hegel.Integers(0, 4)) == 0
+			at := start.Add(time.Duration(hegel.Draw(t, hegel.Integers(0, 20))) * time.Minute)
+			fields := map[string]any{"path": "/docs/a.md", "content_hash": current.ContentHash}
+			if stale {
+				fields["content_hash"] = "old-revision"
+			}
+			if otherFile {
+				fields["path"] = "/docs/other.md"
+			}
+			if !whole {
+				fields["unit"] = map[string]any{"lines": map[string]any{"start": first, "end": last}}
+			}
+			eventType := hegel.Draw(t, hegel.SampledFrom([]string{"doc.read", "doc.hit"}))
+			events = append(events, Event{ID: fmt.Sprint(i), Type: eventType, Time: at, Fields: fields})
+			// A per-line oracle, independent of range coalescing and partials.
+			for line := 1; line <= lineCount; line++ {
+				if !stale && !otherFile && (whole || first <= line && line <= last) {
+					counts[line-1]++
+					if at.After(lastRead[line-1]) {
+						lastRead[line-1] = at
+					}
+				}
+			}
+		}
+		for _, name := range []string{"least-used-lines", "most-used-lines"} {
+			table, err := builtin(name)(ctx, events, facts, Params{Extra: map[string]string{"path": "/docs/a.md"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if table.Total != len(table.Rows) {
+				t.Fatalf("%s total=%d rows=%d", name, table.Total, len(table.Rows))
+			}
+			seen := make([]bool, lineCount)
+			for _, row := range table.Rows {
+				first, last := row[1].(int), row[2].(int)
+				if row[0] != "/docs/a.md" || first < 1 || last > lineCount || first > last {
+					t.Fatalf("%s invalid range: %v", name, row)
+				}
+				at := time.Time{}
+				if recorded, _ := row[3].(*time.Time); recorded != nil {
+					at = *recorded
+				}
+				for line := first; line <= last; line++ {
+					if seen[line-1] || row[4] != counts[line-1] || !at.Equal(lastRead[line-1]) {
+						t.Fatalf("%s line %d: row=%v want count=%d last=%v seen=%v events=%+v", name, line, row, counts[line-1], lastRead[line-1], seen[line-1], events)
+					}
+					seen[line-1] = true
+				}
+			}
+			if slices.Contains(seen, false) {
+				t.Fatalf("%s omitted lines: %v", name, seen)
+			}
+		}
+		usage, err := FileUsage(ctx, events, facts, "/docs", EventFilter{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(usage) != 1 || usage[0].Path != "/docs/a.md" || usage[0].ContentHash != current.ContentHash {
+			t.Fatalf("unexpected file usage: %+v", usage)
+		}
+		cold := make([]bool, lineCount)
+		for _, unit := range usage[0].ColdUnits {
+			if unit.Lines == nil || unit.Lines.Start < 1 || unit.Lines.End > lineCount || unit.Lines.Start > unit.Lines.End {
+				t.Fatalf("invalid cold unit: %+v", unit)
+			}
+			for line := unit.Lines.Start; line <= unit.Lines.End; line++ {
+				if cold[line-1] {
+					t.Fatalf("overlapping cold ranges at line %d", line)
+				}
+				cold[line-1] = true
+			}
+		}
+		for line, count := range counts {
+			if cold[line] != (count == 0) {
+				t.Fatalf("line %d: cold=%v count=%d events=%+v", line+1, cold[line], count, events)
+			}
+		}
+	}, hegel.WithTestCases(1000))
+}
+
 func TestLeastUsedLinesRejectsDirectory(t *testing.T) {
 	facts := NewContentFacts(testFS{"/docs/a.md": []byte("one\n")})
 	if _, err := builtin("least-used-lines")(context.Background(), nil, facts, Params{Extra: map[string]string{"path": "/docs"}}); err == nil {
@@ -231,95 +331,108 @@ func TestIncrementalAggregationsMergeExactly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	random := rand.New(rand.NewPCG(1, 2))
-	pick := func(values ...string) string { return values[random.IntN(len(values))] }
 	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
-	var events summarySource
-	for i := range 600 {
-		e := Event{ID: fmt.Sprint(i), Time: start.Add(time.Duration(i) * 7 * time.Minute), Principal: pick("ann", "bob", "cy"), SessionID: pick("s1", "s2", "s3", ""), Transport: pick("ssh", "mcp")}
-		switch random.IntN(7) {
-		case 0:
-			e.Type, e.Fields = "command.exec", map[string]any{"command": pick("cat", "grep", "ls"), "exit_code": float64(random.IntN(2)), "duration_ms": float64(random.IntN(5))}
-		case 1:
-			e.Type, e.Fields = pick("command.unknown", "syntax.unknown"), map[string]any{"command": pick("vim", ""), "syntax": "<<"}
-		case 2:
-			e.Type = "session.start"
-		case 3:
-			e.Type, e.Fields = "search.query", map[string]any{"pattern": pick("auth", " auth ", "billing"), "filled": random.IntN(2) == 0}
-		case 4, 5:
-			hash := pick(current.ContentHash, "old")
-			unit := map[string]any{}
-			if random.IntN(2) == 0 {
-				first := 1 + random.IntN(5)
-				unit["lines"] = map[string]any{"start": float64(first), "end": float64(first + random.IntN(3))}
-			}
-			e.Type, e.Fields = pick("doc.read", "doc.hit"), map[string]any{"path": pick("/docs/a.md", "/docs/sub/b.md", "/elsewhere.md"), "content_hash": hash, "unit": unit}
-		case 6:
-			after := map[string]any{"lines": float64(5)}
-			if random.IntN(2) == 0 {
-				after["tokens"] = float64(random.IntN(100))
-			}
-			e.Type, e.Fields = "doc.scalars", map[string]any{"commit_id": pick("c1", "c2", "c3", "c4"), "path": pick("/docs/a.md", "/docs/c.md"), "docset": "docs", "writer": pick("human", "agent", "bot"), "content_hash": pick(current.ContentHash, "old"), "delta": map[string]any{"bytes": float64(random.IntN(9)), "lines": float64(1)}, "after": after}
-		}
-		events = append(events, e)
-	}
-	// Like durable sources, honour the type filter.
-	source := sourceFunc(func(ctx context.Context, filter EventFilter, fn func(Event) error) error {
-		return events.Scan(ctx, filter, func(e Event) error {
-			if len(filter.Types) > 0 && !slices.Contains(filter.Types, e.Type) {
-				return nil
-			}
-			return fn(e)
-		})
-	})
-	end := events[len(events)-1].Time
-	boundaries := []time.Time{start, start.Add(13 * time.Hour), start.Add(24 * time.Hour), start.Add(50 * time.Hour), end.Add(time.Second)}
 	for _, aggregation := range BuiltinAggregations() {
 		inc := aggregation.Incremental
 		if inc == nil {
 			continue
 		}
 		t.Run(aggregation.Name, func(t *testing.T) {
-			p := Params{Since: start, Until: end, Extra: map[string]string{"path": "/docs"}}
-			if strings.HasSuffix(aggregation.Name, "-lines") {
-				p.Extra["path"] = "/docs/a.md"
-			}
-			want, err := aggregation.Compute(context.Background(), source, facts, p)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var merged Partial
-			for i := 0; i+1 < len(boundaries); i++ {
-				partial := inc.New(p)
-				if err := source.Scan(context.Background(), EventFilter{From: boundaries[i], To: boundaries[i+1].Add(-time.Nanosecond), Types: inc.Types}, func(e Event) error {
-					partial.Add(e)
-					return nil
-				}); err != nil {
-					t.Fatal(err)
+			hegel.Test(t, func(t *hegel.T) {
+				pick := func(values ...string) string { return hegel.Draw(t, hegel.SampledFrom(values)) }
+				first := hegel.Draw(t, hegel.Integers(0, 60))
+				last := hegel.Draw(t, hegel.Integers(3*1440-60, 3*1440))
+				p := Params{Since: start.Add(time.Duration(first) * time.Minute), Until: start.Add(time.Duration(last) * time.Minute), Limit: hegel.Draw(t, hegel.Integers(0, 4)), Extra: map[string]string{"path": pick("/", "/docs", "/docs/sub"), "transport": pick("", "ssh", "mcp"), "order": pick("asc", "desc"), "depth": pick("0", "1", "2")}}
+				if strings.HasSuffix(aggregation.Name, "-lines") {
+					p.Extra["path"] = "/docs/a.md"
 				}
-				encoded, err := json.Marshal(partial)
+				boundaries := []time.Time{p.Since, start.Add(24 * time.Hour), start.Add(48 * time.Hour), p.Until.Add(time.Nanosecond)}
+				for _, minute := range hegel.Draw(t, hegel.Lists(hegel.Integers(first, last)).MaxSize(5)) {
+					boundaries = append(boundaries, start.Add(time.Duration(minute)*time.Minute))
+				}
+				slices.SortFunc(boundaries, time.Time.Compare)
+				boundaries = slices.Compact(boundaries)
+				eventGen := hegel.Composite(func(tc hegel.TestCase) Event {
+					pick := func(values ...string) string { return hegel.Draw(tc, hegel.SampledFrom(values)) }
+					at := start.Add(time.Duration(hegel.Draw(tc, hegel.Integers(-1, 3*1440+1))) * time.Minute)
+					if hegel.Draw(tc, hegel.Booleans()) {
+						at = hegel.Draw(tc, hegel.SampledFrom(boundaries)).Add(time.Duration(hegel.Draw(tc, hegel.Integers(-1, 1))))
+					}
+					e := Event{Time: at, Principal: pick("ann", "bob", "cy"), SessionID: pick("s1", "s2", "s3", ""), Transport: pick("ssh", "mcp")}
+					switch hegel.Draw(tc, hegel.Integers(0, 6)) {
+					case 0:
+						e.Type, e.Fields = "command.exec", map[string]any{"command": pick("cat", "grep", "ls"), "exit_code": hegel.Draw(tc, hegel.Integers(0, 2)), "duration_ms": hegel.Draw(tc, hegel.Integers(0, 1000))}
+					case 1:
+						e.Type, e.Fields = pick("command.unknown", "syntax.unknown"), map[string]any{"command": pick("vim", ""), "syntax": "<<"}
+					case 2:
+						e.Type = "session.start"
+					case 3:
+						e.Type, e.Fields = "search.query", map[string]any{"pattern": pick("auth", " auth ", "billing"), "filled": hegel.Draw(tc, hegel.Booleans())}
+					case 4, 5:
+						unit := map[string]any{}
+						if hegel.Draw(tc, hegel.Booleans()) {
+							first := hegel.Draw(tc, hegel.Integers(1, 5))
+							unit["lines"] = map[string]any{"start": first, "end": hegel.Draw(tc, hegel.Integers(first, 8))}
+						}
+						e.Type, e.Fields = pick("doc.read", "doc.hit"), map[string]any{"path": pick("/docs/a.md", "/docs/sub/b.md", "/elsewhere.md"), "content_hash": pick(current.ContentHash, "old"), "unit": unit}
+					case 6:
+						after := map[string]any{"lines": float64(5)}
+						if hegel.Draw(tc, hegel.Booleans()) {
+							after["tokens"] = float64(hegel.Draw(tc, hegel.Integers(0, 100)))
+						}
+						e.Type, e.Fields = "doc.scalars", map[string]any{"commit_id": pick("c1", "c2", "c3", "c4"), "path": pick("/docs/a.md", "/docs/c.md"), "docset": "docs", "writer": pick("human", "agent", "bot"), "content_hash": pick(current.ContentHash, "old"), "delta": map[string]any{"bytes": float64(hegel.Draw(tc, hegel.Integers(-9, 9))), "lines": float64(1)}, "after": after}
+					}
+					return e
+				})
+				events := hegel.Draw(t, hegel.Lists(eventGen).MaxSize(80))
+				slices.SortStableFunc(events, func(a, b Event) int { return a.Time.Compare(b.Time) })
+				for i := range events {
+					events[i].ID = fmt.Sprint(i)
+				}
+				source := summarySource(events)
+				want, err := aggregation.Compute(context.Background(), source, facts, p)
 				if err != nil {
 					t.Fatal(err)
 				}
-				decoded := inc.New(p)
-				if err := json.Unmarshal(encoded, decoded); err != nil {
+				var merged Partial
+				for i := 0; i+1 < len(boundaries); i++ {
+					partial := inc.New(p)
+					if err := source.Scan(context.Background(), EventFilter{From: boundaries[i], To: boundaries[i+1].Add(-time.Nanosecond), Types: inc.Types}, func(e Event) error {
+						partial.Add(e)
+						return nil
+					}); err != nil {
+						t.Fatal(err)
+					}
+					encoded, err := json.Marshal(partial)
+					if err != nil {
+						t.Fatal(err)
+					}
+					decoded := inc.New(p)
+					if err := json.Unmarshal(encoded, decoded); err != nil {
+						t.Fatal(err)
+					}
+					if merged == nil {
+						merged = decoded
+					} else {
+						merged.Merge(decoded)
+					}
+				}
+				got, err := inc.Table(context.Background(), merged, facts, p)
+				if err != nil {
 					t.Fatal(err)
 				}
-				if merged == nil {
-					merged = decoded
-				} else {
-					merged.Merge(decoded)
+				wantJSON, err := json.Marshal(want)
+				if err != nil {
+					t.Fatal(err)
 				}
-			}
-			got, err := inc.Table(context.Background(), merged, facts, p)
-			if err != nil {
-				t.Fatal(err)
-			}
-			wantJSON, _ := json.Marshal(want)
-			gotJSON, _ := json.Marshal(got)
-			if string(wantJSON) != string(gotJSON) || len(want.Rows) == 0 {
-				t.Fatalf("merged table differs or is empty:\n got %s\nwant %s", gotJSON, wantJSON)
-			}
+				gotJSON, err := json.Marshal(got)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !bytes.Equal(wantJSON, gotJSON) {
+					t.Fatalf("merged table differs:\n got %s\nwant %s\nparams=%+v boundaries=%v events=%+v", gotJSON, wantJSON, p, boundaries, events)
+				}
+			}, hegel.WithTestCases(1000))
 		})
 	}
 }

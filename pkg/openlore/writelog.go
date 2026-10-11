@@ -58,7 +58,7 @@ type writeLog struct {
 	commitState  func(context.Context, CommitInfo) error
 	preApply     func(*Identity, Attribution, vfs.ChangeSet) error
 	history      HistoryRecorder
-	commitPath   string
+	journal      CommitJournal
 	blobs        BlobStore
 	blobsEnabled bool
 	closed       bool
@@ -118,13 +118,14 @@ func (l *writeLog) run() {
 		}
 		l.mu.RLock()
 		pre := l.preApply
+		journal, blobs, blobsEnabled := l.journal, l.blobs, l.blobsEnabled
 		l.mu.RUnlock()
 		if err == nil && pre != nil {
 			err = pre(e.identity, e.attribution, e.cs)
 		}
 		if err == nil {
 			var captureErr error
-			leaves, captureErr = capturePreImages(context.Background(), l.substrate, l.blobs, e.cs, l.blobsEnabled)
+			leaves, captureErr = capturePreImages(context.Background(), l.substrate, blobs, e.cs, blobsEnabled)
 			if captureErr != nil {
 				l.logger.Warn("history pre-image capture incomplete", "err", captureErr)
 			}
@@ -143,9 +144,9 @@ func (l *writeLog) run() {
 			}
 		}
 		if committed.HasCommitted() {
-			if l.commitPath != "" {
+			if journal != nil {
 				recordedAt := time.Now().UTC()
-				if recordErr := appendCommitRecord(l.commitPath, CommitRecord{ID: commitID, Time: recordedAt, Attribution: attribution, ChangeSet: committed.Committed, Hash: committed.Hash, Leaves: leaves}); recordErr != nil {
+				if recordErr := journal.Append(context.Background(), CommitRecord{ID: commitID, Time: recordedAt, Attribution: attribution, ChangeSet: committed.Committed, Hash: committed.Hash, Leaves: leaves}); recordErr != nil {
 					l.logger.Error("commit journal recording failed after durable write", "err", recordErr)
 				}
 			}
@@ -194,9 +195,9 @@ func (l *writeLog) SetHistoryRecorder(history HistoryRecorder) {
 	l.mu.Unlock()
 }
 
-func (l *writeLog) SetCommitJournal(path string, blobs BlobStore, enabled bool) {
+func (l *writeLog) SetCommitJournal(journal CommitJournal, blobs BlobStore, enabled bool) {
 	l.mu.Lock()
-	l.commitPath, l.blobs, l.blobsEnabled = path, blobs, enabled
+	l.journal, l.blobs, l.blobsEnabled = journal, blobs, enabled
 	l.mu.Unlock()
 }
 

@@ -28,6 +28,15 @@ jobs:
       - name: Test
         run: nix develop --command go test -race ./...
 
+      - name: Test analytics S3 shipping and recovery
+        run: nix develop --command make test-analytics-s3
+
+      - name: Test S3 filesystem and commit journal consistency
+        run: nix develop --command make test-filesystem-s3
+
+      - name: Test separate SQLite databases with Litestream and S3
+        run: nix develop --command make test-litestream
+
   libghostty:
     runs-on: ubuntu-latest
     steps:
