@@ -183,6 +183,31 @@ func TestSubshell(t *testing.T) {
 	}
 }
 
+// `exit` ends only the innermost subshell — `( … )`, `$( … )` or a pipeline
+// operand — and that subshell's status becomes $?. At the top level it ends
+// the invocation with status N, or $? when N is omitted.
+func TestExitScope(t *testing.T) {
+	cases := []struct {
+		cmd, want string
+		code      int
+	}{
+		{`echo before; (exit 3); echo "after $?"`, "before\nafter 3", 0},
+		{"echo before; (exit 3)\necho \"nextline=$?\"", "before\nnextline=3", 0},
+		{`(echo in; exit 3; echo no); echo $?`, "in\n3", 0},
+		{`echo "$(echo a; exit 4; echo b) after"`, "a after", 0},
+		{`echo hi | exit 3; echo "after $?"`, "after 3", 0},
+		{`for i in 1 2; do echo $i; exit 7; done; echo no`, "1", 7},
+		{`true && exit 2 || echo no; echo no`, "", 2},
+		{`false; exit`, "", 1},
+	}
+	for _, tc := range cases {
+		out, _, code := execCmd(t, testFS(), tc.cmd)
+		if got := strings.TrimRight(out, "\n"); got != tc.want || code != tc.code {
+			t.Errorf("%s: got %q exit %d, want %q exit %d", tc.cmd, got, code, tc.want, tc.code)
+		}
+	}
+}
+
 func TestExitStatusParam(t *testing.T) {
 	cases := []struct{ cmd, want string }{
 		{"false; echo u=$?", "u=1"},
