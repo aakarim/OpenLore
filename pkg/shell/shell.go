@@ -8,6 +8,7 @@ import (
 	"io"
 	"path"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -343,14 +344,28 @@ func (s *Shell) execLine(line string, w io.Writer, errW io.Writer, stdin io.Read
 		return 2
 	}
 
-	var exitCode int
-	for _, stmt := range f.Stmts {
-		exitCode = s.execStmt(stmt, w, errW, stdin)
+	return s.execStmts(f.Stmts, w, errW, stdin)
+}
+
+// execStmts runs a statement list and stops after a statement that ran
+// `exit`, returning that statement's status.
+func (s *Shell) execStmts(stmts []*parser.Stmt, w io.Writer, errW io.Writer, stdin io.Reader) int {
+	var code int
+	for _, st := range stmts {
+		code = s.execStmt(st, w, errW, stdin)
 		if s.exitRequested {
 			break
 		}
 	}
-	return exitCode
+	return code
+}
+
+// execIsolated runs a subshell body. `exit` inside it ends only the body; its
+// status becomes the subshell's status.
+func (s *Shell) execIsolated(stmts []*parser.Stmt, w io.Writer, errW io.Writer, stdin io.Reader) int {
+	code := s.execStmts(stmts, w, errW, stdin)
+	s.exitRequested = false
+	return code
 }
 
 func (s *Shell) execStmt(stmt *parser.Stmt, w io.Writer, errW io.Writer, stdin io.Reader) int {
@@ -360,7 +375,8 @@ func (s *Shell) execStmt(stmt *parser.Stmt, w io.Writer, errW io.Writer, stdin i
 
 	code := s.execCmd(stmt.Cmd, w, errW, stdin)
 
-	if stmt.Negated {
+	// `! exit N` exits with N: exit never returns for `!` to negate.
+	if stmt.Negated && !s.exitRequested {
 		if code == 0 {
 			code = 1
 		} else {
@@ -381,18 +397,10 @@ func (s *Shell) execCmd(cmd parser.Command, w io.Writer, errW io.Writer, stdin i
 		return s.execBinary(c, w, errW, stdin)
 
 	case *parser.Subshell:
-		var code int
-		for _, st := range c.Stmts {
-			code = s.execStmt(st, w, errW, stdin)
-		}
-		return code
+		return s.execIsolated(c.Stmts, w, errW, stdin)
 
 	case *parser.Block:
-		var code int
-		for _, st := range c.Stmts {
-			code = s.execStmt(st, w, errW, stdin)
-		}
-		return code
+		return s.execStmts(c.Stmts, w, errW, stdin)
 
 	case *parser.IfClause:
 		return s.execIf(c, w, errW, stdin)
@@ -553,8 +561,7 @@ func (s *Shell) execArgs(args []string, w io.Writer, errW io.Writer, stdin io.Re
 		return 0
 	}
 	if cmdName == "exit" || cmdName == "quit" {
-		s.exitRequested = true
-		return 0
+		return s.exit(cmdName, cmdArgs, errW)
 	}
 
 	if fn, ok := cmds.Registry[cmdName]; ok {
@@ -581,35 +588,60 @@ func (s *Shell) execArgs(args []string, w io.Writer, errW io.Writer, stdin io.Re
 	return 127
 }
 
+// exit ends the current shell (the invocation, or the enclosing subshell)
+// with status N, or with $? when N is omitted, as in POSIX sh.
+func (s *Shell) exit(name string, args []string, errW io.Writer) int {
+	s.exitRequested = true
+	if len(args) == 0 {
+		return s.lastExit
+	}
+	code, err := strconv.Atoi(args[0])
+	if err != nil {
+		fmt.Fprintf(errW, "%s: %s: numeric argument required\n", name, args[0])
+		return 2
+	}
+	if len(args) > 1 {
+		fmt.Fprintf(errW, "%s: too many arguments\n", name)
+		return 1
+	}
+	return code & 0xff
+}
+
+// ExitRequested reports whether the last executed line ran `exit` outside a
+// subshell. `source` uses it to stop the sourced file and the caller.
+func (s *Shell) ExitRequested() bool { return s.exitRequested }
+
 func (s *Shell) execBinary(bc *parser.BinaryCmd, w io.Writer, errW io.Writer, stdin io.Reader) int {
 	switch bc.Op {
 	case parser.Pipe:
 		// Pipeline operands run concurrently in bash, so each one sees the
 		// $? from before the pipeline, not the status of its left neighbour.
+		// Each operand is also its own subshell, so `exit` in one ends only
+		// that operand.
 		prev := s.lastExit
 		var buf bytes.Buffer
-		s.execStmt(bc.X, &buf, errW, stdin)
+		s.execIsolated([]*parser.Stmt{bc.X}, &buf, errW, stdin)
 		s.lastExit = prev
-		return s.execStmt(bc.Y, w, errW, &buf)
+		return s.execIsolated([]*parser.Stmt{bc.Y}, w, errW, &buf)
 
 	case parser.PipeAll:
 		prev := s.lastExit
 		var buf bytes.Buffer
-		s.execStmt(bc.X, &buf, &buf, stdin)
+		s.execIsolated([]*parser.Stmt{bc.X}, &buf, &buf, stdin)
 		s.lastExit = prev
-		return s.execStmt(bc.Y, w, errW, &buf)
+		return s.execIsolated([]*parser.Stmt{bc.Y}, w, errW, &buf)
 
 	case parser.AndStmt:
 		code := s.execStmt(bc.X, w, errW, stdin)
-		if code != 0 {
+		if code != 0 || s.exitRequested {
 			return code
 		}
 		return s.execStmt(bc.Y, w, errW, stdin)
 
 	case parser.OrStmt:
 		code := s.execStmt(bc.X, w, errW, stdin)
-		if code == 0 {
-			return 0
+		if code == 0 || s.exitRequested {
+			return code
 		}
 		return s.execStmt(bc.Y, w, errW, stdin)
 
@@ -622,24 +654,16 @@ func (s *Shell) execBinary(bc *parser.BinaryCmd, w io.Writer, errW io.Writer, st
 func (s *Shell) execIf(ic *parser.IfClause, w io.Writer, errW io.Writer, stdin io.Reader) int {
 	// Plain else: Cond is nil
 	if ic.Cond == nil {
-		var code int
-		for _, st := range ic.Then {
-			code = s.execStmt(st, w, errW, stdin)
-		}
-		return code
+		return s.execStmts(ic.Then, w, errW, stdin)
 	}
 
-	var condCode int
-	for _, st := range ic.Cond {
-		condCode = s.execStmt(st, io.Discard, errW, stdin)
+	condCode := s.execStmts(ic.Cond, io.Discard, errW, stdin)
+	if s.exitRequested {
+		return condCode
 	}
 
 	if condCode == 0 {
-		var code int
-		for _, st := range ic.Then {
-			code = s.execStmt(st, w, errW, stdin)
-		}
-		return code
+		return s.execStmts(ic.Then, w, errW, stdin)
 	}
 
 	if ic.Else != nil {
@@ -652,9 +676,9 @@ func (s *Shell) execIf(ic *parser.IfClause, w io.Writer, errW io.Writer, stdin i
 func (s *Shell) execWhile(wc *parser.WhileClause, w io.Writer, errW io.Writer, stdin io.Reader) int {
 	var code int
 	for i := 0; i < 10000; i++ {
-		var condCode int
-		for _, st := range wc.Cond {
-			condCode = s.execStmt(st, io.Discard, errW, stdin)
+		condCode := s.execStmts(wc.Cond, io.Discard, errW, stdin)
+		if s.exitRequested {
+			return condCode
 		}
 		shouldRun := condCode == 0
 		if wc.Until {
@@ -663,8 +687,9 @@ func (s *Shell) execWhile(wc *parser.WhileClause, w io.Writer, errW io.Writer, s
 		if !shouldRun {
 			break
 		}
-		for _, st := range wc.Do {
-			code = s.execStmt(st, w, errW, stdin)
+		code = s.execStmts(wc.Do, w, errW, stdin)
+		if s.exitRequested {
+			break
 		}
 	}
 	return code
@@ -685,8 +710,9 @@ func (s *Shell) execFor(fc *parser.ForClause, w io.Writer, errW io.Writer, stdin
 	var code int
 	for _, item := range items {
 		s.SetEnv(varName, item)
-		for _, st := range fc.Do {
-			code = s.execStmt(st, w, errW, stdin)
+		code = s.execStmts(fc.Do, w, errW, stdin)
+		if s.exitRequested {
+			break
 		}
 	}
 	return code
@@ -826,9 +852,7 @@ func (s *Shell) expandPart(part parser.WordPart) string {
 
 	case *parser.CmdSubst:
 		var buf bytes.Buffer
-		for _, st := range p.Stmts {
-			s.execStmt(st, &buf, io.Discard, nil)
-		}
+		s.execIsolated(p.Stmts, &buf, io.Discard, nil)
 		return strings.TrimRight(buf.String(), "\n")
 
 	default:
