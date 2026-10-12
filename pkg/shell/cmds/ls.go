@@ -201,7 +201,7 @@ func (l *lsRun) printEntry(f *vfs.FileInfo, full, name string) {
 	case l.o.json && facts != nil:
 		_ = json.NewEncoder(l.w).Encode(*facts)
 	case l.o.long && facts != nil:
-		fmt.Fprintf(l.w, "%s %s %8.0f %8.0f %s\n", f.Mode(), size, facts.Scalars["lines"], facts.Scalars["tokens"], name)
+		fmt.Fprintf(l.w, "%s %s %8.0f %8.0f %s\n", longMode(f), size, facts.Scalars["lines"], facts.Scalars["tokens"], name)
 	case l.o.long:
 		printLongSized(l.w, f, size, name)
 	default:

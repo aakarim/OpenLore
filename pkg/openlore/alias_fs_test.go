@@ -10,6 +10,7 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"github.com/aakarim/go-openlore/internal/analytics"
 	"github.com/aakarim/go-openlore/internal/config"
 	"github.com/aakarim/go-openlore/pkg/shell"
 	"github.com/aakarim/go-openlore/pkg/vfs"
@@ -336,5 +337,30 @@ func TestAliasFS_ShellCountsAliasedFilesOnceAndShowsAliasRootsAsLinks(t *testing
 	}
 	if got := run("ls /cor"); got != "docs/\n" {
 		t.Fatalf("ls /cor = %q, want the target's contents", got)
+	}
+	sh.SetFacts(analytics.NewContentFacts(sh.FS()))
+	if got := run("ls -l --stats /"); !strings.Contains(got, "lrwxrwxrwx") || !strings.Contains(got, "cor -> /agent/cor\n") {
+		t.Fatalf("ls -l --stats / should show the alias as a link:\n%s", got)
+	}
+}
+
+func TestAliasFS_ListsAliasThatShadowsCanonicalEntryAsLink(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{"docs/legacy/old", "channel/general"} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "channel", "general", "note.md"), []byte("note"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fsys := newAliasFS(NewDirFS(root, config.FilesConfig{}), []pathAlias{{Alias: "/docs/legacy", Target: "/channel/general"}})
+
+	entries, err := fsys.ReadDir("/docs")
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("ReadDir(/docs) = %+v, %v", entries, err)
+	}
+	if got := entries[0]; got.FilePath != "/docs/legacy" || got.LinkTarget != "/channel/general" {
+		t.Fatalf("shadowed alias entry = %+v, want link to /channel/general", got)
 	}
 }
