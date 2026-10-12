@@ -49,7 +49,10 @@ func PrintLong(w io.Writer, f *vfs.FileInfo) {
 
 func printLongSized(w io.Writer, f *vfs.FileInfo, size, name string) {
 	mode := "-r--r--r--"
-	if f.Dir {
+	switch {
+	case f.LinkTarget != "":
+		mode = "lrwxrwxrwx"
+	case f.Dir:
 		mode = "dr-xr-xr-x"
 	}
 	t := f.FileModTime.Format("Jan  2 15:04")

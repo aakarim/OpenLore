@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"testing/fstest"
 
@@ -289,5 +290,51 @@ func TestServerCanonicalChangeSetCopiesRemoveSnapshot(t *testing.T) {
 	}})
 	if batch.Changes[0].Target != "/user/alfie/new.md" || batch.Changes[1].Target != "/user/alfie/batch" || batch.Changes[1].RemoveAll.Opts.Expected.Root != "/user/alfie/batch" {
 		t.Fatalf("canonical batch = %+v", batch)
+	}
+}
+
+func TestAliasFS_ShellCountsAliasedFilesOnceAndShowsAliasRootsAsLinks(t *testing.T) {
+	root := t.TempDir()
+	canonicalDir := filepath.Join(root, "agent", "cor")
+	if err := os.MkdirAll(filepath.Join(canonicalDir, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(canonicalDir, "docs", "plan.md"), []byte("plan"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sh := shell.NewShell(newAliasFS(NewDirFS(root, config.FilesConfig{}), []pathAlias{{Alias: "/cor", Target: "/agent/cor"}}))
+	run := func(cmd string) string {
+		t.Helper()
+		var out, errOut bytes.Buffer
+		if code := sh.ExecPipeline(cmd, &out, &errOut, nil); code != 0 {
+			t.Fatalf("%s: exit = %d, stderr = %q", cmd, code, errOut.String())
+		}
+		return out.String()
+	}
+
+	if got, want := run("find / -type f"), "/agent/cor/docs/plan.md\n"; got != want {
+		t.Fatalf("find / -type f = %q, want %q", got, want)
+	}
+	if got, want := run("find / -type l"), "/cor\n"; got != want {
+		t.Fatalf("find / -type l = %q, want %q", got, want)
+	}
+	if got, want := run("find / -L -type f"), "/agent/cor/docs/plan.md\n/cor/docs/plan.md\n"; got != want {
+		t.Fatalf("find -L / -type f = %q, want %q", got, want)
+	}
+	// A starting point that is itself an alias is followed, like find -H.
+	if got, want := run("find /cor -type f"), "/cor/docs/plan.md\n"; got != want {
+		t.Fatalf("find /cor -type f = %q, want %q", got, want)
+	}
+	if got := run("ls -l /"); !strings.Contains(got, "lrwxrwxrwx") || !strings.Contains(got, "cor -> /agent/cor\n") {
+		t.Fatalf("ls -l / should show the alias as a link:\n%s", got)
+	}
+	if got := run("ls -R /"); strings.Contains(got, "\n/cor:") {
+		t.Fatalf("ls -R / should not descend into the alias:\n%s", got)
+	}
+	if got := run("stat /cor"); !strings.Contains(got, "File: /cor -> /agent/cor") || !strings.Contains(got, "Type: symbolic link") {
+		t.Fatalf("stat /cor should show the alias as a link:\n%s", got)
+	}
+	if got := run("ls /cor"); got != "docs/\n" {
+		t.Fatalf("ls /cor = %q, want the target's contents", got)
 	}
 }

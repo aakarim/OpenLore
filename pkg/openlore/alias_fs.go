@@ -84,6 +84,9 @@ func (a *aliasFS) Stat(p string) (*vfs.FileInfo, error) {
 		copy := *info
 		copy.FileName = path.Base(requested)
 		copy.FilePath = requested
+		if requested == alias.Alias {
+			copy.LinkTarget = alias.Target
+		}
 		return &copy, nil
 	}
 
@@ -144,6 +147,7 @@ func (a *aliasFS) ReadDir(p string) ([]vfs.FileInfo, error) {
 			entry = *info
 			entry.FileName = child
 			entry.FilePath = childPath
+			entry.LinkTarget = target
 		}
 		entries = append(entries, entry)
 	}

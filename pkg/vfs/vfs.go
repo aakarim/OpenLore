@@ -20,6 +20,10 @@ type FileInfo struct {
 	Dir         bool
 	FileModTime time.Time
 	FileSize    int64
+	// LinkTarget is set when this path is an alias root for another path. The
+	// entry still reports its target's type and size; shell commands show it
+	// as a symbolic link and tree walks such as find do not descend into it.
+	LinkTarget string
 }
 
 func (fi *FileInfo) Name() string       { return fi.FileName }

@@ -29,7 +29,7 @@ Directories retain a trailing `/`, hidden entries appear only after an explicit
 | Command | Description |
 |---|---|
 | `grep` | Search patterns (`-E`, `-F`, `-i`, `-n`, `-r`, `-R`, `-o`, `-h`, `-c`, `-v`, `-l`); use `-E 'a|b'` for multiple patterns |
-| `find` | Find files (`-name`, `-type f\|d`) |
+| `find` | Find files (`-name`, `-type f\|d\|l`). Alias docsets are links: `find` lists each file once under its canonical path; add `-L` to also walk aliases |
 
 ## Text processing
 
@@ -229,7 +229,9 @@ home      rw          alias        /backend         /home/backend
 
 `GRANTS` contains `ro`, `publish`, `rw`, or plugin-defined grants.
 `ATTRIBUTES` may include `home`, `inbox`, and `alias`; aliases point to their
-canonical path in `TARGET`.
+canonical path in `TARGET`. `ls -l` and `stat` show an alias as a link
+(`backend -> /home/backend`), and `find` does not descend into it unless you
+pass `-L`.
 
 ## Shell syntax
 
