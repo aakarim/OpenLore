@@ -1,10 +1,10 @@
 # Changelog
 
-**Current release: [v0.7.3](https://github.com/aakarim/OpenLore/releases/tag/v0.7.3).**
+**Current release: [v0.7.4](https://github.com/aakarim/OpenLore/releases/tag/v0.7.4).**
 
 ## Which version do these docs describe?
 
-The documentation on `main` tracks development, with **v0.7.3** as the current
+The documentation on `main` tracks development, with **v0.7.4** as the current
 release baseline. It can include changes not yet released; those changes belong
 under **Unreleased** below. Version-specific behavior should be labelled with the
 release that introduced it, rather than assumed to work on older installations.
@@ -15,12 +15,12 @@ Check your installed binary:
 openlore version
 ```
 
-For v0.7.3, the output is `openlore 0.7.3`. If you connect to a remote server, ask
+For v0.7.4, the output is `openlore 0.7.4`. If you connect to a remote server, ask
 its operator for the server version too: your local binary may be a different
 version.
 
 For a fixed documentation snapshot, use the
-[v0.7.3 docs](https://github.com/aakarim/OpenLore/tree/v0.7.3/docs).
+[v0.7.4 docs](https://github.com/aakarim/OpenLore/tree/v0.7.4/docs).
 For an older installation, choose its release tag in GitHub's branch/tag selector
 instead of reading `main`. Release notes below highlight changes that may explain
 differences between the docs and your installation.
@@ -30,6 +30,12 @@ limitations, and verification statements describe their respective releases, not
 necessarily the current version. Dates are the GitHub publication dates in UTC.
 
 ## Unreleased
+
+No unreleased changes yet.
+
+## v0.7.4 — 2026-10-12
+
+[Release notes and downloads](https://github.com/aakarim/OpenLore/releases/tag/v0.7.4)
 
 - Added the [Docsets](docsets.md) concept page, which explains what a docset
   is, why access is organised around docsets, and how nesting, grants, aliases
@@ -52,9 +58,7 @@ necessarily the current version. Dates are the GitHub publication dates in UTC.
   longer links to a login page on servers with passkeys turned off.
 - Added this changelog and guidance for matching documentation to an installed
   version.
-- Fixed `printf` looping forever and exhausting memory when the format contains
-  no conversions but arguments are given (for example `printf -- 'a\n'`).
-  `printf --` now ends option parsing as in POSIX shells.
+- Fixed `printf` looping forever when the format has no conversions but arguments are given ([#167](https://github.com/aakarim/OpenLore/pull/167)).
 - Documented that a successful write is saved but not fully validated: file
   checks run on write, while link resolution, OKF bundle structure and alias
   checks run only under `lore validate`. The [writing guide](writing.md#saved-is-not-validated)
@@ -67,33 +71,48 @@ necessarily the current version. Dates are the GitHub publication dates in UTC.
   Reference. Split the old configuration and identity page: server setup is
   now the [Configure the server](configure-the-server.md) how-to, and
   posture, roles, docsets, identities and inbox credentials live in Auth.
-- `awk` now supports `next`, which skips the remaining statements and rules for
-  the current record, so `awk 'NR==2{print "new"; next} {print}'` replaces one
-  line. Previously it exited 2 as unsupported.
-- Fixed `awk` regex patterns matching every line, variables staying at 0, and
-  string comparisons on `$0` never matching. Unsupported `awk` constructs now
-  exit 2 with an error instead of producing wrong output.
-- Fixed the shell removing a backslash inside double quotes before ordinary
-  characters. As in POSIX shells, the backslash is now removed only before `$`,
-  `` ` ``, `"`, `\` or a newline, so `grep "a\|b"` and `grep "foo\.bar"` match
-  the same lines as their single-quoted forms.
-- Activity and command analytics work for time ranges with more than 50,000
-  events, and failed analytics no longer reload every second.
-- Analytics no longer show "Preparing analytics" indefinitely on busy servers.
-  Published results stay visible while they refresh in the background, activity
-  totals refresh incrementally from cached daily results, and new views are no
-  longer starved by repeated refreshes.
+- `awk` supports `next` instead of exiting 2 as unsupported ([#175](https://github.com/aakarim/OpenLore/pull/175)).
+- Fixed `awk` regex patterns, variables and `$0` comparisons giving wrong results ([#144](https://github.com/aakarim/OpenLore/pull/144)).
+- Fixed the shell dropping a backslash before ordinary characters inside double quotes, which broke `grep "a\|b"` ([#161](https://github.com/aakarim/OpenLore/pull/161)).
+- Fixed activity and command analytics failing for time ranges with more than 50,000 events ([#152](https://github.com/aakarim/OpenLore/pull/152)).
+- Fixed analytics showing "Preparing analytics" indefinitely and refreshing endlessly on busy servers ([#156](https://github.com/aakarim/OpenLore/pull/156)).
 - Activity tables (commands, searches, file and line usage) refresh
   incrementally from cached daily results, like activity totals, and cached
   analytics are no longer discarded every time the server restarts.
 - The analytics dashboard shows knowledge and recent activity without waiting
   for all activity history. A new **Status** panel shows how far history has
   been processed.
-- Knowledge analytics no longer reprocess the whole workspace after a restart or
-  upgrade.
-- The Homebrew cask is now `lore` (`brew install --cask aakarim/tap/lore`) to
-  avoid colliding with the unrelated `openlore` formula in homebrew-core. The
-  installed binary is still `openlore`.
+- Fixed Status reporting analytics as up to date while a refresh was failing ([#163](https://github.com/aakarim/OpenLore/pull/163)).
+- Fixed knowledge analytics reprocessing the whole workspace after a restart ([#145](https://github.com/aakarim/OpenLore/pull/145)) and scans failing when policy hides a file ([#142](https://github.com/aakarim/OpenLore/pull/142)).
+- The Homebrew cask is now `lore` (`brew install --cask aakarim/tap/lore`), avoiding the unrelated `openlore` formula in homebrew-core ([#149](https://github.com/aakarim/OpenLore/pull/149)).
+- Fixed `exit` in a subshell, `$( … )` or pipeline silently ending the whole command, and `exit N` always returning 0 ([#183](https://github.com/aakarim/OpenLore/pull/183)).
+- Fixed `$?` always expanding to 0 ([#158](https://github.com/aakarim/OpenLore/pull/158)).
+- Fixed `sed` silently returning its input unchanged for unsupported commands and `s` flags; it now errors ([#173](https://github.com/aakarim/OpenLore/pull/173)).
+- Fixed `ls` treating the flags `help` lists as paths; unknown flags now error ([#176](https://github.com/aakarim/OpenLore/pull/176)).
+- Fixed `mkdir` refusing to create a docset root that is declared in `lore.json` but missing on disk ([#178](https://github.com/aakarim/OpenLore/pull/178)).
+- Fixed `mv` failing with "operation not supported" for identities with `lore:config:edit` ([#151](https://github.com/aakarim/OpenLore/pull/151)).
+- Fixed `analytics` denials not naming the failed condition, and `analytics --help` requiring analytics authority ([#179](https://github.com/aakarim/OpenLore/pull/179)).
+- Added `external_url`, the externally advertised HTTP origin. Published-document
+  links, passkey origins and the SSH target in generated agent instructions now
+  follow the effective configuration instead of the default ports.
+- Fixed agent instruction commands hard-coding `/docs`, port 2222 and an invalid `publish` form, and `xargs -I{}` being rejected ([#174](https://github.com/aakarim/OpenLore/pull/174)).
+- Fixed the MCP server reporting version `1.0.0` in `serverInfo` instead of the build version ([#168](https://github.com/aakarim/OpenLore/pull/168)).
+- Added setup guides for [Codex](codex.md), [OpenCode](opencode.md) and
+  [Cursor](cursor.md), a [Deploy to Render](render.md) guide, and a Recipes
+  section starting with the [weekly briefing](weekly-briefing.md) recipe. The
+  `history` command is now documented in the command reference.
+- The dashboard matches the openlore.sh design, adds a system-aware dark mode,
+  an outline view for Markdown documents, a file path tooltip, and mobile
+  safe-area spacing.
+
+### Compatibility
+
+An explicit `0` (or other non-positive value) for `port`, `max_jobs`,
+`analytics.pipeline.buffer` or `analytics.index.workers` in `openlore.yml`, or
+`--port 0`, now fails startup with an error naming the key. Previously it was
+silently replaced by the default. Remove the key to keep the default.
+
+**Full changelog:** https://github.com/aakarim/OpenLore/compare/v0.7.3...v0.7.4
 
 ## v0.7.3 — 2026-10-01
 
