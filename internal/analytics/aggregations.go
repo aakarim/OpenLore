@@ -348,11 +348,28 @@ func treeSize(ctx context.Context, _ EventSource, facts ContentFacts, p Params) 
 	}
 	depth, _ := strconv.Atoi(p.Extra["depth"])
 	var rows [][]any
-	err := facts.Walk(ctx, root, WalkOptions{Depth: depth}, func(d DocScalars) error {
+	// One unreadable file must not hide the rest of the corpus, so skip it
+	// and say how much of the answer is missing. The note names the path,
+	// not the error, which can carry host filesystem paths.
+	skipped, first := 0, ""
+	err := facts.Walk(ctx, root, WalkOptions{Depth: depth, Skip: func(p string) {
+		if skipped == 0 {
+			first = p
+		}
+		skipped++
+	}}, func(d DocScalars) error {
 		rows = append(rows, []any{d.Path, 1, d.Scalars["bytes"], d.Scalars["lines"], d.Scalars["tokens"], d.Tokenizer})
 		return nil
 	})
-	return Table{Columns: []string{"path", "files", "bytes", "lines", "tokens", "tokenizer"}, Rows: limitRows(rows, p), Total: len(rows)}, err
+	t := Table{Columns: []string{"path", "files", "bytes", "lines", "tokens", "tokenizer"}, Rows: limitRows(rows, p), Total: len(rows)}
+	switch skipped {
+	case 0:
+	case 1:
+		t.Note = "Skipped 1 unreadable path: " + first
+	default:
+		t.Note = fmt.Sprintf("Skipped %d unreadable paths, first: %s", skipped, first)
+	}
+	return t, err
 }
 func largestDocs(ctx context.Context, src EventSource, facts ContentFacts, p Params) (Table, error) {
 	all := p

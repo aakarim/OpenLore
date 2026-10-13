@@ -113,6 +113,9 @@ func builtinScalarProvider(provider ContentScalarProvider, scalar string) bool {
 type WalkOptions struct {
 	Depth    int
 	StatOnly bool
+	// Skip, when set, receives entries below the walk root that cannot be
+	// stat'd, listed, or read; the walk omits them instead of failing.
+	Skip func(path string)
 }
 type ContentFacts interface {
 	Stat(context.Context, string) (DocScalars, error)
@@ -196,9 +199,16 @@ func (f *contentFacts) Walk(ctx context.Context, prefix string, opts WalkOptions
 		if f.exclude != nil && f.exclude(p) {
 			return nil
 		}
+		fail := func(err error) error {
+			if opts.Skip == nil || p == prefix {
+				return err
+			}
+			opts.Skip(p)
+			return nil
+		}
 		info, err := f.fs.Stat(p)
 		if err != nil {
-			return err
+			return fail(err)
 		}
 		if !info.Dir {
 			var d DocScalars
@@ -208,7 +218,7 @@ func (f *contentFacts) Walk(ctx context.Context, prefix string, opts WalkOptions
 				var e error
 				d, e = f.file(ctx, p, info)
 				if e != nil {
-					return e
+					return fail(e)
 				}
 			}
 			return fn(d)
@@ -218,7 +228,7 @@ func (f *contentFacts) Walk(ctx context.Context, prefix string, opts WalkOptions
 		}
 		entries, err := f.fs.ReadDir(p)
 		if err != nil {
-			return err
+			return fail(err)
 		}
 		for _, e := range entries {
 			if err := walk(path.Join(p, e.FileName), depth+1); err != nil {

@@ -156,6 +156,8 @@ type Table struct {
 	Columns []string `json:"columns"`
 	Rows    [][]any  `json:"rows"`
 	Total   int      `json:"total,omitempty"`
+	// Note explains a partial result; Run reports it as Materialized.Note.
+	Note string `json:"-"`
 }
 type Materialized struct {
 	Status     Status          `json:"status"`
@@ -367,7 +369,7 @@ func (r *Registry) runWith(ctx context.Context, name string, p Params, opts RunO
 	if err != nil {
 		return Materialized{}, err
 	}
-	m := Materialized{Status: StatusOK, Table: t, ComputedAt: time.Now().UTC(), Window: p}
+	m := Materialized{Status: StatusOK, Table: t, ComputedAt: time.Now().UTC(), Window: p, Note: t.Note}
 	if materialize && r.store != nil {
 		if err := r.store.Put(ctx, name, p, m); err != nil {
 			return Materialized{}, err
