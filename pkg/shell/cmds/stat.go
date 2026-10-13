@@ -34,13 +34,16 @@ func CmdStat(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 			_ = json.NewEncoder(w).Encode(facts)
 			continue
 		}
-		ftype := "regular file"
-		if f.Dir {
+		ftype, file := "regular file", p
+		switch {
+		case f.LinkTarget != "":
+			ftype, file = "symbolic link", p+" -> "+f.LinkTarget
+		case f.Dir:
 			ftype = "directory"
 		}
-		fmt.Fprintf(w, "  File: %s\n", p)
+		fmt.Fprintf(w, "  File: %s\n", file)
 		fmt.Fprintf(w, "  Size: %d\tType: %s\n", f.FileSize, ftype)
-		fmt.Fprintf(w, "Access: %s\n", f.Mode())
+		fmt.Fprintf(w, "Access: %s\n", longMode(f))
 		if !f.FileModTime.IsZero() {
 			fmt.Fprintf(w, "Modify: %s\n", f.FileModTime.Format("2006-01-02 15:04:05"))
 		}

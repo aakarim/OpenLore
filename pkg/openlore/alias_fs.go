@@ -84,6 +84,9 @@ func (a *aliasFS) Stat(p string) (*vfs.FileInfo, error) {
 		copy := *info
 		copy.FileName = path.Base(requested)
 		copy.FilePath = requested
+		if requested == alias.Alias {
+			copy.LinkTarget = alias.Target
+		}
 		return &copy, nil
 	}
 
@@ -123,9 +126,24 @@ func (a *aliasFS) ReadDir(p string) ([]vfs.FileInfo, error) {
 		return nil, err
 	}
 
+	// An exact alias path resolves to its target even when the canonical tree
+	// also has an entry with that name, so list it as the alias link.
+	out := make([]vfs.FileInfo, 0, len(entries)+len(children))
 	seen := make(map[string]bool, len(entries)+len(children))
 	for _, entry := range entries {
 		seen[entry.FileName] = true
+		childPath := path.Join(clean, entry.FileName)
+		if target, ok := a.exactAliasTarget(childPath); ok {
+			link, exists, err := a.aliasRootEntry(childPath, target)
+			if err != nil {
+				return nil, err
+			}
+			if exists {
+				out = append(out, link)
+			}
+			continue
+		}
+		out = append(out, entry)
 	}
 	for _, child := range children {
 		if seen[child] {
@@ -134,20 +152,35 @@ func (a *aliasFS) ReadDir(p string) ([]vfs.FileInfo, error) {
 		childPath := path.Join(clean, child)
 		entry := vfs.FileInfo{FileName: child, FilePath: childPath, Dir: true}
 		if target, ok := a.exactAliasTarget(childPath); ok {
-			info, statErr := a.FileSystem.Stat(target)
-			if statErr != nil {
-				if errors.Is(statErr, fs.ErrNotExist) {
-					continue
-				}
-				return nil, statErr
+			link, exists, err := a.aliasRootEntry(childPath, target)
+			if err != nil {
+				return nil, err
 			}
-			entry = *info
-			entry.FileName = child
-			entry.FilePath = childPath
+			if !exists {
+				continue
+			}
+			entry = link
 		}
-		entries = append(entries, entry)
+		out = append(out, entry)
 	}
-	return entries, nil
+	return out, nil
+}
+
+// aliasRootEntry describes the alias root at aliasPath as a link to target.
+// exists is false when the target does not exist.
+func (a *aliasFS) aliasRootEntry(aliasPath, target string) (entry vfs.FileInfo, exists bool, err error) {
+	info, err := a.FileSystem.Stat(target)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return vfs.FileInfo{}, false, nil
+		}
+		return vfs.FileInfo{}, false, err
+	}
+	entry = *info
+	entry.FileName = path.Base(aliasPath)
+	entry.FilePath = aliasPath
+	entry.LinkTarget = target
+	return entry, true, nil
 }
 
 func (a *aliasFS) ReadFile(p string) ([]byte, error) {

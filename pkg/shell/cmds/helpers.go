@@ -48,10 +48,14 @@ func PrintLong(w io.Writer, f *vfs.FileInfo) {
 }
 
 func printLongSized(w io.Writer, f *vfs.FileInfo, size, name string) {
-	mode := "-r--r--r--"
-	if f.Dir {
-		mode = "dr-xr-xr-x"
-	}
 	t := f.FileModTime.Format("Jan  2 15:04")
-	fmt.Fprintf(w, "%s  1 lore lore %s %s %s\n", mode, size, t, name)
+	fmt.Fprintf(w, "%s  1 lore lore %s %s %s\n", longMode(f), size, t, name)
+}
+
+// longMode is the ls -l / stat mode string; alias roots show as links.
+func longMode(f *vfs.FileInfo) string {
+	if f.LinkTarget != "" {
+		return "lrwxrwxrwx"
+	}
+	return f.Mode().String()
 }

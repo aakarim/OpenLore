@@ -165,7 +165,8 @@ func (l *lsRun) listDir(p, display string, header bool) {
 	}
 	if l.o.recursive {
 		for _, e := range entries {
-			if e.Dir {
+			// Like ls -R, alias roots are listed but not descended into.
+			if e.Dir && e.LinkTarget == "" {
 				l.listDir(path.Join(p, e.FileName), path.Join(display, e.FileName), true)
 			}
 		}
@@ -177,6 +178,9 @@ func (l *lsRun) listDir(p, display string, header bool) {
 func (l *lsRun) printEntry(f *vfs.FileInfo, full, name string) {
 	if f.Dir && (l.o.classify || !l.o.long) && !strings.HasSuffix(name, "/") {
 		name += "/"
+	}
+	if l.o.long && f.LinkTarget != "" {
+		name += " -> " + f.LinkTarget
 	}
 	needFacts := l.facts != nil && (l.o.json || (l.o.long && l.o.stats))
 	var facts *analytics.DocScalars
@@ -197,7 +201,7 @@ func (l *lsRun) printEntry(f *vfs.FileInfo, full, name string) {
 	case l.o.json && facts != nil:
 		_ = json.NewEncoder(l.w).Encode(*facts)
 	case l.o.long && facts != nil:
-		fmt.Fprintf(l.w, "%s %s %8.0f %8.0f %s\n", f.Mode(), size, facts.Scalars["lines"], facts.Scalars["tokens"], name)
+		fmt.Fprintf(l.w, "%s %s %8.0f %8.0f %s\n", longMode(f), size, facts.Scalars["lines"], facts.Scalars["tokens"], name)
 	case l.o.long:
 		printLongSized(l.w, f, size, name)
 	default:

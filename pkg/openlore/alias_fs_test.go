@@ -6,9 +6,11 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"testing/fstest"
 
+	"github.com/aakarim/go-openlore/internal/analytics"
 	"github.com/aakarim/go-openlore/internal/config"
 	"github.com/aakarim/go-openlore/pkg/shell"
 	"github.com/aakarim/go-openlore/pkg/vfs"
@@ -289,5 +291,76 @@ func TestServerCanonicalChangeSetCopiesRemoveSnapshot(t *testing.T) {
 	}})
 	if batch.Changes[0].Target != "/user/alfie/new.md" || batch.Changes[1].Target != "/user/alfie/batch" || batch.Changes[1].RemoveAll.Opts.Expected.Root != "/user/alfie/batch" {
 		t.Fatalf("canonical batch = %+v", batch)
+	}
+}
+
+func TestAliasFS_ShellCountsAliasedFilesOnceAndShowsAliasRootsAsLinks(t *testing.T) {
+	root := t.TempDir()
+	canonicalDir := filepath.Join(root, "agent", "cor")
+	if err := os.MkdirAll(filepath.Join(canonicalDir, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(canonicalDir, "docs", "plan.md"), []byte("plan"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sh := shell.NewShell(newAliasFS(NewDirFS(root, config.FilesConfig{}), []pathAlias{{Alias: "/cor", Target: "/agent/cor"}}))
+	run := func(cmd string) string {
+		t.Helper()
+		var out, errOut bytes.Buffer
+		if code := sh.ExecPipeline(cmd, &out, &errOut, nil); code != 0 {
+			t.Fatalf("%s: exit = %d, stderr = %q", cmd, code, errOut.String())
+		}
+		return out.String()
+	}
+
+	if got, want := run("find / -type f"), "/agent/cor/docs/plan.md\n"; got != want {
+		t.Fatalf("find / -type f = %q, want %q", got, want)
+	}
+	if got, want := run("find / -type l"), "/cor\n"; got != want {
+		t.Fatalf("find / -type l = %q, want %q", got, want)
+	}
+	if got, want := run("find / -L -type f"), "/agent/cor/docs/plan.md\n/cor/docs/plan.md\n"; got != want {
+		t.Fatalf("find -L / -type f = %q, want %q", got, want)
+	}
+	// A starting point that is itself an alias is followed, like find -H.
+	if got, want := run("find /cor -type f"), "/cor/docs/plan.md\n"; got != want {
+		t.Fatalf("find /cor -type f = %q, want %q", got, want)
+	}
+	if got := run("ls -l /"); !strings.Contains(got, "lrwxrwxrwx") || !strings.Contains(got, "cor -> /agent/cor\n") {
+		t.Fatalf("ls -l / should show the alias as a link:\n%s", got)
+	}
+	if got := run("ls -R /"); strings.Contains(got, "\n/cor:") {
+		t.Fatalf("ls -R / should not descend into the alias:\n%s", got)
+	}
+	if got := run("stat /cor"); !strings.Contains(got, "File: /cor -> /agent/cor") || !strings.Contains(got, "Type: symbolic link") {
+		t.Fatalf("stat /cor should show the alias as a link:\n%s", got)
+	}
+	if got := run("ls /cor"); got != "docs/\n" {
+		t.Fatalf("ls /cor = %q, want the target's contents", got)
+	}
+	sh.SetFacts(analytics.NewContentFacts(sh.FS()))
+	if got := run("ls -l --stats /"); !strings.Contains(got, "lrwxrwxrwx") || !strings.Contains(got, "cor -> /agent/cor\n") {
+		t.Fatalf("ls -l --stats / should show the alias as a link:\n%s", got)
+	}
+}
+
+func TestAliasFS_ListsAliasThatShadowsCanonicalEntryAsLink(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{"docs/legacy/old", "channel/general"} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "channel", "general", "note.md"), []byte("note"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fsys := newAliasFS(NewDirFS(root, config.FilesConfig{}), []pathAlias{{Alias: "/docs/legacy", Target: "/channel/general"}})
+
+	entries, err := fsys.ReadDir("/docs")
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("ReadDir(/docs) = %+v, %v", entries, err)
+	}
+	if got := entries[0]; got.FilePath != "/docs/legacy" || got.LinkTarget != "/channel/general" {
+		t.Fatalf("shadowed alias entry = %+v, want link to /channel/general", got)
 	}
 }
