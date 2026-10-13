@@ -11,9 +11,10 @@ import (
 	"github.com/aakarim/go-openlore/internal/config"
 	"github.com/aakarim/go-openlore/pkg/shell"
 	"github.com/aakarim/go-openlore/pkg/shell/cmds"
+	"github.com/aakarim/go-openlore/pkg/vfs"
 )
 
-func newAnalyticsService(t *testing.T, fs *mapFS) *analytics.Service {
+func newAnalyticsService(t *testing.T, fs vfs.FileSystem) *analytics.Service {
 	t.Helper()
 	disabled := false
 	service, err := analytics.New(config.AnalyticsConfig{
@@ -55,6 +56,50 @@ func TestAnalyticsFactsUseShellFileSystem(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "       3") {
 		t.Fatalf("ls --stats did not report session-scoped line count: %q", out.String())
+	}
+}
+
+// denyReadFS lists and stats a file but refuses to read it, as a file-policy
+// layer can.
+type denyReadFS struct {
+	*mapFS
+	denied string
+}
+
+func (f denyReadFS) ReadFile(p string) ([]byte, error) {
+	if p == f.denied {
+		return nil, errors.New("access denied: " + p)
+	}
+	return f.mapFS.ReadFile(p)
+}
+
+func TestAnalyticsSizeViewsSkipUnreadableFiles(t *testing.T) {
+	fs := newMapFS()
+	fs.AddFile("/docs/big.md", strings.Repeat("x", 400))
+	fs.AddFile("/docs/small.md", "one\n")
+	fs.AddFile("/generate.go", "package docs\n")
+	sh := shell.NewShell(fs)
+	sh.SetAnalytics(newAnalyticsService(t, denyReadFS{fs, "/generate.go"}))
+	sh.SetAnalyticsAuthorizer(func() error { return nil })
+
+	for _, command := range []string{"analytics show largest-docs --fresh", "analytics show tree-size --fresh --param depth=0"} {
+		var out, errOut bytes.Buffer
+		if code := sh.Exec(command, &out, &errOut, nil); code != 0 {
+			t.Fatalf("%s exited %d: %q", command, code, errOut.String())
+		}
+		got := out.String()
+		if !strings.Contains(got, "\n/docs/big.md ") || !strings.Contains(got, "\n/docs/small.md ") || strings.Contains(got, "\n/generate.go ") {
+			t.Fatalf("%s rows: %q", command, got)
+		}
+		if !strings.Contains(got, "Skipped 1 unreadable path: /generate.go") {
+			t.Fatalf("%s did not report the skipped path: %q", command, got)
+		}
+	}
+
+	// A root that cannot be read is still an error, not an empty result.
+	var out, errOut bytes.Buffer
+	if code := sh.Exec("analytics show tree-size --fresh --param path=/generate.go", &out, &errOut, nil); code == 0 || !strings.Contains(errOut.String(), "access denied: /generate.go") {
+		t.Fatalf("unreadable root: %d %q %q", code, out.String(), errOut.String())
 	}
 }
 
