@@ -148,6 +148,19 @@ func (f *configViewFS) WriteFileAtomic(name string, data []byte, opts vfs.WriteO
 	return hex.EncodeToString(sum[:]), nil
 }
 
+// CanWrite forwards the session's write scope (vfs.WriteScopeFS); the live
+// config file is writable exactly when the session may edit it.
+func (f *configViewFS) CanWrite(name string) bool {
+	if vfs.CleanPath(name) == authConfigVFSPath {
+		return f.authorized()
+	}
+	if pathWithinRoot("/opt", vfs.CleanPath(name)) {
+		return false
+	}
+	scope, ok := f.WritableFS.(vfs.WriteScopeFS)
+	return !ok || scope.CanWrite(name)
+}
+
 func (f *configViewFS) Mkdir(name string) error {
 	if pathWithinRoot("/opt", vfs.CleanPath(name)) {
 		return vfs.ErrReadOnly
