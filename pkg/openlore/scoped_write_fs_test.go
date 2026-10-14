@@ -3,6 +3,7 @@ package openlore
 import (
 	"bytes"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -136,7 +137,7 @@ func TestSessionShellModeBitsFollowGrant(t *testing.T) {
 			}
 		}
 		sh := server.buildSessionShell(testIdentity("alice"))
-		for cmd, want := range map[string]string{
+		cases := map[string]string{
 			"ls -ld /":            "dr-xr-xr-x",
 			"ls -ld /docs":        "drwxr-xr-x",
 			"ls -l /docs":         "drwxr-xr-x",
@@ -146,7 +147,17 @@ func TestSessionShellModeBitsFollowGrant(t *testing.T) {
 			"ls -l /ref":          "dr-xr-xr-x",
 			"ls -l /ref/sub":      "-r--r--r--",
 			"stat /ref/sub/b.md":  "Access: -r--r--r--",
-		} {
+		}
+		if configAdmin {
+			// The synthetic /opt tree: only the live config file is writable.
+			cases["stat /opt/openlore/lore.json"] = "Access: -rw-r--r--"
+			cases["ls -l /opt/openlore"] = "-rw-r--r--"
+			cases["ls -ld /opt"] = "dr-xr-xr-x"
+			cases["ls -ld /opt/openlore"] = "dr-xr-xr-x"
+		} else if code := sh.ExecPipeline("ls -ld /opt/openlore", io.Discard, io.Discard, nil); code == 0 {
+			t.Error("non-admin session can see /opt/openlore")
+		}
+		for cmd, want := range cases {
 			var out, errOut bytes.Buffer
 			if code := sh.ExecPipeline(cmd, &out, &errOut, nil); code != 0 || !strings.Contains(out.String(), want) {
 				t.Errorf("configAdmin=%v %s: exit %d, stdout %q, stderr %q; want %q", configAdmin, cmd, code, out.String(), errOut.String(), want)
