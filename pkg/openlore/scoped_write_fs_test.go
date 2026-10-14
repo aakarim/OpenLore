@@ -1,7 +1,10 @@
 package openlore
 
 import (
+	"bytes"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -108,5 +111,46 @@ func TestScopedWriteFS_ReadsPassThrough(t *testing.T) {
 	}
 	if string(data) != "hi" {
 		t.Fatalf("read = %q, want %q", data, "hi")
+	}
+}
+
+// Regression for OPE-42: `ls -l` and `stat` derive write bits from the caller's
+// effective grant, including for config administrators whose session adds a
+// configViewFS layer over the scoped filesystem.
+func TestSessionShellModeBitsFollowGrant(t *testing.T) {
+	for _, configAdmin := range []bool{false, true} {
+		auth := serverAuth(map[string]config.DocsetSpec{"docs": docset("/docs", nil), "ref": docset("/ref", nil)}, nil)
+		ref := auth.Docsets["ref"]
+		ref.Access = config.DocsetAccess{Allow: map[string]string{"writer": "ro"}}
+		auth.Docsets["ref"] = ref
+		if configAdmin {
+			auth.Roles["writer"] = config.RoleSpec{Allow: config.CapabilityRules{Capabilities: []string{"lore:config:edit"}}}
+		}
+		server, root := bootRulesServer(t, auth, nil)
+		for _, f := range []string{"docs/sub/a.md", "ref/sub/b.md"} {
+			if err := os.MkdirAll(filepath.Dir(filepath.Join(root, f)), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, f), []byte("x\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		sh := server.buildSessionShell(testIdentity("alice"))
+		for cmd, want := range map[string]string{
+			"ls -ld /":            "dr-xr-xr-x",
+			"ls -ld /docs":        "drwxr-xr-x",
+			"ls -l /docs":         "drwxr-xr-x",
+			"ls -l /docs/sub":     "-rw-r--r--",
+			"stat /docs/sub/a.md": "Access: -rw-r--r--",
+			"ls -ld /ref":         "dr-xr-xr-x",
+			"ls -l /ref":          "dr-xr-xr-x",
+			"ls -l /ref/sub":      "-r--r--r--",
+			"stat /ref/sub/b.md":  "Access: -r--r--r--",
+		} {
+			var out, errOut bytes.Buffer
+			if code := sh.ExecPipeline(cmd, &out, &errOut, nil); code != 0 || !strings.Contains(out.String(), want) {
+				t.Errorf("configAdmin=%v %s: exit %d, stdout %q, stderr %q; want %q", configAdmin, cmd, code, out.String(), errOut.String(), want)
+			}
+		}
 	}
 }

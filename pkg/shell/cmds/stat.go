@@ -43,7 +43,7 @@ func CmdStat(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 		}
 		fmt.Fprintf(w, "  File: %s\n", file)
 		fmt.Fprintf(w, "  Size: %d\tType: %s\n", f.FileSize, ftype)
-		fmt.Fprintf(w, "Access: %s\n", longMode(f))
+		fmt.Fprintf(w, "Access: %s\n", longMode(ctx, p, f))
 		if !f.FileModTime.IsZero() {
 			fmt.Fprintf(w, "Modify: %s\n", f.FileModTime.Format("2006-01-02 15:04:05"))
 		}

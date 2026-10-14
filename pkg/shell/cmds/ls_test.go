@@ -94,7 +94,7 @@ func TestLsSortAndFormat(t *testing.T) {
 		t.Errorf("ls -lhS /s: got %q", out)
 	}
 	out, _, _ = execCmd(t, fs, "ls -ldF /s")
-	if !strings.HasPrefix(out, "dr-xr-xr-x") || !strings.HasSuffix(strings.TrimSpace(out), " /s/") {
+	if !strings.HasPrefix(out, "drwxr-xr-x") || !strings.HasSuffix(strings.TrimSpace(out), " /s/") {
 		t.Errorf("ls -ldF /s: got %q", out)
 	}
 }
