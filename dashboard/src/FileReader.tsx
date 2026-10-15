@@ -1,7 +1,13 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import { useAsync, useModalLock } from "./hooks";
-import { ChartIcon, CloseIcon, SettingsIcon } from "./icons";
+import {
+  ChartIcon,
+  CloseIcon,
+  CopyIcon,
+  LinkIcon,
+  SettingsIcon,
+} from "./icons";
 import type { FileResponse, HistoryResponse, Session } from "./types";
 
 const basename = (path: string) =>
@@ -141,26 +147,15 @@ function FileInfo({
   file,
   ratio,
   contextWindow,
-  onCopy,
   onAnalytics,
   onSettings,
 }: {
   file: FileResponse;
   ratio: number;
   contextWindow: number;
-  onCopy: (value: string) => void | Promise<void>;
   onAnalytics: () => void;
   onSettings?: () => void;
 }) {
-  const [copyStatus, setCopyStatus] = useState("");
-  const copy = async (value: string, label: string) => {
-    try {
-      await onCopy(value);
-      setCopyStatus(`${label} copied.`);
-    } catch {
-      setCopyStatus(`Couldn’t copy ${label.toLowerCase()}.`);
-    }
-  };
   const estimatedTokens =
     ratio > 0 ? Math.ceil(file.facts.characters / ratio) : 0;
   return (
@@ -190,17 +185,6 @@ function FileInfo({
       </dl>
       <p>Activity over time is in Analytics → Usage.</p>
       <code className="path-code">{file.path}</code>
-      <div className="link-actions">
-        <button onClick={() => void copy(file.path, "Agent path")}>
-          Copy agent path
-        </button>
-        <button onClick={() => void copy(location.href, "URL")}>
-          Copy URL
-        </button>
-      </div>
-      <output aria-live="polite" className="copy-status">
-        {copyStatus}
-      </output>
       <div className="detail-actions">
         <button
           className="primary"
@@ -337,7 +321,6 @@ export function Details({
   file,
   ratio = 4,
   contextWindow,
-  onCopy,
   onAnalytics,
   onSettings,
   outline,
@@ -347,7 +330,6 @@ export function Details({
   file: FileResponse;
   ratio?: number;
   contextWindow: number;
-  onCopy: (value: string) => void | Promise<void>;
   onAnalytics: () => void;
   onSettings?: () => void;
   outline?: Heading[];
@@ -383,7 +365,7 @@ export function Details({
       </div>
       {current === "info" ? (
         <FileInfo
-          {...{ file, ratio, contextWindow, onCopy, onAnalytics, onSettings }}
+          {...{ file, ratio, contextWindow, onAnalytics, onSettings }}
         />
       ) : current === "outline" ? (
         <Outline
@@ -404,6 +386,7 @@ export function FileReader({
   onMode,
   onFile,
   onAnalytics,
+  onCopy,
   ratio = 4,
   contextWindow,
   scrollPosition,
@@ -415,6 +398,7 @@ export function FileReader({
   onMode: (mode: "preview" | "source") => void;
   onFile: (path: string) => void;
   onAnalytics: () => void;
+  onCopy: (value: string) => void;
   ratio?: number;
   contextWindow: number;
   scrollPosition: number;
@@ -506,40 +490,57 @@ export function FileReader({
     );
   const file = state.data;
   if (!file) return null;
-  const copy = (value: string) => navigator.clipboard.writeText(value);
   return (
     <div className="file-layout">
       <section className="reader">
         <div className="reader-head">
-          <div
-            className="file-location"
-            onMouseEnter={() => setShowPath(true)}
-            onMouseLeave={(event) => {
-              if (!event.currentTarget.contains(document.activeElement))
-                setShowPath(false);
-            }}
-            onBlur={() => setShowPath(false)}
-          >
-            <button
-              className="file-name"
-              aria-label={`Show path for ${basename(path)}`}
-              aria-describedby={pathId}
-              onFocus={() => setShowPath(true)}
-              onClick={(event) => {
-                event.currentTarget.focus();
-                setShowPath(true);
+          <div className="file-title">
+            <div
+              className="file-location"
+              onMouseEnter={() => setShowPath(true)}
+              onMouseLeave={(event) => {
+                if (!event.currentTarget.contains(document.activeElement))
+                  setShowPath(false);
               }}
+              onBlur={() => setShowPath(false)}
             >
-              {basename(path)}
+              <button
+                className="file-name"
+                aria-label={`Show path for ${basename(path)}`}
+                aria-describedby={pathId}
+                onFocus={() => setShowPath(true)}
+                onClick={(event) => {
+                  event.currentTarget.focus();
+                  setShowPath(true);
+                }}
+              >
+                {basename(path)}
+              </button>
+              <span
+                className="file-path"
+                id={pathId}
+                role="tooltip"
+                hidden={!showPath}
+              >
+                {path}
+              </span>
+            </div>
+            <button
+              className="icon-button"
+              aria-label="Copy agent path"
+              title="Copy agent path"
+              onClick={() => onCopy(path)}
+            >
+              <CopyIcon />
             </button>
-            <span
-              className="file-path"
-              id={pathId}
-              role="tooltip"
-              hidden={!showPath}
+            <button
+              className="icon-button"
+              aria-label="Copy URL"
+              title="Copy URL"
+              onClick={() => onCopy(location.href)}
             >
-              {path}
-            </span>
+              <LinkIcon />
+            </button>
           </div>
           <div className="view-toggle">
             <button
@@ -586,7 +587,6 @@ export function FileReader({
           file={file}
           ratio={ratio}
           contextWindow={contextWindow}
-          onCopy={copy}
           onAnalytics={onAnalytics}
           outline={file.binary ? undefined : outline}
           activeHeading={activeHeading}
@@ -647,7 +647,6 @@ export function MobileDetails({
               file={state.data}
               ratio={ratio}
               contextWindow={contextWindow}
-              onCopy={(value) => navigator.clipboard.writeText(value)}
               onAnalytics={onAnalytics}
               onSettings={onSettings}
             />

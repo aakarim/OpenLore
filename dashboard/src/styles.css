@@ -826,10 +826,30 @@ select:focus-visible,
   font: 11px var(--mono);
   gap: 12px;
 }
-.file-location {
+.file-title {
   position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   min-width: 0;
   flex: 1;
+}
+.file-location {
+  min-width: 0;
+}
+.file-title .icon-button {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+}
+.file-title .icon-button:hover:not(:disabled) {
+  color: var(--ink);
 }
 .file-name {
   display: block;
@@ -1064,18 +1084,6 @@ select:focus-visible,
   font-size: 10px;
   overflow-wrap: anywhere;
   margin: 20px 0;
-}
-.link-actions {
-  display: flex;
-  gap: 14px;
-  margin: 18px 0;
-}
-.link-actions button {
-  border: 0;
-  border-bottom: 1px solid;
-  background: transparent;
-  border-radius: 0;
-  padding: 2px;
 }
 .detail-actions {
   display: flex;
@@ -1651,10 +1659,14 @@ button.primary:hover:not(:disabled) {
   }
   .reader-head {
     min-height: 43px;
-    padding: 0 12px;
+    padding: 6px 12px;
   }
   .file-name {
     min-height: 44px;
+  }
+  .file-title .icon-button {
+    width: 34px;
+    height: 34px;
   }
   .reader-head .view-toggle {
     display: none;
