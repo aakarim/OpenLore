@@ -31,7 +31,10 @@ necessarily the current version. Dates are the GitHub publication dates in UTC.
 
 ## Unreleased
 
-No unreleased changes yet.
+- Added the [Build your company brain on OpenLore](company-brain.md) recipe,
+  which explains what OpenLore already solves for a shared knowledge layer and
+  walks through laying it out as docsets, connecting data sources, giving it to
+  agents and capturing knowledge from across the organisation.
 
 ## v0.7.4 — 2026-10-12
 
