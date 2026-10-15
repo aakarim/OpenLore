@@ -37,6 +37,7 @@ const readerProps = {
   onMode: vi.fn(),
   onFile: vi.fn(),
   onAnalytics: vi.fn(),
+  onCopy: vi.fn(),
   ratio: 6,
   contextWindow: 12,
   scrollPosition: 0,
@@ -285,7 +286,6 @@ test("timeline paginates and appends entries using next_cursor", async () => {
     <Details
       file={baseFile}
       contextWindow={200}
-      onCopy={vi.fn()}
       onAnalytics={vi.fn()}
     />,
   );
@@ -299,24 +299,16 @@ test("timeline paginates and appends entries using next_cursor", async () => {
   ).not.toBeInTheDocument();
 });
 
-test("clipboard actions announce success and failure", async () => {
-  const copy = vi
-    .fn()
-    .mockResolvedValueOnce(undefined)
-    .mockRejectedValueOnce(new Error("denied"));
-  render(
-    <Details
-      file={baseFile}
-      ratio={6}
-      contextWindow={12}
-      onCopy={copy}
-      onAnalytics={vi.fn()}
-    />,
+test("copy buttons beside the file name copy the agent path and URL", async () => {
+  vi.spyOn(api, "file").mockResolvedValue(baseFile);
+  const onCopy = vi.fn();
+  render(<FileReader {...readerProps} onCopy={onCopy} />);
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Copy agent path" }),
   );
-  fireEvent.click(screen.getByRole("button", { name: "Copy agent path" }));
-  expect(await screen.findByText("Agent path copied.")).toBeVisible();
+  expect(onCopy).toHaveBeenLastCalledWith(baseFile.path);
   fireEvent.click(screen.getByRole("button", { name: "Copy URL" }));
-  expect(await screen.findByText("Couldn’t copy url.")).toBeVisible();
+  expect(onCopy).toHaveBeenLastCalledWith(location.href);
 });
 
 test("markdown outline lists headings, jumps to them, and switches out of source mode", async () => {

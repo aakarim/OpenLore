@@ -408,6 +408,7 @@ function Workspace({ session }: { session: Session }) {
             Files{prefs.openPaths.length ? ` ${prefs.openPaths.length}` : ""}
           </button>
         </nav>
+        <span className="identity">{session.identity}</span>
         <button
           className="finder-toggle"
           aria-label="Find file"
@@ -419,7 +420,6 @@ function Workspace({ session }: { session: Session }) {
           <span>Find</span>
           <kbd aria-hidden="true">{finderShortcut}</kbd>
         </button>
-        <span className="identity">{session.identity}</span>
         <ThemeToggle />
       </header>
       {!collapsed && <Tree {...treeProps} />}
@@ -551,6 +551,7 @@ function Workspace({ session }: { session: Session }) {
                 onMode={setMode}
                 onFile={openFile}
                 onAnalytics={() => navigate("analytics", activeFile, "usage")}
+                onCopy={(value) => void copy(value)}
                 contextWindow={prefs.contextWindow}
                 ratio={prefs.ratio}
                 scrollPosition={prefs.positions[activeFile] || 0}
