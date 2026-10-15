@@ -44,6 +44,23 @@ func CmdPublish(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdi
 		return 0
 	}
 
+	// publish takes exactly one path. Reject extra arguments rather than
+	// ignoring them, and turn the `publish <docset> <file>` form into the path
+	// the caller meant.
+	if len(args) > 1 {
+		quoted := make([]string, len(args))
+		for i, a := range args {
+			quoted[i] = fmt.Sprintf("%q", a)
+		}
+		fmt.Fprintf(errW, "publish: expected one path /<docset>/<file>; got %d arguments %s\n", len(args), strings.Join(quoted, " "))
+		if len(args) == 2 && !strings.Contains(strings.Trim(args[0], "/"), "/") {
+			fmt.Fprintf(errW, "  e.g. publish %s\n", path.Join("/", args[0], args[1]))
+		} else {
+			fmt.Fprintf(errW, "  e.g. publish /%s/my-file.md\n", writable[0].Name)
+		}
+		return 1
+	}
+
 	// Parse /<docset>/<file...>.
 	p := path.Clean("/" + strings.TrimPrefix(args[0], "/"))
 	segs := strings.SplitN(strings.TrimPrefix(p, "/"), "/", 2)

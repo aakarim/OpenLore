@@ -43,8 +43,8 @@ sed -i 's/old/new/g' /mydocset/notes.md
 # mkdir — create a folder INSIDE a docset (not a docset root)
 mkdir /mydocset/subsection
 
-# publish — publish stdin as a new source into a docset
-echo "# API" | publish mydocset api.md
+# publish — publish stdin into a docset's inbox (lands in its inbox as api.md)
+echo "# API" | publish /mydocset/api.md
 ```
 
 ## You can only write where you're scoped
