@@ -108,12 +108,24 @@ export function App() {
       document.removeEventListener("visibilitychange", visible);
     };
   }, [session.refresh]);
+  const error = session.error instanceof APIError ? session.error : null;
+  // Next steps mean the server is not configured for browser sign-in yet,
+  // so a login link would only lead to another error.
+  const steps = error?.nextSteps ?? [];
+  const signInURL =
+    error?.status === 401 && steps.length === 0 ? loginURL(error.loginURL) : "";
+  useEffect(() => {
+    // The passkey page is the sign-in page; an interstitial would only add a
+    // click. Replace history so Back does not bounce through this redirect.
+    if (signInURL) location.replace(signInURL);
+  }, [signInURL]);
+  if (signInURL)
+    return (
+      <main className="startup" role="status">
+        Opening sign-in…
+      </main>
+    );
   if (session.error) {
-    const error = session.error instanceof APIError ? session.error : null;
-    // Next steps mean the server is not configured for browser sign-in yet,
-    // so a login link would only lead to another error.
-    const steps = error?.nextSteps ?? [];
-    const canSignIn = error?.status === 401 && steps.length === 0;
     return (
       <main className="startup">
         <div className="brand">
@@ -122,7 +134,7 @@ export function App() {
             /
           </span>
         </div>
-        <h1>{canSignIn ? "Sign in to OpenLore" : "Dashboard not ready"}</h1>
+        <h1>Dashboard not ready</h1>
         <p>{session.error.message}</p>
         {steps.length === 1 && (
           <p className="next-step">
@@ -139,13 +151,7 @@ export function App() {
             </ol>
           </div>
         )}
-        {canSignIn ? (
-          <a className="primary button" href={loginURL(error.loginURL)}>
-            Continue to sign in
-          </a>
-        ) : (
-          <button onClick={session.refresh}>Retry</button>
-        )}
+        <button onClick={session.refresh}>Retry</button>
       </main>
     );
   }
