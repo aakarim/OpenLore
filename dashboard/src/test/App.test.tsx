@@ -7,7 +7,7 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { vi } from "vitest";
+import { onTestFinished, vi } from "vitest";
 import { App, loginURL } from "../App";
 import { pollDelay } from "../Analytics";
 import { mockAPI } from "./fixtures";
@@ -17,6 +17,23 @@ async function openStatus() {
     .setup()
     .click(await screen.findByRole("button", { name: /^Analytics status/ }));
   return screen.getByRole("dialog", { name: "Analytics status" });
+}
+
+// jsdom cannot navigate, so capture location.replace and keep the rest of
+// location live.
+function captureNavigation() {
+  const replace = vi.fn();
+  const real = location;
+  vi.stubGlobal(
+    "location",
+    new Proxy({} as Location, {
+      get: (_, key) => (key === "replace" ? replace : real[key as "href"]),
+    }),
+  );
+  onTestFinished(() => {
+    vi.unstubAllGlobals();
+  });
+  return replace;
 }
 
 test("desktop tree opens a production API document and switches views without losing its tab", async () => {
@@ -806,10 +823,12 @@ test("expired session clears the previously rendered document", async () => {
   fetch.mockResolvedValue(
     new Response(JSON.stringify({ error: "Session expired" }), { status: 401 }),
   );
+  const replace = captureNavigation();
   fireEvent(window, new Event("dashboard-auth-expired"));
-  expect(
-    await screen.findByRole("heading", { name: "Sign in to OpenLore" }),
-  ).toBeVisible();
+  await waitFor(() => expect(replace).toHaveBeenCalledTimes(1));
+  const target = new URL(replace.mock.calls[0][0]);
+  expect(target.pathname).toBe("/passkey/login");
+  expect(target.searchParams.get("redirect")).toBe("/lore/guide/start.md");
   expect(
     screen.queryByRole("heading", { name: "Start" }),
   ).not.toBeInTheDocument();
@@ -877,6 +896,7 @@ test("an unconfigured server shows the operator's next step instead of a sign-in
     next_steps: ["set `auth_file: ./lore.json` in openlore.yml and restart"],
   };
   let status = 404;
+  const replace = captureNavigation();
   fetch.mockImplementation((input, init) =>
     String(input).endsWith("/dashboard/api/session")
       ? Promise.resolve(new Response(JSON.stringify(body), { status }))
@@ -914,15 +934,16 @@ test("an unconfigured server shows the operator's next step instead of a sign-in
   ).not.toBeInTheDocument();
   expect(screen.queryByRole("link")).not.toBeInTheDocument();
 
-  // Once sign-in is possible the usual login link returns.
+  expect(replace).not.toHaveBeenCalled();
+
+  // Once sign-in is possible the dashboard goes straight to the login page
+  // instead of showing its own sign-in step first.
   body = { error: "authentication required", login_url: "/passkey/login" };
   await userEvent.setup().click(screen.getByRole("button", { name: "Retry" }));
-  expect(
-    await screen.findByRole("heading", { name: "Sign in to OpenLore" }),
-  ).toBeVisible();
-  expect(
-    screen.getByRole("link", { name: "Continue to sign in" }),
-  ).toHaveAttribute("href", expect.stringContaining("/passkey/login"));
+  await waitFor(() => expect(replace).toHaveBeenCalledTimes(1));
+  expect(new URL(replace.mock.calls[0][0]).pathname).toBe("/passkey/login");
+  expect(screen.getByRole("status")).toHaveTextContent("Opening sign-in…");
+  expect(screen.queryByRole("link")).not.toBeInTheDocument();
 });
 
 test("session refresh removes a document whose access was revoked", async () => {
@@ -965,10 +986,13 @@ test("an aggregation-only refresh recovers an expired session", async () => {
       ? Promise.resolve(new Response("Session expired", { status: 401 }))
       : original(input, init),
   );
+  const replace = captureNavigation();
   await user.click(screen.getByRole("button", { name: "Refresh analytics" }));
-  expect(
-    await screen.findByRole("heading", { name: "Sign in to OpenLore" }),
-  ).toBeVisible();
+  await waitFor(() =>
+    expect(replace).toHaveBeenCalledWith(
+      expect.stringContaining("/passkey/login?redirect="),
+    ),
+  );
   expect(
     screen.queryByRole("complementary", { name: "Knowledge tree" }),
   ).not.toBeInTheDocument();
