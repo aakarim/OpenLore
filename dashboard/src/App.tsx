@@ -24,6 +24,7 @@ import {
   SearchIcon,
   SettingsIcon,
 } from "./icons";
+import { SetupTree, SetupView, useSetup } from "./Setup";
 import { ThemeToggle } from "./ThemeToggle";
 import {
   defaults,
@@ -35,16 +36,10 @@ import {
 import { Tree } from "./Tree";
 import type { AnalyticsTab, Session } from "./types";
 
-type View = "analytics" | "files";
+type View = "analytics" | "files" | "setup";
 type Route = { view: View; path: string; tab: AnalyticsTab };
 type SheetName =
-  | "folders"
-  | "open"
-  | "details"
-  | "analytics"
-  | "settings"
-  | "status"
-  | null;
+  "folders" | "open" | "details" | "analytics" | "settings" | "status" | null;
 const name = (path: string) =>
   path.split("/").filter(Boolean).at(-1) || "Workspace";
 const ancestors = (path: string) => [
@@ -73,8 +68,9 @@ function readRoute(session: Session): Route {
     }
     return { view: "files", path, tab };
   }
+  const view = query.get("view");
   return {
-    view: query.get("view") === "analytics" ? "analytics" : "files",
+    view: view === "analytics" || view === "setup" ? view : "files",
     path: query.get("path") || "/",
     tab,
   };
@@ -170,7 +166,7 @@ function Workspace({ session }: { session: Session }) {
   const [prefsKey, setPrefsKey] = useState("");
   const [activeFile, setActiveFile] = useState("");
   const [fileLocation, setFileLocation] = useState("/");
-  const [scope, setScope] = useState(route.path);
+  const [scope, setScope] = useState(route.view === "setup" ? "/" : route.path);
   const [ready, setReady] = useState(false);
   const [routeError, setRouteError] = useState("");
   const [sheet, setSheet] = useState<SheetName>(null);
@@ -179,9 +175,9 @@ function Workspace({ session }: { session: Session }) {
   const [collapsed, setCollapsed] = useState(false);
   const [days, setDays] = useState(30);
   const [computed, setComputed] = useState("");
-  const [processing, setProcessing] = useState<
-    Record<string, ProcessingItem>
-  >({});
+  const [processing, setProcessing] = useState<Record<string, ProcessingItem>>(
+    {},
+  );
   const reportProcessing = useCallback(
     (key: string, item: ProcessingItem | null) =>
       setProcessing((current) => {
@@ -196,6 +192,13 @@ function Workspace({ session }: { session: Session }) {
   const processingStatus = processingState(processingItems);
   const [revision, setRevision] = useState(0);
   const [toast, setToast] = useState("");
+  // Setup loads the first time its view opens and stays loaded afterwards so
+  // returning to it does not refetch.
+  const [setupVisited, setSetupVisited] = useState(route.view === "setup");
+  useEffect(() => {
+    if (route.view === "setup") setSetupVisited(true);
+  }, [route.view]);
+  const setup = useSetup(setupVisited);
   const setPreference = (patch: Partial<Preferences>) =>
     setPrefs((p) => ({ ...p, ...patch }));
 
@@ -243,7 +246,7 @@ function Workspace({ session }: { session: Session }) {
       });
       setPrefsKey(key);
       setRoute(next);
-      setScope(next.path);
+      if (next.view !== "setup") setScope(next.path);
       if (next.view === "files") setFileLocation(next.path);
       setActiveFile(file);
       setRouteError(error);
@@ -276,6 +279,9 @@ function Workspace({ session }: { session: Session }) {
       setRoute(next);
       setRouteError("");
       setSheet(null);
+      // Setup paths are config files, not knowledge; they never move the
+      // analytics scope, the files location, or the expanded tree.
+      if (view === "setup") return;
       if (view === "analytics") setScope(path);
       else setFileLocation(path);
       setPrefs((p) => ({
@@ -316,6 +322,7 @@ function Workspace({ session }: { session: Session }) {
       setRoute(next);
       setRouteError("");
       setSheet(null);
+      if (next.view === "setup") return;
       if (next.view === "analytics") {
         setScope(next.path);
         return;
@@ -413,6 +420,12 @@ function Workspace({ session }: { session: Session }) {
           >
             Files{prefs.openPaths.length ? ` ${prefs.openPaths.length}` : ""}
           </button>
+          <button
+            aria-current={view === "setup"}
+            onClick={() => navigate("setup", view === "setup" ? path : "/")}
+          >
+            Setup
+          </button>
         </nav>
         <span className="identity">{session.identity}</span>
         <button
@@ -428,9 +441,25 @@ function Workspace({ session }: { session: Session }) {
         </button>
         <ThemeToggle />
       </header>
-      {!collapsed && <Tree {...treeProps} />}
+      {!collapsed &&
+        (view === "setup" ? (
+          <SetupTree
+            setup={setup}
+            selected={path}
+            onSelect={(p) => navigate("setup", p)}
+          />
+        ) : (
+          <Tree {...treeProps} />
+        ))}
       <main className="workspace">
-        {routeError ? (
+        {view === "setup" ? (
+          <SetupView
+            setup={setup}
+            path={path}
+            onSelect={(p) => navigate("setup", p)}
+            onCopy={(value) => void copy(value)}
+          />
+        ) : routeError ? (
           <div className="state error" role="alert">
             {routeError}
             <button onClick={() => openFolder("/")}>Browse workspace</button>
@@ -569,7 +598,10 @@ function Workspace({ session }: { session: Session }) {
                 }
               />
             ) : (
-              <section className="file-empty" aria-labelledby="file-empty-title">
+              <section
+                className="file-empty"
+                aria-labelledby="file-empty-title"
+              >
                 <div className="file-empty-icon">
                   <FileIcon />
                 </div>
@@ -591,34 +623,55 @@ function Workspace({ session }: { session: Session }) {
       </main>
       <nav className="mobile-nav" aria-label="Mobile workspace">
         <button aria-haspopup="dialog" onClick={() => setSheet("folders")}>
-          <FolderIcon /> <span>Folders</span>
+          {view === "setup" ? (
+            <>
+              <SettingsIcon /> <span>Configuration</span>
+            </>
+          ) : (
+            <>
+              <FolderIcon /> <span>Folders</span>
+            </>
+          )}
         </button>
         {view === "files" && (
           <button aria-haspopup="dialog" onClick={() => setSheet("open")}>
             <FileIcon /> <span>Open files · {prefs.openPaths.length}</span>
           </button>
         )}
-        <button
-          aria-haspopup="dialog"
-          disabled={view === "files" && !activeFile}
-          onClick={() => setSheet(view === "files" ? "details" : "analytics")}
-        >
-          {view === "files" ? (
-            <>
-              <InfoIcon /> <span>Details</span>
-            </>
-          ) : (
-            <>
-              {analyticsTabs.find((t) => t.id === tab)?.icon}
-              <span>{analyticsTabs.find((t) => t.id === tab)?.label}</span>
-            </>
-          )}
-        </button>
+        {view !== "setup" && (
+          <button
+            aria-haspopup="dialog"
+            disabled={view === "files" && !activeFile}
+            onClick={() => setSheet(view === "files" ? "details" : "analytics")}
+          >
+            {view === "files" ? (
+              <>
+                <InfoIcon /> <span>Details</span>
+              </>
+            ) : (
+              <>
+                {analyticsTabs.find((t) => t.id === tab)?.icon}
+                <span>{analyticsTabs.find((t) => t.id === tab)?.label}</span>
+              </>
+            )}
+          </button>
+        )}
       </nav>
       {sheet === "folders" && (
-        <Sheet title="Folders" onClose={() => setSheet(null)}>
+        <Sheet
+          title={view === "setup" ? "Configuration" : "Folders"}
+          onClose={() => setSheet(null)}
+        >
           <div className="sheet-tree">
-            <Tree {...treeProps} onFolder={undefined} />
+            {view === "setup" ? (
+              <SetupTree
+                setup={setup}
+                selected={path}
+                onSelect={(p) => navigate("setup", p)}
+              />
+            ) : (
+              <Tree {...treeProps} onFolder={undefined} />
+            )}
           </div>
         </Sheet>
       )}

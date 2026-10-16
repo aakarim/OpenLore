@@ -1,7 +1,7 @@
 # Dashboard
 
 Distribution builds replace the landing page and `/lore/<path>` browser with
-the **Analytics / Files** dashboard. Existing published file URLs keep working;
+the **Analytics / Files / Setup** dashboard. Existing published file URLs keep working;
 `passkeys.lore_path` is respected. See [building the dashboard](dashboard-build.md)
 for the source-only frontend build and backend-only Go builds.
 
@@ -140,6 +140,35 @@ The number of roles with a grant is not a count of individual users: role
 combinations, delegation, and token scopes can further restrict an identity.
 Folder validation-rule layers are shown separately from ACLs. They are not
 folder permissions and this view does not edit them.
+
+## Setup view
+
+The **Setup** view explains how the instance is configured for the signed-in
+identity. Its sidebar is a configuration tree rather than the knowledge tree:
+the live `lore.json` and `openlore.yml` (when readable) under *Server*, then every readable
+`.lore/config.yaml` grouped by the docset that governs it and labelled by the
+folder it applies to. Configuration files are listed here only; the Files tree
+and the fuzzy finder no longer show `.lore` folders or the `/opt/openlore`
+config mount, so the knowledge tree holds knowledge and nothing else. A
+selected file shows what it applies to, who may edit it, and its source.
+
+The overview shows the session identity, its roles and home docset; the SSH,
+dashboard, MCP and published-file addresses to connect with; which server
+features are on (write lock, analytics, history, skills plugin); and one card
+per docset with its paths and aliases, the grants your roles give you, its
+inbox, whether it uses the Open Knowledge Format or agent skills, and its
+folder rules. Everything here is read-only.
+
+What the view reveals follows the same gates as the rest of the dashboard.
+`lore.json` and `openlore.yml` appear only for a full-scope session holding
+`lore:config:edit`, the same condition under which agents can read them at
+`/opt/openlore/lore.json` and `/opt/openlore/openlore.yml`. `openlore.yml` is
+mounted read-only and only when the server was started from one; the server
+reads it at startup, so changes need a restart. Role grants per docset, `rules` from `lore.json`,
+and `config.edit` lists are operator detail shown only with
+[`lore:access:view`](#access-tab); without it a docset card lists only your own
+grants. Folder configs are discovered by walking the readable tree, bounded at
+10,000 folders; past that bound the view says the list may be incomplete.
 
 ## Facts versus activity
 

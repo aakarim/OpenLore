@@ -108,8 +108,11 @@ type Config struct {
 	// hence openlore.yml.
 	OIDCIssuers []OIDCIssuer
 
+	// ConfigFile is the openlore.yml WithConfigFile read, or empty when the
+	// server runs on defaults or an embedded config.
+	ConfigFile string
+
 	configFileLoaded bool
-	configFilePath   string
 	embeddedLoaded   bool
 	warnings         []string
 }
@@ -174,7 +177,7 @@ func (c Config) ExperimentalEnabled(feature string) bool {
 func (c Config) Source() string {
 	switch {
 	case c.configFileLoaded:
-		return "loaded " + c.configFilePath
+		return "loaded " + c.ConfigFile
 	case c.embeddedLoaded:
 		return "using embedded openlore.yml"
 	default:
@@ -953,7 +956,7 @@ func WithConfigFile(path string) Option {
 		cfg.warnings = append(cfg.warnings, warnings...)
 
 		cfg.configFileLoaded = true
-		cfg.configFilePath = path
+		cfg.ConfigFile = path
 		cfg.Experimental = append([]string(nil), fc.Experimental...)
 		if err := applyAnalyticsConfig(cfg, fc.Analytics); err != nil {
 			return err

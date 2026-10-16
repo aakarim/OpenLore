@@ -35,6 +35,18 @@ necessarily the current version. Dates are the GitHub publication dates in UTC.
   which explains what OpenLore already solves for a shared knowledge layer and
   walks through laying it out as docsets, connecting data sources, giving it to
   agents and capturing knowledge from across the organisation.
+- Added a **Setup** view to the [dashboard](dashboard.md) that shows how the
+  instance is configured for the signed-in identity: connection addresses,
+  server features, each docset's paths, grants, inbox and folder rules, and a
+  configuration tree listing every readable `.lore/config.yaml` and, for
+  sessions that may edit configuration, the live `lore.json` and
+  `openlore.yml`. The Files tree and fuzzy finder no longer list `.lore`
+  folders or the `/opt/openlore` config mount; configuration files live on the
+  Setup view instead.
+- Sessions with `lore:config:edit` can now read the running server's
+  `openlore.yml` at `/opt/openlore/openlore.yml`, beside `lore.json`. The file
+  is read-only over the VFS and is mounted only when the server was started
+  from a config file.
 
 ## v0.7.4 — 2026-10-12
 
