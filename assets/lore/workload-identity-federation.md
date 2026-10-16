@@ -211,7 +211,7 @@ curl -X POST https://openlore.example/mcp \
 curl -X POST https://openlore.example/api/shell \
   -H "Authorization: Bearer $OL_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"command": "publish knowledge report.md < out.md"}'
+  -d '{"command": "publish /knowledge/report.md < out.md"}'
 ```
 
 Every call runs with the resolved identity's lore, capabilities, and home —
