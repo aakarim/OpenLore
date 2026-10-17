@@ -92,7 +92,7 @@ func (s *S3FS) SetReadonly() error {
 }
 
 func s3FilePath(name string) (string, error) {
-	if !utf8.ValidString(name) || strings.ContainsAny(name, "\x00\\") || hasTraversal(name) || (hasReservedPath(name) && !isDirConfigPath(name)) {
+	if !utf8.ValidString(name) || strings.ContainsAny(name, "\x00\\") || hasTraversal(name) || isTrashPath(vfs.CleanPath(name)) || (hasReservedPath(name) && !isDirConfigPath(name)) {
 		return "", fmt.Errorf("access denied: %s", name)
 	}
 	return vfs.CleanPath(name), nil
@@ -143,20 +143,35 @@ func (s *S3FS) mutate(fn func(map[string]s3FileEntry) error) error {
 	return err
 }
 
-func (s *S3FS) Stat(name string) (*vfs.FileInfo, error) {
-	name, err := s3FilePath(name)
-	if err != nil {
+// Metadata directories are readable only through their exposed config file.
+// Use this for stat/listing, not mutations: opening reads must not permit
+// recursive deletion or writes to other reserved metadata paths.
+func (m s3FileManifest) fileInfo(name string) (*vfs.FileInfo, error) {
+	clean := vfs.CleanPath(name)
+	if path.Base(clean) == ".lore" && !hasTraversal(name) && isDirConfigPath(path.Join(clean, "config.yaml")) {
+		if _, err := s3FilePath(name + "/config.yaml"); err != nil {
+			return nil, err
+		}
+		config, exists := m.Entries[path.Join(clean, "config.yaml")]
+		if !exists || config.Dir {
+			return nil, vfs.ErrNotFound(name)
+		}
+	} else if _, err := s3FilePath(name); err != nil {
 		return nil, err
 	}
+	entry, exists := m.Entries[clean]
+	if !exists {
+		return nil, vfs.ErrNotFound(name)
+	}
+	return &vfs.FileInfo{FileName: path.Base(clean), FilePath: clean, Dir: entry.Dir, FileModTime: entry.Modified, FileSize: entry.Size}, nil
+}
+
+func (s *S3FS) Stat(name string) (*vfs.FileInfo, error) {
 	manifest, _, err := s.manifest()
 	if err != nil {
 		return nil, err
 	}
-	entry, exists := manifest.Entries[name]
-	if !exists {
-		return nil, vfs.ErrNotFound(name)
-	}
-	return &vfs.FileInfo{FileName: path.Base(name), FilePath: name, Dir: entry.Dir, FileModTime: entry.Modified, FileSize: entry.Size}, nil
+	return manifest.fileInfo(name)
 }
 
 func (s *S3FS) ReadFile(name string) ([]byte, error) {
@@ -191,28 +206,26 @@ func (s *S3FS) ReadFile(name string) ([]byte, error) {
 }
 
 func (s *S3FS) ReadDir(name string) ([]vfs.FileInfo, error) {
-	name, err := s3FilePath(name)
-	if err != nil {
-		return nil, err
-	}
 	manifest, _, err := s.manifest()
 	if err != nil {
 		return nil, err
 	}
-	entry, exists := manifest.Entries[name]
-	if !exists {
-		return nil, vfs.ErrNotFound(name)
+	entry, err := manifest.fileInfo(name)
+	if err != nil {
+		return nil, err
 	}
 	if !entry.Dir {
 		return nil, vfs.ErrNotDirectory(name)
 	}
+	name = entry.FilePath
 	var entries []vfs.FileInfo
-	for p, entry := range manifest.Entries {
+	for p := range manifest.Entries {
 		if p != name && path.Dir(p) == name {
-			if _, err := s3FilePath(p); err != nil {
+			info, err := manifest.fileInfo(p)
+			if err != nil {
 				continue
 			}
-			entries = append(entries, vfs.FileInfo{FileName: path.Base(p), FilePath: p, Dir: entry.Dir, FileModTime: entry.Modified, FileSize: entry.Size})
+			entries = append(entries, *info)
 		}
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].FileName < entries[j].FileName })

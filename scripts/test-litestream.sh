@@ -18,7 +18,7 @@ if [[ -z "${LITESTREAM_BIN:-}" ]]; then
   curl -fsSL --retry 3 "$base/$archive" -o "$tmp/$archive"
   curl -fsSL --retry 3 "$base/checksums.txt" -o "$tmp/checksums.txt"
   expected=$(awk -v name="$archive" '$2 == name { print $1 }' "$tmp/checksums.txt")
-  actual=$(shasum -a 256 "$tmp/$archive" | awk '{ print $1 }')
+  actual=$(sha256sum "$tmp/$archive" | awk '{ print $1 }')
   [[ -n "$expected" && "$actual" == "$expected" ]] || { echo 'Litestream checksum mismatch' >&2; exit 1; }
   tar -xzf "$tmp/$archive" -C "$tmp" litestream
   export LITESTREAM_BIN="$tmp/litestream"

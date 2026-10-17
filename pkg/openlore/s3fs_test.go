@@ -542,12 +542,24 @@ func TestS3Filesystem(t *testing.T) {
 		if _, err := other.ReadFile("/adjacent/file"); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("prefix leaked: %v", err)
 		}
-		for _, name := range []string{"../escape", "/.lore/config", "/nul\x00file", "/bad\\file"} {
+		for _, name := range []string{"../escape", "/.lore/config", "/nul\x00file", "/bad\\file", "/.openlore-trash", "/.openlore-trash/file", "/.openlore-trash/.lore/config.yaml"} {
 			if _, err := fsys.WriteFileAtomic(name, nil, vfs.WriteOpts{}); err == nil {
 				t.Fatalf("accepted path %q", name)
 			}
 			if _, err := fsys.ReadFile(name); err == nil {
 				t.Fatalf("read path %q", name)
+			}
+			if _, err := fsys.Stat(name); err == nil {
+				t.Fatalf("stat accepted path %q", name)
+			}
+			if _, err := fsys.ReadDir(name); err == nil {
+				t.Fatalf("listed path %q", name)
+			}
+			if err := fsys.MkdirAll(name); err == nil {
+				t.Fatalf("created directory %q", name)
+			}
+			if err := fsys.RemoveAll(name, vfs.RemoveOpts{}); err == nil {
+				t.Fatalf("removed forbidden path %q", name)
 			}
 		}
 		if err := fsys.RemoveAll("/", vfs.RemoveOpts{}); err == nil {
@@ -556,8 +568,8 @@ func TestS3Filesystem(t *testing.T) {
 		if _, err := fsys.WriteFileAtomic("/protected/.lore/config.yaml", []byte("version: 1"), vfs.WriteOpts{}); err != nil {
 			t.Fatal(err)
 		}
-		if entries, err := fsys.ReadDir("/protected"); err != nil || len(entries) != 0 {
-			t.Fatalf("reserved namespace exposed: %#v %v", entries, err)
+		if entries, err := fsys.ReadDir("/protected"); err != nil || len(entries) != 1 || entries[0].FileName != ".lore" || !entries[0].Dir {
+			t.Fatalf("config directory missing: %#v %v", entries, err)
 		}
 		if err := fsys.RemoveAll("/protected", vfs.RemoveOpts{}); err == nil {
 			t.Fatal("deleted hidden metadata")
@@ -570,6 +582,52 @@ func TestS3Filesystem(t *testing.T) {
 		}
 		if err := fsys.Remove("/adjacent/file"); !errors.Is(err, vfs.ErrReadOnly) {
 			t.Fatalf("readonly delete=%v", err)
+		}
+	})
+
+	t.Run("config-directory-read-contract", func(t *testing.T) {
+		fsys, err := NewS3FS(client, bucket, analytics.NewID())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := fsys.SetWriteable(); err != nil {
+			t.Fatal(err)
+		}
+		for _, dir := range []string{"/.lore", "/docs/.lore"} {
+			if _, err := fsys.Stat(dir); err == nil {
+				t.Fatalf("config directory exists without config: %s", dir)
+			}
+			if _, err := fsys.WriteFileAtomic(dir+"/config.yaml", []byte("version: 1"), vfs.WriteOpts{}); err != nil {
+				t.Fatal(err)
+			}
+			if info, err := fsys.Stat(dir); err != nil || !info.Dir || info.FilePath != dir {
+				t.Fatalf("config directory stat: %+v %v", info, err)
+			}
+			if entries, err := fsys.ReadDir(dir); err != nil || len(entries) != 1 || entries[0].FileName != "config.yaml" || entries[0].Dir || entries[0].FileSize != 10 {
+				t.Fatalf("config directory listing: %+v %v", entries, err)
+			}
+			var visited []string
+			if err := vfs.WalkDir(fsys, dir, func(name string, info *vfs.FileInfo, err error) error {
+				visited = append(visited, name)
+				return err
+			}); err != nil || len(visited) != 2 || visited[0] != dir || visited[1] != dir+"/config.yaml" {
+				t.Fatalf("config walk: %v %v", visited, err)
+			}
+			if _, err := fsys.WriteFileAtomic(dir+"/secret", nil, vfs.WriteOpts{}); err == nil {
+				t.Fatal("opened other metadata for writes")
+			}
+			if err := fsys.RemoveAll(dir, vfs.RemoveOpts{}); err == nil {
+				t.Fatal("opened config directory for recursive deletion")
+			}
+			if err := fsys.Remove(dir + "/config.yaml"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := fsys.Stat(dir); err == nil {
+				t.Fatal("empty metadata directory remains visible")
+			}
+			if _, err := fsys.ReadDir(dir); err == nil {
+				t.Fatal("empty metadata directory remains listable")
+			}
 		}
 	})
 

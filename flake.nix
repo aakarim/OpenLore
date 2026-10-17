@@ -22,6 +22,8 @@
             packages = [
               pkgs.go_1_26
               pkgs.nodejs_24
+              pkgs.curl
+              pkgs.coreutils
             ];
           };
         });
