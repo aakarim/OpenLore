@@ -50,7 +50,7 @@ dashboard.
 SSH, MCP, the JSON API, and published file links work in every installation.
 The startup banner's `Dashboard:` line shows whether your binary includes it.
 
-To run a hosted server instead, see [Deploy OpenLore to Render](render.md).
+To run a hosted server instead, see [Deploy a shared server](deploy.md).
 
 ## Serve a folder
 
