@@ -266,8 +266,8 @@ func (s *Server) dashboardTree(w http.ResponseWriter, r *http.Request) {
 		node := dashboardNode{Path: entryPath, Name: entry.Name(), Directory: entry.Dir, Bytes: entry.Size()}
 		if entry.Dir {
 			// Read only this folder's config, through the caller's scoped FS.
-			// Missing, inaccessible or invalid metadata leaves the default icon.
-			if content, err := scoped.ReadFile(path.Join(node.Path, ".lore/config.yaml")); err == nil {
+			// Missing, inaccessible, oversized or invalid metadata leaves the default icon.
+			if content, err := readFileBounded(scoped, path.Join(node.Path, ".lore/config.yaml"), dashboardMaxBytes); err == nil {
 				if config, err := rules.DecodeFile(content); err == nil {
 					node.Icon = rules.FolderIcon(config.Icon)
 				}

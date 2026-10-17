@@ -609,15 +609,17 @@ func TestDashboardFolderIcons(t *testing.T) {
 		"empty/.lore/config.yaml":    {Data: []byte("version: 1\nicon: ''\n")},
 		"unknown/.lore/config.yaml":  {Data: []byte("version: 1\nicon: unknown\n")},
 		"invalid/.lore/config.yaml":  {Data: []byte("version: [\n")},
-		"private/.lore/config.yaml":  {Data: []byte("version: 1\nicon: security\n")},
-		"note.md":                    {Data: []byte("file")},
+		// Valid YAML beyond the read limit must fall back, not display its icon.
+		"oversized/.lore/config.yaml": {Data: []byte("version: 1\nicon: star\n#" + strings.Repeat("x", dashboardMaxBytes))},
+		"private/.lore/config.yaml":   {Data: []byte("version: 1\nicon: security\n")},
+		"note.md":                     {Data: []byte("file")},
 	}))
 	for _, tc := range []struct {
 		target string
 		want   map[string]string
 	}{
 		{"/", map[string]string{"public": "📚"}},
-		{"/public", map[string]string{"research": "🔬", "plain": "", "empty": "", "unknown": "", "invalid": "", "note.md": ""}},
+		{"/public", map[string]string{"research": "🔬", "plain": "", "empty": "", "unknown": "", "invalid": "", "oversized": "", "note.md": ""}},
 		{"/public/research", map[string]string{"nested": ""}},
 	} {
 		w := dashboardRequest(mux, "GET", "/dashboard/api/tree?path="+tc.target, token)
