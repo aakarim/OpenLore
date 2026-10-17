@@ -123,7 +123,7 @@ func TestCommitJournalReplayProperties(t *testing.T) {
 				consume()
 			}
 		}
-	}, hegel.WithTestCases(200))
+	}, hegel.WithTestCases(1000))
 }
 
 func TestCommitJournalRetentionProtectsLaggingActiveCheckpoint(t *testing.T) {
@@ -303,7 +303,7 @@ func TestCommitJournalPartialRecordProperties(t *testing.T) {
 		if err := checkReplayedCommit(got, want); err != nil {
 			t.Fatal(err)
 		}
-	}, hegel.WithTestCases(200))
+	}, hegel.WithTestCases(1000))
 }
 
 // Exercise real file commits, pre-image blobs, journal serialization and the
@@ -426,7 +426,7 @@ func TestWriteLogAnalyticsReplayProperties(t *testing.T) {
 				}
 			}
 		}
-	}, hegel.WithTestCases(200))
+	}, hegel.WithTestCases(1000))
 }
 
 func TestCapturePreImagesStoresExactBlob(t *testing.T) {

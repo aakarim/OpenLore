@@ -315,7 +315,7 @@ func TestS3Filesystem(t *testing.T) {
 								t.Fatalf("retry file=%x want=%x err=%v", got, after, err)
 							}
 						}
-					}, hegel.WithTestCases(5))
+					}, hegel.WithTestCases(1000))
 				})
 			}
 		}

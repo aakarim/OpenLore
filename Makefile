@@ -23,10 +23,10 @@ test-libghostty:
 
 # Requires Docker; starts and removes an isolated LocalStack S3 container.
 test-analytics-s3:
-	go test -race -tags=integration ./internal/analytics -run '^TestS3Analytics$$' -count=1 -timeout=15m
+	go test -race -tags=integration ./internal/analytics -run '^TestS3Analytics$$' -count=1 -timeout=45m
 
 test-filesystem-s3:
-	go test -race -tags=integration ./pkg/openlore -run '^TestS3Filesystem$$' -count=1 -timeout=15m
+	go test -race -tags=integration ./pkg/openlore -run '^TestS3Filesystem$$' -count=1 -timeout=45m
 
 test-litestream:
 	bash ./scripts/test-litestream.sh

@@ -164,7 +164,7 @@ func TestUsageSummaryWriteAttributionProperties(t *testing.T) {
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("write summary differs:\n got %+v\nwant %+v\nevents=%+v", got, want, events)
 		}
-	}, hegel.WithTestCases(250))
+	}, hegel.WithTestCases(1000))
 }
 
 func TestUsageSummaryRejectsInvalidCharacterCounts(t *testing.T) {

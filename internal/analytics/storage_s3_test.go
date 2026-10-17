@@ -145,7 +145,7 @@ func TestS3Analytics(t *testing.T) {
 								ht.Fatalf("table got %s want %s", a, b)
 							}
 						}
-					}, hegel.WithTestCases(10))
+					}, hegel.WithTestCases(1000))
 				})
 			}
 		}

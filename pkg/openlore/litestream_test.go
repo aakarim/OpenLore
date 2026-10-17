@@ -354,7 +354,7 @@ func TestLitestreamSQLite(t *testing.T) {
 	if os.Getenv("LITESTREAM_BIN") == "" {
 		t.Fatal("run make test-litestream (requires Docker and downloads pinned Litestream)")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 14*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 44*time.Minute)
 	defer cancel()
 	container, err := localstack.Run(ctx, "localstack/localstack:4.9.2", testcontainers.WithEnv(map[string]string{"SERVICES": "s3"}))
 	if err != nil {
@@ -446,7 +446,7 @@ func TestLitestreamSQLite(t *testing.T) {
 						if err := checkSQLiteFixture(ctx, f, want); err != nil {
 							t.Fatal(err)
 						}
-					}, hegel.WithTestCases(5))
+					}, hegel.WithTestCases(1000))
 				})
 			}
 		}

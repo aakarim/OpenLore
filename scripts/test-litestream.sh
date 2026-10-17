@@ -24,4 +24,4 @@ if [[ -z "${LITESTREAM_BIN:-}" ]]; then
   export LITESTREAM_BIN="$tmp/litestream"
 fi
 [[ "$("$LITESTREAM_BIN" version)" == "$version" ]] || { echo "Expected Litestream $version" >&2; exit 1; }
-go test -race -tags=integration ./pkg/openlore -run '^TestLitestreamSQLite$' -count=1 -timeout=15m
+go test -race -tags=integration ./pkg/openlore -run '^TestLitestreamSQLite$' -count=1 -timeout=45m
