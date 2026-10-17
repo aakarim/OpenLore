@@ -133,16 +133,6 @@ func (m memoryRemote) Get(_ context.Context, key string) (io.ReadCloser, error) 
 	return io.NopCloser(bytes.NewReader(m[key])), nil
 }
 
-type trackingRemote struct {
-	memoryRemote
-	gets []string
-}
-
-func (r *trackingRemote) Get(ctx context.Context, key string) (io.ReadCloser, error) {
-	r.gets = append(r.gets, key)
-	return r.memoryRemote.Get(ctx, key)
-}
-
 func TestRemoteSourceRangesSealedZstdDedupAndOrder(t *testing.T) {
 	at := time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC)
 	one := Event{ID: "one", Time: at.Add(time.Minute), Type: "read", Principal: "p"}
@@ -154,23 +144,21 @@ func TestRemoteSourceRangesSealedZstdDedupAndOrder(t *testing.T) {
 		}
 		return b.Bytes()
 	}
-	remote := &trackingRemote{memoryRemote: memoryRemote{"events/2026-09-15/000-100.jsonl": line(one)}}
+	remote := memoryRemote{"events/2026-09-15/000-100.jsonl": line(one)}
 	var compressed bytes.Buffer
 	zw, _ := zstd.NewWriter(&compressed)
 	_, _ = zw.Write(line(one, two))
 	_ = zw.Close()
-	remote.memoryRemote["events/2026-09-15/events-2026-09-15.jsonl.zst"] = compressed.Bytes()
-	remote.memoryRemote["events/2026-09-16/000-100.jsonl"] = line(one)
+	remote["events/2026-09-15/events-2026-09-15.jsonl.zst"] = compressed.Bytes()
+	remote["events/2026-09-15/late.jsonl"] = line(Event{ID: "late", Time: at, Type: "read", Principal: "p"})
+	remote["events/2026-09-16/000-100.jsonl"] = line(one)
 	var got []string
 	err := NewRemoteSource(remote, "events/").Scan(context.Background(), EventFilter{Types: []string{"read"}}, func(e Event) error { got = append(got, e.ID); return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(got, ",") != "one,two,one" {
+	if strings.Join(got, ",") != "one,two,late,one" {
 		t.Fatalf("events=%v, want deterministic deduplication scoped to each day", got)
-	}
-	if len(remote.gets) != 2 || !strings.HasSuffix(remote.gets[0], ".jsonl.zst") {
-		t.Fatalf("remote reads = %v, want the sealed object instead of its day's deltas", remote.gets)
 	}
 }
 

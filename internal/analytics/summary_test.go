@@ -3,10 +3,15 @@ package analytics
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"hegel.dev/go/hegel"
 )
 
 type summarySource []Event
@@ -14,6 +19,9 @@ type summarySource []Event
 func (s summarySource) Scan(_ context.Context, filter EventFilter, fn func(Event) error) error {
 	for _, event := range s {
 		if !filter.From.IsZero() && event.Time.Before(filter.From) || !filter.To.IsZero() && event.Time.After(filter.To) {
+			continue
+		}
+		if len(filter.Types) > 0 && !slices.Contains(filter.Types, event.Type) {
 			continue
 		}
 		if err := fn(event); err != nil {
@@ -71,6 +79,92 @@ func TestUsageSummaryDoesNotCollapseLegacyWritesWithoutKeys(t *testing.T) {
 	if summary.Writes != 2 || summary.UnknownWrites != 2 {
 		t.Fatalf("legacy writes collapsed: %#v", summary)
 	}
+}
+
+func TestUsageSummaryWriteAttributionProperties(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Hegel property tests are excluded in short mode")
+	}
+	hegel.Test(t, func(t *hegel.T) {
+		start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+		kinds := []string{"human", "agent", "unknown"}
+		var events summarySource
+		var totals [3]int
+		var daily [3][3]int
+		// Construct logical writes first, so expected totals do not depend on
+		// the production deduplication key or event-classification helpers.
+		for i := range hegel.Draw(t, hegel.Integers(0, 18)) {
+			shape := hegel.Draw(t, hegel.Integers(0, 2))   // scalar only, write only, both
+			keyMode := hegel.Draw(t, hegel.Integers(0, 4)) // complete, missing/empty commit/path
+			docKind := hegel.Draw(t, hegel.Integers(0, 2))
+			for variant, eventType := range []string{"doc.scalars", "doc.write"} {
+				if shape == 0 && variant == 1 || shape == 1 && variant == 0 {
+					continue
+				}
+				kind := docKind
+				if variant == 0 {
+					kind = (docKind + 1) % 3 // conflicting attribution must not override doc.write
+				}
+				day := hegel.Draw(t, hegel.Integers(0, 2))
+				fields := map[string]any{"commit_id": fmt.Sprintf("c%d", i/3), "path": fmt.Sprintf("/docs/%d.md", i%3)}
+				switch keyMode {
+				case 1:
+					delete(fields, "commit_id")
+				case 2:
+					fields["commit_id"] = ""
+				case 3:
+					delete(fields, "path")
+				case 4:
+					fields["path"] = ""
+				}
+				if hegel.Draw(t, hegel.Booleans()) {
+					fields["writer"] = kinds[kind]
+					fields["actor_kind"] = kinds[(kind+1)%3]
+				} else {
+					fields["actor_kind"] = kinds[kind]
+					if hegel.Draw(t, hegel.Booleans()) {
+						fields["writer"] = ""
+					}
+				}
+				// Omitted and unrecognised kinds are both unknown.
+				if kind == 2 && hegel.Draw(t, hegel.Booleans()) {
+					delete(fields, "writer")
+					delete(fields, "actor_kind")
+				}
+				copies := hegel.Draw(t, hegel.Integers(1, 3))
+				for copy := range copies {
+					events = append(events, Event{ID: fmt.Sprintf("%d-%d-%d", i, variant, copy), Time: start.Add(time.Duration(day) * 24 * time.Hour), Type: eventType, Fields: fields})
+				}
+				if keyMode != 0 {
+					// Without a complete key these are independent legacy events.
+					totals[kind] += copies
+					daily[day][kind] += copies
+				} else if variant == 1 || shape == 0 {
+					totals[kind]++
+					daily[day][kind]++
+				}
+			}
+		}
+		// Randomise arrival order, including pairs on different days.
+		for i := len(events) - 1; i > 0; i-- {
+			j := hegel.Draw(t, hegel.Integers(0, i))
+			events[i], events[j] = events[j], events[i]
+		}
+		got, err := UsageSummary(context.Background(), events, Params{}, 4)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := Summary{Writes: totals[0] + totals[1] + totals[2], HumanWrites: totals[0], AgentWrites: totals[1], UnknownWrites: totals[2], Activity: []SummaryActivity{}, ComputedAt: got.ComputedAt}
+		for day, counts := range daily {
+			total := counts[0] + counts[1] + counts[2]
+			if total > 0 {
+				want.Activity = append(want.Activity, SummaryActivity{Date: start.Add(time.Duration(day) * 24 * time.Hour).Format("2006-01-02"), Human: counts[0], Agent: counts[1], Unknown: counts[2], Writes: total})
+			}
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("write summary differs:\n got %+v\nwant %+v\nevents=%+v", got, want, events)
+		}
+	}, hegel.WithTestCases(1000))
 }
 
 func TestUsageSummaryRejectsInvalidCharacterCounts(t *testing.T) {
