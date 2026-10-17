@@ -1097,3 +1097,94 @@ test("a failed refresh of a published result is reported in status", async () =>
     within(dialog).getByText(/Previous results remain visible/),
   ).toBeVisible();
 });
+
+test("Setup lists configuration in its own tree, shows a config file, and keeps it out of the knowledge tree", async () => {
+  mockAPI();
+  render(<App />);
+  const user = userEvent.setup();
+  const knowledge = await screen.findByRole("complementary", {
+    name: "Knowledge tree",
+  });
+  await user.click(
+    await within(knowledge).findByRole("button", { name: /guide/ }),
+  );
+  await within(knowledge).findByRole("button", { name: /start.md/ });
+  expect(within(knowledge).queryByText(/\.lore|config\.yaml/)).toBeNull();
+
+  await user.click(screen.getByRole("button", { name: "Setup" }));
+  expect(new URLSearchParams(location.search).get("view")).toBe("setup");
+  const config = await screen.findByRole("complementary", {
+    name: "Configuration tree",
+  });
+  expect(
+    await screen.findByRole("heading", { name: "How this workspace is set up" }),
+  ).toBeVisible();
+  expect(screen.getByText("ssh lore@lore.example.test")).toBeVisible();
+  expect(screen.getByText("https://lore.example.test/mcp")).toBeVisible();
+  const docset = screen.getByRole("region", { name: /^guide/ });
+  expect(within(docset).getByText("read, write · writable")).toBeVisible();
+  expect(within(docset).getByText("/guide/inbox")).toBeVisible();
+  // Operator detail (role grants) needs lore:access:view; the fixture has none.
+  expect(within(docset).queryByRole("heading", { name: "Roles" })).toBeNull();
+
+  const group = within(config).getByRole("group", { name: "Docset guide" });
+  await user.click(within(group).getByRole("button", { name: /docset root/ }));
+  expect(new URLSearchParams(location.search).get("path")).toBe(
+    "/guide/.lore/config.yaml",
+  );
+  expect(
+    await screen.findByRole("heading", { name: "config.yaml" }),
+  ).toBeVisible();
+  expect(await screen.findByText(/use: frontmatter/)).toBeVisible();
+  expect(screen.getByText("/guide and below")).toBeVisible();
+
+  // Back in Files, the location and tree are untouched by the setup selection.
+  await user.click(screen.getByRole("button", { name: /^Files/ }));
+  const tree = await screen.findByRole("complementary", {
+    name: "Knowledge tree",
+  });
+  expect(within(tree).queryByText(/config\.yaml/)).toBeNull();
+  expect(location.pathname).toBe("/lore/guide");
+});
+
+test("Setup shows operator detail for a docset without role grants and tolerates rules without match", async () => {
+  mockAPI({ access: true });
+  render(<App />);
+  await userEvent.setup().click(await screen.findByRole("button", { name: "Setup" }));
+  const docset = await screen.findByRole("region", { name: /^guide/ });
+  expect(within(docset).getByRole("heading", { name: "Roles" })).toBeVisible();
+  expect(
+    within(docset).getByText("No role grants; only home and delegated access apply."),
+  ).toBeVisible();
+  expect(within(docset).getByText(/Folder rules may be edited by: writer/)).toBeVisible();
+  expect(within(docset).getByText("doc-size")).toBeVisible();
+  expect(within(docset).getByText(/no match patterns/)).toBeVisible();
+});
+
+test("Setup shows lore.json and openlore.yml under Server for config editors", async () => {
+  mockAPI({ configEdit: true });
+  render(<App />);
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "Setup" }));
+  const config = await screen.findByRole("complementary", {
+    name: "Configuration tree",
+  });
+  const server = await within(config).findByRole("group", { name: "Server" });
+  expect(within(server).getByRole("button", { name: /lore\.json/ })).toBeVisible();
+
+  // The Connect card links to the server settings file by name.
+  await user.click(
+    within(screen.getByRole("region", { name: "Connect" })).getByRole("button", {
+      name: "openlore.yml",
+    }),
+  );
+  expect(new URLSearchParams(location.search).get("path")).toBe(
+    "/opt/openlore/openlore.yml",
+  );
+  expect(await screen.findByText(/http_port: 8080/)).toBeVisible();
+  expect(screen.getByText("Server settings (openlore.yml)")).toBeVisible();
+  expect(screen.getByText("restart the server")).toBeVisible();
+  expect(
+    within(server).getByRole("button", { name: /openlore\.yml/ }),
+  ).toHaveAttribute("aria-current", "page");
+});

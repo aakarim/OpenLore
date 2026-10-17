@@ -125,6 +125,7 @@ func (s *Server) dashboardRoutes(frontend fs.FS) HTTPRouteRegistrar {
 			"raw": s.dashboardRaw, "history": s.dashboardHistory,
 			"access": s.dashboardAccess, "usage": s.dashboardUsage,
 			"analytics-status": s.dashboardAnalyticsStatus,
+			"setup":            s.dashboardSetup,
 		} {
 			mux.Handle("GET /dashboard/api/"+route, s.dashboardAuth(handler))
 		}
@@ -223,6 +224,24 @@ type dashboardNode struct {
 	Analytics  *analytics.SnapshotStatus `json:"analytics,omitempty"`
 }
 
+// authConfigVisible reports whether the session's filesystem exposes the live
+// lore.json at its synthetic /opt path, which the Setup view lists instead of
+// the knowledge tree.
+func authConfigVisible(scoped vfs.FileSystem) bool {
+	info, err := scoped.Stat(authConfigVFSPath)
+	return err == nil && !info.Dir
+}
+
+// dashboardKnowledgePath reports whether p belongs in the knowledge tree and
+// finder. Configuration (`.lore/` folders and the synthetic /opt config view)
+// is listed by the Setup view instead so the tree shows content only.
+func dashboardKnowledgePath(p string, authConfig bool) bool {
+	if hasReservedPath(p) {
+		return false
+	}
+	return !authConfig || !pathWithinRoot("/opt", p)
+}
+
 func (s *Server) dashboardTree(w http.ResponseWriter, r *http.Request) {
 	_, scoped, target := s.dashboardPath(r)
 	entries, err := scoped.ReadDir(target)
@@ -236,9 +255,14 @@ func (s *Server) dashboardTree(w http.ResponseWriter, r *http.Request) {
 		}
 		return entries[i].Name() < entries[j].Name()
 	})
+	authConfig := authConfigVisible(scoped)
 	nodes := make([]dashboardNode, 0, len(entries))
 	for _, entry := range entries {
-		nodes = append(nodes, dashboardNode{Path: path.Join(target, entry.Name()), Name: entry.Name(), Directory: entry.Dir, Bytes: entry.Size()})
+		entryPath := path.Join(target, entry.Name())
+		if !dashboardKnowledgePath(entryPath, authConfig) {
+			continue
+		}
+		nodes = append(nodes, dashboardNode{Path: entryPath, Name: entry.Name(), Directory: entry.Dir, Bytes: entry.Size()})
 	}
 	dashboardJSON(w, map[string]any{"path": target, "entries": nodes})
 }
@@ -266,6 +290,7 @@ func (s *Server) dashboardFiles(w http.ResponseWriter, r *http.Request) {
 		dashboardError(w, http.StatusNotFound, "folder unavailable")
 		return
 	}
+	authConfig := authConfigVisible(scoped)
 	files := make([]dashboardFile, 0)
 	walkErr := vfs.WalkDir(scoped, target, func(p string, info *vfs.FileInfo, err error) error {
 		if ctxErr := r.Context().Err(); ctxErr != nil {
@@ -273,7 +298,7 @@ func (s *Server) dashboardFiles(w http.ResponseWriter, r *http.Request) {
 		}
 		// An unreadable or vanished subtree is omitted; the rest of the
 		// workspace stays searchable.
-		if err != nil || info.Dir {
+		if err != nil || info.Dir || !dashboardKnowledgePath(p, authConfig) {
 			return nil
 		}
 		if len(files) >= dashboardMaxFiles {
@@ -330,7 +355,7 @@ func (s *Server) dashboardContextNodeFromInfo(ctx context.Context, scoped vfs.Fi
 		}
 		if s.analytics != nil && s.analytics.HasFactsIndex() {
 			facts, err := s.analytics.CurrentFacts(ctx, target, info, func() ([]byte, error) {
-				if target == authConfigVFSPath {
+				if target == authConfigVFSPath || target == serverConfigVFSPath {
 					// The authorized config view deliberately overrides a durable
 					// file at the same path, so its displayed bytes take precedence.
 					return readFileBounded(scoped, target, dashboardMaxBytes)
@@ -773,19 +798,8 @@ func (s *Server) dashboardAccess(w http.ResponseWriter, r *http.Request) {
 		if len(item.Roots) == 0 {
 			continue
 		}
-		denied := map[string]bool{}
-		for _, role := range ds.Access.Deny {
-			denied[role] = true
-		}
-		for role, grant := range ds.Access.Allow {
-			item.Roles = append(item.Roles, dashboardRole{Role: role, Grant: grant, Denied: denied[role]})
-			delete(denied, role)
-		}
-		for role := range denied {
-			item.Roles = append(item.Roles, dashboardRole{Role: role, Denied: true})
-		}
+		item.Roles = dashboardRoles(ds.Access.Allow, ds.Access.Deny)
 		sort.Strings(item.Roots)
-		sort.Slice(item.Roles, func(i, j int) bool { return item.Roles[i].Role < item.Roles[j].Role })
 		docsets = append(docsets, item)
 	}
 	sort.Slice(docsets, func(i, j int) bool { return docsets[i].Name < docsets[j].Name })

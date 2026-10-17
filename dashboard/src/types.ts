@@ -111,6 +111,60 @@ export type Access = {
   folder_rules: { origin: string; scope: string; rules: object }[];
   notes: string[];
 };
+export type RuleSpec = {
+  /** Null when the rule omits `match`. */
+  match: string[] | null;
+  exclude?: string[];
+  use: string;
+  with?: Record<string, unknown>;
+  enforce?: boolean;
+  default?: boolean;
+};
+export type SetupDocset = {
+  name: string;
+  roots: string[];
+  aliases: string[];
+  grants: string[];
+  writable: boolean;
+  readonly: boolean;
+  home: boolean;
+  inbox?: string;
+  agent_skills: boolean;
+  okf: boolean;
+  config_files: string[];
+  roles?: { role: string; grant: string; denied: boolean }[];
+  rules?: Record<string, RuleSpec>;
+  config_edit?: string[];
+};
+export type ConfigFile = {
+  path: string;
+  /** lore.json, openlore.yml, or a folder's .lore/config.yaml. */
+  kind: "auth" | "server" | "folder";
+  scope: string;
+  docset?: string;
+};
+export type Setup = {
+  identity: string;
+  roles: string[];
+  home?: string;
+  access: boolean;
+  config_edit: boolean;
+  server: {
+    ssh: string;
+    http_url: string;
+    mcp_url?: string;
+    lore_path: string;
+    readonly: boolean;
+    skills: boolean;
+    analytics: boolean;
+    history: boolean;
+  };
+  docsets: SetupDocset[];
+  config_files: ConfigFile[];
+  truncated: boolean;
+  rules?: Record<string, RuleSpec>;
+  notes: string[];
+};
 export type AnalyticsProcessingStatus = {
   activity: {
     state: "ready" | "updating" | "failed" | "disabled" | "unavailable";

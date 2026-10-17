@@ -7,6 +7,7 @@ import type {
   HistoryResponse,
   Materialized,
   Session,
+  Setup,
   TreeResponse,
   Usage,
 } from "./types";
@@ -86,6 +87,7 @@ export const api = {
     request<AnalyticsProcessingStatus>("analytics-status", signal),
   access: (path: string, signal?: AbortSignal) =>
     request<Access>(`access?${query({ path })}`, signal),
+  setup: (signal?: AbortSignal) => request<Setup>("setup", signal),
   aggregation: (
     name: string,
     path: string,
