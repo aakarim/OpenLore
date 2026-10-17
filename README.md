@@ -81,6 +81,7 @@ There's no vector database, ingestion pipeline or SDK. Your knowledge stays as o
 - [Any agent over SSH](docs/start-ssh.md)
 - [Let an agent publish into an inbox](docs/publish-to-inbox.md)
 - [Deploy to Render](docs/render.md)
+- [Prune a knowledge repository from its analytics](docs/knowledge-cleanup.md)
 - [All documentation](https://openlore.sh/docs/)
 
 
