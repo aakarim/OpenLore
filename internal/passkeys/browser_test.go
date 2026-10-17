@@ -34,6 +34,7 @@ func TestRenderFileIncludesBreadcrumbsIframeAndParentCloseLink(t *testing.T) {
 	body := rec.Body.String()
 	for _, want := range []string{
 		`rel="manifest" href="/lore/manifest.webmanifest"`,
+		`rel="apple-touch-icon" href="/lore/apple-touch-icon.svg"`,
 		`apple-mobile-web-app-capable`,
 		`navigator.serviceWorker.register("/lore/service-worker.js")`,
 		`href="/lore/"`,
@@ -85,6 +86,16 @@ func TestLoreBrowserServesPWAAssetsWithoutAuthentication(t *testing.T) {
 		}
 		if got := manifest["start_url"]; got != "/knowledge/" {
 			t.Errorf("start_url = %q", got)
+		}
+	})
+
+	t.Run("app icons", func(t *testing.T) {
+		for _, path := range []string{"/knowledge/app-icon.svg", "/knowledge/apple-touch-icon.svg"} {
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+			if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "image/svg+xml" {
+				t.Errorf("%s: status=%d Content-Type=%q", path, rec.Code, rec.Header().Get("Content-Type"))
+			}
 		}
 	})
 
