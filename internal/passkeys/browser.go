@@ -344,7 +344,7 @@ func servePWAAsset(w http.ResponseWriter, r *http.Request, lorePath string) bool
 	case lorePath + "/app-icon.svg":
 		w.Header().Set("Content-Type", "image/svg+xml")
 		w.Header().Set("Cache-Control", "public, max-age=86400")
-		fmt.Fprint(w, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="96" fill="#1d1a23"/><path d="M145 104h222v304H145z" fill="#fffdf8"/><path d="M181 164h150M181 218h150M181 272h112M181 326h132" stroke="#1d1a23" stroke-width="24" stroke-linecap="round"/><path d="M122 81h222v304" fill="none" stroke="#ff8a50" stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/></svg>`)
+		fmt.Fprint(w, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 900"><defs><linearGradient id="g" x2="900" y2="900" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#ffd366"/><stop offset=".2" stop-color="#ff9953"/><stop offset=".4" stop-color="#ffc29b"/><stop offset=".6" stop-color="#c1a3e9"/><stop offset=".8" stop-color="#8775d8"/><stop offset="1" stop-color="#564191"/></linearGradient></defs><rect width="900" height="900" fill="#564191"/><rect x="56.25" y="56.25" width="787.5" height="787.5" fill="url(#g)"/><path fill="#fafafa" d="M307.8 770h86.4L592.2 130h-86.4z"/></svg>`)
 		return true
 	default:
 		return false
