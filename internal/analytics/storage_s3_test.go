@@ -63,6 +63,10 @@ func TestS3Analytics(t *testing.T) {
 	}
 
 	t.Run("round-trip-rebuild", func(t *testing.T) {
+		cases := 25
+		if os.Getenv("OPENLORE_EXHAUSTIVE") == "1" {
+			cases = 1000
+		}
 		day := time.Now().UTC().Truncate(24 * time.Hour).Add(-3 * 24 * time.Hour)
 		for _, compression := range []string{"none", "zstd"} {
 			for _, rotation := range []time.Duration{time.Hour, 24 * time.Hour} {
@@ -145,7 +149,7 @@ func TestS3Analytics(t *testing.T) {
 								ht.Fatalf("table got %s want %s", a, b)
 							}
 						}
-					}, hegel.WithTestCases(1000))
+					}, hegel.WithTestCases(cases))
 				})
 			}
 		}

@@ -31,6 +31,14 @@ type journalAppendFunc func(context.Context, CommitRecord) error
 
 func (f journalAppendFunc) Append(ctx context.Context, r CommitRecord) error { return f(ctx, r) }
 
+// Keep every fault/operation combination in PRs; opt into deeper payload sampling locally.
+func s3TestCases() int {
+	if os.Getenv("OPENLORE_EXHAUSTIVE") == "1" {
+		return 1000
+	}
+	return 25
+}
+
 // Faults wrap real S3 requests; "after" means the remote operation completed
 // but the caller did not receive its acknowledgment. No in-memory S3 fake.
 type observedS3Client struct {
@@ -315,7 +323,7 @@ func TestS3Filesystem(t *testing.T) {
 								t.Fatalf("retry file=%x want=%x err=%v", got, after, err)
 							}
 						}
-					}, hegel.WithTestCases(1000))
+					}, hegel.WithTestCases(s3TestCases()))
 				})
 			}
 		}

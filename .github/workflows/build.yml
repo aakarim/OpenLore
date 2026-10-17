@@ -7,7 +7,7 @@ on:
     branches: [main, release/v0.7.0]
 
 jobs:
-  build:
+  dashboard:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -16,6 +16,13 @@ jobs:
 
       - name: Check, test, and build dashboard
         run: nix develop --command make dashboard-ci
+
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v31
 
       - name: Build
         run: nix develop --command go build ./...
@@ -28,17 +35,41 @@ jobs:
       - name: Test
         run: nix develop --command go test -race ${{ github.event_name == 'push' && '-short' || '' }} ./...
 
-      - name: Test analytics S3 shipping and recovery
-        if: github.event_name == 'pull_request'
-        run: nix develop --command make test-analytics-s3
+  integration:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [test-analytics-s3, test-filesystem-s3, test-litestream]
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: Test S3 filesystem and commit journal consistency
-        if: github.event_name == 'pull_request'
-        run: nix develop --command make test-filesystem-s3
+      - uses: cachix/install-nix-action@v31
 
-      - name: Test separate SQLite databases with Litestream and S3
-        if: github.event_name == 'pull_request'
-        run: nix develop --command make test-litestream
+      - name: Run integration suite
+        run: nix develop --command make ${{ matrix.target }}
+
+  # Preserve the existing build status as a gate over all its former steps.
+  build:
+    if: always()
+    needs: [dashboard, go, integration]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require successful checks
+        env:
+          DASHBOARD_RESULT: ${{ needs.dashboard.result }}
+          GO_RESULT: ${{ needs.go.result }}
+          INTEGRATION_RESULT: ${{ needs.integration.result }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          test "$DASHBOARD_RESULT" = success
+          test "$GO_RESULT" = success
+          if [ "$EVENT_NAME" = pull_request ]; then
+            test "$INTEGRATION_RESULT" = success
+          else
+            test "$INTEGRATION_RESULT" = skipped
+          fi
 
   libghostty:
     runs-on: ubuntu-latest

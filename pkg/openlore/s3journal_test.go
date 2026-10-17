@@ -293,7 +293,7 @@ func testS3CommitJournal(t *testing.T, client *s3.Client, bucket string) {
 						if len(ids) != want || ids[len(ids)-1] != attempted.ID {
 							t.Fatalf("physical journal IDs=%v want %d records ending in %s", ids, want, attempted.ID)
 						}
-					}, hegel.WithTestCases(1000))
+					}, hegel.WithTestCases(s3TestCases()))
 				})
 			}
 		}

@@ -22,6 +22,8 @@ test-libghostty:
 	./scripts/test-libghostty.sh
 
 # Requires Docker; starts and removes an isolated LocalStack S3 container.
+# Matrix properties use 25 trials per combination. For 1,000 trials, run e.g.
+# OPENLORE_EXHAUSTIVE=1 make test-analytics-s3
 test-analytics-s3:
 	go test -race -tags=integration ./internal/analytics -run '^TestS3Analytics$$' -count=1 -timeout=45m
 

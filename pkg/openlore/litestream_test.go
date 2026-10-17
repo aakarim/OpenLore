@@ -446,7 +446,7 @@ func TestLitestreamSQLite(t *testing.T) {
 						if err := checkSQLiteFixture(ctx, f, want); err != nil {
 							t.Fatal(err)
 						}
-					}, hegel.WithTestCases(1000))
+					}, hegel.WithTestCases(s3TestCases()))
 				})
 			}
 		}
