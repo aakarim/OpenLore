@@ -75,6 +75,34 @@ An identity can also name one docset as its `home`. That docset becomes `$HOME`
 and the identity gets `rw` on it. See
 [Identity home directories](auth.md#identity-home-directories).
 
+### Folder icons in the web UI
+
+To customise a docset root's icon, set `icon` in that folder's
+`.lore/config.yaml`. For the `backend` docset above, write
+`/teams/backend/.lore/config.yaml`:
+
+```yaml
+version: 1
+icon: code
+```
+
+This displays 💻 beside `backend` in the web UI's knowledge tree. **`icon`
+is a folder-config key, not a key in `lore.json`'s `docsets` object.** The
+same setting works for folders within a docset; it applies only to the
+containing folder and does not inherit into children.
+
+Choose from the [built-in emoji suite](folder-rules.md#folder-icons). Native
+emojis require no bundled icon artwork or fonts, but their appearance varies
+by device. Omit `icon` or set it to `""` to keep the default folder outline.
+Unknown names are rejected during config validation; missing, unreadable or
+invalid configs fall back to the default icon in the web UI. Reload the page
+after changing an icon.
+
+Writing this file through OpenLore requires both a write grant and a role
+listed in the owning docset's `config.edit`. For example, add
+`"config": { "edit": ["backend"] }` to the `backend` docset above to allow
+its writers to change folder configs. See [Config permissions](folder-rules.md#permissions).
+
 ## How docsets are designed
 
 ### Subtrees of one filesystem

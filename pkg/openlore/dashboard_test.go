@@ -599,6 +599,55 @@ func TestDashboardFilesListsReadableScopeFlat(t *testing.T) {
 	}
 }
 
+func TestDashboardFolderIcons(t *testing.T) {
+	s, mux, token := newDashboardTestServer(t)
+	s.merge.Mount("public", NewFSAdapter(fstest.MapFS{
+		".lore/config.yaml":          {Data: []byte("version: 1\nicon: books\n")},
+		"research/.lore/config.yaml": {Data: []byte("version: 1\nicon: research\n")},
+		"research/nested/note.md":    {Data: []byte("nested")},
+		"plain/note.md":              {Data: []byte("plain")},
+		"empty/.lore/config.yaml":    {Data: []byte("version: 1\nicon: ''\n")},
+		"unknown/.lore/config.yaml":  {Data: []byte("version: 1\nicon: unknown\n")},
+		"invalid/.lore/config.yaml":  {Data: []byte("version: [\n")},
+		// Valid YAML beyond the read limit must fall back, not display its icon.
+		"oversized/.lore/config.yaml": {Data: []byte("version: 1\nicon: star\n#" + strings.Repeat("x", dashboardMaxBytes))},
+		"private/.lore/config.yaml":   {Data: []byte("version: 1\nicon: security\n")},
+		"note.md":                     {Data: []byte("file")},
+	}))
+	for _, tc := range []struct {
+		target string
+		want   map[string]string
+	}{
+		{"/", map[string]string{"public": "📚"}},
+		{"/public", map[string]string{"research": "🔬", "plain": "", "empty": "", "unknown": "", "invalid": "", "oversized": "", "note.md": ""}},
+		{"/public/research", map[string]string{"nested": ""}},
+	} {
+		w := dashboardRequest(mux, "GET", "/dashboard/api/tree?path="+tc.target, token)
+		var tree struct{ Entries []dashboardNode }
+		if err := json.Unmarshal(w.Body.Bytes(), &tree); err != nil {
+			t.Fatal(err)
+		}
+		if w.Code != 200 {
+			t.Fatalf("tree %s: %d %s", tc.target, w.Code, w.Body.String())
+		}
+		seen := map[string]string{}
+		for _, node := range tree.Entries {
+			if node.Name == "private" || node.Icon == "🔒" {
+				t.Fatalf("private folder metadata leaked: %+v", node)
+			}
+			if node.Name == ".lore" {
+				t.Fatalf("folder config should be listed in Setup, not the knowledge tree: %+v", node)
+			}
+			seen[node.Name] = node.Icon
+		}
+		for name, icon := range tc.want {
+			if got, ok := seen[name]; !ok || got != icon {
+				t.Errorf("%s/%s icon = %q (present %v), want %q", tc.target, name, got, ok, icon)
+			}
+		}
+	}
+}
+
 func TestDashboardLargeFolderAndContextLimits(t *testing.T) {
 	s, mux, token := newDashboardTestServer(t)
 	files := fstest.MapFS{}

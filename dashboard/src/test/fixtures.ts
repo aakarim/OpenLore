@@ -146,7 +146,13 @@ export function mockAPI(
           ? {
               path: "/",
               entries: [
-                { path: "/guide", name: "guide", directory: true, bytes: 1200 },
+                {
+                  path: "/guide",
+                  name: "guide",
+                  directory: true,
+                  icon: "📚",
+                  bytes: 1200,
+                },
               ],
             }
           : {

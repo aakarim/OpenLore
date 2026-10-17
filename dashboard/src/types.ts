@@ -3,6 +3,7 @@ export type TreeEntry = {
   path: string;
   name: string;
   directory: boolean;
+  icon?: string;
   bytes: number;
 };
 export type TreeResponse = { path: string; entries: TreeEntry[] };

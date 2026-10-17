@@ -354,6 +354,12 @@ select:focus-visible,
   width: 14px;
   height: 14px;
 }
+.folder-emoji {
+  flex: 0 0 14px;
+  width: 14px;
+  font: 14px/1 "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+  text-align: center;
+}
 .chevron .icon {
   width: 12px;
   height: 12px;

@@ -6,9 +6,9 @@ import (
 )
 
 func TestDecodeFileStrictAndReservedSections(t *testing.T) {
-	valid := "version: 1\nrules:\n  short:\n    match: ['**/*.md']\n    use: size/lines\n    with: {max: 3}\nhooks: {}\n"
+	valid := "version: 1\nicon: books\nrules:\n  short:\n    match: ['**/*.md']\n    use: size/lines\n    with: {max: 3}\nhooks: {}\n"
 	config, err := DecodeFile([]byte(valid))
-	if err != nil || config.Rules["short"].Use != "size/lines" {
+	if err != nil || config.Rules["short"].Use != "size/lines" || config.Icon != "books" {
 		t.Fatalf("DecodeFile = %#v, %v", config, err)
 	}
 	for _, tc := range []struct {
@@ -17,6 +17,7 @@ func TestDecodeFileStrictAndReservedSections(t *testing.T) {
 	}{
 		{"version: 1\nhooks: {x: {}}\n", "hooks: not supported yet"},
 		{"version: 1\nunknown: true\n", "field unknown not found"},
+		{"version: 1\nicon: bookz\n", `icon: unknown name "bookz"`},
 		{"version: 2\n", "version: expected 1"},
 		{"version: 1\nrules:\n  x:\n    use: size/lines\n    matc: ['*.md']\n", `rules.x: unknown key "matc" (did you mean "match"?)`},
 		{"rules: {}\n", "version: required (expected 1)"},

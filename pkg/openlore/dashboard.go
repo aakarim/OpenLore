@@ -216,6 +216,7 @@ type dashboardNode struct {
 	Path       string                    `json:"path"`
 	Name       string                    `json:"name"`
 	Directory  bool                      `json:"directory"`
+	Icon       string                    `json:"icon,omitempty"`
 	Bytes      int64                     `json:"bytes"`
 	Lines      int64                     `json:"lines"`
 	Characters int64                     `json:"characters"`
@@ -262,7 +263,17 @@ func (s *Server) dashboardTree(w http.ResponseWriter, r *http.Request) {
 		if !dashboardKnowledgePath(entryPath, authConfig) {
 			continue
 		}
-		nodes = append(nodes, dashboardNode{Path: entryPath, Name: entry.Name(), Directory: entry.Dir, Bytes: entry.Size()})
+		node := dashboardNode{Path: entryPath, Name: entry.Name(), Directory: entry.Dir, Bytes: entry.Size()}
+		if entry.Dir {
+			// Read only this folder's config, through the caller's scoped FS.
+			// Missing, inaccessible, oversized or invalid metadata leaves the default icon.
+			if content, err := readFileBounded(scoped, path.Join(node.Path, ".lore/config.yaml"), dashboardMaxBytes); err == nil {
+				if config, err := rules.DecodeFile(content); err == nil {
+					node.Icon = rules.FolderIcon(config.Icon)
+				}
+			}
+		}
+		nodes = append(nodes, node)
 	}
 	dashboardJSON(w, map[string]any{"path": target, "entries": nodes})
 }
