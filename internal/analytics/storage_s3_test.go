@@ -64,85 +64,91 @@ func TestS3Analytics(t *testing.T) {
 
 	t.Run("round-trip-rebuild", func(t *testing.T) {
 		day := time.Now().UTC().Truncate(24 * time.Hour).Add(-3 * 24 * time.Hour)
-		hegel.Test(t, func(ht *hegel.T) {
-			remote := store(t)
-			// Release each generated case's files and handles before the next
-			// case (testing.T.Cleanup would retain them until all cases finish).
-			dir, err := os.MkdirTemp("", "analytics-s3-case-")
-			if err != nil {
-				ht.Fatal(err)
+		for _, compression := range []string{"none", "zstd"} {
+			for _, rotation := range []time.Duration{time.Hour, 24 * time.Hour} {
+				t.Run(compression+"/"+rotation.String(), func(t *testing.T) {
+					hegel.Test(t, func(ht *hegel.T) {
+						remote := store(t)
+						// Release each generated case's files and handles before the next
+						// case (testing.T.Cleanup would retain them until all cases finish).
+						dir, err := os.MkdirTemp("", "analytics-s3-case-")
+						if err != nil {
+							ht.Fatal(err)
+						}
+						defer os.RemoveAll(dir)
+						log, err := OpenEventLog(filepath.Join(dir, "source"), LogOptions{
+							Compress: compression,
+							Rotate:   rotation,
+						})
+						if err != nil {
+							ht.Fatal(err)
+						}
+						defer log.Close()
+						var events summarySource
+						for i := range hegel.Draw(ht, hegel.Integers(0, 30)) {
+							at := day.Add(time.Duration(hegel.Draw(ht, hegel.Integers(0, 3*1440))) * time.Minute)
+							e := Event{ID: fmt.Sprint(i), Time: at, Type: "command.exec", Principal: "person", SessionID: "session", Transport: "mcp", Fields: map[string]any{"command": hegel.Draw(ht, hegel.Text().MaxSize(128)), "duration_ms": hegel.Draw(ht, hegel.Integers(0, 100)), "exit_code": hegel.Draw(ht, hegel.Integers(0, 1))}}
+							events = append(events, e)
+						}
+						// One logical write straddles midnight and disagrees on attribution.
+						events = append(events,
+							Event{ID: "scalar", Time: day.Add(24*time.Hour - time.Second), Type: "doc.scalars", Fields: map[string]any{"commit_id": "commit", "path": "/a.md", "writer": "agent"}},
+							Event{ID: "write", Time: day.Add(24*time.Hour + time.Second), Type: "doc.write", Fields: map[string]any{"commit_id": "commit", "path": "/a.md", "writer": "human"}},
+						)
+						for _, event := range events {
+							if err := log.Append(ctx, event); err != nil {
+								ht.Fatal(err)
+							}
+						}
+						if err := NewShipper(log, remote, 0).ShipNow(ctx); err != nil {
+							ht.Fatal(err)
+						}
+						assertS3Events(ht, remote, events)
+						service, err := New(config.AnalyticsConfig{Dir: filepath.Join(dir, "restored"), Log: config.AnalyticsLogConfig{Compress: "none"}}, Deps{Remote: remote})
+						if err != nil {
+							ht.Fatal(err)
+						}
+						defer service.Close(ctx)
+						wantSummary, err := UsageSummary(ctx, events, Params{}, 4)
+						if err != nil {
+							ht.Fatal(err)
+						}
+						wantTable, err := builtin("top-commands")(ctx, events, nil, Params{})
+						if err != nil {
+							ht.Fatal(err)
+						}
+						for range 2 {
+							if err := service.RebuildFromRemote(ctx); err != nil {
+								ht.Fatal(err)
+							}
+							got, err := UsageSummary(ctx, service.EventSource(), Params{}, 4)
+							if err != nil {
+								ht.Fatal(err)
+							}
+							got.ComputedAt = wantSummary.ComputedAt
+							if !reflect.DeepEqual(got, wantSummary) {
+								ht.Fatalf("summary got %+v want %+v", got, wantSummary)
+							}
+							view, err := service.Registry().Run(ctx, "top-commands", Params{}, RunOptions{})
+							if err != nil {
+								ht.Fatal(err)
+							}
+							a, err := json.Marshal(view.Table)
+							if err != nil {
+								ht.Fatal(err)
+							}
+							b, err := json.Marshal(wantTable)
+							if err != nil {
+								ht.Fatal(err)
+							}
+							if !bytes.Equal(a, b) {
+								ht.Fatalf("table got %s want %s", a, b)
+							}
+						}
+					}, hegel.WithTestCases(10))
+				})
 			}
-			defer os.RemoveAll(dir)
-			log, err := OpenEventLog(filepath.Join(dir, "source"), LogOptions{
-				Compress: hegel.Draw(ht, hegel.SampledFrom([]string{"none", "zstd"})),
-				Rotate:   hegel.Draw(ht, hegel.SampledFrom([]time.Duration{time.Hour, 24 * time.Hour})),
-			})
-			if err != nil {
-				ht.Fatal(err)
-			}
-			defer log.Close()
-			var events summarySource
-			for i := range hegel.Draw(ht, hegel.Integers(0, 30)) {
-				at := day.Add(time.Duration(hegel.Draw(ht, hegel.Integers(0, 3*1440))) * time.Minute)
-				e := Event{ID: fmt.Sprint(i), Time: at, Type: "command.exec", Principal: "person", SessionID: "session", Transport: "mcp", Fields: map[string]any{"command": hegel.Draw(ht, hegel.Text().MaxSize(128)), "duration_ms": hegel.Draw(ht, hegel.Integers(0, 100)), "exit_code": hegel.Draw(ht, hegel.Integers(0, 1))}}
-				events = append(events, e)
-			}
-			// One logical write straddles midnight and disagrees on attribution.
-			events = append(events,
-				Event{ID: "scalar", Time: day.Add(24*time.Hour - time.Second), Type: "doc.scalars", Fields: map[string]any{"commit_id": "commit", "path": "/a.md", "writer": "agent"}},
-				Event{ID: "write", Time: day.Add(24*time.Hour + time.Second), Type: "doc.write", Fields: map[string]any{"commit_id": "commit", "path": "/a.md", "writer": "human"}},
-			)
-			for _, event := range events {
-				if err := log.Append(ctx, event); err != nil {
-					ht.Fatal(err)
-				}
-			}
-			if err := NewShipper(log, remote, 0).ShipNow(ctx); err != nil {
-				ht.Fatal(err)
-			}
-			assertS3Events(ht, remote, events)
-			service, err := New(config.AnalyticsConfig{Dir: filepath.Join(dir, "restored"), Log: config.AnalyticsLogConfig{Compress: "none"}}, Deps{Remote: remote})
-			if err != nil {
-				ht.Fatal(err)
-			}
-			defer service.Close(ctx)
-			wantSummary, err := UsageSummary(ctx, events, Params{}, 4)
-			if err != nil {
-				ht.Fatal(err)
-			}
-			wantTable, err := builtin("top-commands")(ctx, events, nil, Params{})
-			if err != nil {
-				ht.Fatal(err)
-			}
-			for range 2 {
-				if err := service.RebuildFromRemote(ctx); err != nil {
-					ht.Fatal(err)
-				}
-				got, err := UsageSummary(ctx, service.EventSource(), Params{}, 4)
-				if err != nil {
-					ht.Fatal(err)
-				}
-				got.ComputedAt = wantSummary.ComputedAt
-				if !reflect.DeepEqual(got, wantSummary) {
-					ht.Fatalf("summary got %+v want %+v", got, wantSummary)
-				}
-				view, err := service.Registry().Run(ctx, "top-commands", Params{}, RunOptions{})
-				if err != nil {
-					ht.Fatal(err)
-				}
-				a, err := json.Marshal(view.Table)
-				if err != nil {
-					ht.Fatal(err)
-				}
-				b, err := json.Marshal(wantTable)
-				if err != nil {
-					ht.Fatal(err)
-				}
-				if !bytes.Equal(a, b) {
-					ht.Fatalf("table got %s want %s", a, b)
-				}
-			}
-		}, hegel.WithTestCases(1000))
+		}
 	})
 
 	t.Run("lost-ack-and-checkpoint", func(t *testing.T) {

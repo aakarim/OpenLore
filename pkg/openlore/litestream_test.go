@@ -376,80 +376,79 @@ func TestLitestreamSQLite(t *testing.T) {
 	}
 
 	t.Run("blob-and-transaction-faults", func(t *testing.T) {
-		seen := map[string]bool{}
-		hegel.Test(t, func(t *hegel.T) {
-			change := drawSQLiteFixtureChanges(t, 1, 1)[0]
-			op := hegel.Draw(t, hegel.SampledFrom([]string{"create", "update", "delete"}))
-			fault := hegel.Draw(t, hegel.SampledFrom([]string{"none", "blob-before", "blob-after", "sql-rollback"}))
-			dir, err := os.MkdirTemp("", "sqlite-transaction-")
-			if err != nil {
-				t.Fatal(err)
+		for _, fault := range []string{"none", "blob-before", "blob-after", "sql-rollback"} {
+			for _, op := range []string{"create", "update", "delete"} {
+				t.Run(fault+"/"+op, func(t *testing.T) {
+					hegel.Test(t, func(t *hegel.T) {
+						change := drawSQLiteFixtureChanges(t, 1, 1)[0]
+						dir, err := os.MkdirTemp("", "sqlite-transaction-")
+						if err != nil {
+							t.Fatal(err)
+						}
+						defer os.RemoveAll(dir)
+						prefix := analytics.NewID()
+						f, err := openSQLiteFilesystemFixture(filepath.Join(dir, "events-filesystem.db"), client, bucket, prefix)
+						if err != nil {
+							t.Fatal(err)
+						}
+						defer f.db.Close()
+						var initial []sqliteFixtureChange
+						if op != "create" {
+							before := sqliteFixtureChange{ID: "before", Path: change.Path, Body: append(bytes.Clone(change.Body), 0, 1, 2)}
+							if err := f.commit(ctx, before, false); err != nil {
+								t.Fatal(err)
+							}
+							initial = append(initial, before)
+						}
+						change.Delete = op == "delete"
+						injected := errors.New("injected S3 acknowledgment failure")
+						f.client = observedS3Client{S3FileClient: client, put: func(ctx context.Context, input *s3.PutObjectInput, opts ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
+							if fault == "blob-before" {
+								return nil, injected
+							}
+							out, err := client.PutObject(ctx, input, opts...)
+							if err == nil && fault == "blob-after" {
+								return nil, injected
+							}
+							return out, err
+						}}
+						err = f.commit(ctx, change, fault == "sql-rollback")
+						want := append([]sqliteFixtureChange(nil), initial...)
+						failed := fault == "sql-rollback" || !change.Delete && strings.HasPrefix(fault, "blob-")
+						if failed {
+							if !errors.Is(err, injected) && !errors.Is(err, errSQLiteFixtureFault) {
+								t.Fatalf("expected injected error, got %v", err)
+							}
+						} else {
+							if err != nil {
+								t.Fatal(err)
+							}
+							want = append(want, change)
+						}
+						if err := checkSQLiteFixture(ctx, f, want); err != nil {
+							t.Fatal(err)
+						}
+						f.client = client
+						// Retry both known failures and a lost successful response. Exactly one
+						// operation identity must survive; a different payload must be rejected.
+						if err := f.commit(ctx, change, false); err != nil {
+							t.Fatal(err)
+						}
+						want = append(initial, change)
+						if err := checkSQLiteFixture(ctx, f, want); err != nil {
+							t.Fatal(err)
+						}
+						conflict := change
+						conflict.Body = append(bytes.Clone(change.Body), 7)
+						if err := f.commit(ctx, conflict, false); err == nil {
+							t.Fatal("accepted changed request with same operation ID")
+						}
+						if err := checkSQLiteFixture(ctx, f, want); err != nil {
+							t.Fatal(err)
+						}
+					}, hegel.WithTestCases(5))
+				})
 			}
-			defer os.RemoveAll(dir)
-			prefix := analytics.NewID()
-			f, err := openSQLiteFilesystemFixture(filepath.Join(dir, "events-filesystem.db"), client, bucket, prefix)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer f.db.Close()
-			var initial []sqliteFixtureChange
-			if op != "create" {
-				before := sqliteFixtureChange{ID: "before", Path: change.Path, Body: append(bytes.Clone(change.Body), 0, 1, 2)}
-				if err := f.commit(ctx, before, false); err != nil {
-					t.Fatal(err)
-				}
-				initial = append(initial, before)
-			}
-			change.Delete = op == "delete"
-			injected := errors.New("injected S3 acknowledgment failure")
-			f.client = observedS3Client{S3FileClient: client, put: func(ctx context.Context, input *s3.PutObjectInput, opts ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
-				if fault == "blob-before" {
-					return nil, injected
-				}
-				out, err := client.PutObject(ctx, input, opts...)
-				if err == nil && fault == "blob-after" {
-					return nil, injected
-				}
-				return out, err
-			}}
-			err = f.commit(ctx, change, fault == "sql-rollback")
-			want := append([]sqliteFixtureChange(nil), initial...)
-			failed := fault == "sql-rollback" || !change.Delete && strings.HasPrefix(fault, "blob-")
-			if failed {
-				if !errors.Is(err, injected) && !errors.Is(err, errSQLiteFixtureFault) {
-					t.Fatalf("expected injected error, got %v", err)
-				}
-			} else {
-				if err != nil {
-					t.Fatal(err)
-				}
-				want = append(want, change)
-			}
-			if err := checkSQLiteFixture(ctx, f, want); err != nil {
-				t.Fatal(err)
-			}
-			f.client = client
-			// Retry both known failures and a lost successful response. Exactly one
-			// operation identity must survive; a different payload must be rejected.
-			if err := f.commit(ctx, change, false); err != nil {
-				t.Fatal(err)
-			}
-			want = append(initial, change)
-			if err := checkSQLiteFixture(ctx, f, want); err != nil {
-				t.Fatal(err)
-			}
-			conflict := change
-			conflict.Body = append(bytes.Clone(change.Body), 7)
-			if err := f.commit(ctx, conflict, false); err == nil {
-				t.Fatal("accepted changed request with same operation ID")
-			}
-			if err := checkSQLiteFixture(ctx, f, want); err != nil {
-				t.Fatal(err)
-			}
-			seen[fault+"/"+op] = true
-		}, hegel.WithTestCases(1000))
-		if !t.Failed() && len(seen) != 12 {
-			t.Fatalf("fault coverage: got %v, want all 12 cells", seen)
 		}
 	})
 

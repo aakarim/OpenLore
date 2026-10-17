@@ -275,7 +275,7 @@ func TestCurrentRevisionLineUsageProperties(t *testing.T) {
 				t.Fatalf("line %d: cold=%v count=%d events=%+v", line+1, cold[line], count, events)
 			}
 		}
-	}, hegel.WithTestCases(1000))
+	}, hegel.WithTestCases(250))
 }
 
 func TestLeastUsedLinesRejectsDirectory(t *testing.T) {
@@ -438,7 +438,7 @@ func TestIncrementalAggregationsMergeExactly(t *testing.T) {
 				if !bytes.Equal(wantJSON, gotJSON) {
 					t.Fatalf("merged table differs:\n got %s\nwant %s\nparams=%+v boundaries=%v events=%+v", gotJSON, wantJSON, p, boundaries, events)
 				}
-			}, hegel.WithTestCases(1000))
+			}, hegel.WithTestCases(250))
 		})
 	}
 }

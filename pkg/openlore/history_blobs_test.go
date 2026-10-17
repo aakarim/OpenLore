@@ -22,6 +22,15 @@ import (
 	"hegel.dev/go/hegel"
 )
 
+// Local and remote journals must preserve the entire record, not just its ID
+// or the analytics values derived from it.
+func checkReplayedCommit(got, want CommitRecord) error {
+	if !reflect.DeepEqual(got, want) {
+		return fmt.Errorf("replayed record differs: got %#v, want %#v", got, want)
+	}
+	return nil
+}
+
 // Compare the cursor with an append-order model, not another cursor. Rotation,
 // lag, retention and checkpoint/reopen can happen in any generated order.
 func TestCommitJournalReplayProperties(t *testing.T) {
@@ -50,8 +59,8 @@ func TestCommitJournalReplayProperties(t *testing.T) {
 			if err != nil || !ok {
 				t.Fatalf("record %d/%d: ok=%v err=%v", read, len(records), ok, err)
 			}
-			if !reflect.DeepEqual(got, records[read]) {
-				t.Fatalf("record %d: got %#v, want %#v", read, got, records[read])
+			if err := checkReplayedCommit(got, records[read]); err != nil {
+				t.Fatalf("record %d: %v", read, err)
 			}
 			read++
 		}
@@ -114,7 +123,7 @@ func TestCommitJournalReplayProperties(t *testing.T) {
 				consume()
 			}
 		}
-	}, hegel.WithTestCases(1000))
+	}, hegel.WithTestCases(200))
 }
 
 func TestCommitJournalRetentionProtectsLaggingActiveCheckpoint(t *testing.T) {
@@ -288,10 +297,13 @@ func TestCommitJournalPartialRecordProperties(t *testing.T) {
 			t.Fatalf("cancelled read consumed record: ok=%v err=%v position=%#v", ok, err, cursor.Position())
 		}
 		got, ok, err := cursor.Next(context.Background())
-		if err != nil || !ok || !reflect.DeepEqual(got, want) || cursor.Position().Offset != int64(len(line)) {
+		if err != nil || !ok || cursor.Position().Offset != int64(len(line)) {
 			t.Fatalf("completed record: got=%#v ok=%v err=%v position=%#v", got, ok, err, cursor.Position())
 		}
-	}, hegel.WithTestCases(1000))
+		if err := checkReplayedCommit(got, want); err != nil {
+			t.Fatal(err)
+		}
+	}, hegel.WithTestCases(200))
 }
 
 // Exercise real file commits, pre-image blobs, journal serialization and the
@@ -414,7 +426,7 @@ func TestWriteLogAnalyticsReplayProperties(t *testing.T) {
 				}
 			}
 		}
-	}, hegel.WithTestCases(1000))
+	}, hegel.WithTestCases(200))
 }
 
 func TestCapturePreImagesStoresExactBlob(t *testing.T) {

@@ -138,170 +138,164 @@ func (c *s3JournalCursor) Seek(ctx context.Context, id string) error {
 func testS3CommitJournal(t *testing.T, client *s3.Client, bucket string) {
 	ctx := context.Background()
 	t.Run("write-replay-faults", func(t *testing.T) {
-		seen := map[string]bool{}
-		hegel.Test(t, func(t *hegel.T) {
-			op := hegel.Draw(t, hegel.SampledFrom([]string{"create", "update", "delete"}))
-			fault := hegel.Draw(t, hegel.SampledFrom([]string{"none", "put-before", "put-after"}))
-			before := hegel.Draw(t, hegel.Binary(0, 128))
-			after := append(bytes.Clone(before), hegel.Draw(t, hegel.Binary(1, 64))...)
-			dir, err := os.MkdirTemp("", "s3-journal-")
-			if err != nil {
-				t.Fatal(err)
+		for _, fault := range []string{"none", "put-before", "put-after"} {
+			for _, op := range []string{"create", "update", "delete"} {
+				t.Run(fault+"/"+op, func(t *testing.T) {
+					hegel.Test(t, func(t *hegel.T) {
+						before := hegel.Draw(t, hegel.Binary(0, 128))
+						after := append(bytes.Clone(before), hegel.Draw(t, hegel.Binary(1, 64))...)
+						dir, err := os.MkdirTemp("", "s3-journal-")
+						if err != nil {
+							t.Fatal(err)
+						}
+						defer os.RemoveAll(dir)
+						prefix := analytics.NewID()
+						journal := &s3JournalFixture{client, bucket, prefix + "/commits.jsonl"}
+						fsys, err := NewS3FS(client, bucket, prefix+"/files")
+						if err != nil {
+							t.Fatal(err)
+						}
+						if err := fsys.SetWriteable(); err != nil {
+							t.Fatal(err)
+						}
+						log := newWriteLog(fsys, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), 1)
+						defer log.Close(ctx)
+						log.SetCommitJournal(journal, nil, false)
+						cursor := &s3JournalCursor{journal: journal, cache: filepath.Join(dir, "commits.jsonl")}
+						processor := NewScalarProcessor(cursor, nil, IdentityStoreClassifier(nil)).(*ScalarProcessor)
+						const name = "/docs/é %25.md"
+						if op != "create" {
+							if _, err := log.Submit(ctx, Attribution{Principal: "person"}, vfs.ChangeSet{Target: name, Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: before}}); err != nil {
+								t.Fatal(err)
+							}
+							if events := processor.Drain(ctx); len(events) != 1 || events[0].Fields["delta"].(map[string]any)["bytes"] != float64(len(before)) {
+								t.Fatalf("initial replay: %+v", events)
+							}
+						} else {
+							before = nil
+						}
+						injected := errors.New("S3 journal unavailable")
+						hit := false
+						faulty := *journal
+						faulty.client = observedS3Client{S3FileClient: client, put: func(ctx context.Context, in *s3.PutObjectInput, opts ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
+							hit = true
+							if fault == "put-before" {
+								return nil, injected
+							}
+							out, err := client.PutObject(ctx, in, opts...)
+							if err == nil && fault == "put-after" {
+								return nil, injected
+							}
+							return out, err
+						}}
+						var attempted CommitRecord
+						log.SetCommitJournal(journalAppendFunc(func(ctx context.Context, r CommitRecord) error {
+							attempted = r
+							return faulty.Append(ctx, r)
+						}), nil, false)
+						change := vfs.ChangeSet{Target: name, Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: after}}
+						if op == "delete" {
+							change.Action, change.Write, after = vfs.ChangeActionRemove, nil, nil
+						}
+						if _, err := log.Submit(ctx, Attribution{Principal: "person"}, change); err != nil {
+							t.Fatal(err)
+						}
+						if err := log.Close(ctx); err != nil {
+							t.Fatal(err)
+						}
+						if !hit || attempted.ID == "" {
+							t.Fatal("journal boundary not exercised")
+						}
+						got, err := fsys.ReadFile(name)
+						if op == "delete" {
+							if !errors.Is(err, os.ErrNotExist) {
+								t.Fatalf("delete not visible: %v", err)
+							}
+						} else if err != nil || !bytes.Equal(got, after) {
+							t.Fatalf("file=%x want=%x err=%v", got, after, err)
+						}
+						// GET failures must not consume history; the next successful GET
+						// must still yield the same commit to the actual analytics processor.
+						position := cursor.Position()
+						journal.client = observedS3Client{S3FileClient: client, get: func(context.Context, *s3.GetObjectInput, ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
+							return nil, injected
+						}}
+						if _, ok, err := cursor.Next(ctx); !errors.Is(err, injected) || ok || cursor.Position() != position {
+							t.Fatalf("failed GET consumed history: ok=%v err=%v", ok, err)
+						}
+						journal.client = client
+						checkEvents := func(events []analytics.Event, count int) {
+							if len(events) != count {
+								t.Fatalf("%s/%s replay count=%d want=%d", fault, op, len(events), count)
+							}
+							if count == 1 {
+								fields := events[0].Fields
+								if fields["commit_id"] != attempted.ID || fields["path"] != name || fields["action"] != op || fields["delta"].(map[string]any)["bytes"] != float64(len(after)-len(before)) {
+									t.Fatalf("incorrect replay: %+v", events[0])
+								}
+							}
+						}
+						count := 1
+						if fault == "put-before" {
+							count = 0 // Existing dual-write gap: visible file, missing journal.
+						}
+						checkEvents(processor.Drain(ctx), count)
+						checkpoint, err := processor.MarshalCheckpointState()
+						if err != nil {
+							t.Fatal(err)
+						}
+						// Explicitly retry the retained record, not Submit (which creates a
+						// new ID). This is a sink contract, NOT automatic production repair.
+						for range 2 {
+							if err := journal.Append(ctx, attempted); err != nil {
+								t.Fatal(err)
+							}
+						}
+						conflict := attempted
+						conflict.Attribution.Principal = "different-person"
+						if err := journal.Append(ctx, conflict); err == nil {
+							t.Fatal("accepted changed record with same ID")
+						}
+						// Remove all local cached bytes. A restored checkpoint must work
+						// from S3 alone, with the journal's logical segment name unchanged.
+						if err := os.Remove(cursor.cache); err != nil {
+							t.Fatal(err)
+						}
+						cursor = &s3JournalCursor{journal: journal, cache: filepath.Join(dir, "commits.jsonl")}
+						processor = NewScalarProcessor(cursor, nil, IdentityStoreClassifier(nil)).(*ScalarProcessor)
+						if err := processor.RestoreCheckpointState(checkpoint); err != nil {
+							t.Fatal(err)
+						}
+						checkEvents(processor.Drain(ctx), 1-count)
+						// Inspect the cursor too: processor deduplication must not conceal
+						// duplicate physical journal records after an ambiguous PUT.
+						raw := &s3JournalCursor{journal: journal, cache: filepath.Join(dir, "raw.jsonl")}
+						var ids []string
+						for {
+							r, ok, err := raw.Next(ctx)
+							if err != nil {
+								t.Fatal(err)
+							}
+							if !ok {
+								break
+							}
+							if r.ID == attempted.ID {
+								if err := checkReplayedCommit(r, attempted); err != nil {
+									t.Fatal(err)
+								}
+							}
+							ids = append(ids, r.ID)
+						}
+						want := 2
+						if op == "create" {
+							want = 1
+						}
+						if len(ids) != want || ids[len(ids)-1] != attempted.ID {
+							t.Fatalf("physical journal IDs=%v want %d records ending in %s", ids, want, attempted.ID)
+						}
+					}, hegel.WithTestCases(5))
+				})
 			}
-			defer os.RemoveAll(dir)
-			prefix := analytics.NewID()
-			journal := &s3JournalFixture{client, bucket, prefix + "/commits.jsonl"}
-			fsys, err := NewS3FS(client, bucket, prefix+"/files")
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := fsys.SetWriteable(); err != nil {
-				t.Fatal(err)
-			}
-			log := newWriteLog(fsys, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), 1)
-			defer log.Close(ctx)
-			log.SetCommitJournal(journal, nil, false)
-			cursor := &s3JournalCursor{journal: journal, cache: filepath.Join(dir, "commits.jsonl")}
-			processor := NewScalarProcessor(cursor, nil, IdentityStoreClassifier(nil)).(*ScalarProcessor)
-			const name = "/docs/é %25.md"
-			if op != "create" {
-				if _, err := log.Submit(ctx, Attribution{Principal: "person"}, vfs.ChangeSet{Target: name, Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: before}}); err != nil {
-					t.Fatal(err)
-				}
-				if events := processor.Drain(ctx); len(events) != 1 || events[0].Fields["delta"].(map[string]any)["bytes"] != float64(len(before)) {
-					t.Fatalf("initial replay: %+v", events)
-				}
-			} else {
-				before = nil
-			}
-			injected := errors.New("S3 journal unavailable")
-			hit := false
-			faulty := *journal
-			faulty.client = observedS3Client{S3FileClient: client, put: func(ctx context.Context, in *s3.PutObjectInput, opts ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
-				hit = true
-				if fault == "put-before" {
-					return nil, injected
-				}
-				out, err := client.PutObject(ctx, in, opts...)
-				if err == nil && fault == "put-after" {
-					return nil, injected
-				}
-				return out, err
-			}}
-			var attempted CommitRecord
-			log.SetCommitJournal(journalAppendFunc(func(ctx context.Context, r CommitRecord) error {
-				attempted = r
-				return faulty.Append(ctx, r)
-			}), nil, false)
-			change := vfs.ChangeSet{Target: name, Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: after}}
-			if op == "delete" {
-				change.Action, change.Write, after = vfs.ChangeActionRemove, nil, nil
-			}
-			if _, err := log.Submit(ctx, Attribution{Principal: "person"}, change); err != nil {
-				t.Fatal(err)
-			}
-			if err := log.Close(ctx); err != nil {
-				t.Fatal(err)
-			}
-			if !hit || attempted.ID == "" {
-				t.Fatal("journal boundary not exercised")
-			}
-			got, err := fsys.ReadFile(name)
-			if op == "delete" {
-				if !errors.Is(err, os.ErrNotExist) {
-					t.Fatalf("delete not visible: %v", err)
-				}
-			} else if err != nil || !bytes.Equal(got, after) {
-				t.Fatalf("file=%x want=%x err=%v", got, after, err)
-			}
-			// GET failures must not consume history; the next successful GET
-			// must still yield the same commit to the actual analytics processor.
-			position := cursor.Position()
-			journal.client = observedS3Client{S3FileClient: client, get: func(context.Context, *s3.GetObjectInput, ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
-				return nil, injected
-			}}
-			if _, ok, err := cursor.Next(ctx); !errors.Is(err, injected) || ok || cursor.Position() != position {
-				t.Fatalf("failed GET consumed history: ok=%v err=%v", ok, err)
-			}
-			journal.client = client
-			checkEvents := func(events []analytics.Event, count int) {
-				if len(events) != count {
-					t.Fatalf("%s/%s replay count=%d want=%d", fault, op, len(events), count)
-				}
-				if count == 1 {
-					fields := events[0].Fields
-					if fields["commit_id"] != attempted.ID || fields["path"] != name || fields["action"] != op || fields["delta"].(map[string]any)["bytes"] != float64(len(after)-len(before)) {
-						t.Fatalf("incorrect replay: %+v", events[0])
-					}
-				}
-			}
-			count := 1
-			if fault == "put-before" {
-				count = 0 // Existing dual-write gap: visible file, missing journal.
-			}
-			checkEvents(processor.Drain(ctx), count)
-			checkpoint, err := processor.MarshalCheckpointState()
-			if err != nil {
-				t.Fatal(err)
-			}
-			// Explicitly retry the retained record, not Submit (which creates a
-			// new ID). This is a sink contract, NOT automatic production repair.
-			for range 2 {
-				if err := journal.Append(ctx, attempted); err != nil {
-					t.Fatal(err)
-				}
-			}
-			conflict := attempted
-			conflict.Attribution.Principal = "different-person"
-			if err := journal.Append(ctx, conflict); err == nil {
-				t.Fatal("accepted changed record with same ID")
-			}
-			// Remove all local cached bytes. A restored checkpoint must work
-			// from S3 alone, with the journal's logical segment name unchanged.
-			if err := os.Remove(cursor.cache); err != nil {
-				t.Fatal(err)
-			}
-			cursor = &s3JournalCursor{journal: journal, cache: filepath.Join(dir, "commits.jsonl")}
-			processor = NewScalarProcessor(cursor, nil, IdentityStoreClassifier(nil)).(*ScalarProcessor)
-			if err := processor.RestoreCheckpointState(checkpoint); err != nil {
-				t.Fatal(err)
-			}
-			checkEvents(processor.Drain(ctx), 1-count)
-			// Inspect the cursor too: processor deduplication must not conceal
-			// duplicate physical journal records after an ambiguous PUT.
-			raw := &s3JournalCursor{journal: journal, cache: filepath.Join(dir, "raw.jsonl")}
-			var ids []string
-			for {
-				r, ok, err := raw.Next(ctx)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if !ok {
-					break
-				}
-				if r.ID == attempted.ID {
-					got, err := json.Marshal(r)
-					if err != nil {
-						t.Fatal(err)
-					}
-					want, err := json.Marshal(attempted)
-					if err != nil || !bytes.Equal(got, want) {
-						t.Fatalf("record changed in transit: got=%s want=%s err=%v", got, want, err)
-					}
-				}
-				ids = append(ids, r.ID)
-			}
-			want := 2
-			if op == "create" {
-				want = 1
-			}
-			if len(ids) != want || ids[len(ids)-1] != attempted.ID {
-				t.Fatalf("physical journal IDs=%v want %d records ending in %s", ids, want, attempted.ID)
-			}
-			seen[fault+"/"+op] = true
-		}, hegel.WithTestCases(1000))
-		if !t.Failed() && len(seen) != 9 {
-			t.Fatalf("fault matrix covered %v, want all nine cells", seen)
 		}
 	})
 

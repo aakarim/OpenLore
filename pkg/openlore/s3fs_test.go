@@ -84,247 +84,239 @@ func TestS3Filesystem(t *testing.T) {
 	})
 
 	t.Run("file-journal-fault-boundaries", func(t *testing.T) {
-		seen := map[string]bool{}
-		hegel.Test(t, func(t *hegel.T) {
-			fault := hegel.Draw(t, hegel.SampledFrom([]string{"none", "blob-before", "blob-after", "manifest-before", "manifest-after", "journal-before", "journal-after"}))
-			op := hegel.Draw(t, hegel.SampledFrom([]string{"create", "update", "delete"}))
-			before := hegel.Draw(t, hegel.Binary(1, 64))
-			after := append(bytes.Clone(before), hegel.Draw(t, hegel.Binary(1, 32))...)
-			prefix := analytics.NewID()
-			dir, err := os.MkdirTemp("", "s3-file-journal-")
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer os.RemoveAll(dir)
-			journal := fileCommitJournal(filepath.Join(dir, "commits.jsonl"))
-			blobs, err := OpenBlobStore(filepath.Join(dir, "objects"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			fsys, err := NewS3FS(client, bucket, prefix)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := fsys.SetWriteable(); err != nil {
-				t.Fatal(err)
-			}
-			log := newWriteLog(fsys, nil, logger, 1)
-			defer func() { log.Close(ctx) }()
-			log.SetCommitJournal(journal, blobs, true)
-			const name = "/docs/é %25.md"
-			initialRecords := 0
-			if op != "create" {
-				if _, err := log.Submit(ctx, Attribution{Principal: "person"}, vfs.ChangeSet{Target: name, Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: before}}); err != nil {
-					t.Fatal(err)
-				}
-				initialRecords = 1
-			}
-			if err := log.Close(ctx); err != nil {
-				t.Fatal(err)
-			}
-			injected := errors.New("injected storage boundary failure")
-			hit := false
-			faultClient := observedS3Client{S3FileClient: client}
-			faultClient.put = func(ctx context.Context, in *s3.PutObjectInput, opts ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
-				key := aws.ToString(in.Key)
-				matches := strings.HasPrefix(fault, "blob-") && strings.Contains(key, "/objects/") || strings.HasPrefix(fault, "manifest-") && strings.HasSuffix(key, "/manifest.json")
-				if !matches {
-					return client.PutObject(ctx, in, opts...)
-				}
-				hit = true
-				if strings.HasSuffix(fault, "-after") {
-					if _, err := client.PutObject(ctx, in, opts...); err != nil {
-						return nil, err
-					}
-				}
-				return nil, injected
-			}
-			fsys, err = NewS3FS(faultClient, bucket, prefix)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := fsys.SetWriteable(); err != nil {
-				t.Fatal(err)
-			}
-			log = newWriteLog(fsys, nil, logger, 1)
-			log.SetCommitJournal(journalAppendFunc(func(ctx context.Context, record CommitRecord) error {
-				if fault == "journal-before" {
-					hit = true
-					return injected
-				}
-				if err := journal.Append(ctx, record); err != nil {
-					return err
-				}
-				if fault == "journal-after" {
-					hit = true
-					return injected
-				}
-				return nil
-			}), blobs, true)
-			cs := vfs.ChangeSet{Target: name, Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: after}}
-			switch op {
-			case "create":
-				cs.Write.Opts.IfNoneMatch = true
-			case "update":
-				hash := fmt.Sprintf("%x", sha256.Sum256(before))
-				cs.Write.Opts.IfMatch = &hash
-			case "delete":
-				cs.Action, cs.Write = vfs.ChangeActionRemove, nil
-			}
-			_, submitErr := log.Submit(ctx, Attribution{Principal: "person"}, cs)
-			if err := log.Close(ctx); err != nil {
-				t.Fatal(err)
-			}
-			// Deletes do not PUT content blobs. They must remain a successful
-			// control when only a content-upload fault has been armed.
-			expectedHit := fault != "none" && !(op == "delete" && strings.HasPrefix(fault, "blob-"))
-			if hit != expectedHit {
-				t.Fatalf("fault %s/%s hit=%v want=%v", fault, op, hit, expectedHit)
-			}
-			failedAtS3 := expectedHit && !strings.HasPrefix(fault, "journal-")
-			if failedAtS3 != errors.Is(submitErr, injected) || !failedAtS3 && submitErr != nil {
-				t.Fatalf("%s/%s submit=%v", fault, op, submitErr)
-			}
-			published := !failedAtS3 || fault == "manifest-after"
-			recorded := !failedAtS3 && fault != "journal-before"
-			// Recreate both sides: restart is not a reconciliation mechanism.
-			fsys, err = NewS3FS(client, bucket, prefix)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := fsys.SetWriteable(); err != nil {
-				t.Fatal(err)
-			}
-			wantExists := op != "create"
-			wantBytes := before
-			if published {
-				wantExists, wantBytes = op != "delete", after
-			}
-			got, readErr := fsys.ReadFile(name)
-			if wantExists {
-				if readErr != nil || !bytes.Equal(got, wantBytes) {
-					t.Fatalf("%s/%s file=%x want=%x err=%v", fault, op, got, wantBytes, readErr)
-				}
-			} else if !errors.Is(readErr, os.ErrNotExist) {
-				t.Fatalf("%s/%s expected absent file: %v", fault, op, readErr)
-			}
-			cursor, err := OpenHistoryCursor(string(journal), HistoryPosition{})
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer cursor.(io.Closer).Close()
-			var records []CommitRecord
-			for {
-				r, ok, err := cursor.Next(ctx)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if !ok {
-					break
-				}
-				records = append(records, r)
-			}
-			wantRecords := initialRecords
-			if recorded {
-				wantRecords++
-			}
-			if len(records) != wantRecords {
-				t.Fatalf("%s/%s journal=%d want=%d", fault, op, len(records), wantRecords)
-			}
-			if recorded {
-				last := records[len(records)-1]
-				if len(last.Leaves) != 1 || last.Leaves[0].Target != name || last.Leaves[0].Action != cs.Action {
-					t.Fatalf("incorrect committed leaf: %#v", last)
-				}
-			}
-			if err := cursor.(historyCursorRestorer).RestorePosition(HistoryPosition{}); err != nil {
-				t.Fatal(err)
-			}
-			processor := NewScalarProcessor(cursor, blobs, IdentityStoreClassifier(nil)).(*ScalarProcessor)
-			events := processor.Drain(ctx)
-			var analyticalBytes float64
-			for _, e := range events {
-				analyticalBytes += e.Fields["delta"].(map[string]any)["bytes"].(float64)
-			}
-			wantAnalyticsBytes := 0
-			if initialRecords > 0 {
-				wantAnalyticsBytes = len(before)
-			}
-			if recorded {
-				wantAnalyticsBytes = len(after)
-				if op == "delete" {
-					wantAnalyticsBytes = 0
-				}
-			}
-			if len(events) != wantRecords || analyticalBytes != float64(wantAnalyticsBytes) {
-				t.Fatalf("%s/%s analytics=%v/%d want=%d/%d", fault, op, analyticalBytes, len(events), wantAnalyticsBytes, wantRecords)
-			}
-			visibleBytes := 0
-			if wantExists {
-				visibleBytes = len(wantBytes)
-			}
-			if drift := analyticalBytes != float64(visibleBytes); drift != (published && !recorded) {
-				t.Fatalf("%s/%s drift=%v, analytics=%v S3=%d", fault, op, drift, analyticalBytes, visibleBytes)
-			}
-			// Retry only an operation reported as failed. Pre-publication failures
-			// recover; lost manifest acknowledgments cannot be repaired by blindly
-			// retrying the original create/CAS/delete operation.
-			if failedAtS3 {
-				log = newWriteLog(fsys, nil, logger, 1)
-				log.SetCommitJournal(journal, blobs, true)
-				_, retryErr := log.Submit(ctx, Attribution{Principal: "person"}, cs)
-				if err := log.Close(ctx); err != nil {
-					t.Fatal(err)
-				}
-				if published {
-					if op == "delete" {
-						if !errors.Is(retryErr, os.ErrNotExist) {
-							t.Fatalf("delete retry=%v", retryErr)
-						}
-					} else {
-						var precondition *vfs.PreconditionError
-						if !errors.As(retryErr, &precondition) {
-							t.Fatalf("CAS retry=%v", retryErr)
-						}
-					}
-				} else if retryErr != nil {
-					t.Fatalf("retry before publication: %v", retryErr)
-				}
-				extra := processor.Drain(ctx)
-				if published && len(extra) != 0 || !published && len(extra) != 1 {
-					t.Fatalf("%s/%s retry events=%d", fault, op, len(extra))
-				}
-				if !published {
-					wantDelta := len(after)
-					if op != "create" {
-						wantDelta -= len(before)
-					}
-					if op == "delete" {
-						wantDelta = -len(before)
-					}
-					if extra[0].Fields["delta"].(map[string]any)["bytes"] != float64(wantDelta) {
-						t.Fatalf("retry delta=%#v want=%d", extra[0].Fields, wantDelta)
-					}
-				}
-				got, err := fsys.ReadFile(name)
-				if op == "delete" {
-					if !errors.Is(err, os.ErrNotExist) {
-						t.Fatalf("retry delete: %v", err)
-					}
-				} else if err != nil || !bytes.Equal(got, after) {
-					t.Fatalf("retry file=%x want=%x err=%v", got, after, err)
-				}
-			}
-			seen[fault+"/"+op] = true
-		}, hegel.WithTestCases(1000))
-		if t.Failed() {
-			return
-		}
 		for _, fault := range []string{"none", "blob-before", "blob-after", "manifest-before", "manifest-after", "journal-before", "journal-after"} {
 			for _, op := range []string{"create", "update", "delete"} {
-				if !seen[fault+"/"+op] {
-					t.Errorf("fault matrix cell not exercised: %s/%s", fault, op)
-				}
+				t.Run(fault+"/"+op, func(t *testing.T) {
+					hegel.Test(t, func(t *hegel.T) {
+						before := hegel.Draw(t, hegel.Binary(1, 64))
+						after := append(bytes.Clone(before), hegel.Draw(t, hegel.Binary(1, 32))...)
+						prefix := analytics.NewID()
+						dir, err := os.MkdirTemp("", "s3-file-journal-")
+						if err != nil {
+							t.Fatal(err)
+						}
+						defer os.RemoveAll(dir)
+						journal := fileCommitJournal(filepath.Join(dir, "commits.jsonl"))
+						blobs, err := OpenBlobStore(filepath.Join(dir, "objects"))
+						if err != nil {
+							t.Fatal(err)
+						}
+						fsys, err := NewS3FS(client, bucket, prefix)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if err := fsys.SetWriteable(); err != nil {
+							t.Fatal(err)
+						}
+						log := newWriteLog(fsys, nil, logger, 1)
+						defer func() { log.Close(ctx) }()
+						log.SetCommitJournal(journal, blobs, true)
+						const name = "/docs/é %25.md"
+						initialRecords := 0
+						if op != "create" {
+							if _, err := log.Submit(ctx, Attribution{Principal: "person"}, vfs.ChangeSet{Target: name, Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: before}}); err != nil {
+								t.Fatal(err)
+							}
+							initialRecords = 1
+						}
+						if err := log.Close(ctx); err != nil {
+							t.Fatal(err)
+						}
+						injected := errors.New("injected storage boundary failure")
+						hit := false
+						faultClient := observedS3Client{S3FileClient: client}
+						faultClient.put = func(ctx context.Context, in *s3.PutObjectInput, opts ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
+							key := aws.ToString(in.Key)
+							matches := strings.HasPrefix(fault, "blob-") && strings.Contains(key, "/objects/") || strings.HasPrefix(fault, "manifest-") && strings.HasSuffix(key, "/manifest.json")
+							if !matches {
+								return client.PutObject(ctx, in, opts...)
+							}
+							hit = true
+							if strings.HasSuffix(fault, "-after") {
+								if _, err := client.PutObject(ctx, in, opts...); err != nil {
+									return nil, err
+								}
+							}
+							return nil, injected
+						}
+						fsys, err = NewS3FS(faultClient, bucket, prefix)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if err := fsys.SetWriteable(); err != nil {
+							t.Fatal(err)
+						}
+						log = newWriteLog(fsys, nil, logger, 1)
+						log.SetCommitJournal(journalAppendFunc(func(ctx context.Context, record CommitRecord) error {
+							if fault == "journal-before" {
+								hit = true
+								return injected
+							}
+							if err := journal.Append(ctx, record); err != nil {
+								return err
+							}
+							if fault == "journal-after" {
+								hit = true
+								return injected
+							}
+							return nil
+						}), blobs, true)
+						cs := vfs.ChangeSet{Target: name, Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: after}}
+						switch op {
+						case "create":
+							cs.Write.Opts.IfNoneMatch = true
+						case "update":
+							hash := fmt.Sprintf("%x", sha256.Sum256(before))
+							cs.Write.Opts.IfMatch = &hash
+						case "delete":
+							cs.Action, cs.Write = vfs.ChangeActionRemove, nil
+						}
+						_, submitErr := log.Submit(ctx, Attribution{Principal: "person"}, cs)
+						if err := log.Close(ctx); err != nil {
+							t.Fatal(err)
+						}
+						// Deletes do not PUT content blobs. They must remain a successful
+						// control when only a content-upload fault has been armed.
+						expectedHit := fault != "none" && !(op == "delete" && strings.HasPrefix(fault, "blob-"))
+						if hit != expectedHit {
+							t.Fatalf("fault %s/%s hit=%v want=%v", fault, op, hit, expectedHit)
+						}
+						failedAtS3 := expectedHit && !strings.HasPrefix(fault, "journal-")
+						if failedAtS3 != errors.Is(submitErr, injected) || !failedAtS3 && submitErr != nil {
+							t.Fatalf("%s/%s submit=%v", fault, op, submitErr)
+						}
+						published := !failedAtS3 || fault == "manifest-after"
+						recorded := !failedAtS3 && fault != "journal-before"
+						// Recreate both sides: restart is not a reconciliation mechanism.
+						fsys, err = NewS3FS(client, bucket, prefix)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if err := fsys.SetWriteable(); err != nil {
+							t.Fatal(err)
+						}
+						wantExists := op != "create"
+						wantBytes := before
+						if published {
+							wantExists, wantBytes = op != "delete", after
+						}
+						got, readErr := fsys.ReadFile(name)
+						if wantExists {
+							if readErr != nil || !bytes.Equal(got, wantBytes) {
+								t.Fatalf("%s/%s file=%x want=%x err=%v", fault, op, got, wantBytes, readErr)
+							}
+						} else if !errors.Is(readErr, os.ErrNotExist) {
+							t.Fatalf("%s/%s expected absent file: %v", fault, op, readErr)
+						}
+						cursor, err := OpenHistoryCursor(string(journal), HistoryPosition{})
+						if err != nil {
+							t.Fatal(err)
+						}
+						defer cursor.(io.Closer).Close()
+						var records []CommitRecord
+						for {
+							r, ok, err := cursor.Next(ctx)
+							if err != nil {
+								t.Fatal(err)
+							}
+							if !ok {
+								break
+							}
+							records = append(records, r)
+						}
+						wantRecords := initialRecords
+						if recorded {
+							wantRecords++
+						}
+						if len(records) != wantRecords {
+							t.Fatalf("%s/%s journal=%d want=%d", fault, op, len(records), wantRecords)
+						}
+						if recorded {
+							last := records[len(records)-1]
+							if len(last.Leaves) != 1 || last.Leaves[0].Target != name || last.Leaves[0].Action != cs.Action {
+								t.Fatalf("incorrect committed leaf: %#v", last)
+							}
+						}
+						if err := cursor.(historyCursorRestorer).RestorePosition(HistoryPosition{}); err != nil {
+							t.Fatal(err)
+						}
+						processor := NewScalarProcessor(cursor, blobs, IdentityStoreClassifier(nil)).(*ScalarProcessor)
+						events := processor.Drain(ctx)
+						var analyticalBytes float64
+						for _, e := range events {
+							analyticalBytes += e.Fields["delta"].(map[string]any)["bytes"].(float64)
+						}
+						wantAnalyticsBytes := 0
+						if initialRecords > 0 {
+							wantAnalyticsBytes = len(before)
+						}
+						if recorded {
+							wantAnalyticsBytes = len(after)
+							if op == "delete" {
+								wantAnalyticsBytes = 0
+							}
+						}
+						if len(events) != wantRecords || analyticalBytes != float64(wantAnalyticsBytes) {
+							t.Fatalf("%s/%s analytics=%v/%d want=%d/%d", fault, op, analyticalBytes, len(events), wantAnalyticsBytes, wantRecords)
+						}
+						visibleBytes := 0
+						if wantExists {
+							visibleBytes = len(wantBytes)
+						}
+						if drift := analyticalBytes != float64(visibleBytes); drift != (published && !recorded) {
+							t.Fatalf("%s/%s drift=%v, analytics=%v S3=%d", fault, op, drift, analyticalBytes, visibleBytes)
+						}
+						// Retry only an operation reported as failed. Pre-publication failures
+						// recover; lost manifest acknowledgments cannot be repaired by blindly
+						// retrying the original create/CAS/delete operation.
+						if failedAtS3 {
+							log = newWriteLog(fsys, nil, logger, 1)
+							log.SetCommitJournal(journal, blobs, true)
+							_, retryErr := log.Submit(ctx, Attribution{Principal: "person"}, cs)
+							if err := log.Close(ctx); err != nil {
+								t.Fatal(err)
+							}
+							if published {
+								if op == "delete" {
+									if !errors.Is(retryErr, os.ErrNotExist) {
+										t.Fatalf("delete retry=%v", retryErr)
+									}
+								} else {
+									var precondition *vfs.PreconditionError
+									if !errors.As(retryErr, &precondition) {
+										t.Fatalf("CAS retry=%v", retryErr)
+									}
+								}
+							} else if retryErr != nil {
+								t.Fatalf("retry before publication: %v", retryErr)
+							}
+							extra := processor.Drain(ctx)
+							if published && len(extra) != 0 || !published && len(extra) != 1 {
+								t.Fatalf("%s/%s retry events=%d", fault, op, len(extra))
+							}
+							if !published {
+								wantDelta := len(after)
+								if op != "create" {
+									wantDelta -= len(before)
+								}
+								if op == "delete" {
+									wantDelta = -len(before)
+								}
+								if extra[0].Fields["delta"].(map[string]any)["bytes"] != float64(wantDelta) {
+									t.Fatalf("retry delta=%#v want=%d", extra[0].Fields, wantDelta)
+								}
+							}
+							got, err := fsys.ReadFile(name)
+							if op == "delete" {
+								if !errors.Is(err, os.ErrNotExist) {
+									t.Fatalf("retry delete: %v", err)
+								}
+							} else if err != nil || !bytes.Equal(got, after) {
+								t.Fatalf("retry file=%x want=%x err=%v", got, after, err)
+							}
+						}
+					}, hegel.WithTestCases(5))
+				})
 			}
 		}
 	})
