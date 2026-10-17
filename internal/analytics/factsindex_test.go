@@ -113,14 +113,13 @@ func TestFactsScanQueueResumesSameScopeGeneration(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := index.FailScan(ctx, generation, errors.New("interrupted")); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := index.StartScan(ctx, scopes); err != nil {
-		t.Fatal(err)
+	// A process that stops mid-scan leaves the generation updating; the next
+	// start resumes its queue and progress.
+	if resumed, err := index.StartScan(ctx, scopes); err != nil || resumed != generation {
+		t.Fatalf("interrupted generation=%d want=%d err=%v", resumed, generation, err)
 	}
 	state, err := index.ScanState(ctx)
-	if err != nil || state.Processed != 2 || state.Skipped != 1 {
+	if err != nil || state.State != "updating" || state.Processed != 2 || state.Skipped != 1 {
 		t.Fatalf("resumed progress=%+v err=%v", state, err)
 	}
 	if _, err := index.StartScan(ctx, []KnowledgeScope{{Name: "other", Root: "/other"}}); err != nil {
@@ -129,6 +128,63 @@ func TestFactsScanQueueResumesSameScopeGeneration(t *testing.T) {
 	state, err = index.ScanState(ctx)
 	if err != nil || state.Processed != 0 || state.Skipped != 0 {
 		t.Fatalf("new scan did not reset progress=%+v err=%v", state, err)
+	}
+}
+
+func TestFactsScanFailedGenerationRestartsFromScopeRoots(t *testing.T) {
+	_, index := testFactsIndex(t)
+	ctx := context.Background()
+	scopes := []KnowledgeScope{{Name: "docs", Root: "/docs"}, {Name: "notes", Root: "/notes"}}
+	first, err := index.StartScan(ctx, scopes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := index.CompleteScanPath(ctx, first, "/docs", []string{"/docs/a.md"}, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := index.CompleteScanPath(ctx, first, "/notes", nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := index.Upsert(ctx, IndexedFacts{Path: "/docs/a.md", Owner: "docs", Generation: first, Sources: map[string]map[string]float64{"size": {"bytes": 1}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := index.CompleteScanPath(ctx, first, "/docs/a.md", nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if complete, err := index.FinishScan(ctx, first); err != nil || !complete {
+		t.Fatalf("finish complete=%v err=%v", complete, err)
+	}
+	// Later work queues a path that can never be indexed and fails the scan.
+	if err := index.QueueScanPath(ctx, first, "/docs/broken.md"); err != nil {
+		t.Fatal(err)
+	}
+	if err := index.FailScan(ctx, first, errors.New("index /docs/broken.md: permission denied")); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted, err := index.StartScan(ctx, scopes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restarted <= first {
+		t.Fatalf("failed scan resumed generation %d (first %d)", restarted, first)
+	}
+	if paths, err := index.NextScanPaths(ctx, restarted, 10); err != nil || len(paths) != 2 || paths[0] != "/docs" || paths[1] != "/notes" {
+		t.Fatalf("restarted queue=%v err=%v, want scope roots", paths, err)
+	}
+	if paths, err := index.NextScanPaths(ctx, first, 10); err != nil || len(paths) != 0 {
+		t.Fatalf("failed generation queue survived: %v err=%v", paths, err)
+	}
+	state, err := index.ScanState(ctx)
+	if err != nil || state.State != "updating" || state.Error != "" || state.Processed != 0 || state.Skipped != 0 || !state.ScopeCompatible {
+		t.Fatalf("restarted state=%+v err=%v", state, err)
+	}
+	// The last completed generation stays readable while the rebuild runs.
+	if rows, err := index.PrefixScan(ctx, "/docs"); err != nil || len(rows) != 1 || rows[0].Generation != first {
+		t.Fatalf("committed rows during rebuild=%v err=%v", rows, err)
+	}
+	if again, err := index.StartScan(ctx, scopes); err != nil || again != restarted {
+		t.Fatalf("interrupted rebuild generation=%d want=%d err=%v", again, restarted, err)
 	}
 }
 

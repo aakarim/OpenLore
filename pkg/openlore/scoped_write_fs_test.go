@@ -136,6 +136,10 @@ func TestSessionShellModeBitsFollowGrant(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
+		server.config.ConfigFile = filepath.Join(t.TempDir(), "openlore.yml")
+		if err := os.WriteFile(server.config.ConfigFile, []byte("http_port: 8080\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 		sh := server.buildSessionShell(testIdentity("alice"))
 		cases := map[string]string{
 			"ls -ld /":            "dr-xr-xr-x",
@@ -149,8 +153,11 @@ func TestSessionShellModeBitsFollowGrant(t *testing.T) {
 			"stat /ref/sub/b.md":  "Access: -r--r--r--",
 		}
 		if configAdmin {
-			// The synthetic /opt tree: only the live config file is writable.
+			// The synthetic /opt tree: only the live lore.json is writable;
+			// openlore.yml is mounted read-only.
 			cases["stat /opt/openlore/lore.json"] = "Access: -rw-r--r--"
+			cases["stat /opt/openlore/openlore.yml"] = "Access: -r--r--r--"
+			cases["cat /opt/openlore/openlore.yml"] = "http_port: 8080"
 			cases["ls -l /opt/openlore"] = "-rw-r--r--"
 			cases["ls -ld /opt"] = "dr-xr-xr-x"
 			cases["ls -ld /opt/openlore"] = "dr-xr-xr-x"

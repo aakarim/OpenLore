@@ -1429,6 +1429,214 @@ button.primary:hover:not(:disabled) {
   gap: 6px;
   white-space: nowrap;
 }
+/* Setup view: configuration tree and overview cards. */
+.tree-group {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 40px;
+  padding: 7px 10px;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.tree-group > .icon {
+  width: 14px;
+  height: 14px;
+}
+.tree-group > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.setup-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr));
+  align-items: start;
+  gap: 18px;
+  margin-top: 22px;
+}
+.setup-grid .card.docset {
+  grid-column: 1 / -1;
+}
+.setup-grid .card h3 {
+  font-size: 12px;
+  margin: 22px 0 10px;
+  color: var(--muted);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.card.docset h2 {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.card.docset h2 small {
+  font: 10px var(--mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--purple);
+  border: 1px solid var(--purple);
+  padding: 3px 7px;
+}
+.setup-facts {
+  display: grid;
+  gap: 14px;
+  margin: 0;
+}
+.setup-facts > div {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 12px;
+  align-items: baseline;
+}
+.setup-facts dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+.setup-facts dd {
+  margin: 0;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.setup-facts dd code {
+  display: inline-block;
+  font-size: 12px;
+  background: var(--panel2);
+  padding: 2px 6px;
+  margin: 0 6px 4px 0;
+}
+.setup-facts dd code.alias {
+  background: transparent;
+  border: 1px dashed var(--border);
+}
+.flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 18px 0 0;
+}
+.flag {
+  font: 11px var(--mono);
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.flag.on {
+  border-color: var(--human);
+  color: var(--ink);
+}
+/* An inline file reference that opens the file, styled like a link. */
+.link-button {
+  border: 0;
+  border-bottom: 1px solid;
+  background: transparent;
+  padding: 0 1px;
+  font-family: var(--mono);
+  font-size: 0.95em;
+}
+.link-button:hover:not(:disabled) {
+  background: transparent;
+  color: var(--orange);
+}
+.connection-list,
+.config-list,
+.rule-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.connection-list li {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+.connection-list li:first-child {
+  border-top: 0;
+}
+.connection-list li > span {
+  display: grid;
+  font-size: 13px;
+}
+.connection-list small,
+.config-list small,
+.rule-list small {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.connection-list code {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+.config-list button {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 14px;
+  text-align: left;
+  border-width: 1px;
+  border-color: var(--border);
+}
+.config-list button:hover:not(:disabled) {
+  border-color: var(--orange);
+}
+.config-list button > span {
+  display: grid;
+  min-width: 0;
+}
+.rule-list li {
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+}
+.rule-list li:first-child {
+  border-top: 0;
+}
+.rule-list code {
+  font-size: 12px;
+}
+.rule-list pre {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+.config-view {
+  display: grid;
+  gap: 18px;
+  margin-top: 22px;
+}
+.config-meta .link-actions {
+  margin-bottom: 0;
+  align-items: center;
+}
+.config-source {
+  padding: 0;
+}
+.config-source .source {
+  max-width: none;
+  margin: 0;
+  font-size: 13px;
+}
+.setup-notes p {
+  margin: 0 0 8px;
+}
+.setup-notes p:last-child {
+  margin-bottom: 0;
+}
 @media (min-width: 761px) and (max-width: 1100px) {
   .app:not(.tree-collapsed) {
     grid-template-columns: 210px minmax(0, 1fr);
@@ -1729,6 +1937,16 @@ button.primary:hover:not(:disabled) {
   .sheet-tree {
     max-height: 65vh;
     overflow: auto;
+  }
+  .connection-list li {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .connection-list li > span {
+    grid-column: 1 / -1;
+  }
+  .setup-facts > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
   }
   .sheet-tree > .sidebar {
     overflow: visible;

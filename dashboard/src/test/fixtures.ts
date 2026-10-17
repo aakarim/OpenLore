@@ -60,8 +60,74 @@ const usage = {
     },
   ],
 };
+const folderConfig = {
+  path: "/guide/.lore/config.yaml",
+  name: "config.yaml",
+  source: "rules:\n  frontmatter:\n    match: ['**/*.md']\n    use: frontmatter\n",
+  content_type: "text/yaml",
+  facts: { bytes: 60, lines: 4, characters: 60, tokens: 15 },
+  binary: false,
+};
+const serverConfigs = [
+  {
+    path: "/opt/openlore/lore.json",
+    name: "lore.json",
+    source: '{\n  "docsets": {\n    "guide": { "paths": ["/guide"] }\n  }\n}\n',
+    content_type: "application/json",
+    facts: { bytes: 58, lines: 5, characters: 58, tokens: 20 },
+    binary: false,
+  },
+  {
+    path: "/opt/openlore/openlore.yml",
+    name: "openlore.yml",
+    source: "port: 2322\nhttp_port: 8080\nauth_file: ./lore.json\n",
+    content_type: "text/yaml",
+    facts: { bytes: 49, lines: 3, characters: 49, tokens: 14 },
+    binary: false,
+  },
+];
+const setup = {
+  identity: "private@example.test",
+  roles: ["writer"],
+  home: "guide",
+  access: false,
+  config_edit: false,
+  server: {
+    ssh: "ssh lore@lore.example.test",
+    http_url: "https://lore.example.test",
+    mcp_url: "https://lore.example.test/mcp",
+    lore_path: "/lore",
+    readonly: false,
+    skills: true,
+    analytics: true,
+    history: false,
+  },
+  docsets: [
+    {
+      name: "guide",
+      roots: ["/guide"],
+      aliases: [],
+      grants: ["read", "write"],
+      writable: true,
+      readonly: false,
+      home: true,
+      inbox: "/guide/inbox",
+      agent_skills: false,
+      okf: true,
+      config_files: [folderConfig.path],
+    },
+  ],
+  config_files: [{ path: folderConfig.path, kind: "folder", scope: "/guide", docset: "guide" }],
+  truncated: false,
+  notes: [],
+};
 export function mockAPI(
-  options: { contextError?: boolean; access?: boolean; partialContext?: boolean } = {},
+  options: {
+    contextError?: boolean;
+    access?: boolean;
+    partialContext?: boolean;
+    configEdit?: boolean;
+  } = {},
 ) {
   return vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
     const url = new URL(String(input), location.origin),
@@ -136,10 +202,38 @@ export function mockAPI(
                 : context,
           );
     if (path.endsWith("/usage")) return json(usage);
-    if (path.endsWith("/file"))
-      return url.searchParams.get("path") === file.path
-        ? json(file)
-        : json({ error: "not found" }, 404);
+    if (path.endsWith("/file")) {
+      const requested = url.searchParams.get("path");
+      if (requested === file.path) return json(file);
+      if (requested === folderConfig.path) return json(folderConfig);
+      const server = serverConfigs.find((item) => item.path === requested);
+      if (server && options.configEdit) return json(server);
+      return json({ error: "not found" }, 404);
+    }
+    if (path.endsWith("/setup"))
+      return json({
+        ...setup,
+        ...(options.configEdit && {
+          config_edit: true,
+          config_files: [
+            { path: serverConfigs[0].path, kind: "auth", scope: "/" },
+            { path: serverConfigs[1].path, kind: "server", scope: "/" },
+            ...setup.config_files,
+          ],
+        }),
+        // With lore:access:view the home docset carries operator detail but no
+        // role grants (Go omits the empty roles list) and a rule without match.
+        ...(options.access && {
+          access: true,
+          docsets: [
+            {
+              ...setup.docsets[0],
+              rules: { "doc-size": { match: null, use: "size/kilobytes", with: { max: 60 } } },
+              config_edit: ["writer"],
+            },
+          ],
+        }),
+      });
     if (path.endsWith("/history"))
       return json({ available: true, entries: [] });
     if (path.includes("/analytics/aggregations/"))

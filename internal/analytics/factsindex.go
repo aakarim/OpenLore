@@ -430,10 +430,11 @@ func (x *sqliteFactsIndex) StartScan(ctx context.Context, scopes []KnowledgeScop
 		// Content changes made through OpenLore are applied incrementally.
 		return generation, tx.Commit()
 	}
-	if stateErr == nil && existingHash == scopeHash && (existingState == "updating" || existingState == "failed") {
-		if _, err := tx.ExecContext(ctx, `UPDATE facts_scan_state SET state='updating',error='' WHERE id=1`); err != nil {
-			return 0, err
-		}
+	// An interrupted scan resumes its durable queue. A failed scan starts a
+	// fresh generation from the scope roots instead, so a queued path that can
+	// never be indexed cannot fail every restart. Rows from the last completed
+	// generation stay readable until the rebuild finishes and prunes them.
+	if stateErr == nil && existingHash == scopeHash && existingState == "updating" {
 		return generation, tx.Commit()
 	}
 	if stateErr != nil && !errors.Is(stateErr, sql.ErrNoRows) {

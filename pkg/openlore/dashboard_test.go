@@ -617,8 +617,8 @@ func TestDashboardFolderIcons(t *testing.T) {
 		want   map[string]string
 	}{
 		{"/", map[string]string{"public": "📚"}},
-		{"/public", map[string]string{".lore": "", "research": "🔬", "plain": "", "empty": "", "unknown": "", "invalid": "", "note.md": ""}},
-		{"/public/research", map[string]string{".lore": "", "nested": ""}},
+		{"/public", map[string]string{"research": "🔬", "plain": "", "empty": "", "unknown": "", "invalid": "", "note.md": ""}},
+		{"/public/research", map[string]string{"nested": ""}},
 	} {
 		w := dashboardRequest(mux, "GET", "/dashboard/api/tree?path="+tc.target, token)
 		var tree struct{ Entries []dashboardNode }
@@ -632,6 +632,9 @@ func TestDashboardFolderIcons(t *testing.T) {
 		for _, node := range tree.Entries {
 			if node.Name == "private" || node.Icon == "🔒" {
 				t.Fatalf("private folder metadata leaked: %+v", node)
+			}
+			if node.Name == ".lore" {
+				t.Fatalf("folder config should be listed in Setup, not the knowledge tree: %+v", node)
 			}
 			seen[node.Name] = node.Icon
 		}
