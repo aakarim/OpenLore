@@ -37,10 +37,13 @@ type dashboardSetupDocset struct {
 	Writable bool     `json:"writable"`
 	// Readonly is the docset's own setting; the global write lock is
 	// reported once as server.readonly.
-	Readonly    bool     `json:"readonly"`
-	Home        bool     `json:"home"`
-	Inbox       string   `json:"inbox,omitempty"`
-	AgentSkills bool     `json:"agent_skills"`
+	Readonly    bool   `json:"readonly"`
+	Home        bool   `json:"home"`
+	Inbox       string `json:"inbox,omitempty"`
+	AgentSkills bool   `json:"agent_skills"`
+	// OKF reports Open Knowledge Format validation from lore.json: the
+	// docset's `okf` block or an `okf` rule at docset or server level. Folder
+	// rules may add it further down; those are listed under ConfigFiles.
 	OKF         bool     `json:"okf"`
 	ConfigFiles []string `json:"config_files"`
 	// Operator-only fields, present with lore:access:view.
@@ -88,7 +91,8 @@ func (s *Server) dashboardSetup(w http.ResponseWriter, r *http.Request) {
 			item = &dashboardSetupDocset{
 				Name: row.Name, Roots: []string{}, Aliases: []string{}, Grants: row.Grants,
 				Writable: row.Writable, Readonly: ds.Readonly != nil && *ds.Readonly,
-				Inbox: inboxPath(ds), AgentSkills: row.AgentSkills, OKF: ds.OKF != nil, ConfigFiles: []string{},
+				Inbox: inboxPath(ds), AgentSkills: row.AgentSkills, ConfigFiles: []string{},
+				OKF: ds.OKF != nil || usesRule(ds.Rules, "okf") || usesRule(auth.Rules, "okf"),
 			}
 			if access {
 				item.Roles = dashboardRoles(ds.Access.Allow, ds.Access.Deny)
@@ -210,6 +214,16 @@ func (s *Server) dashboardFolderConfigs(r *http.Request, scoped vfs.FileSystem) 
 	err := walk("/")
 	sort.Strings(folders)
 	return folders, err
+}
+
+// usesRule reports whether any rule in the layer uses the named member.
+func usesRule(layer map[string]rules.RuleSpec, member string) bool {
+	for _, spec := range layer {
+		if spec.Use == member {
+			return true
+		}
+	}
+	return false
 }
 
 func dashboardRoles(allow map[string]string, deny []string) []dashboardRole {

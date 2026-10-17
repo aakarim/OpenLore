@@ -112,7 +112,8 @@ export type Access = {
   notes: string[];
 };
 export type RuleSpec = {
-  match: string[];
+  /** Null when the rule omits `match`. */
+  match: string[] | null;
   exclude?: string[];
   use: string;
   with?: Record<string, unknown>;

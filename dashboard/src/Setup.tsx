@@ -156,7 +156,7 @@ function Rules({ rules }: { rules: Record<string, RuleSpec> | undefined }) {
         <li key={name}>
           <code>{name}</code> → <code>{rule.use}</code>
           <small>
-            {rule.match.join(", ")}
+            {rule.match?.length ? rule.match.join(", ") : "no match patterns"}
             {rule.exclude?.length
               ? ` (excluding ${rule.exclude.join(", ")})`
               : ""}
@@ -176,14 +176,18 @@ function DocsetCard({
   docset,
   files,
   writeLock,
+  access,
   onSelect,
 }: {
   docset: SetupDocset;
   files: ConfigFile[];
   /** The server's global write lock (`--readonly`), which overrides grants. */
   writeLock: boolean;
+  /** lore:access:view: the operator detail (roles, rules, config.edit) is present. */
+  access: boolean;
   onSelect: (path: string) => void;
 }) {
+  const roles = docset.roles ?? [];
   return (
     <section className="card docset" aria-labelledby={`docset-${docset.name}`}>
       <h2 id={`docset-${docset.name}`}>
@@ -249,12 +253,12 @@ function DocsetCard({
           No <code>.lore/config.yaml</code> under this docset.
         </p>
       )}
-      {docset.roles && (
+      {access && (
         <>
           <h3>Roles</h3>
           <div className="policy">
-            {docset.roles.length ? (
-              docset.roles.map((role) => (
+            {roles.length ? (
+              roles.map((role) => (
                 <span className={role.denied ? "denied" : ""} key={role.role}>
                   {role.role}: {role.denied ? "denied" : role.grant}
                 </span>
@@ -407,6 +411,7 @@ function Overview({
           key={docset.name}
           docset={docset}
           writeLock={setup.server.readonly}
+          access={setup.access}
           files={setup.config_files.filter(
             (file) => file.kind === "folder" && file.docset === docset.name,
           )}

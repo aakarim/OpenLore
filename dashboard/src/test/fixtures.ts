@@ -205,19 +205,29 @@ export function mockAPI(
       return json({ error: "not found" }, 404);
     }
     if (path.endsWith("/setup"))
-      return json(
-        options.configEdit
-          ? {
-              ...setup,
-              config_edit: true,
-              config_files: [
-                { path: serverConfigs[0].path, kind: "auth", scope: "/" },
-                { path: serverConfigs[1].path, kind: "server", scope: "/" },
-                ...setup.config_files,
-              ],
-            }
-          : setup,
-      );
+      return json({
+        ...setup,
+        ...(options.configEdit && {
+          config_edit: true,
+          config_files: [
+            { path: serverConfigs[0].path, kind: "auth", scope: "/" },
+            { path: serverConfigs[1].path, kind: "server", scope: "/" },
+            ...setup.config_files,
+          ],
+        }),
+        // With lore:access:view the home docset carries operator detail but no
+        // role grants (Go omits the empty roles list) and a rule without match.
+        ...(options.access && {
+          access: true,
+          docsets: [
+            {
+              ...setup.docsets[0],
+              rules: { "doc-size": { match: null, use: "size/kilobytes", with: { max: 60 } } },
+              config_edit: ["writer"],
+            },
+          ],
+        }),
+      });
     if (path.endsWith("/history"))
       return json({ available: true, entries: [] });
     if (path.includes("/analytics/aggregations/"))

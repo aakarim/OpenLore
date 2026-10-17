@@ -10,6 +10,7 @@ import (
 	"testing/fstest"
 
 	"github.com/aakarim/go-openlore/internal/config"
+	"github.com/aakarim/go-openlore/pkg/rules"
 )
 
 func newSetupTestServer(t *testing.T) (*Server, *http.ServeMux, string) {
@@ -100,6 +101,19 @@ func TestDashboardSetupListsReadableConfigOnly(t *testing.T) {
 	}
 	if strings.Contains(w.Body.String(), "private-child") {
 		t.Fatalf("access view leaked an unreadable docset: %s", w.Body.String())
+	}
+
+	// OKF counts when enabled by a rule, not only by the legacy docset block.
+	if setup.Docsets[0].OKF {
+		t.Fatalf("okf reported without any OKF configuration: %+v", setup.Docsets[0])
+	}
+	s.auth.Rules = map[string]rules.RuleSpec{"format": {Match: []string{"**/*.md"}, Use: "okf"}}
+	w = dashboardRequest(mux, "GET", "/dashboard/api/setup", token)
+	if err := json.Unmarshal(w.Body.Bytes(), &setup); err != nil {
+		t.Fatal(err)
+	}
+	if !setup.Docsets[0].OKF {
+		t.Fatalf("okf not reported for a server-wide okf rule: %+v", setup.Docsets[0])
 	}
 }
 

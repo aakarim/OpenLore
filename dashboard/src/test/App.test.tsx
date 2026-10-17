@@ -1147,6 +1147,20 @@ test("Setup lists configuration in its own tree, shows a config file, and keeps 
   expect(location.pathname).toBe("/lore/guide");
 });
 
+test("Setup shows operator detail for a docset without role grants and tolerates rules without match", async () => {
+  mockAPI({ access: true });
+  render(<App />);
+  await userEvent.setup().click(await screen.findByRole("button", { name: "Setup" }));
+  const docset = await screen.findByRole("region", { name: /^guide/ });
+  expect(within(docset).getByRole("heading", { name: "Roles" })).toBeVisible();
+  expect(
+    within(docset).getByText("No role grants; only home and delegated access apply."),
+  ).toBeVisible();
+  expect(within(docset).getByText(/Folder rules may be edited by: writer/)).toBeVisible();
+  expect(within(docset).getByText("doc-size")).toBeVisible();
+  expect(within(docset).getByText(/no match patterns/)).toBeVisible();
+});
+
 test("Setup shows lore.json and openlore.yml under Server for config editors", async () => {
   mockAPI({ configEdit: true });
   render(<App />);
