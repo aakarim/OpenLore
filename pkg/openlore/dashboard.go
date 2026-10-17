@@ -215,6 +215,7 @@ type dashboardNode struct {
 	Path       string                    `json:"path"`
 	Name       string                    `json:"name"`
 	Directory  bool                      `json:"directory"`
+	Icon       string                    `json:"icon,omitempty"`
 	Bytes      int64                     `json:"bytes"`
 	Lines      int64                     `json:"lines"`
 	Characters int64                     `json:"characters"`
@@ -238,7 +239,17 @@ func (s *Server) dashboardTree(w http.ResponseWriter, r *http.Request) {
 	})
 	nodes := make([]dashboardNode, 0, len(entries))
 	for _, entry := range entries {
-		nodes = append(nodes, dashboardNode{Path: path.Join(target, entry.Name()), Name: entry.Name(), Directory: entry.Dir, Bytes: entry.Size()})
+		node := dashboardNode{Path: path.Join(target, entry.Name()), Name: entry.Name(), Directory: entry.Dir, Bytes: entry.Size()}
+		if entry.Dir {
+			// Read only this folder's config, through the caller's scoped FS.
+			// Missing, inaccessible or invalid metadata leaves the default icon.
+			if content, err := scoped.ReadFile(path.Join(node.Path, ".lore/config.yaml")); err == nil {
+				if config, err := rules.DecodeFile(content); err == nil {
+					node.Icon = rules.FolderIcon(config.Icon)
+				}
+			}
+		}
+		nodes = append(nodes, node)
 	}
 	dashboardJSON(w, map[string]any{"path": target, "entries": nodes})
 }

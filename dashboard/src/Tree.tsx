@@ -57,7 +57,17 @@ function Branch({
               </span>
             )}
             {!entry.directory && <span className="chevron" />}
-            {entry.directory ? <FolderIcon /> : <FileIcon />}
+            {entry.directory ? (
+              entry.icon ? (
+                <span className="folder-emoji" aria-hidden="true">
+                  {entry.icon}
+                </span>
+              ) : (
+                <FolderIcon />
+              )
+            ) : (
+              <FileIcon />
+            )}
             <span>{entry.name}</span>
           </button>
           {entry.directory && (

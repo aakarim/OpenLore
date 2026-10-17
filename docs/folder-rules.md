@@ -47,8 +47,8 @@ lore.json  docsets.X.rules:   │  applies under docset X's display roots
   docset shadowing: a nested docset that does not declare a rule exempts its
   subtree from the parent docset's rules, exactly as OKF scoping already works.
 
-There is no `inherit` key. A `.lore/config.yaml` applies to its directory and
-everything beneath it.
+There is no `inherit` key. Rules in `.lore/config.yaml` apply to its directory
+and everything beneath it. Folder icons apply only to the containing directory.
 
 ## `.lore/config.yaml`
 
@@ -84,6 +84,37 @@ The file is written like any other file (`cat config.yaml | ssh … "cat >
 permission below. Rules are never evaluated against the config file itself.
 `tree` and `ls` show `.lore/config.yaml` when it exists and nothing else under
 `.lore/`.
+
+### Folder icons
+
+Set an optional `icon` in a folder's `.lore/config.yaml` to customise its icon
+in the web UI's knowledge tree. For example, `docs/.lore/config.yaml`:
+
+```yaml
+version: 1
+icon: books
+```
+
+The built-in suite uses native emojis, rendered by the viewer's device. No
+third-party icon artwork or emoji fonts are bundled; appearance varies by
+platform. Choose one of these names:
+
+| Name | Icon | Name | Icon |
+|---|---|---|---|
+| `folder` | 📁 | `books` | 📚 |
+| `notes` | 📝 | `code` | 💻 |
+| `ideas` | 💡 | `research` | 🔬 |
+| `projects` | 🚀 | `team` | 👥 |
+| `calendar` | 📅 | `archive` | 📦 |
+| `security` | 🔒 | `star` | ⭐ |
+
+Icons are configured in files, not through an icon picker. The usual
+`config.edit` permission applies. Unknown names are rejected when writing
+through OpenLore or running `lore validate`. Omit `icon` (or use `icon: ""`)
+to keep the default folder outline. Icons do not inherit into child folders
+and do not change file icons or the virtual Workspace root. Missing,
+unreadable or invalid configs fall back to the default icon in the web UI.
+Reload the page after changing a folder's icon.
 
 ### Globs
 

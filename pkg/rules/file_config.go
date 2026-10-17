@@ -12,10 +12,21 @@ import (
 // .lore/config.yaml file.
 type FileConfig struct {
 	Version    int                 `yaml:"version"`
+	Icon       string              `yaml:"icon,omitempty"`
 	Rules      map[string]RuleSpec `yaml:"rules,omitempty"`
 	Packages   map[string]any      `yaml:"packages,omitempty"`
 	Hooks      map[string]any      `yaml:"hooks,omitempty"`
 	Operations map[string]any      `yaml:"operations,omitempty"`
+}
+
+// FolderIcon resolves a configured icon name to native emoji text. No artwork
+// or fonts are bundled; the browser uses the platform's emoji font.
+func FolderIcon(name string) string {
+	return map[string]string{
+		"folder": "📁", "books": "📚", "notes": "📝", "code": "💻",
+		"ideas": "💡", "research": "🔬", "projects": "🚀", "team": "👥",
+		"calendar": "📅", "archive": "📦", "security": "🔒", "star": "⭐",
+	}[name]
 }
 
 // DecodeFile decodes a folder rule configuration. Reserved sections are
@@ -43,6 +54,9 @@ func DecodeFile(content []byte) (FileConfig, error) {
 	}
 	if config.Version != 1 {
 		return FileConfig{}, fmt.Errorf("version: expected 1, got %d", config.Version)
+	}
+	if config.Icon != "" && FolderIcon(config.Icon) == "" {
+		return FileConfig{}, fmt.Errorf("icon: unknown name %q (see the folder icons in docs/folder-rules.md)", config.Icon)
 	}
 	for _, reserved := range []struct {
 		name    string

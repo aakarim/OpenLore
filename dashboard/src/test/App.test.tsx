@@ -49,9 +49,12 @@ test("desktop tree opens a production API document and switches views without lo
   expect(root).toHaveAttribute("aria-expanded", "false");
   await user.click(root);
   const folder = await within(tree).findByRole("button", { name: /guide/ });
+  expect(folder).toHaveAccessibleName("guide");
+  expect(within(folder).getByText("📚")).toHaveAttribute("aria-hidden", "true");
   expect(folder).toHaveAttribute("aria-expanded", "false");
   await user.click(folder);
   expect(folder).toHaveAttribute("aria-expanded", "true");
+  expect(within(folder).getByText("📚")).toBeVisible();
   expect(
     await within(tree).findByRole("button", { name: /start.md/ }),
   ).not.toHaveAttribute("aria-expanded");
