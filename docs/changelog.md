@@ -1,10 +1,10 @@
 # Changelog
 
-**Current release: [v0.7.4](https://github.com/aakarim/OpenLore/releases/tag/v0.7.4).**
+**Current release: [v0.7.5](https://github.com/aakarim/OpenLore/releases/tag/v0.7.5).**
 
 ## Which version do these docs describe?
 
-The documentation on `main` tracks development, with **v0.7.4** as the current
+The documentation on `main` tracks development, with **v0.7.5** as the current
 release baseline. It can include changes not yet released; those changes belong
 under **Unreleased** below. Version-specific behavior should be labelled with the
 release that introduced it, rather than assumed to work on older installations.
@@ -15,12 +15,12 @@ Check your installed binary:
 openlore version
 ```
 
-For v0.7.4, the output is `openlore 0.7.4`. If you connect to a remote server, ask
+For v0.7.5, the output is `openlore 0.7.5`. If you connect to a remote server, ask
 its operator for the server version too: your local binary may be a different
 version.
 
 For a fixed documentation snapshot, use the
-[v0.7.4 docs](https://github.com/aakarim/OpenLore/tree/v0.7.4/docs).
+[v0.7.5 docs](https://github.com/aakarim/OpenLore/tree/v0.7.5/docs).
 For an older installation, choose its release tag in GitHub's branch/tag selector
 instead of reading `main`. Release notes below highlight changes that may explain
 differences between the docs and your installation.
@@ -31,6 +31,30 @@ necessarily the current version. Dates are the GitHub publication dates in UTC.
 
 ## Unreleased
 
+No changes yet.
+
+## v0.7.5 — 2026-10-17
+
+[Release notes and downloads](https://github.com/aakarim/OpenLore/releases/tag/v0.7.5)
+
+- Added configurable folder emoji icons through `.lore/config.yaml` in the
+  dashboard knowledge tree, plus a new gradient-slash PWA app icon.
+- The dashboard now goes straight to the passkey login page when sign-in is
+  needed, and file copy actions sit beside the file name as icons.
+- Fixed failed knowledge-facts scans getting stuck on the same queued path
+  after a restart; failed scans now rebuild from docset roots while keeping
+  the last completed results readable.
+- `analytics show tree-size` and `largest-docs` skip unreadable descendants
+  and report skipped paths instead of failing the whole result. An unreadable
+  root still fails.
+- `find` lists aliased docsets once by default; `-L` follows aliases, and an
+  alias supplied as the starting point is still walked. `ls -l` and `stat`
+  show aliases as links, and `ls -R` no longer descends through them.
+- `ls -l` and `stat` now show write bits according to the caller's grant.
+- `publish` rejects extra arguments instead of silently ignoring them; its
+  two-argument examples have been corrected.
+- Added a [knowledge cleanup](knowledge-cleanup.md) recipe and a
+  [deployment guide](deploy.md) with Fly.io, EC2 and DigitalOcean platform pages.
 - Added the [Build your company brain on OpenLore](company-brain.md) recipe,
   which explains what OpenLore already solves for a shared knowledge layer and
   walks through laying it out as docsets, connecting data sources, giving it to
@@ -47,6 +71,8 @@ necessarily the current version. Dates are the GitHub publication dates in UTC.
   `openlore.yml` at `/opt/openlore/openlore.yml`, beside `lore.json`. The file
   is read-only over the VFS and is mounted only when the server was started
   from a config file.
+
+**Full changelog:** https://github.com/aakarim/OpenLore/compare/v0.7.4...v0.7.5
 
 ## v0.7.4 — 2026-10-12
 
