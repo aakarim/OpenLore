@@ -31,7 +31,10 @@ necessarily the current version. Dates are the GitHub publication dates in UTC.
 
 ## Unreleased
 
-No changes yet.
+- Added the [Build an LLM wiki on OpenLore](llm-wiki.md) recipe, which runs
+  Karpathy's LLM wiki pattern on a server: existing docsets as the read-only
+  raw layer, a `wiki` docset as an OKF bundle for the index and log, a schema
+  page every agent reads, and ingest, query and lint through any agent.
 
 ## v0.7.5 — 2026-10-17
 
