@@ -1,3 +1,5 @@
+//go:build integration
+
 package analytics
 
 import (
@@ -11,7 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
-// S3EventStore stores shipped events beneath an isolated bucket prefix.
+// S3EventStore is a test-only adapter for shipped events in an S3 bucket prefix.
 // The caller supplies a client with credentials, region and endpoint configured;
 // constructing a store does not create a bucket or change its policies.
 type S3EventStore struct {

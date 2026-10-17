@@ -1,3 +1,5 @@
+//go:build integration
+
 package openlore
 
 import (
@@ -28,7 +30,7 @@ type S3FileClient interface {
 	PutObject(context.Context, *s3.PutObjectInput, ...func(*s3.Options)) (*s3.PutObjectOutput, error)
 }
 
-// S3FS is an experimental WritableFS for one docset rooted at /. File bytes
+// S3FS is a test-only WritableFS for one docset rooted at /. File bytes
 // are immutable content-addressed objects; a conditional manifest PUT publishes
 // namespace changes, including whole-tree deletes, atomically. Separate clients
 // cannot silently overwrite one another's manifest updates: contention returns

@@ -76,6 +76,10 @@ func TestS3Filesystem(t *testing.T) {
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
+	t.Run("remote-commit-journal", func(t *testing.T) {
+		testS3CommitJournal(t, client, bucket)
+	})
+
 	t.Run("file-journal-fault-boundaries", func(t *testing.T) {
 		seen := map[string]bool{}
 		hegel.Test(t, func(t *hegel.T) {
