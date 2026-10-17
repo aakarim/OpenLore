@@ -53,6 +53,9 @@ func (c observedS3Client) GetObject(ctx context.Context, in *s3.GetObjectInput, 
 }
 
 func TestS3Filesystem(t *testing.T) {
+	if testing.Short() {
+		t.Skip("S3 integration tests are excluded in short mode")
+	}
 	ctx := context.Background()
 	container, err := localstack.Run(ctx, "localstack/localstack:4.9.2", testcontainers.WithEnv(map[string]string{"SERVICES": "s3"}))
 	if err != nil {

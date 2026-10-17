@@ -29,6 +29,9 @@ import (
 // Fail rather than skip if Docker is unavailable: this suite is explicitly
 // selected with -tags=integration and must actually exercise S3 in CI.
 func TestS3Analytics(t *testing.T) {
+	if testing.Short() {
+		t.Skip("S3 integration tests are excluded in short mode")
+	}
 	ctx := context.Background()
 	container, err := localstack.Run(ctx, "localstack/localstack:4.9.2", testcontainers.WithEnv(map[string]string{"SERVICES": "s3"}))
 	if err != nil {

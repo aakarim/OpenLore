@@ -348,6 +348,9 @@ func drawSQLiteFixtureChanges(t *hegel.T, min, max int) []sqliteFixtureChange {
 }
 
 func TestLitestreamSQLite(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Litestream integration tests are excluded in short mode")
+	}
 	if os.Getenv("LITESTREAM_BIN") == "" {
 		t.Fatal("run make test-litestream (requires Docker and downloads pinned Litestream)")
 	}

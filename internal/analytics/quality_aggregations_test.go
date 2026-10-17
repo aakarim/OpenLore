@@ -177,6 +177,9 @@ func TestMostUsedLinesSortsCurrentRevisionByReadCount(t *testing.T) {
 }
 
 func TestCurrentRevisionLineUsageProperties(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Hegel property tests are excluded in short mode")
+	}
 	hegel.Test(t, func(t *hegel.T) {
 		ctx := context.Background()
 		lineCount := hegel.Draw(t, hegel.Integers(1, 24))
@@ -325,6 +328,9 @@ func TestPhaseTwoAggregationsAreRegisteredAsLive(t *testing.T) {
 // Every incremental aggregation must give the same table from merged,
 // JSON round-tripped partials of consecutive ranges as from one scan.
 func TestIncrementalAggregationsMergeExactly(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Hegel property tests are excluded in short mode")
+	}
 	files := testFS{"/docs/a.md": []byte("one\ntwo\nthree\nfour\nfive\n"), "/docs/sub/b.md": []byte("b\n"), "/docs/c.md": []byte("c")}
 	facts := NewContentFacts(files)
 	current, err := facts.Stat(context.Background(), "/docs/a.md")

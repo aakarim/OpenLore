@@ -82,6 +82,9 @@ func TestUsageSummaryDoesNotCollapseLegacyWritesWithoutKeys(t *testing.T) {
 }
 
 func TestUsageSummaryWriteAttributionProperties(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Hegel property tests are excluded in short mode")
+	}
 	hegel.Test(t, func(t *hegel.T) {
 		start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 		kinds := []string{"human", "agent", "unknown"}

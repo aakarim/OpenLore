@@ -26,15 +26,18 @@ jobs:
           git diff --exit-code docs/rules-stdlib.md
 
       - name: Test
-        run: nix develop --command go test -race ./...
+        run: nix develop --command go test -race ${{ github.event_name == 'push' && '-short' || '' }} ./...
 
       - name: Test analytics S3 shipping and recovery
+        if: github.event_name == 'pull_request'
         run: nix develop --command make test-analytics-s3
 
       - name: Test S3 filesystem and commit journal consistency
+        if: github.event_name == 'pull_request'
         run: nix develop --command make test-filesystem-s3
 
       - name: Test separate SQLite databases with Litestream and S3
+        if: github.event_name == 'pull_request'
         run: nix develop --command make test-litestream
 
   libghostty:

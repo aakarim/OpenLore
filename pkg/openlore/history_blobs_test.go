@@ -25,6 +25,9 @@ import (
 // Compare the cursor with an append-order model, not another cursor. Rotation,
 // lag, retention and checkpoint/reopen can happen in any generated order.
 func TestCommitJournalReplayProperties(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Hegel property tests are excluded in short mode")
+	}
 	hegel.Test(t, func(t *hegel.T) {
 		ctx := context.Background()
 		dir, err := os.MkdirTemp("", "commit-replay-")
@@ -240,6 +243,9 @@ func TestHistoryCursorDoesNotSkipCorruptionOnRetry(t *testing.T) {
 }
 
 func TestCommitJournalPartialRecordProperties(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Hegel property tests are excluded in short mode")
+	}
 	hegel.Test(t, func(t *hegel.T) {
 		dir, err := os.MkdirTemp("", "commit-partial-")
 		if err != nil {
@@ -291,6 +297,9 @@ func TestCommitJournalPartialRecordProperties(t *testing.T) {
 // Exercise real file commits, pre-image blobs, journal serialization and the
 // analytics reader together. The oracle is an independent in-memory file map.
 func TestWriteLogAnalyticsReplayProperties(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Hegel property tests are excluded in short mode")
+	}
 	hegel.Test(t, func(t *hegel.T) {
 		ctx := context.Background()
 		dir, err := os.MkdirTemp("", "commit-scalars-")
