@@ -108,3 +108,10 @@ Restart the service from the dashboard so the running server loads the new polic
 **The service misbehaves after a config edit.** Check the logs in the Render Dashboard; OpenLore reports each config value it ignores. For more detail, set `debug: true` in `openlore.yml`, restart, and set it back once fixed.
 
 **Start again from scratch.** Delete the files in `/var/lib/openlore/config/` from the Render Shell and restart. The next boot writes fresh starter files. Documents under `/var/lib/openlore/published` are kept.
+
+---
+
+## Next steps
+
+- [Deploy to Fly.io](fly.md) instead if agents need to connect over public SSH.
+- Learn how [auth](auth.md) scopes what each identity sees.
