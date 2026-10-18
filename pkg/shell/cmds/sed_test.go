@@ -150,6 +150,58 @@ func TestSedSubstitutionReplacementEscapes(t *testing.T) {
 	}
 }
 
+func TestSedAddressUsesBasicRegexp(t *testing.T) {
+	tests := []struct {
+		name, options, expr, input, want string
+	}{
+		{"literal alternation", "", `/a|b/d`, "a\na|b\nkeep\n", "a\nkeep\n"},
+		{"literal parentheses", "", `/x(y)/d`, "xy\nx(y)\nkeep\n", "xy\nkeep\n"},
+		{"unbalanced literal parenthesis", "", `/y) z/d`, "x](y) z\nkeep\n", "keep\n"},
+		{"escaped alternation", "", `/a\|b/d`, "a\nb\nkeep\n", "keep\n"},
+		{"print", "-n", `/x(y)/p`, "xy\nx(y)\n", "x(y)\n"},
+		{"append", "", `/x(y)/a added`, "xy\nx(y)\n", "xy\nx(y)\nadded\n"},
+		{"substitute", "", `/x(y)/s/x/X/`, "xy\nx(y)\n", "xy\nX(y)\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fs := testFS()
+			fs.AddFile("/docs/address.txt", tt.input)
+			out, errOut, code := execCmd(t, fs, "sed "+tt.options+" '"+tt.expr+"' /docs/address.txt")
+			if code != 0 || errOut != "" || out != tt.want {
+				t.Fatalf("code=%d stdout=%q stderr=%q, want %q", code, out, errOut, tt.want)
+			}
+			out, errOut, code = execCmd(t, fs, "sed -i "+tt.options+" '"+tt.expr+"' /docs/address.txt")
+			content, err := fs.ReadFile("/docs/address.txt")
+			if code != 0 || out != "" || errOut != "" || err != nil || string(content) != tt.want {
+				t.Fatalf("in-place: code=%d stdout=%q stderr=%q content=%q err=%v, want %q", code, out, errOut, content, err, tt.want)
+			}
+		})
+	}
+}
+
+func TestSedRejectsInvalidAddressesBeforeWriting(t *testing.T) {
+	for _, tt := range []struct{ expr, wantErr string }{
+		{`/[/d`, "invalid regex in address"},
+		{`1,/[/d`, "invalid regex in address"},
+		{`/unterminated`, "unterminated address"},
+		{`\#a/b#d`, "unsupported command"},
+	} {
+		t.Run(tt.expr, func(t *testing.T) {
+			fs := testFS()
+			const original = "one\ntwo\n"
+			fs.AddFile("/docs/address.txt", original)
+			out, errOut, code := execCmd(t, fs, "sed -i -e '1d' -e '"+tt.expr+"' /docs/address.txt")
+			if code == 0 || out != "" || !strings.Contains(errOut, tt.wantErr) {
+				t.Fatalf("code=%d stdout=%q stderr=%q, want address error before processing", code, out, errOut)
+			}
+			content, err := fs.ReadFile("/docs/address.txt")
+			if err != nil || string(content) != original {
+				t.Fatalf("content=%q err=%v, want unchanged file", content, err)
+			}
+		})
+	}
+}
+
 func TestSedSubstitutionReplacementNewlineInPlace(t *testing.T) {
 	fs := testFS()
 	fs.AddFile("/docs/escape.md", "a\n")

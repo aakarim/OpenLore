@@ -236,8 +236,8 @@ func applySedCommands(cmds []sedCmd, lines []string, quiet bool, w io.Writer, on
 type sedCmd struct {
 	addrStart    int
 	addrEnd      int
-	addrRegex    string
-	addrEndRegex string
+	addrRegex    *regexp.Regexp
+	addrEndRegex *regexp.Regexp
 	command      byte
 	pattern      string
 	replacement  string
@@ -250,7 +250,7 @@ type sedCmd struct {
 }
 
 func sedAddressMatch(cmd sedCmd, lineNum, totalLines int, line string) bool {
-	if cmd.addrStart == 0 && cmd.addrEnd == 0 && cmd.addrRegex == "" && cmd.addrEndRegex == "" {
+	if cmd.addrStart == 0 && cmd.addrEnd == 0 && cmd.addrRegex == nil && cmd.addrEndRegex == nil {
 		return true
 	}
 	start := cmd.addrStart
@@ -262,15 +262,8 @@ func sedAddressMatch(cmd sedCmd, lineNum, totalLines int, line string) bool {
 		end = totalLines
 	}
 
-	if cmd.addrRegex != "" {
-		re, err := regexp.Compile(cmd.addrRegex)
-		if err != nil {
-			return false
-		}
-		if !re.MatchString(line) {
-			return false
-		}
-		return true
+	if cmd.addrRegex != nil {
+		return cmd.addrRegex.MatchString(line)
 	}
 
 	if end > 0 {
@@ -411,10 +404,16 @@ func parseSedExpr(expr string) (sedCmd, error) {
 	// Parse address
 	if i < len(expr) && expr[i] == '/' {
 		end := indexUnescapedSedDelimiter(expr, i+1, '/')
-		if end >= 0 {
-			cmd.addrRegex = strings.ReplaceAll(expr[i+1:end], `\/`, "/")
-			i = end + 1
+		if end < 0 {
+			return cmd, fmt.Errorf("unterminated address in expression '%s'", expr)
 		}
+		pattern := strings.ReplaceAll(expr[i+1:end], `\/`, "/")
+		var err error
+		cmd.addrRegex, err = regexp.Compile(basicRegexpToRE2(pattern))
+		if err != nil {
+			return cmd, fmt.Errorf("invalid regex in address /%s/: %w", pattern, err)
+		}
+		i = end + 1
 	} else if i < len(expr) && expr[i] == '$' {
 		cmd.addrStart = -1
 		i++
@@ -435,10 +434,16 @@ func parseSedExpr(expr string) (sedCmd, error) {
 			i++
 		} else if i < len(expr) && expr[i] == '/' {
 			end := indexUnescapedSedDelimiter(expr, i+1, '/')
-			if end >= 0 {
-				cmd.addrEndRegex = strings.ReplaceAll(expr[i+1:end], `\/`, "/")
-				i = end + 1
+			if end < 0 {
+				return cmd, fmt.Errorf("unterminated address in expression '%s'", expr)
 			}
+			pattern := strings.ReplaceAll(expr[i+1:end], `\/`, "/")
+			var err error
+			cmd.addrEndRegex, err = regexp.Compile(basicRegexpToRE2(pattern))
+			if err != nil {
+				return cmd, fmt.Errorf("invalid regex in address /%s/: %w", pattern, err)
+			}
+			i = end + 1
 		} else {
 			j := i
 			for j < len(expr) && expr[j] >= '0' && expr[j] <= '9' {
