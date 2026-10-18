@@ -13,6 +13,11 @@ import (
 	"github.com/aakarim/go-openlore/pkg/shell/cmds"
 	"github.com/aakarim/go-openlore/pkg/vfs"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // MCPOption configures the MCP server constructed by NewMCPServer.
@@ -98,6 +103,7 @@ func NewMCPServer(fs vfs.FileSystem, opts ...MCPOption) *mcp.Server {
 		},
 		serverOpts,
 	)
+	server.AddReceivingMiddleware(mcpTracingMiddleware)
 
 	shellDesc := "Execute a command in OpenLore's restricted knowledge-repository shell. This is not Bash and cannot run arbitrary executables. Supports ls, cat, grep, find, tree, head, tail, wc, stat, sort, uniq, cut, sed, awk, jq, xargs, pipes, loops, and more; use list_commands for the available surface."
 	if cfg.shellDescription != "" {
@@ -130,6 +136,65 @@ func NewMCPServer(fs vfs.FileSystem, opts ...MCPOption) *mcp.Server {
 	return server
 }
 
+func mcpTracingMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
+	return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+		if method != "tools/call" && method != "tools/list" {
+			return next(ctx, method, req)
+		}
+		// HTTP sessions inherit their initialization context in the SDK, but
+		// Extra contains this request's headers. Never reuse an old parent.
+		hasHTTPHeaders := false
+		if extra := req.GetExtra(); extra != nil && extra.Header != nil {
+			hasHTTPHeaders = true
+			ctx = trace.ContextWithSpanContext(ctx, trace.SpanContext{})
+			ctx = propagation.TraceContext{}.Extract(ctx, propagation.HeaderCarrier(extra.Header))
+		}
+		if !hasHTTPHeaders || !trace.SpanContextFromContext(ctx).IsValid() {
+			// tools/list permits omitted params, represented by a typed nil.
+			var meta map[string]any
+			switch params := req.GetParams().(type) {
+			case *mcp.CallToolParamsRaw:
+				if params != nil {
+					meta = params.GetMeta()
+				}
+			case *mcp.ListToolsParams:
+				if params != nil {
+					meta = params.GetMeta()
+				}
+			}
+			if parent, ok := meta["traceparent"].(string); ok {
+				state, _ := meta["tracestate"].(string)
+				ctx = propagation.TraceContext{}.Extract(ctx, propagation.MapCarrier{"traceparent": parent, "tracestate": state})
+			}
+		}
+		ctx, span := otel.Tracer("github.com/aakarim/go-openlore/mcp").Start(ctx, method, trace.WithSpanKind(trace.SpanKindServer))
+		defer span.End()
+		if params, ok := req.GetParams().(*mcp.CallToolParamsRaw); ok && params != nil {
+			name := params.Name
+			if name != "shell" && name != "list_commands" {
+				name = "unknown"
+			}
+			span.SetAttributes(attribute.String("gen_ai.operation.name", "execute_tool"), attribute.String("gen_ai.tool.name", name))
+		}
+		result, err := next(ctx, method, req)
+		if err != nil {
+			// Protocol errors can echo arguments. Record classification only.
+			span.SetStatus(codes.Error, "MCP request failed")
+		} else if toolResult, ok := result.(*mcp.CallToolResult); ok {
+			if code, ok := exitCodeFromStructured(toolResult.StructuredContent); ok {
+				span.SetAttributes(attribute.Int("openlore.exit_code", code))
+				if code != 0 {
+					span.SetStatus(codes.Error, "shell command failed")
+				}
+			}
+			if toolResult.IsError {
+				span.SetStatus(codes.Error, "tool execution failed")
+			}
+		}
+		return result, err
+	}
+}
+
 type mcpShellInput struct {
 	Command string `json:"command" jsonschema:"The OpenLore shell command to execute (e.g. grep -r auth /docs). This is a restricted interpreter, not Bash."`
 }
@@ -155,7 +220,7 @@ func newMCPShellHandler(fs vfs.FileSystem, envVars map[string]string, factory fu
 			}
 		}
 
-		output, stdout, stderr, exitCode := execShellTranscript(sh, input.Command)
+		output, stdout, stderr, exitCode := execShellTranscript(ctx, sh, input.Command)
 
 		return &mcp.CallToolResult{
 			Content:           []mcp.Content{&mcp.TextContent{Text: output}},
@@ -167,9 +232,9 @@ func newMCPShellHandler(fs vfs.FileSystem, envVars map[string]string, factory fu
 // execShellTranscript executes command in sh and returns its output streams
 // separately, along with a merged output value for backwards compatibility.
 // The exit code remains result data and is never added to either stream.
-func execShellTranscript(sh *shell.Shell, command string) (output, stdout, stderr string, exitCode int) {
+func execShellTranscript(ctx context.Context, sh *shell.Shell, command string) (output, stdout, stderr string, exitCode int) {
 	var stdoutBuffer, stderrBuffer bytes.Buffer
-	exitCode = sh.ExecPipeline(command, &stdoutBuffer, &stderrBuffer, nil)
+	exitCode = sh.ExecPipelineContext(ctx, command, &stdoutBuffer, &stderrBuffer, nil)
 
 	sections := make([]string, 0, 2)
 	if stdoutBuffer.Len() > 0 {

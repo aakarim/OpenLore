@@ -19,6 +19,9 @@ import (
 	"github.com/aakarim/go-openlore/pkg/shell/cmds"
 	"github.com/aakarim/go-openlore/pkg/shell/parser"
 	"github.com/aakarim/go-openlore/pkg/vfs"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 )
 
 // Shell is a restricted bash-like shell that operates over any vfs.FileSystem.
@@ -44,6 +47,7 @@ type Shell struct {
 	publishTargets          []cmds.PublishTarget
 	unsupportedUsageHandler func(UnsupportedUsage)
 	commandObserver         func(CommandExecution)
+	executionContext        context.Context
 	invocationID            string
 	commandEventID          string
 	pipelinePosition        int
@@ -84,6 +88,7 @@ type UnsupportedUsage struct {
 }
 
 type CommandExecution struct {
+	Context          context.Context
 	Command          string
 	Argc             int
 	ExitCode         int
@@ -240,6 +245,16 @@ func (s *Shell) EmitMetric(ctx context.Context, eventType string, fields map[str
 		s.metricEmitter(analytics.ContextWithInvocation(ctx, s.invocationID, s.commandEventID), eventType, fields)
 	}
 }
+
+// Context returns the current invocation or command context. A Shell is
+// stateful and must not be executed concurrently, with or without tracing.
+func (s *Shell) Context() context.Context {
+	if s.executionContext != nil {
+		return s.executionContext
+	}
+	return context.Background()
+}
+
 func (s *Shell) MetricsEnabled() bool                          { return s.metricEmitter != nil }
 func (s *Shell) SetInvocationObserver(fn func(string, string)) { s.invocationObserver = fn }
 
@@ -284,16 +299,26 @@ func (s *Shell) AllEnv() map[string]string {
 
 // Exec parses and executes a single command line.
 func (s *Shell) Exec(cmdLine string, w io.Writer, errW io.Writer, stdin io.Reader) int {
-	return s.execLine(cmdLine, w, errW, stdin)
+	return s.ExecPipeline(cmdLine, w, errW, stdin)
 }
 
 // ExecArgs executes an already-tokenized command without parsing its arguments
 // as shell source.
 func (s *Shell) ExecArgs(args []string, w io.Writer, errW io.Writer, stdin io.Reader) int {
-	if s.commandObserver == nil || len(args) == 0 {
+	if len(args) == 0 {
 		return s.execArgs(args, w, errW, stdin)
 	}
 	command := args[0]
+	return s.observeCommand(&command, len(args)-1, w, func(out io.Writer) int {
+		return s.execArgs(args, out, errW, stdin)
+	})
+}
+
+func (s *Shell) observeCommand(command *string, argc int, w io.Writer, run func(io.Writer) int) int {
+	previousContext := s.executionContext
+	ctx, span := otel.Tracer("github.com/aakarim/go-openlore/shell").Start(s.Context(), "openlore.command")
+	s.executionContext = ctx
+	defer func() { s.executionContext = previousContext; span.End() }()
 	eventID := analytics.NewID()
 	parentEventID := s.commandEventID
 	s.commandEventID = eventID
@@ -306,15 +331,47 @@ func (s *Shell) ExecArgs(args []string, w io.Writer, errW io.Writer, stdin io.Re
 	s.pipelinePosition++
 	counter := &countingWriter{Writer: w}
 	started := time.Now()
-	code := s.execArgs(args, counter, errW, stdin)
-	s.commandObserver(CommandExecution{Command: command, Argc: len(args) - 1, ExitCode: code, Duration: time.Since(started), BytesOut: counter.n, PipelinePosition: position, InvocationID: s.invocationID, EventID: eventID})
+	code := run(counter)
+	// The executor fills the expanded name, without evaluating source twice.
+	// Unknown command names can be arbitrary user content, not just verbs.
+	name := *command
+	if _, known := cmds.Registry[name]; !known && name != "pwd" && name != "exit" && name != "quit" {
+		name = "unknown"
+	}
+	span.SetAttributes(attribute.String("openlore.command.name", name), attribute.Int("openlore.command.argc", argc), attribute.Int("openlore.exit_code", code), attribute.Int64("openlore.bytes_out", counter.n), attribute.String("openlore.invocation_id", s.invocationID), attribute.Int("openlore.pipeline_position", position))
+	if code != 0 {
+		span.SetStatus(codes.Error, "command failed")
+	}
+	if s.commandObserver != nil {
+		s.commandObserver(CommandExecution{Context: ctx, Command: *command, Argc: argc, ExitCode: code, Duration: time.Since(started), BytesOut: counter.n, PipelinePosition: position, InvocationID: s.invocationID, EventID: eventID})
+	}
 	return code
 }
 
 // ExecPipeline parses a shell line and executes the resulting AST.
 // stdin is optional — pass nil if no external stdin is available.
 func (s *Shell) ExecPipeline(line string, w io.Writer, errW io.Writer, stdin io.Reader) int {
-	return s.execLine(line, w, errW, stdin)
+	return s.ExecPipelineContext(s.Context(), line, w, errW, stdin)
+}
+
+// ExecPipelineContext executes a shell invocation beneath the caller's trace.
+// Arguments, source text, paths and output are never added to spans.
+func (s *Shell) ExecPipelineContext(ctx context.Context, line string, w io.Writer, errW io.Writer, stdin io.Reader) int {
+	previousContext := s.executionContext
+	previousInvocation, previousEvent, previousPosition := s.invocationID, s.commandEventID, s.pipelinePosition
+	ctx, span := otel.Tracer("github.com/aakarim/go-openlore/shell").Start(ctx, "openlore.shell")
+	s.executionContext = ctx
+	defer func() {
+		s.executionContext = previousContext
+		s.invocationID, s.commandEventID, s.pipelinePosition = previousInvocation, previousEvent, previousPosition
+		span.End()
+	}()
+	code := s.execLine(line, w, errW, stdin)
+	span.SetAttributes(attribute.String("openlore.invocation_id", s.invocationID), attribute.Int("openlore.exit_code", code))
+	if code != 0 {
+		span.SetStatus(codes.Error, "shell invocation failed")
+	}
+	return code
 }
 
 func (s *Shell) execLine(line string, w io.Writer, errW io.Writer, stdin io.Reader) int {
@@ -440,24 +497,18 @@ func (s *Shell) execCmd(cmd parser.Command, w io.Writer, errW io.Writer, stdin i
 }
 
 func (s *Shell) execCall(call *parser.CallExpr, w io.Writer, errW io.Writer, stdin io.Reader) int {
-	if s.commandObserver == nil || len(call.Args) == 0 {
-		return s.execCallObserved(call, w, errW, stdin)
+	if len(call.Args) == 0 {
+		return s.execCallObserved(call, w, errW, stdin, nil)
 	}
-	command := s.expandWord(call.Args[0])
-	eventID := analytics.NewID()
-	s.commandEventID = eventID
-	defer func() { s.commandEventID = "" }()
-	if s.invocationObserver != nil {
-		s.invocationObserver(s.invocationID, eventID)
-		defer s.invocationObserver("", "")
+	command := "unknown"
+	if len(call.Args[0].Parts) == 1 {
+		if literal, ok := call.Args[0].Parts[0].(*parser.Lit); ok {
+			command = literal.Value
+		}
 	}
-	position := s.pipelinePosition
-	s.pipelinePosition++
-	counter := &countingWriter{Writer: w}
-	started := time.Now()
-	code := s.execCallObserved(call, counter, errW, stdin)
-	s.commandObserver(CommandExecution{Command: command, Argc: len(call.Args) - 1, ExitCode: code, Duration: time.Since(started), BytesOut: counter.n, PipelinePosition: position, InvocationID: s.invocationID, EventID: eventID})
-	return code
+	return s.observeCommand(&command, len(call.Args)-1, w, func(out io.Writer) int {
+		return s.execCallObserved(call, out, errW, stdin, &command)
+	})
 }
 
 type countingWriter struct {
@@ -471,7 +522,7 @@ func (w *countingWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
-func (s *Shell) execCallObserved(call *parser.CallExpr, w io.Writer, errW io.Writer, stdin io.Reader) int {
+func (s *Shell) execCallObserved(call *parser.CallExpr, w io.Writer, errW io.Writer, stdin io.Reader, command *string) int {
 	// A `> file` / `>> file` redirection buffers the command's stdout and
 	// commits it as a single atomic whole-object write. Nothing is committed
 	// unless the command succeeds (commit-on-success only — no half-files).
@@ -481,9 +532,9 @@ func (s *Shell) execCallObserved(call *parser.CallExpr, w io.Writer, errW io.Wri
 		// It does not require write capability because it cannot mutate state.
 		if target == "/dev/null" {
 			if call.Redirect.Stderr {
-				return s.execCallInner(call, w, io.Discard, stdin)
+				return s.execCallInner(call, w, io.Discard, stdin, command)
 			}
-			return s.execCallInner(call, io.Discard, errW, stdin)
+			return s.execCallInner(call, io.Discard, errW, stdin, command)
 		}
 		// A file redirect is a write; gate it at parse time (Part B) so a
 		// read-only session cannot use `>`/`>>` to mutate a docset.
@@ -497,22 +548,22 @@ func (s *Shell) execCallObserved(call *parser.CallExpr, w io.Writer, errW io.Wri
 		}
 		var buf bytes.Buffer
 		if call.Redirect.Stderr {
-			code := s.execCallInner(call, w, &buf, stdin)
+			code := s.execCallInner(call, w, &buf, stdin, command)
 			if redirectCode := cmds.WriteFileMsg(s, errW, "redirect", target, buf.Bytes(), call.Redirect.Append); redirectCode != 0 {
 				return redirectCode
 			}
 			return code
 		}
-		code := s.execCallInner(call, &buf, errW, stdin)
+		code := s.execCallInner(call, &buf, errW, stdin, command)
 		if code != 0 {
 			return code
 		}
 		return cmds.WriteFileMsg(s, errW, "redirect", target, buf.Bytes(), call.Redirect.Append)
 	}
-	return s.execCallInner(call, w, errW, stdin)
+	return s.execCallInner(call, w, errW, stdin, command)
 }
 
-func (s *Shell) execCallInner(call *parser.CallExpr, w io.Writer, errW io.Writer, stdin io.Reader) int {
+func (s *Shell) execCallInner(call *parser.CallExpr, w io.Writer, errW io.Writer, stdin io.Reader, command *string) int {
 	if len(call.Args) == 0 {
 		for _, assign := range call.Assigns {
 			s.SetEnv(assign.Name.Value, s.expandWord(assign.Value))
@@ -532,6 +583,7 @@ func (s *Shell) execCallInner(call *parser.CallExpr, w io.Writer, errW io.Writer
 		}
 		args = append(args, expanded)
 	}
+	*command = args[0]
 
 	// A heredoc on the command replaces stdin with the heredoc body. We
 	// concatenate multiple heredoc bodies in declaration order to match bash.
@@ -947,6 +999,7 @@ func (s *Shell) globExpand(pattern string) []string {
 // shell. WidthChanges may be nil. Non-positive widths use an 80-column
 // fallback.
 type InteractiveOptions struct {
+	Context      context.Context
 	Width        int
 	WidthChanges <-chan int
 }
@@ -961,6 +1014,11 @@ func (s *Shell) RunInteractive(rw io.ReadWriter, errW io.Writer, motd string, pr
 // an allocated PTY, the session's ptyWriter already converts \n to \r\n, so no
 // additional CRLFWriter wrapping is needed.
 func (s *Shell) RunInteractiveWithOptions(rw io.ReadWriter, errW io.Writer, motd string, prompt string, opts InteractiveOptions) {
+	previousContext := s.executionContext
+	if opts.Context != nil {
+		s.executionContext = opts.Context
+	}
+	defer func() { s.executionContext = previousContext }()
 	if motd != "" {
 		fmt.Fprintln(rw, motd)
 		fmt.Fprintln(rw, "")

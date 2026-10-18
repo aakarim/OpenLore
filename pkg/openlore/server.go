@@ -782,12 +782,12 @@ func (s *Server) shellHandler(next ssh.Handler) ssh.Handler {
 		// first and cannot faithfully reconstruct shell operators such as output
 		// redirection, especially when an operator is adjacent to another word.
 		if cmdLine := sess.RawCommand(); cmdLine != "" {
-			exitCode := sh.ExecPipeline(cmdLine, sess, sess.Stderr(), sess)
+			exitCode := sh.ExecPipelineContext(ctx, cmdLine, sess, sess.Stderr(), sess)
 			sess.Exit(exitCode)
 			return
 		}
 
-		interactiveOpts := shell.InteractiveOptions{Width: 80}
+		interactiveOpts := shell.InteractiveOptions{Context: ctx, Width: 80}
 		if pty, windowChanges, ok := sess.Pty(); ok {
 			interactiveOpts.Width = pty.Window.Width
 			widthChanges := make(chan int, 1)
@@ -1180,7 +1180,7 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 				attrs = append(attrs, "identity", id.IdentityName)
 			}
 			if s.config.Debug {
-				s.logger.Debug("unsupported shell usage", attrs...)
+				s.logger.DebugContext(sh.Context(), "unsupported shell usage", attrs...)
 			}
 			if s.analytics != nil {
 				eventType := "command.unknown"
@@ -1189,7 +1189,7 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 					eventType = "syntax.unknown"
 					fields = map[string]any{"syntax": usage.Syntax}
 				}
-				s.analytics.Record(context.Background(), s.analyticsEvent(id, eventType, fields))
+				s.analytics.Record(sh.Context(), s.analyticsEvent(id, eventType, fields))
 			}
 		})
 	}
@@ -1214,13 +1214,16 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 		if s.metrics != nil {
 			s.metrics.TotalCommands.Add(1)
 		}
+		if s.config.Debug {
+			s.logger.DebugContext(ce.Context, "shell command completed", "exit_code", ce.ExitCode, "duration_ms", ce.Duration.Milliseconds(), "bytes_out", ce.BytesOut, "invocation_id", ce.InvocationID)
+		}
 		if s.analytics == nil {
 			return
 		}
 		e := s.analyticsEvent(id, "command.exec", map[string]any{"command": ce.Command, "argc": ce.Argc, "exit_code": ce.ExitCode, "duration_ms": ce.Duration.Milliseconds(), "bytes_out": ce.BytesOut, "pipeline_position": ce.PipelinePosition})
 		e.ID = ce.EventID
 		e.InvocationID = ce.InvocationID
-		s.analytics.Record(context.Background(), e)
+		s.analytics.Record(ce.Context, e)
 	})
 	if s.config.DefaultCwd != "" {
 		sh.SetCwd(s.config.DefaultCwd)

@@ -19,6 +19,7 @@ import (
 
 	"github.com/aakarim/go-openlore/assets"
 	"github.com/aakarim/go-openlore/internal/config"
+	"github.com/aakarim/go-openlore/internal/telemetry"
 	openlore "github.com/aakarim/go-openlore/pkg/openlore"
 	"github.com/aakarim/go-openlore/pkg/shell/cmds"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -437,12 +438,15 @@ func main() {
 				os.Exit(1)
 			}
 
+			shutdownTelemetry := startTelemetry()
 			server := openlore.NewMCPServer(vfs)
 			if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
+				shutdownTelemetry()
 				fmt.Fprintf(os.Stderr, "mcp server error: %v\n", err)
 				os.Exit(1)
 			}
-			os.Exit(0)
+			shutdownTelemetry()
+			return
 
 		case "mcpb":
 			mcpbCmd := flag.NewFlagSet("mcpb", flag.ExitOnError)
@@ -735,7 +739,7 @@ func main() {
 	if resolved.Debug {
 		level = slog.LevelDebug
 	}
-	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+	logger := slog.New(telemetry.LogHandler{Handler: slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level})})
 	slog.SetDefault(logger)
 	opts = append(opts, openlore.WithLogger(logger))
 
@@ -800,6 +804,8 @@ func main() {
 		"allow_keyless", cfg.AllowKeyless,
 	)
 
+	shutdownTelemetry := startTelemetry()
+	defer shutdownTelemetry()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	errCh := make(chan error, 1)
@@ -808,6 +814,7 @@ func main() {
 	case err := <-errCh:
 		if err != nil {
 			slog.Error("server exited with error", "error", err)
+			shutdownTelemetry()
 			os.Exit(1)
 		}
 	case <-ctx.Done():
@@ -815,6 +822,23 @@ func main() {
 		defer cancel()
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			slog.Warn("shutdown incomplete", "error", err)
+		}
+	}
+}
+
+// Telemetry is best effort: exporter configuration or network failures must
+// not prevent serving knowledge. Never log exporter errors containing URLs
+// or authentication headers supplied through the environment.
+func startTelemetry() func() {
+	shutdown, err := telemetry.Setup(context.Background(), assets.Version())
+	if err != nil {
+		slog.Warn("tracing initialization failed; continuing without export")
+	}
+	return func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdown(ctx); err != nil {
+			slog.Warn("tracing shutdown incomplete")
 		}
 	}
 }

@@ -23,7 +23,11 @@ type metricEmitter interface {
 
 func emitMetric(ctx CmdContext, eventType string, fields map[string]any) {
 	if emitter, ok := ctx.(metricEmitter); ok {
-		emitter.EmitMetric(context.Background(), eventType, fields)
+		goCtx := context.Background()
+		if execution, ok := ctx.(interface{ Context() context.Context }); ok {
+			goCtx = execution.Context()
+		}
+		emitter.EmitMetric(goCtx, eventType, fields)
 	}
 }
 

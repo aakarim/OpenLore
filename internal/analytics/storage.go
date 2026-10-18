@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/klauspost/compress/zstd"
+	"go.opentelemetry.io/otel/trace"
 	_ "modernc.org/sqlite"
 )
 
@@ -553,7 +554,11 @@ func (r *Recorder) Start(ctx context.Context) {
 		}()
 	})
 }
-func (r *Recorder) Record(_ context.Context, e Event) {
+func (r *Recorder) Record(ctx context.Context, e Event) {
+	// Capture correlation before the event crosses the asynchronous queue.
+	if sc := trace.SpanContextFromContext(ctx); sc.IsValid() {
+		e.TraceID, e.SpanID = sc.TraceID().String(), sc.SpanID().String()
+	}
 	if e.ID == "" {
 		e.ID = NewID()
 	}

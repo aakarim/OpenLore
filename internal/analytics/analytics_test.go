@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/aakarim/go-openlore/pkg/vfs"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type countingProcessor struct{ calls int }
@@ -105,7 +106,8 @@ func TestRecorderPersistsAndDrains(t *testing.T) {
 	}
 	r := NewRecorder(log, 2)
 	r.Start(context.Background())
-	r.Record(context.Background(), Event{Type: "command.exec", Fields: map[string]any{"command": "cat"}})
+	sc := trace.NewSpanContext(trace.SpanContextConfig{TraceID: trace.TraceID{1}, SpanID: trace.SpanID{2}})
+	r.Record(trace.ContextWithSpanContext(context.Background(), sc), Event{Type: "command.exec", Fields: map[string]any{"command": "cat"}})
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	if err := r.Close(ctx); err != nil {
@@ -117,6 +119,9 @@ func TestRecorderPersistsAndDrains(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].ID == "" || got[0].Type != "command.exec" {
 		t.Fatalf("unexpected events: %#v", got)
+	}
+	if got[0].TraceID != sc.TraceID().String() || got[0].SpanID != sc.SpanID().String() {
+		t.Fatalf("persisted event lost trace correlation: %#v", got[0])
 	}
 }
 

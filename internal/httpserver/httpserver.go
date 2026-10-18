@@ -12,6 +12,7 @@ import (
 	"path"
 	"strings"
 
+	"github.com/aakarim/go-openlore/internal/telemetry"
 	gossh "golang.org/x/crypto/ssh"
 )
 
@@ -58,7 +59,7 @@ func New(fsys fs.FS, cfg Config) (*Server, error) {
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", cfg.Port),
-		Handler: mux,
+		Handler: telemetry.HTTPHandler(mux),
 	}
 
 	if cfg.TLSCert != "" && cfg.TLSKey != "" {
