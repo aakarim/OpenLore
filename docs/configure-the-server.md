@@ -101,27 +101,43 @@ collector or a compatible backend such as Langfuse, Phoenix, or LangSmith.
 Export is off unless an endpoint is explicitly configured. This applies to
 both the regular server and `openlore mcp` (stdio).
 
-```bash
-export OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:4318"
-export OTEL_SERVICE_NAME="openlore"
-export OTEL_TRACES_SAMPLER="parentbased_traceidratio"
-export OTEL_TRACES_SAMPLER_ARG="0.1"
-openlore ./docs
+Configure tracing in `openlore.yml`; no environment variables are required:
+
+```yaml
+tracing:
+  endpoint: http://localhost:4318/v1/traces
+  service_name: openlore
+  sample_ratio: 0.1
+  resource_attributes:
+    deployment.environment.name: production
+  # For an authenticated backend, set headers in a private config file:
+  # headers:
+  #   Authorization: "Bearer YOUR_TOKEN"
 ```
 
-The base endpoint receives traces at `/v1/traces`. For a vendor-specific full
-URL, use `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` instead; it takes precedence.
-Set `OTEL_EXPORTER_OTLP_HEADERS` (or `OTEL_EXPORTER_OTLP_TRACES_HEADERS`) for
-backend authentication through your deployment's secret mechanism. Do not
-commit credentials to configuration files. The exporter also supports the
-standard timeout and TLS certificate environment variables. Only HTTP
-protobuf export is implemented, not gRPC or HTTP/JSON.
+`endpoint` is the full trace URL, including `/v1/traces` or the vendor-specific
+path. Set `tracing.enabled: false` to disable export even when an endpoint is
+configured. Otherwise, an endpoint opts in; `enabled: true` alone does not
+select a default collector. `sample_ratio` controls new root traces (0 to 1)
+and honours parent sampling decisions. With no sampler configured, sampling
+is parent-based always-on. The binary version is attached as `service.version`.
 
-`OTEL_RESOURCE_ATTRIBUTES` adds deployment/project attributes required by
-your backend. `OTEL_SERVICE_NAME` defaults to `openlore`; the binary version
-is attached as `service.version`. With no sampler configured, the SDK uses
-parent-based always-on sampling. Set `OTEL_SDK_DISABLED=true` to disable the
-executable's exporter even if an endpoint is configured.
+For credentials, use a private file outside the served content directory,
+restrict its permissions (for example, `chmod 600`), and select it with
+`openlore --config /etc/openlore/openlore.yml ./docs` or
+`openlore mcp --config /etc/openlore/openlore.yml ./docs`. Do not commit or
+embed a config containing credentials. The file replaces the embedded config;
+it is not an overlay.
+
+Standard `OTEL_*` environment variables remain optional fallbacks. Explicit
+file settings take precedence: the file endpoint beats both environment
+endpoints, `headers` replaces environment headers (`{}` clears them), and file
+resource attributes override matching environment attributes. `service_name`
+also overrides `service.name` in resource attributes. Omitted service/sampler
+settings use the SDK's environment configuration and defaults. The environment
+kill switch `OTEL_SDK_DISABLED=true` always prevents export. Advanced timeout
+and TLS certificate environment settings remain supported. Only HTTP protobuf
+export is implemented, not gRPC or HTTP/JSON.
 
 ### What is traced
 

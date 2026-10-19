@@ -27,6 +27,7 @@ type Config struct {
 	Debug           bool
 	Experimental    []string
 	Analytics       AnalyticsConfig
+	Tracing         TracingConfig
 	Port            int
 	MetricsPort     int
 	HostKeyPath     string
@@ -115,6 +116,30 @@ type Config struct {
 	configFileLoaded bool
 	embeddedLoaded   bool
 	warnings         []string
+}
+
+// TracingConfig configures the executable's OTLP/HTTP trace exporter. Nil
+// Enabled infers opt-in from an endpoint; explicit false disables export.
+type TracingConfig struct {
+	Enabled            *bool             `yaml:"enabled"`
+	Endpoint           string            `yaml:"endpoint"`
+	ServiceName        string            `yaml:"service_name"`
+	SampleRatio        *float64          `yaml:"sample_ratio"`
+	Headers            map[string]string `yaml:"headers"`
+	ResourceAttributes map[string]string `yaml:"resource_attributes"`
+}
+
+func (t TracingConfig) Validate() error {
+	if t.Endpoint != "" {
+		u, err := url.Parse(t.Endpoint)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+			return errors.New("tracing.endpoint must be an http or https URL without credentials, query or fragment")
+		}
+	}
+	if t.SampleRatio != nil && (math.IsNaN(*t.SampleRatio) || *t.SampleRatio < 0 || *t.SampleRatio > 1) {
+		return errors.New("tracing.sample_ratio must be between 0 and 1")
+	}
+	return nil
 }
 
 type AnalyticsConfig struct {
@@ -645,6 +670,7 @@ type fileConfig struct {
 	Debug               bool                   `yaml:"debug"`
 	Experimental        []string               `yaml:"experimental"`
 	Analytics           analyticsYAML          `yaml:"analytics"`
+	Tracing             TracingConfig          `yaml:"tracing"`
 	Port                *int                   `yaml:"port"`
 	MetricsPort         *int                   `yaml:"metrics_port"`
 	HostKeyPath         string                 `yaml:"host_key_path"`
@@ -891,6 +917,9 @@ func New(opts ...Option) (Config, error) {
 	if value := os.Getenv("OPENLORE_EXPERIMENTAL"); value != "" {
 		cfg.Experimental = append(cfg.Experimental, strings.Split(value, ",")...)
 	}
+	if err := cfg.Tracing.Validate(); err != nil {
+		return Config{}, err
+	}
 
 	if cfg.Port < 1 || cfg.Port > 65535 {
 		return Config{}, fmt.Errorf("port must be between 1 and 65535 (SSH cannot be disabled), got %d", cfg.Port)
@@ -958,6 +987,7 @@ func WithConfigFile(path string) Option {
 		cfg.configFileLoaded = true
 		cfg.ConfigFile = path
 		cfg.Experimental = append([]string(nil), fc.Experimental...)
+		cfg.Tracing = fc.Tracing
 		if err := applyAnalyticsConfig(cfg, fc.Analytics); err != nil {
 			return err
 		}
@@ -1099,6 +1129,7 @@ func WithEmbeddedConfig(data []byte, motdFallback string) Option {
 			cfg.warnings = append(cfg.warnings, warnings...)
 			cfg.embeddedLoaded = true
 			cfg.Experimental = append([]string(nil), fc.Experimental...)
+			cfg.Tracing = fc.Tracing
 			if err := applyAnalyticsConfig(cfg, fc.Analytics); err != nil {
 				return err
 			}

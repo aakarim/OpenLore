@@ -43,6 +43,34 @@ var entries = map[string]entry{
 		Description: "Names of experimental features to switch on; the `OPENLORE_EXPERIMENTAL` environment variable appends to this list.",
 		Example:     `["analytics"]`,
 	},
+	"tracing": {
+		Description: "Opt-in OpenTelemetry tracing over OTLP/HTTP protobuf; explicit file settings override their standard `OTEL_*` environment fallbacks.",
+	},
+	"tracing.enabled": {
+		Description: "Allows export when an endpoint is configured; unset infers opt-in from a file or environment endpoint. Explicit `false` or `OTEL_SDK_DISABLED=true` prevents export.",
+		Example:     "true",
+	},
+	"tracing.endpoint": {
+		Description: "Full OTLP/HTTP trace URL, including `/v1/traces` or the backend-specific path; accepts HTTP or HTTPS without embedded credentials, query or fragment.",
+		Example:     `"http://localhost:4318/v1/traces"`,
+	},
+	"tracing.service_name": {
+		Default:     "openlore",
+		Description: "Service name attached to exported spans; overrides `service.name` in `resource_attributes` and the environment.",
+		Example:     `"docs-production"`,
+	},
+	"tracing.sample_ratio": {
+		Description: "Fraction of new root traces to sample, from 0 to 1, while respecting parent sampling decisions. Unset uses the SDK sampler environment settings or parent-based always-on sampling.",
+		Example:     "0.1",
+	},
+	"tracing.headers": {
+		Description: "Exporter authentication headers; replaces environment headers when set, including an explicit empty map. Keep credentials in a private config outside served content, not in version control or embedded assets.",
+		Example:     `{Authorization: "Bearer YOUR_TOKEN"}`,
+	},
+	"tracing.resource_attributes": {
+		Description: "Deployment or project attributes required by the backend; file values override matching environment attributes.",
+		Example:     `{"deployment.environment.name": "production"}`,
+	},
 	"analytics": {
 		Description: "Usage analytics: how reads and writes are logged, aggregated, indexed and exported.",
 	},

@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/aakarim/go-openlore/internal/config"
 	"github.com/felixge/httpsnoop"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -21,29 +22,50 @@ import (
 )
 
 // Setup initializes tracing only when an OTLP endpoint is explicitly set.
-// The SDK reads standard OTEL_* resource, exporter, and sampler variables.
+// File settings override standard OTEL_* exporter, resource and sampler values.
 // The caller owns shutdown and must give it a bounded, uncancelled context.
-func Setup(ctx context.Context, version string) (func(context.Context) error, error) {
+func Setup(ctx context.Context, cfg config.TracingConfig, version string) (func(context.Context) error, error) {
 	noop := func(context.Context) error { return nil }
-	if strings.EqualFold(os.Getenv("OTEL_SDK_DISABLED"), "true") ||
-		(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") == "" && os.Getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT") == "") {
+	if (cfg.Enabled != nil && !*cfg.Enabled) || strings.EqualFold(os.Getenv("OTEL_SDK_DISABLED"), "true") ||
+		(cfg.Endpoint == "" && os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") == "" && os.Getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT") == "") {
 		return noop, nil
 	}
-	exporter, err := otlptracehttp.New(ctx)
+	if err := cfg.Validate(); err != nil {
+		return noop, err
+	}
+	var exporterOptions []otlptracehttp.Option
+	if cfg.Endpoint != "" {
+		exporterOptions = append(exporterOptions, otlptracehttp.WithEndpointURL(cfg.Endpoint))
+	}
+	if cfg.Headers != nil {
+		exporterOptions = append(exporterOptions, otlptracehttp.WithHeaders(cfg.Headers))
+	}
+	exporter, err := otlptracehttp.New(ctx, exporterOptions...)
 	if err != nil {
 		return noop, err
+	}
+	var attributes []attribute.KeyValue
+	for key, value := range cfg.ResourceAttributes {
+		attributes = append(attributes, attribute.String(key, value))
+	}
+	if cfg.ServiceName != "" {
+		attributes = append(attributes, attribute.String("service.name", cfg.ServiceName))
 	}
 	res, err := resource.New(ctx, resource.WithTelemetrySDK(), resource.WithAttributes(
 		attribute.String("service.name", "openlore"),
 		attribute.String("service.version", version),
-	), resource.WithFromEnv())
+	), resource.WithFromEnv(), resource.WithAttributes(attributes...))
 	if err != nil {
 		_ = exporter.Shutdown(ctx)
 		return noop, err
 	}
 	// Exporter errors may contain collector URLs. Keep diagnostics content-free.
 	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(error) { slog.Warn("telemetry export failed") }))
-	provider := sdktrace.NewTracerProvider(sdktrace.WithResource(res), sdktrace.WithBatcher(exporter))
+	providerOptions := []sdktrace.TracerProviderOption{sdktrace.WithResource(res), sdktrace.WithBatcher(exporter)}
+	if cfg.SampleRatio != nil {
+		providerOptions = append(providerOptions, sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(*cfg.SampleRatio))))
+	}
+	provider := sdktrace.NewTracerProvider(providerOptions...)
 	otel.SetTracerProvider(provider)
 	return provider.Shutdown, nil
 }

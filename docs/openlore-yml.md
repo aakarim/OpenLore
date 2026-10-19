@@ -518,6 +518,84 @@ analytics:
 
 ---
 
+## `tracing`
+
+Opt-in OpenTelemetry tracing over OTLP/HTTP protobuf; explicit file settings override their standard `OTEL_*` environment fallbacks.
+
+### `tracing.enabled`
+
+**Type:** `boolean`  
+**Default:** none
+
+Allows export when an endpoint is configured; unset infers opt-in from a file or environment endpoint. Explicit `false` or `OTEL_SDK_DISABLED=true` prevents export.
+
+```yaml
+tracing:
+  enabled: true
+```
+
+### `tracing.endpoint`
+
+**Type:** `string`  
+**Default:** none
+
+Full OTLP/HTTP trace URL, including `/v1/traces` or the backend-specific path; accepts HTTP or HTTPS without embedded credentials, query or fragment.
+
+```yaml
+tracing:
+  endpoint: "http://localhost:4318/v1/traces"
+```
+
+### `tracing.service_name`
+
+**Type:** `string`  
+**Default:** `openlore`
+
+Service name attached to exported spans; overrides `service.name` in `resource_attributes` and the environment.
+
+```yaml
+tracing:
+  service_name: "docs-production"
+```
+
+### `tracing.sample_ratio`
+
+**Type:** `number`  
+**Default:** none
+
+Fraction of new root traces to sample, from 0 to 1, while respecting parent sampling decisions. Unset uses the SDK sampler environment settings or parent-based always-on sampling.
+
+```yaml
+tracing:
+  sample_ratio: 0.1
+```
+
+### `tracing.headers`
+
+**Type:** `map`  
+**Default:** none
+
+Exporter authentication headers; replaces environment headers when set, including an explicit empty map. Keep credentials in a private config outside served content, not in version control or embedded assets.
+
+```yaml
+tracing:
+  headers: {Authorization: "Bearer YOUR_TOKEN"}
+```
+
+### `tracing.resource_attributes`
+
+**Type:** `map`  
+**Default:** none
+
+Deployment or project attributes required by the backend; file values override matching environment attributes.
+
+```yaml
+tracing:
+  resource_attributes: {"deployment.environment.name": "production"}
+```
+
+---
+
 ## `mcp`
 
 The MCP-over-HTTP endpoint for clients such as Claude Code and Codex.

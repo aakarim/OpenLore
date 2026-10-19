@@ -67,6 +67,19 @@ metrics_port: 3000
 #   export:
 #     prometheus: true
 
+# OpenTelemetry tracing is opt-in. File settings override OTEL_* fallbacks.
+# Use the full OTLP/HTTP trace URL; no environment variables are required.
+# tracing:
+#   endpoint: http://localhost:4318/v1/traces
+#   service_name: openlore
+#   sample_ratio: 0.1 # New root traces; parent sampling is respected.
+#   resource_attributes:
+#     deployment.environment.name: production
+#   # enabled: false # Prevent export even if an endpoint is configured.
+#   # Put credentials in a private config outside served docs, never commit/embed:
+#   # headers:
+#   #   Authorization: "Bearer YOUR_TOKEN"
+
 # ── MCP (Model Context Protocol) ──────────────────────
 #
 # The MCP-over-HTTP endpoint lets MCP-aware clients (Claude Desktop,

@@ -394,20 +394,20 @@ func main() {
 			}
 			mcpCmd.Parse(os.Args[2:])
 
-			// Try loading config file for file filters. A loaded file replaces the
+			// Load config for file filters and tracing. A loaded file replaces the
 			// embedded config; the embedded config is used only when no file exists.
 			embeddedCfg, _ := assets.EmbeddedConfig()
 			cfgOpts := []config.Option{
 				config.WithConfigFile(*mcpConfig),
 				config.WithEmbeddedConfig(embeddedCfg, ""),
 			}
-			var resolvedCfg config.Config
-			var files config.FilesConfig
-			if cfg, err := config.New(cfgOpts...); err == nil {
-				resolvedCfg = cfg
-				files = cfg.Files
-				fmt.Fprintf(os.Stderr, "config: %s\n", cfg.Source())
+			resolvedCfg, err := config.New(cfgOpts...)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
 			}
+			files := resolvedCfg.Files
+			fmt.Fprintf(os.Stderr, "config: %s\n", resolvedCfg.Source())
 			if *mcpAllowed != "" {
 				files.Allowed = splitAndTrim(*mcpAllowed)
 			}
@@ -438,7 +438,7 @@ func main() {
 				os.Exit(1)
 			}
 
-			shutdownTelemetry := startTelemetry()
+			shutdownTelemetry := startTelemetry(resolvedCfg.Tracing)
 			server := openlore.NewMCPServer(vfs)
 			if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 				shutdownTelemetry()
@@ -804,7 +804,7 @@ func main() {
 		"allow_keyless", cfg.AllowKeyless,
 	)
 
-	shutdownTelemetry := startTelemetry()
+	shutdownTelemetry := startTelemetry(cfg.Tracing)
 	defer shutdownTelemetry()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -828,9 +828,9 @@ func main() {
 
 // Telemetry is best effort: exporter configuration or network failures must
 // not prevent serving knowledge. Never log exporter errors containing URLs
-// or authentication headers supplied through the environment.
-func startTelemetry() func() {
-	shutdown, err := telemetry.Setup(context.Background(), assets.Version())
+// or authentication headers supplied through configuration.
+func startTelemetry(cfg config.TracingConfig) func() {
+	shutdown, err := telemetry.Setup(context.Background(), cfg, assets.Version())
 	if err != nil {
 		slog.Warn("tracing initialization failed; continuing without export")
 	}
