@@ -236,8 +236,8 @@ func applySedCommands(cmds []sedCmd, lines []string, quiet bool, w io.Writer, on
 type sedCmd struct {
 	addrStart    int
 	addrEnd      int
-	addrRegex    string
-	addrEndRegex string
+	addrRegex    *regexp.Regexp
+	addrEndRegex *regexp.Regexp
 	command      byte
 	pattern      string
 	replacement  string
@@ -250,7 +250,7 @@ type sedCmd struct {
 }
 
 func sedAddressMatch(cmd sedCmd, lineNum, totalLines int, line string) bool {
-	if cmd.addrStart == 0 && cmd.addrEnd == 0 && cmd.addrRegex == "" && cmd.addrEndRegex == "" {
+	if cmd.addrStart == 0 && cmd.addrEnd == 0 && cmd.addrRegex == nil && cmd.addrEndRegex == nil {
 		return true
 	}
 	start := cmd.addrStart
@@ -262,15 +262,8 @@ func sedAddressMatch(cmd sedCmd, lineNum, totalLines int, line string) bool {
 		end = totalLines
 	}
 
-	if cmd.addrRegex != "" {
-		re, err := regexp.Compile(cmd.addrRegex)
-		if err != nil {
-			return false
-		}
-		if !re.MatchString(line) {
-			return false
-		}
-		return true
+	if cmd.addrRegex != nil {
+		return cmd.addrRegex.MatchString(line)
 	}
 
 	if end > 0 {
@@ -401,6 +394,58 @@ func indexUnescapedSedDelimiter(expr string, start int, delim byte) int {
 	return -1
 }
 
+// compileSedAddress validates BRE intervals before translation: Go treats
+// malformed intervals such as a{1 as literal text instead of syntax errors.
+func compileSedAddress(pattern string) (*regexp.Regexp, error) {
+	bracketStart := -1
+	for i := 0; i < len(pattern); i++ {
+		if bracketStart >= 0 {
+			if strings.HasPrefix(pattern[i:], "[:") {
+				if end := strings.Index(pattern[i+2:], ":]"); end >= 0 {
+					i += end + 3
+					continue
+				}
+			}
+			if pattern[i] == ']' && i > bracketStart {
+				bracketStart = -1
+			} else if pattern[i] == '\\' && i+1 < len(pattern) {
+				i++
+			}
+			continue
+		}
+		if pattern[i] == '[' {
+			bracketStart = i + 1
+			if bracketStart < len(pattern) && pattern[bracketStart] == '^' {
+				bracketStart++
+			}
+			continue
+		}
+		if pattern[i] != '\\' || i+1 >= len(pattern) {
+			continue
+		}
+		i++
+		if pattern[i] != '{' {
+			continue
+		}
+		start := i + 1
+		j := start
+		for j < len(pattern) && pattern[j] >= '0' && pattern[j] <= '9' {
+			j++
+		}
+		if j < len(pattern) && pattern[j] == ',' {
+			j++
+			for j < len(pattern) && pattern[j] >= '0' && pattern[j] <= '9' {
+				j++
+			}
+		}
+		if j == start || j+1 >= len(pattern) || pattern[j:j+2] != `\}` {
+			return nil, fmt.Errorf("invalid BRE interval")
+		}
+		i = j + 1
+	}
+	return regexp.Compile(basicRegexpToRE2(pattern))
+}
+
 // parseSedExpr parses one sed command. Commands and substitution flags that
 // are not implemented are reported as errors rather than silently ignored, so
 // callers never see exit 0 for an edit that was not made.
@@ -411,10 +456,16 @@ func parseSedExpr(expr string) (sedCmd, error) {
 	// Parse address
 	if i < len(expr) && expr[i] == '/' {
 		end := indexUnescapedSedDelimiter(expr, i+1, '/')
-		if end >= 0 {
-			cmd.addrRegex = strings.ReplaceAll(expr[i+1:end], `\/`, "/")
-			i = end + 1
+		if end < 0 {
+			return cmd, fmt.Errorf("unterminated address in expression '%s'", expr)
 		}
+		pattern := strings.ReplaceAll(expr[i+1:end], `\/`, "/")
+		var err error
+		cmd.addrRegex, err = compileSedAddress(pattern)
+		if err != nil {
+			return cmd, fmt.Errorf("invalid regex in address /%s/: %w", pattern, err)
+		}
+		i = end + 1
 	} else if i < len(expr) && expr[i] == '$' {
 		cmd.addrStart = -1
 		i++
@@ -435,10 +486,16 @@ func parseSedExpr(expr string) (sedCmd, error) {
 			i++
 		} else if i < len(expr) && expr[i] == '/' {
 			end := indexUnescapedSedDelimiter(expr, i+1, '/')
-			if end >= 0 {
-				cmd.addrEndRegex = strings.ReplaceAll(expr[i+1:end], `\/`, "/")
-				i = end + 1
+			if end < 0 {
+				return cmd, fmt.Errorf("unterminated address in expression '%s'", expr)
 			}
+			pattern := strings.ReplaceAll(expr[i+1:end], `\/`, "/")
+			var err error
+			cmd.addrEndRegex, err = compileSedAddress(pattern)
+			if err != nil {
+				return cmd, fmt.Errorf("invalid regex in address /%s/: %w", pattern, err)
+			}
+			i = end + 1
 		} else {
 			j := i
 			for j < len(expr) && expr[j] >= '0' && expr[j] <= '9' {
