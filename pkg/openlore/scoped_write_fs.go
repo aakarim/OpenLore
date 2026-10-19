@@ -1,6 +1,7 @@
 package openlore
 
 import (
+	"fmt"
 	"os"
 	"syscall"
 
@@ -18,7 +19,8 @@ type writeAuthorizer func(action vfs.ChangeAction, p string) bool
 // scopedWriteFS gates a session's writes through a writeAuthorizer. Reads pass
 // straight through to the wrapped filesystem; a mutation only reaches the
 // backing substrate when the authorizer allows the specific (action, path),
-// otherwise it fails closed with vfs.ErrReadOnly.
+// otherwise it fails closed. Atomic batches distinguish scope denials from
+// read-only backends and unsupported batch admission.
 type scopedWriteFS struct {
 	vfs.FileSystem                // read delegation (Stat / ReadDir / ReadFile)
 	inner          vfs.WritableFS // the writable substrate, nil if base is read-only
@@ -48,14 +50,20 @@ func (s *scopedWriteFS) WriteFileAtomic(p string, data []byte, opts vfs.WriteOpt
 }
 
 func (s *scopedWriteFS) AdmitChangeSet(cs vfs.ChangeSet) error {
-	a, ok := s.inner.(vfs.ChangeSetAdmitter)
-	if !ok || vfs.ValidateChangeSet(cs) != nil {
+	if err := vfs.ValidateChangeSet(cs); err != nil {
+		return err
+	}
+	if s.inner == nil {
 		return vfs.ErrReadOnly
 	}
 	for _, change := range cs.Leaves() {
 		if !s.authorize(change.Action, change.Target) {
-			return mutationDeniedError(s.FileSystem, change.Action, change.Target)
+			return fmt.Errorf("write scope denies %s on %s: %w", change.Action, change.Target, os.ErrPermission)
 		}
+	}
+	a, ok := s.inner.(vfs.ChangeSetAdmitter)
+	if !ok {
+		return syscall.ENOTSUP
 	}
 	return a.AdmitChangeSet(cs)
 }
