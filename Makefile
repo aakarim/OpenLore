@@ -1,4 +1,4 @@
-.PHONY: build dashboard-build dashboard-ci distribution test-libghostty
+.PHONY: build dashboard-build dashboard-ci distribution test-libghostty test-analytics-s3 test-filesystem-s3 test-litestream
 
 # Normal Go builds intentionally do not require Node or generated dashboard
 # assets. Distribution builds embed the generated frontend.
@@ -20,3 +20,15 @@ distribution: dashboard-build
 
 test-libghostty:
 	./scripts/test-libghostty.sh
+
+# Requires Docker; starts and removes an isolated LocalStack S3 container.
+# Matrix properties use 25 trials per combination. For 1,000 trials, run e.g.
+# OPENLORE_EXHAUSTIVE=1 make test-analytics-s3
+test-analytics-s3:
+	go test -race -tags=integration ./internal/analytics -run '^TestS3Analytics$$' -count=1 -timeout=45m
+
+test-filesystem-s3:
+	go test -race -tags=integration ./pkg/openlore -run '^TestS3Filesystem$$' -count=1 -timeout=45m
+
+test-litestream:
+	bash ./scripts/test-litestream.sh

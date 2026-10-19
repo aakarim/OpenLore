@@ -1,12 +1,16 @@
 package openlore
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -15,7 +19,415 @@ import (
 	"github.com/aakarim/go-openlore/internal/analytics"
 	"github.com/aakarim/go-openlore/internal/config"
 	"github.com/aakarim/go-openlore/pkg/vfs"
+	"hegel.dev/go/hegel"
 )
+
+// Local and remote journals must preserve the entire record, not just its ID
+// or the analytics values derived from it.
+func checkReplayedCommit(got, want CommitRecord) error {
+	if !reflect.DeepEqual(got, want) {
+		return fmt.Errorf("replayed record differs: got %#v, want %#v", got, want)
+	}
+	return nil
+}
+
+// Compare the cursor with an append-order model, not another cursor. Rotation,
+// lag, retention and checkpoint/reopen can happen in any generated order.
+func TestCommitJournalReplayProperties(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Hegel property tests are excluded in short mode")
+	}
+	hegel.Test(t, func(t *hegel.T) {
+		ctx := context.Background()
+		dir, err := os.MkdirTemp("", "commit-replay-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer os.RemoveAll(dir)
+		file := filepath.Join(dir, "commits.jsonl")
+		cursor, err := OpenHistoryCursor(file, HistoryPosition{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { cursor.(io.Closer).Close() }()
+		var records []CommitRecord
+		read := 0
+		day := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+		retention := hegel.Draw(t, hegel.SampledFrom([]time.Duration{0, 24 * time.Hour}))
+		consume := func() {
+			got, ok, err := cursor.Next(ctx)
+			if err != nil || !ok {
+				t.Fatalf("record %d/%d: ok=%v err=%v", read, len(records), ok, err)
+			}
+			if err := checkReplayedCommit(got, records[read]); err != nil {
+				t.Fatalf("record %d: %v", read, err)
+			}
+			read++
+		}
+		for range hegel.Draw(t, hegel.Integers(0, 24)) {
+			record := CommitRecord{ID: fmt.Sprint(len(records)), Time: day, Attribution: Attribution{Principal: hegel.Draw(t, hegel.Text().MaxSize(32))}, ChangeSet: vfs.ChangeSet{Target: "/doc.md", Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: hegel.Draw(t, hegel.Binary(0, 128))}}}
+			if err := appendCommitRecord(file, record); err != nil {
+				t.Fatal(err)
+			}
+			records = append(records, record)
+			for range hegel.Draw(t, hegel.Integers(0, len(records)-read)) {
+				consume()
+			}
+			if hegel.Draw(t, hegel.Booleans()) {
+				if err := RotateCommitJournal(ctx, file, day.Add(30*24*time.Hour), retention, cursor.Position()); err != nil {
+					t.Fatal(err)
+				}
+				day = day.Add(time.Duration(hegel.Draw(t, hegel.Integers(0, 1))) * 24 * time.Hour)
+			}
+			if hegel.Draw(t, hegel.Booleans()) {
+				encoded, err := json.Marshal(cursor.Position())
+				if err != nil {
+					t.Fatal(err)
+				}
+				var position HistoryPosition
+				if err := json.Unmarshal(encoded, &position); err != nil {
+					t.Fatal(err)
+				}
+				cursor.(io.Closer).Close()
+				cursor, err = OpenHistoryCursor(file, position)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		for read < len(records) {
+			consume()
+		}
+		if record, ok, err := cursor.Next(ctx); err != nil || ok {
+			t.Fatalf("tail: extra record=%#v ok=%v err=%v", record, ok, err)
+		}
+		if lag, err := HistoryCursorLagBytes(file, cursor.Position()); err != nil || lag != 0 {
+			t.Fatalf("caught-up lag=%d err=%v", lag, err)
+		}
+		position := cursor.Position()
+		if err := cursor.Seek(ctx, "missing"); !errors.Is(err, io.EOF) || cursor.Position() != position {
+			t.Fatalf("seek beyond tail: position=%#v err=%v", cursor.Position(), err)
+		}
+		if retention == 0 && len(records) > 0 {
+			cursor.(io.Closer).Close()
+			cursor, err = OpenHistoryCursor(file, HistoryPosition{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			index := hegel.Draw(t, hegel.Integers(0, len(records)-1))
+			if err := cursor.Seek(ctx, records[index].ID); err != nil || cursor.Position().LastID != records[index].ID {
+				t.Fatalf("seek to %d: position=%#v err=%v", index, cursor.Position(), err)
+			}
+			read = index + 1
+			for read < len(records) {
+				consume()
+			}
+		}
+	}, hegel.WithTestCases(1000))
+}
+
+func TestCommitJournalRetentionProtectsLaggingActiveCheckpoint(t *testing.T) {
+	for _, consumed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("consumed=%v", consumed), func(t *testing.T) {
+			ctx := context.Background()
+			file := filepath.Join(t.TempDir(), "commits.jsonl")
+			cursor, err := OpenHistoryCursor(file, HistoryPosition{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer cursor.(io.Closer).Close()
+			old := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+			for _, id := range []string{"first", "pending"} {
+				if err := appendCommitRecord(file, CommitRecord{ID: id, Time: old}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if consumed {
+				if _, ok, err := cursor.Next(ctx); err != nil || !ok {
+					t.Fatalf("first read: ok=%v err=%v", ok, err)
+				}
+			}
+			// The reader has not polled again when a second rotation occurs.
+			for range 2 {
+				if err := RotateCommitJournal(ctx, file, old.Add(30*24*time.Hour), 24*time.Hour, cursor.Position()); err != nil {
+					t.Fatal(err)
+				}
+				if err := appendCommitRecord(file, CommitRecord{ID: "later", Time: old.Add(24 * time.Hour)}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			want := "first"
+			if consumed {
+				want = "pending"
+			}
+			if got, ok, err := cursor.Next(ctx); err != nil || !ok || got.ID != want {
+				t.Fatalf("protected unread record lost: got=%q want=%q ok=%v err=%v", got.ID, want, ok, err)
+			}
+		})
+	}
+}
+
+func TestCommitJournalRotationAfterPruningKeepsAppendOrder(t *testing.T) {
+	ctx := context.Background()
+	file := filepath.Join(t.TempDir(), "commits.jsonl")
+	cursor, err := OpenHistoryCursor(file, HistoryPosition{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cursor.(io.Closer).Close()
+	old := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	for i := range 3 {
+		if err := appendCommitRecord(file, CommitRecord{ID: fmt.Sprint(i), Time: old}); err != nil {
+			t.Fatal(err)
+		}
+		if i < 2 {
+			if got, ok, err := cursor.Next(ctx); err != nil || !ok || got.ID != fmt.Sprint(i) {
+				t.Fatalf("read %d: %#v %v %v", i, got, ok, err)
+			}
+		}
+		if err := RotateCommitJournal(ctx, file, old.Add(30*24*time.Hour), 24*time.Hour, cursor.Position()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, ok, err := cursor.Next(ctx); err != nil || !ok || got.ID != "2" {
+		t.Fatalf("new segment lost after pruning: %#v %v %v", got, ok, err)
+	}
+}
+
+func TestHistoryCursorDoesNotSkipCorruptionOnRetry(t *testing.T) {
+	for _, rotated := range []bool{false, true} {
+		for _, live := range []bool{false, true} {
+			t.Run(fmt.Sprintf("rotated=%v/live=%v", rotated, live), func(t *testing.T) {
+				ctx := context.Background()
+				file := filepath.Join(t.TempDir(), "commits.jsonl")
+				old := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+				if err := appendCommitRecord(file, CommitRecord{ID: "first", Time: old}); err != nil {
+					t.Fatal(err)
+				}
+				f, err := os.OpenFile(file, os.O_APPEND|os.O_WRONLY, 0o600)
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, err = f.WriteString("{broken-json}\n")
+				closeErr := f.Close()
+				if err != nil || closeErr != nil {
+					t.Fatalf("inject corruption: %v %v", err, closeErr)
+				}
+				if err := appendCommitRecord(file, CommitRecord{ID: "must-not-skip-to-this", Time: old}); err != nil {
+					t.Fatal(err)
+				}
+				cursor, err := OpenHistoryCursor(file, HistoryPosition{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer func() { cursor.(io.Closer).Close() }()
+				if live {
+					if got, ok, err := cursor.Next(ctx); err != nil || !ok || got.ID != "first" {
+						t.Fatalf("first read: %#v %v %v", got, ok, err)
+					}
+				}
+				if rotated {
+					if err := RotateCommitJournal(ctx, file, old.Add(24*time.Hour), 0); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if !live {
+					cursor.(io.Closer).Close()
+					cursor, err = OpenHistoryCursor(file, HistoryPosition{})
+					if err != nil {
+						t.Fatal(err)
+					}
+					if got, ok, err := cursor.Next(ctx); err != nil || !ok || got.ID != "first" {
+						t.Fatalf("first read: %#v %v %v", got, ok, err)
+					}
+				}
+				for attempt := range 3 {
+					if got, ok, err := cursor.Next(ctx); err == nil || ok || cursor.Position().LastID != "first" {
+						t.Fatalf("retry %d skipped corruption: got=%q ok=%v err=%v position=%#v", attempt, got.ID, ok, err, cursor.Position())
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestCommitJournalPartialRecordProperties(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Hegel property tests are excluded in short mode")
+	}
+	hegel.Test(t, func(t *hegel.T) {
+		dir, err := os.MkdirTemp("", "commit-partial-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer os.RemoveAll(dir)
+		file := filepath.Join(dir, "commits.jsonl")
+		want := CommitRecord{ID: "partial", ChangeSet: vfs.ChangeSet{Target: hegel.Draw(t, hegel.Text().MaxSize(128)), Write: &vfs.WriteChange{Bytes: hegel.Draw(t, hegel.Binary(0, 512))}}}
+		line, err := json.Marshal(want)
+		if err != nil {
+			t.Fatal(err)
+		}
+		line = append(line, '\n')
+		cut := hegel.Draw(t, hegel.Integers(0, len(line)-1))
+		if err := os.WriteFile(file, line[:cut], 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cursor, err := OpenHistoryCursor(file, HistoryPosition{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer cursor.(io.Closer).Close()
+		for range 2 {
+			if _, ok, err := cursor.Next(context.Background()); err != nil || ok || cursor.Position() != (HistoryPosition{}) {
+				t.Fatalf("partial record consumed: ok=%v err=%v position=%#v", ok, err, cursor.Position())
+			}
+		}
+		f, err := os.OpenFile(file, os.O_APPEND|os.O_WRONLY, 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = f.Write(line[cut:])
+		closeErr := f.Close()
+		if err != nil || closeErr != nil {
+			t.Fatalf("complete record: %v %v", err, closeErr)
+		}
+		cancelled, cancel := context.WithCancel(context.Background())
+		cancel()
+		if _, ok, err := cursor.Next(cancelled); !errors.Is(err, context.Canceled) || ok || cursor.Position() != (HistoryPosition{}) {
+			t.Fatalf("cancelled read consumed record: ok=%v err=%v position=%#v", ok, err, cursor.Position())
+		}
+		got, ok, err := cursor.Next(context.Background())
+		if err != nil || !ok || cursor.Position().Offset != int64(len(line)) {
+			t.Fatalf("completed record: got=%#v ok=%v err=%v position=%#v", got, ok, err, cursor.Position())
+		}
+		if err := checkReplayedCommit(got, want); err != nil {
+			t.Fatal(err)
+		}
+	}, hegel.WithTestCases(1000))
+}
+
+// Exercise real file commits, pre-image blobs, journal serialization and the
+// analytics reader together. The oracle is an independent in-memory file map.
+func TestWriteLogAnalyticsReplayProperties(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Hegel property tests are excluded in short mode")
+	}
+	hegel.Test(t, func(t *hegel.T) {
+		ctx := context.Background()
+		dir, err := os.MkdirTemp("", "commit-scalars-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer os.RemoveAll(dir)
+		fsys := NewDirFS(dir, config.FilesConfig{Allowed: []string{"*.md"}})
+		if err := fsys.SetWriteable(); err != nil {
+			t.Fatal(err)
+		}
+		blobs, err := OpenBlobStore(filepath.Join(dir, "history", "objects"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		file := filepath.Join(dir, "history", "commits.jsonl")
+		log := newWriteLog(fsys, nil, nil, hegel.Draw(t, hegel.Integers(1, 8)))
+		captureBlobs := hegel.Draw(t, hegel.Booleans())
+		log.SetCommitJournal(fileCommitJournal(file), blobs, captureBlobs)
+		defer log.Close(ctx)
+		cursor, err := OpenHistoryCursor(file, HistoryPosition{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { cursor.(io.Closer).Close() }()
+		processor := NewScalarProcessor(cursor, blobs, IdentityStoreClassifier(nil)).(*ScalarProcessor)
+		model := map[string][]byte{}
+		for range hegel.Draw(t, hegel.Integers(1, 20)) {
+			path := fmt.Sprintf("/doc-%d.md", hegel.Draw(t, hegel.Integers(0, 2)))
+			before, existed := model[path]
+			after := hegel.Draw(t, hegel.Binary(0, 128))
+			action := "create"
+			if existed {
+				action = "update"
+			}
+			cs := vfs.ChangeSet{Target: path, Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: after}}
+			reject := hegel.Draw(t, hegel.Booleans())
+			if reject {
+				stale := "not-the-current-hash"
+				cs.Write.Opts.IfMatch = &stale
+			} else if existed && hegel.Draw(t, hegel.Booleans()) {
+				cs.Action, cs.Write, action, after = vfs.ChangeActionRemove, nil, "delete", nil
+			}
+			kind := hegel.Draw(t, hegel.SampledFrom([]string{"human", "agent", "unknown"}))
+			_, err := log.Submit(ctx, Attribution{Principal: "person", ActorKind: kind}, cs)
+			if reject {
+				var precondition *vfs.PreconditionError
+				if !errors.As(err, &precondition) {
+					t.Fatalf("rejected write: %v", err)
+				}
+				if events := processor.Drain(ctx); len(events) != 0 {
+					t.Fatalf("rejected write entered analytics: %#v", events)
+				}
+			} else {
+				if err != nil {
+					t.Fatal(err)
+				}
+				events := processor.Drain(ctx)
+				if len(events) != 1 {
+					t.Fatalf("committed write produced %d events", len(events))
+				}
+				e := events[0]
+				fields := e.Fields
+				if fields["path"] != path || fields["action"] != action || fields["writer"] != kind || fields["first_seen"] != (!existed || !captureBlobs) || e.Principal != "person" {
+					t.Fatalf("incorrect attribution/action: %#v", e)
+				}
+				if delta := fields["delta"].(map[string]any)["bytes"]; delta != float64(len(after)-len(before)) {
+					t.Fatalf("byte delta=%v want=%d", delta, len(after)-len(before))
+				}
+				if existed && captureBlobs && fields["before"].(map[string]float64)["bytes"] != float64(len(before)) {
+					t.Fatalf("incorrect pre-image: %#v", fields)
+				}
+				if action == "delete" {
+					delete(model, path)
+					if fields["content_hash"] != "" {
+						t.Fatalf("delete hash: %#v", fields)
+					}
+				} else {
+					model[path] = after
+					if fields["content_hash"] != fmt.Sprintf("%x", sha256.Sum256(after)) || fields["after"].(map[string]float64)["bytes"] != float64(len(after)) {
+						t.Fatalf("incorrect after-image: %#v", fields)
+					}
+				}
+				if extra := processor.Process(ctx, writeEvent("notification", fields["commit_id"].(string))); len(extra) != 0 {
+					t.Fatalf("duplicate notification emitted %d events", len(extra))
+				}
+			}
+			got, readErr := fsys.ReadFile(path)
+			if want, exists := model[path]; exists {
+				if readErr != nil || !bytes.Equal(got, want) {
+					t.Fatalf("substrate differs: got=%q want=%q err=%v", got, want, readErr)
+				}
+			} else if !errors.Is(readErr, os.ErrNotExist) {
+				t.Fatalf("absent file read: %v", readErr)
+			}
+			if hegel.Draw(t, hegel.Booleans()) {
+				checkpoint, err := processor.MarshalCheckpointState()
+				if err != nil {
+					t.Fatal(err)
+				}
+				cursor.(io.Closer).Close()
+				cursor, err = OpenHistoryCursor(file, HistoryPosition{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				processor = NewScalarProcessor(cursor, blobs, IdentityStoreClassifier(nil)).(*ScalarProcessor)
+				if err := processor.RestoreCheckpointState(checkpoint); err != nil {
+					t.Fatal(err)
+				}
+				if extra := processor.Drain(ctx); len(extra) != 0 {
+					t.Fatalf("restart duplicated %d events", len(extra))
+				}
+			}
+		}
+	}, hegel.WithTestCases(1000))
+}
 
 func TestCapturePreImagesStoresExactBlob(t *testing.T) {
 	root := t.TempDir()
@@ -488,7 +900,7 @@ func TestWriteLogCapturesPreImagesForUpdateAndDelete(t *testing.T) {
 	}
 	historyPath := filepath.Join(dir, "commits.jsonl")
 	log := newWriteLog(fsys, nil, nil, 4)
-	log.SetCommitJournal(historyPath, blobs, true)
+	log.SetCommitJournal(fileCommitJournal(historyPath), blobs, true)
 	defer log.Close(ctx)
 
 	for _, cs := range []vfs.ChangeSet{

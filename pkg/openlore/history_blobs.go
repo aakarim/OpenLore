@@ -200,6 +200,23 @@ func fillAfter(leaves []LeafRecord, committed vfs.ChangeSet) []LeafRecord {
 	}
 	return leaves
 }
+
+// CommitJournal is the durable record sink used after a filesystem mutation.
+// Append can fail independently of the file commit; it is not a transaction
+// with the substrate. HistoryCursor is the separate replay/read interface.
+type CommitJournal interface {
+	Append(context.Context, CommitRecord) error
+}
+
+type fileCommitJournal string
+
+func (j fileCommitJournal) Append(ctx context.Context, record CommitRecord) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return appendCommitRecord(string(j), record)
+}
+
 func appendCommitRecord(file string, record CommitRecord) error {
 	commitJournalMu.Lock()
 	defer commitJournalMu.Unlock()
@@ -432,7 +449,7 @@ func (c *fileHistoryCursor) Next(ctx context.Context) (CommitRecord, bool, error
 	}
 	if errors.Is(err, io.EOF) {
 		if c.position.Segment != "" && c.position.Segment != filepath.Base(c.path) {
-			return CommitRecord{}, false, io.ErrUnexpectedEOF
+			return CommitRecord{}, false, errors.Join(io.ErrUnexpectedEOF, c.openCurrent())
 		}
 		// An append-only journal may be observed between the record write and
 		// its terminating newline. Do not consume that record until complete.
@@ -442,11 +459,13 @@ func (c *fileHistoryCursor) Next(ctx context.Context) (CommitRecord, bool, error
 		return CommitRecord{}, false, nil
 	}
 	if err != nil && !errors.Is(err, io.EOF) {
-		return CommitRecord{}, false, err
+		return CommitRecord{}, false, errors.Join(err, c.openCurrent())
 	}
 	var r CommitRecord
 	if err := json.Unmarshal(line, &r); err != nil {
-		return CommitRecord{}, false, err
+		// The reader consumed bytes but the checkpoint did not. Rewind so a
+		// retry cannot silently skip corruption and checkpoint past it.
+		return CommitRecord{}, false, errors.Join(err, c.openCurrent())
 	}
 	c.position.Offset += int64(len(line))
 	c.position.LastID = r.ID
@@ -469,7 +488,7 @@ func (c *fileHistoryCursor) nextLocked(ctx context.Context) (CommitRecord, bool,
 	}
 	if errors.Is(err, io.EOF) {
 		if c.position.Segment != "" && c.position.Segment != filepath.Base(c.path) {
-			return CommitRecord{}, false, io.ErrUnexpectedEOF
+			return CommitRecord{}, false, errors.Join(io.ErrUnexpectedEOF, c.openCurrent())
 		}
 		if seekErr := c.openCurrent(); seekErr != nil {
 			return CommitRecord{}, false, seekErr
@@ -477,11 +496,11 @@ func (c *fileHistoryCursor) nextLocked(ctx context.Context) (CommitRecord, bool,
 		return CommitRecord{}, false, nil
 	}
 	if err != nil {
-		return CommitRecord{}, false, err
+		return CommitRecord{}, false, errors.Join(err, c.openCurrent())
 	}
 	var r CommitRecord
 	if err := json.Unmarshal(line, &r); err != nil {
-		return r, false, err
+		return CommitRecord{}, false, errors.Join(err, c.openCurrent())
 	}
 	c.position.Offset += int64(len(line))
 	c.position.LastID = r.ID
@@ -722,9 +741,18 @@ func RotateCommitJournal(ctx context.Context, file string, now time.Time, retent
 	}
 	var checkpoint *HistoryPosition
 	if len(protected) > 0 {
-		checkpoint = &protected[0]
-		if segment != "" && (checkpoint.Segment == "" || checkpoint.Segment == filepath.Base(file)) {
-			checkpoint.Segment = filepath.Base(segment) + ".zst"
+		position := protected[0]
+		checkpoint = &position
+		if retention > 0 && (position.Segment == "" || position.Segment == filepath.Base(file)) {
+			// The reader may have missed several rotations. Resolve its actual
+			// checkpoint (or the beginning), not merely the newest segment.
+			cursor := &fileHistoryCursor{path: file}
+			err := cursor.restorePositionLocked(position)
+			_ = cursor.Close()
+			if err != nil {
+				return err
+			}
+			position = cursor.Position()
 		}
 	}
 	return pruneHistory(ctx, filepath.Dir(file), now, retention, checkpoint)
@@ -787,16 +815,24 @@ func detachCommitJournal(file string, now time.Time) (string, int64, error) {
 	if err != nil || st.Size() == 0 || sameUTCDate(segmentDay, now) {
 		return "", 0, nil
 	}
-	name := fmt.Sprintf("commits-%s.jsonl", segmentDay.Format("2006-01-02"))
-	dst := filepath.Join(filepath.Dir(file), name)
-	for i := 1; ; i++ {
-		if _, plainErr := os.Stat(dst); errors.Is(plainErr, os.ErrNotExist) {
-			if _, compressedErr := os.Stat(dst + ".zst"); errors.Is(compressedErr, os.ErrNotExist) {
-				break
-			}
-		}
-		dst = filepath.Join(filepath.Dir(file), fmt.Sprintf("commits-%s-%d.jsonl", segmentDay.Format("2006-01-02"), i))
+	segments, err := (&fileHistoryCursor{path: file}).segments()
+	if err != nil {
+		return "", 0, err
 	}
+	day := segmentDay.Format("2006-01-02")
+	sequence := 0
+	for _, segment := range segments {
+		if segmentDate, index := historySegmentOrder(segment); segmentDate == day {
+			sequence = max(sequence, index+1)
+		}
+	}
+	// Never fill a retention-created gap: cursors and pruning use this
+	// sequence as append order, so a new segment must sort after survivors.
+	name := fmt.Sprintf("commits-%s.jsonl", day)
+	if sequence > 0 {
+		name = fmt.Sprintf("commits-%s-%d.jsonl", day, sequence)
+	}
+	dst := filepath.Join(filepath.Dir(file), name)
 	if err := os.Rename(file, dst); err != nil {
 		return "", 0, err
 	}
