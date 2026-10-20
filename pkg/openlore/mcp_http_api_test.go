@@ -57,7 +57,10 @@ func TestMCPHTTPAPI_Shell(t *testing.T) {
 }
 
 func TestMCPHTTPAPI_ShellCommandFailureIsResult(t *testing.T) {
-	h := newTestAPI(t)
+	dir := t.TempDir()
+	fs := NewDirFS(dir, config.FilesConfig{})
+	api := NewMCPHTTPAPI(NewMCPServer(fs), func(context.Context) *shell.Shell { return shell.NewShell(fs) })
+	h := api.Handler("/api")
 
 	body := strings.NewReader(`{"command":"cat /does/not/exist"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/shell", body)
@@ -87,6 +90,12 @@ func TestMCPHTTPAPI_ShellCommandFailureIsResult(t *testing.T) {
 	}
 	if resp.Output != resp.Stderr {
 		t.Fatalf("output = %q, want backwards-compatible merged stderr %q", resp.Output, resp.Stderr)
+	}
+	if strings.Contains(rec.Body.String(), dir) {
+		t.Fatalf("response leaks host directory %q: %s", dir, rec.Body.String())
+	}
+	if !strings.Contains(resp.Stderr, "/does/not/exist") {
+		t.Fatalf("stderr = %q, want virtual path", resp.Stderr)
 	}
 }
 

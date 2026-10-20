@@ -183,7 +183,7 @@ func (d *DirFS) WriteFileAtomic(p string, content []byte, opts vfs.WriteOpts) (s
 	if opts.IfMatch != nil || opts.IfNoneMatch {
 		cur, exists, err := currentHash(full)
 		if err != nil {
-			return "", err
+			return "", withoutHostPath(err)
 		}
 		if opts.IfNoneMatch && exists {
 			return "", &vfs.PreconditionError{Path: vfs.CleanPath(p), Current: cur}
@@ -196,10 +196,10 @@ func (d *DirFS) WriteFileAtomic(p string, content []byte, opts vfs.WriteOpts) (s
 	}
 
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-		return "", fmt.Errorf("mkdir: %w", err)
+		return "", fmt.Errorf("mkdir: %w", withoutHostPath(err))
 	}
 	if err := atomicWrite(full, content); err != nil {
-		return "", err
+		return "", withoutHostPath(err)
 	}
 
 	sum := sha256.Sum256(content)
@@ -233,12 +233,12 @@ func (d *DirFS) Mkdir(p string) error {
 	// immediate parent, so a mkdir that fails leaves nothing behind.
 	if root, _ := d.docsetRootFor(clean); root != "/" && root == path.Dir(clean) {
 		if err := os.MkdirAll(d.resolve(root), 0o755); err != nil {
-			return fmt.Errorf("mkdir: %w", err)
+			return fmt.Errorf("mkdir: %w", withoutHostPath(err))
 		}
 	}
 	full := d.resolve(p)
 	if err := os.Mkdir(full, 0o755); err != nil {
-		return fmt.Errorf("mkdir: %w", err)
+		return fmt.Errorf("mkdir: %w", withoutHostPath(err))
 	}
 	return nil
 }
@@ -344,7 +344,7 @@ func (d *DirFS) materializeDir(p string) error {
 	}
 	d.commitMu.Lock()
 	defer d.commitMu.Unlock()
-	return os.MkdirAll(d.resolve(clean), 0o755)
+	return withoutHostPath(os.MkdirAll(d.resolve(clean), 0o755))
 }
 
 // MkdirAll creates p and any missing ancestors (mkdir -p). p must sit strictly
@@ -372,7 +372,7 @@ func (d *DirFS) MkdirAll(p string) error {
 	defer d.commitMu.Unlock()
 
 	if err := os.MkdirAll(d.resolve(p), 0o755); err != nil {
-		return fmt.Errorf("mkdir: %w", err)
+		return fmt.Errorf("mkdir: %w", withoutHostPath(err))
 	}
 	return nil
 }
@@ -403,13 +403,13 @@ func (d *DirFS) Remove(p string) error {
 	full := d.resolve(p)
 	info, err := os.Stat(full)
 	if err != nil {
-		return err
+		return withoutHostPath(err)
 	}
 	if !dirConfig && !info.IsDir() && !isAllowed(info.Name(), d.files) {
 		return fmt.Errorf("access denied: %s", p)
 	}
 	if err := os.Remove(full); err != nil {
-		return err
+		return withoutHostPath(err)
 	}
 	return nil
 }
@@ -441,7 +441,7 @@ func (d *DirFS) RemoveAll(p string, opts vfs.RemoveOpts) error {
 
 	full := d.resolve(p)
 	if _, err := os.Stat(full); err != nil {
-		return err
+		return withoutHostPath(err)
 	}
 
 	// Snapshot the physical subtree and refuse if it hides anything from the
@@ -450,7 +450,7 @@ func (d *DirFS) RemoveAll(p string, opts vfs.RemoveOpts) error {
 	// compare-and-swap against opts.Expected meaningful.
 	snap, err := d.rawSnapshot(clean, full)
 	if err != nil {
-		return err
+		return withoutHostPath(err)
 	}
 	if opts.Expected != nil {
 		if detail, equal := snapshotsEqual(opts.Expected, snap); !equal {
@@ -460,11 +460,11 @@ func (d *DirFS) RemoveAll(p string, opts vfs.RemoveOpts) error {
 
 	trashRoot := filepath.Join(d.root, trashDirName)
 	if err := os.MkdirAll(trashRoot, 0o700); err != nil {
-		return fmt.Errorf("prepare staging: %w", err)
+		return fmt.Errorf("prepare staging: %w", withoutHostPath(err))
 	}
 	staged := filepath.Join(trashRoot, randomToken())
 	if err := os.Rename(full, staged); err != nil {
-		return fmt.Errorf("stage delete: %w", err)
+		return fmt.Errorf("stage delete: %w", withoutHostPath(err))
 	}
 	// The subtree is now invisible at its original path; destroy the staged
 	// copy synchronously (best-effort — the namespace change already committed).
@@ -589,6 +589,22 @@ func (d *DirFS) resolve(p string) string {
 	return filepath.Join(d.root, filepath.FromSlash(p))
 }
 
+// withoutHostPath removes OS path metadata before an error crosses the VFS
+// boundary. Return the cause, not a string replacement, so errors.Is still
+// recognizes filesystem sentinels and errno values. Commands supply the virtual
+// path in their own diagnostics; temp/staging paths must never escape.
+func withoutHostPath(err error) error {
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) {
+		return withoutHostPath(pathErr.Err)
+	}
+	var linkErr *os.LinkError
+	if errors.As(err, &linkErr) {
+		return withoutHostPath(linkErr.Err)
+	}
+	return err
+}
+
 // HostDir maps a VFS directory to its writable on-disk backing for package state.
 func (d *DirFS) HostDir(p string) (string, bool) { return d.resolve(p), true }
 
@@ -654,7 +670,7 @@ func (d *DirFS) Stat(p string) (*vfs.FileInfo, error) {
 		}
 		info, err := os.Stat(d.resolve(clean))
 		if err != nil {
-			return nil, err
+			return nil, withoutHostPath(err)
 		}
 		return &vfs.FileInfo{FileName: ".lore", FilePath: clean, FileSize: info.Size(), FileModTime: info.ModTime(), Dir: true}, nil
 	}
@@ -665,7 +681,7 @@ func (d *DirFS) Stat(p string) (*vfs.FileInfo, error) {
 	full := d.resolve(p)
 	info, err := os.Stat(full)
 	if err != nil {
-		return nil, err
+		return nil, withoutHostPath(err)
 	}
 
 	if !dirConfig && !info.IsDir() && !isAllowed(info.Name(), d.files) {
@@ -694,7 +710,7 @@ func (d *DirFS) ReadDir(p string) ([]vfs.FileInfo, error) {
 		configPath := path.Join(clean, "config.yaml")
 		info, err := os.Stat(d.resolve(configPath))
 		if err != nil {
-			return nil, err
+			return nil, withoutHostPath(err)
 		}
 		if info.IsDir() {
 			return nil, os.ErrNotExist
@@ -711,7 +727,7 @@ func (d *DirFS) ReadDir(p string) ([]vfs.FileInfo, error) {
 	full := d.resolve(p)
 	entries, err := os.ReadDir(full)
 	if err != nil {
-		return nil, err
+		return nil, withoutHostPath(err)
 	}
 
 	var result []vfs.FileInfo
@@ -765,7 +781,8 @@ func (d *DirFS) ReadFile(p string) ([]byte, error) {
 	}
 
 	full := d.resolve(p)
-	return os.ReadFile(full)
+	data, err := os.ReadFile(full)
+	return data, withoutHostPath(err)
 }
 
 func (d *DirFS) ReadFileBounded(p string, maxBytes int64) ([]byte, error) {
@@ -778,10 +795,11 @@ func (d *DirFS) ReadFileBounded(p string, maxBytes int64) ([]byte, error) {
 	}
 	file, err := os.Open(d.resolve(p))
 	if err != nil {
-		return nil, err
+		return nil, withoutHostPath(err)
 	}
 	defer file.Close()
-	return readAllBounded(file, maxBytes)
+	data, err := readAllBounded(file, maxBytes)
+	return data, withoutHostPath(err)
 }
 
 // MergeFS merges multiple filesystems under named mount points.
