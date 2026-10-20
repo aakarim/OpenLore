@@ -6,6 +6,7 @@ import {
   CloseIcon,
   CopyIcon,
   LinkIcon,
+  RefreshIcon,
   SettingsIcon,
 } from "./icons";
 import type { FileResponse, HistoryResponse, Session } from "./types";
@@ -486,6 +487,7 @@ export function FileReader({
       <div className="state error" role="alert">
         <strong>Couldn’t open this file</strong>
         <p>{state.error.message}</p>
+        <button onClick={state.refresh}>Try again</button>
       </div>
     );
   const file = state.data;
@@ -540,6 +542,14 @@ export function FileReader({
               onClick={() => onCopy(location.href)}
             >
               <LinkIcon />
+            </button>
+            <button
+              className="icon-button"
+              aria-label="Refresh file"
+              title="Refresh file"
+              onClick={state.refresh}
+            >
+              <RefreshIcon />
             </button>
           </div>
           <div className="view-toggle">

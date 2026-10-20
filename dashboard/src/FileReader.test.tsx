@@ -54,6 +54,52 @@ test("renders plaintext preview and estimates FileInfo from characters and ratio
   expect(screen.queryByText("999")).not.toBeInTheDocument();
 });
 
+test.each(["preview", "source"] as const)(
+  "refresh replaces stale file content in %s mode",
+  async (mode) => {
+    vi.spyOn(api, "file")
+      .mockResolvedValueOnce(baseFile)
+      .mockResolvedValueOnce({
+        ...baseFile,
+        source: "Updated knowledge",
+        html: "<p>Updated preview</p>",
+      });
+    render(<FileReader {...readerProps} mode={mode} />);
+    const user = userEvent.setup();
+    expect(await screen.findByText("Plain text knowledge")).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "Refresh file" }));
+
+    expect(
+      await screen.findByText(
+        mode === "preview" ? "Updated preview" : "Updated knowledge",
+      ),
+    ).toBeVisible();
+    expect(screen.queryByText("Plain text knowledge")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", {
+        name: mode === "preview" ? "Preview" : "Source",
+      }),
+    ).toHaveAttribute("aria-pressed", "true");
+  },
+);
+
+test("a failed refresh can be retried without reopening the file", async () => {
+  vi.spyOn(api, "file")
+    .mockResolvedValueOnce(baseFile)
+    .mockRejectedValueOnce(new Error("Connection lost"))
+    .mockResolvedValueOnce({ ...baseFile, source: "Recovered knowledge" });
+  render(<FileReader {...readerProps} />);
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "Refresh file" }));
+
+  expect(await screen.findByRole("alert")).toHaveTextContent("Connection lost");
+  await user.click(screen.getByRole("button", { name: "Try again" }));
+
+  expect(await screen.findByText("Recovered knowledge")).toBeVisible();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
 test("filename tooltip shows the full path on hover, focus, or click and dismisses on Escape or blur", async () => {
   const path = "/docs/team notes/drafts/plan.md";
   vi.spyOn(api, "file").mockResolvedValue({ ...baseFile, path });
