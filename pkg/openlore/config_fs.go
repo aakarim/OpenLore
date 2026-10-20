@@ -58,11 +58,11 @@ func (f *configViewFS) Stat(name string) (*vfs.FileInfo, error) {
 	}
 	b, err := os.ReadFile(host)
 	if err != nil {
-		return nil, err
+		return nil, withoutHostPath(err)
 	}
 	info, err := os.Stat(host)
 	if err != nil {
-		return nil, err
+		return nil, withoutHostPath(err)
 	}
 	return &vfs.FileInfo{FileName: path.Base(clean), FilePath: clean, FileSize: int64(len(b)), FileModTime: info.ModTime()}, nil
 }
@@ -108,7 +108,8 @@ func (f *configViewFS) ReadFile(name string) ([]byte, error) {
 	if !f.authorized() {
 		return nil, os.ErrPermission
 	}
-	return os.ReadFile(host)
+	data, err := os.ReadFile(host)
+	return data, withoutHostPath(err)
 }
 
 func (f *configViewFS) ReadFileBounded(name string, maxBytes int64) ([]byte, error) {
@@ -121,10 +122,11 @@ func (f *configViewFS) ReadFileBounded(name string, maxBytes int64) ([]byte, err
 	}
 	file, err := os.Open(host)
 	if err != nil {
-		return nil, err
+		return nil, withoutHostPath(err)
 	}
 	defer file.Close()
-	return readAllBounded(file, maxBytes)
+	data, err := readAllBounded(file, maxBytes)
+	return data, withoutHostPath(err)
 }
 
 func (f *configViewFS) WriteFileAtomic(name string, data []byte, opts vfs.WriteOpts) (string, error) {
@@ -142,7 +144,7 @@ func (f *configViewFS) WriteFileAtomic(name string, data []byte, opts vfs.WriteO
 	defer f.server.authMu.Unlock()
 	current, err := os.ReadFile(f.server.config.AuthFile)
 	if err != nil {
-		return "", err
+		return "", withoutHostPath(err)
 	}
 	currentSum := sha256.Sum256(current)
 	currentHash := hex.EncodeToString(currentSum[:])
@@ -165,10 +167,10 @@ func (f *configViewFS) WriteFileAtomic(name string, data []byte, opts vfs.WriteO
 	}
 	tmp := f.server.config.AuthFile + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return "", err
+		return "", withoutHostPath(err)
 	}
 	if err := os.Rename(tmp, f.server.config.AuthFile); err != nil {
-		return "", err
+		return "", withoutHostPath(err)
 	}
 	sum := sha256.Sum256(data)
 	if f.server.audit != nil {

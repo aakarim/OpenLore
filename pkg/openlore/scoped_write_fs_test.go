@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/aakarim/go-openlore/internal/config"
+	"github.com/aakarim/go-openlore/pkg/shell"
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
 
@@ -87,6 +88,60 @@ func TestScopedWriteFS_NoRoots_FullyReadOnly(t *testing.T) {
 	fs := newScopedWriteFS(base, nil)
 	if _, err := fs.WriteFileAtomic("/jared/x.md", []byte("nope"), vfs.WriteOpts{}); !errors.Is(err, vfs.ErrReadOnly) {
 		t.Fatalf("no-roots session must be read-only everywhere, got %v", err)
+	}
+}
+
+func TestScopedWriteFSMoveFailureNamesCause(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		roots    []string
+		readOnly bool
+		want     string
+	}{
+		{name: "unsupported atomic move", roots: []string{"/"}, want: "does not support atomic moves"},
+		{name: "destination outside scope", roots: []string{"/source"}, want: "write scope denies write on /dest/b.md"},
+		{name: "source outside scope", roots: []string{"/dest"}, want: "write scope denies remove_all on /source/a.md"},
+		{name: "read-only backend", roots: []string{"/"}, readOnly: true, want: "read-only filesystem"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base, _ := newWritableDirFS(t)
+			for _, dir := range []string{"/source", "/dest"} {
+				if err := base.Mkdir(dir); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var backing vfs.FileSystem = base
+			if tc.readOnly {
+				backing = struct{ vfs.FileSystem }{base}
+			}
+			sh := shell.NewShell(newScopedWriteFS(backing, rootsAuthz(tc.roots...)))
+			if !tc.readOnly {
+				// The same session can write and delete within its grant; lacking
+				// atomic move support must not be mistaken for a read-only folder.
+				probe := tc.roots[0] + "/probe.md"
+				if code := sh.ExecPipeline("echo probe > "+probe+" && rm "+probe, io.Discard, io.Discard, nil); code != 0 {
+					t.Fatalf("write/delete probe exit = %d", code)
+				}
+			}
+			for path, body := range map[string]string{"/source/a.md": "source\n", "/dest/b.md": "destination\n"} {
+				if _, err := base.WriteFileAtomic(path, []byte(body), vfs.WriteOpts{}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var out, errOut bytes.Buffer
+			code := sh.ExecPipeline("mv /source/a.md /dest/b.md && echo continued", &out, &errOut, nil)
+			if code != 1 || out.Len() != 0 || !strings.Contains(errOut.String(), tc.want) {
+				t.Fatalf("move: exit=%d stdout=%q stderr=%q; want %q", code, out.String(), errOut.String(), tc.want)
+			}
+			if !tc.readOnly && strings.Contains(errOut.String(), "read-only filesystem") {
+				t.Fatalf("writable backend misreported as read-only: %s", errOut.String())
+			}
+			for path, want := range map[string]string{"/source/a.md": "source\n", "/dest/b.md": "destination\n"} {
+				if got, err := base.ReadFile(path); err != nil || string(got) != want {
+					t.Fatalf("failed move changed %s: got %q, err %v", path, got, err)
+				}
+			}
+		})
 	}
 }
 

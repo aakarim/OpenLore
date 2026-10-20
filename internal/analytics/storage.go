@@ -42,12 +42,13 @@ type EventLog interface {
 	Close() error
 }
 type fileEventLog struct {
-	dir            string
-	opts           LogOptions
-	mu             sync.Mutex
-	closed         bool
-	activePathName string
-	active         *os.File
+	dir             string
+	opts            LogOptions
+	mu              sync.Mutex
+	closed          bool
+	activePathName  string
+	active          *os.File
+	retainUnshipped bool
 }
 
 type logCursor map[string]int64
@@ -99,7 +100,27 @@ func (l *fileEventLog) Append(ctx context.Context, e Event) error {
 		return errors.New("analytics event log closed")
 	}
 	active := l.activePath(e.Time)
-	if _, err := os.Stat(active + ".zst"); err == nil {
+	_, sealedErr := os.Stat(active + ".zst")
+	previouslyShipped := false
+	if _, err := os.Stat(active); errors.Is(err, os.ErrNotExist) {
+		// A retained checkpoint can outlive its segment. Never reuse that
+		// segment's name for late arrivals, even after a process restart.
+		b, err := os.ReadFile(filepath.Join(l.dir, "shipper.checkpoint"))
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err == nil {
+			var shipped map[string]int64
+			if err := json.Unmarshal(b, &shipped); err != nil {
+				return err
+			}
+			base := filepath.Base(active)
+			_, raw := shipped[base]
+			_, compressed := shipped[base+".zst"]
+			previouslyShipped = raw || compressed
+		}
+	}
+	if sealedErr == nil || previouslyShipped {
 		// A late event must never recreate a sealed segment: a subsequent seal
 		// would otherwise replace the existing compressed file.
 		active = strings.TrimSuffix(active, ".jsonl") + "-late-" + NewID() + ".jsonl"
@@ -468,10 +489,33 @@ func (l *fileEventLog) Seal(ctx context.Context, before time.Time) error {
 		}
 	}
 	if l.opts.Retention > 0 {
+		// Retention must not outrun remote durability. Read the atomic durable
+		// checkpoint, not the shipper's possibly uncommitted in-memory offsets.
+		shipped := map[string]int64{}
+		if l.retainUnshipped {
+			b, err := os.ReadFile(filepath.Join(l.dir, "shipper.checkpoint"))
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+			if err == nil {
+				if err := json.Unmarshal(b, &shipped); err != nil {
+					return err
+				}
+			}
+		}
 		cutoff := time.Now().UTC().Add(-l.opts.Retention)
 		for _, seg := range l.Segments() {
-			if seg.Day.Before(cutoff) {
-				_ = os.Remove(seg.Path)
+			if !seg.Day.Before(cutoff) || l.retainUnshipped && shipped[filepath.Base(seg.Path)] != seg.Size {
+				continue
+			}
+			if l.active != nil && l.activePathName == seg.Path {
+				if err := l.active.Close(); err != nil {
+					return err
+				}
+				l.active, l.activePathName = nil, ""
+			}
+			if err := os.Remove(seg.Path); err != nil {
+				return err
 			}
 		}
 	}

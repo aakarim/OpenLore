@@ -2,12 +2,14 @@ package analytics
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -602,6 +604,11 @@ type Shipper struct {
 }
 
 func NewShipper(log EventLog, remote RemoteEventStore, interval time.Duration) *Shipper {
+	if l, ok := log.(*fileEventLog); ok && remote != nil {
+		l.mu.Lock()
+		l.retainUnshipped = true
+		l.mu.Unlock()
+	}
 	return &Shipper{log: log, remote: remote, interval: interval, done: make(chan struct{}), offsets: map[string]int64{}}
 }
 func (s *Shipper) Run(ctx context.Context) {
@@ -675,25 +682,27 @@ func (s *Shipper) ShipNow(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		key := "events/" + day + "/" + base
+		// Include both the segment and its payload digest: independent writers
+		// can have identical filenames and offsets but different bytes. A retry
+		// of the same range still has the same key, even after a restart.
+		hash := sha256.New()
+		body := io.NewSectionReader(f, offset, seg.Size-offset)
+		if _, err = io.Copy(hash, body); err != nil {
+			_ = f.Close()
+			return err
+		}
+		key := fmt.Sprintf("events/%s/%s-%x.jsonl.zst", day, strings.TrimSuffix(base, ".jsonl.zst"), hash.Sum(nil))
 		if !seg.Compressed {
-			// Each active upload is an immutable byte-range object. Retrying uses
-			// the same key and bytes; the checkpoint advances only after Put.
-			key = fmt.Sprintf("events/%s/%020d-%020d.jsonl", day, offset, seg.Size)
+			key = fmt.Sprintf("events/%s/%s-%020d-%020d-%x.jsonl", day, strings.TrimSuffix(base, ".jsonl"), offset, seg.Size, hash.Sum(nil))
 		}
-		_, seekErr := f.Seek(offset, io.SeekStart)
-		if seekErr == nil {
-			err = s.remote.Put(ctx, key, io.LimitReader(f, seg.Size-offset), seg.Size-offset)
-		}
+		err = s.remote.Put(ctx, key, io.NewSectionReader(f, offset, seg.Size-offset), seg.Size-offset)
 		_ = f.Close()
-		if seekErr != nil {
-			return seekErr
-		}
 		if err != nil {
 			return err
 		}
 		s.offsets[base] = seg.Size
 		if err := s.saveCheckpoint(); err != nil {
+			s.offsets[base] = offset
 			return err
 		}
 	}

@@ -370,7 +370,7 @@ func newServerWithRoot(rootDir string, rootFS vfs.FileSystem, lowerFS fs.FS, opt
 			return nil, fmt.Errorf("opening history blob store: %w", blobErr)
 		}
 		commitPath := filepath.Join(dataDir, "history", "commits.jsonl")
-		s.writeLog.SetCommitJournal(commitPath, blobs, cfg.Analytics.HistoryBlobsEnabled())
+		s.writeLog.SetCommitJournal(fileCommitJournal(commitPath), blobs, cfg.Analytics.HistoryBlobsEnabled())
 		s.historyPath = commitPath
 		if s.analytics != nil {
 			cursor, cursorErr := OpenHistoryCursor(commitPath, HistoryPosition{})
