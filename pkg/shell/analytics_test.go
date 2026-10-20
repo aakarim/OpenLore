@@ -2,10 +2,18 @@ package shell
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
+	"io"
 	"io/fs"
+	"strings"
 	"testing"
 
 	"github.com/aakarim/go-openlore/pkg/vfs"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 type analyticsTestFS struct{}
@@ -49,5 +57,58 @@ func TestCommandObserverSeesXargsGeneratedCommands(t *testing.T) {
 	}
 	if echoes != 2 {
 		t.Fatalf("observations = %#v, want two generated echo commands", got)
+	}
+}
+
+func TestShellTracingPreservesNestedExecutionAndRedactsContent(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	previous := otel.GetTracerProvider()
+	otel.SetTracerProvider(provider)
+	defer otel.SetTracerProvider(previous)
+	defer provider.Shutdown(context.Background())
+	ctx, parent := provider.Tracer("test").Start(t.Context(), "agent")
+	defer parent.End()
+	sh := NewShell(analyticsTestFS{})
+	var out bytes.Buffer
+	if code := sh.ExecPipelineContext(ctx, `eval 'echo private-text'; printf 'one two' | xargs -n 1 echo; private-secret-command`, &out, io.Discard, nil); code != 127 || out.String() != "private-text\none\ntwo\n" {
+		t.Fatalf("exit=%d output=%q", code, out.String())
+	}
+	var echoes, unknown int
+	for _, span := range recorder.Ended() {
+		if span.SpanContext().TraceID() != parent.SpanContext().TraceID() {
+			t.Fatalf("nested execution escaped the caller's trace: %s", span.Name())
+		}
+		data, _ := json.Marshal(span.Attributes())
+		if strings.Contains(string(data), "private-") || strings.Contains(span.Status().Description, "private-") {
+			t.Fatalf("span leaked content: %s", data)
+		}
+		for _, attr := range span.Attributes() {
+			if attr.Key == "openlore.command.name" {
+				switch attr.Value.AsString() {
+				case "echo":
+					echoes++
+				case "unknown":
+					unknown++
+					if span.Status().Code != codes.Error {
+						t.Fatal("unknown command was not marked failed")
+					}
+				}
+			}
+		}
+	}
+	if echoes != 3 || unknown != 1 {
+		t.Fatalf("missing nested commands: echoes=%d unknown=%d", echoes, unknown)
+	}
+	// A later unparented invocation on the same shell must not reuse this trace.
+	sh.ExecPipeline("true", io.Discard, io.Discard, nil)
+	spans := recorder.Ended()
+	if spans[len(spans)-1].SpanContext().TraceID() == parent.SpanContext().TraceID() {
+		t.Fatal("shell retained the previous request's trace")
+	}
+	// Reading the command name for tracing must not execute substitutions.
+	out.Reset()
+	if code := sh.ExecPipelineContext(ctx, `$(export N=${N}x; echo echo) "$N"`, &out, io.Discard, nil); code != 0 || out.String() != "x\n" {
+		t.Fatalf("tracing re-evaluated command substitution: exit=%d output=%q", code, out.String())
 	}
 }

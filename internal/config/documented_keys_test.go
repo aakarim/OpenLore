@@ -62,6 +62,46 @@ func writeTestConfig(t *testing.T, body string) string {
 	return file
 }
 
+func TestTracingConfiguration(t *testing.T) {
+	const body = `tracing:
+  enabled: false
+  endpoint: https://collector.example.com/v1/traces
+  service_name: docs
+  sample_ratio: 0
+  headers:
+    Authorization: Bearer test-only
+  resource_attributes:
+    deployment.environment.name: staging
+`
+	for _, opt := range []Option{WithConfigFile(writeTestConfig(t, body)), WithEmbeddedConfig([]byte(body), "")} {
+		cfg, err := New(opt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tracing := cfg.Tracing
+		if tracing.Enabled == nil || *tracing.Enabled || tracing.Endpoint != "https://collector.example.com/v1/traces" ||
+			tracing.ServiceName != "docs" || tracing.SampleRatio == nil || *tracing.SampleRatio != 0 ||
+			tracing.Headers["Authorization"] != "Bearer test-only" || tracing.ResourceAttributes["deployment.environment.name"] != "staging" {
+			t.Fatalf("tracing settings were not loaded correctly")
+		}
+	}
+	for _, invalid := range []struct{ yaml, key string }{
+		{"endpoint: ftp://collector.example.com", "tracing.endpoint"},
+		{"endpoint: https:///v1/traces", "tracing.endpoint"},
+		{"endpoint: https://user:secret@collector.example.com/v1/traces", "tracing.endpoint"},
+		{"sample_ratio: -0.1", "tracing.sample_ratio"},
+		{"sample_ratio: 1.1", "tracing.sample_ratio"},
+		{"sample_ratio: .nan", "tracing.sample_ratio"},
+	} {
+		body := "tracing:\n  " + invalid.yaml + "\n"
+		for _, opt := range []Option{WithConfigFile(writeTestConfig(t, body)), WithEmbeddedConfig([]byte(body), "")} {
+			if _, err := New(opt); err == nil || !strings.Contains(err.Error(), invalid.key) {
+				t.Errorf("invalid %s: err = %v, want an error naming %s", invalid.yaml, err, invalid.key)
+			}
+		}
+	}
+}
+
 // TestExplicitZeroIsNotTreatedAsOmitted pins that an explicit non-positive
 // value (0 or negative) for a setting that must be positive is rejected
 // instead of silently replaced by the default.

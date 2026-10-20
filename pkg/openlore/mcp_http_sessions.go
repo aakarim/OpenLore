@@ -133,7 +133,7 @@ func (s *httpShellSessions) handleShell(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	session.mu.Lock()
-	result := executeSessionShell(session.shell, req.Command)
+	result := executeSessionShell(r.Context(), session.shell, req.Command)
 	session.mu.Unlock()
 	writeJSON(w, http.StatusOK, result)
 }
@@ -231,8 +231,8 @@ func randomHTTPSessionID() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-func executeSessionShell(sh *shell.Shell, command string) toolResponse {
-	output, stdout, stderr, exitCode := execShellTranscript(sh, command)
+func executeSessionShell(ctx context.Context, sh *shell.Shell, command string) toolResponse {
+	output, stdout, stderr, exitCode := execShellTranscript(ctx, sh, command)
 	return toolResponse{
 		Output:   output,
 		Stdout:   stdout,

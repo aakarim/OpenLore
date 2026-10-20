@@ -220,7 +220,7 @@ func TestExecShellTranscriptPreservesStreams(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			output, stdout, stderr, exitCode := execShellTranscript(sh, tc.command)
+			output, stdout, stderr, exitCode := execShellTranscript(t.Context(), sh, tc.command)
 			if exitCode != tc.wantExit {
 				t.Fatalf("exit code = %d, want %d", exitCode, tc.wantExit)
 			}

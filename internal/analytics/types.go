@@ -25,6 +25,8 @@ type Event struct {
 	ClientSessionID string         `json:"client_session_id,omitempty"`
 	InvocationID    string         `json:"invocation_id"`
 	ParentID        string         `json:"parent_id,omitempty"`
+	TraceID         string         `json:"trace_id,omitempty"`
+	SpanID          string         `json:"span_id,omitempty"`
 	RemoteAddr      string         `json:"remote_addr,omitempty"`
 	Fields          map[string]any `json:"fields,omitempty"`
 }
