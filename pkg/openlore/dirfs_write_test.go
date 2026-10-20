@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"syscall"
 	"testing"
 
 	"github.com/aakarim/go-openlore/internal/config"
@@ -28,6 +30,54 @@ func newWritableDirFS(t *testing.T) (*DirFS, string) {
 		t.Fatalf("SetWriteable: %v", err)
 	}
 	return d, dir
+}
+
+func TestDirFSErrorsHideHostPaths(t *testing.T) {
+	d, root := newWritableDirFS(t)
+	if _, err := d.WriteFileAtomic("/file.md", []byte("content"), vfs.WriteOpts{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Mkdir("/directory.md"); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		run  func() error
+		want error
+	}{
+		{"read missing", func() error { _, err := d.ReadFile("/missing.md"); return err }, os.ErrNotExist},
+		{"bounded read missing", func() error { _, err := d.ReadFileBounded("/missing.md", 100); return err }, os.ErrNotExist},
+		{"stat missing", func() error { _, err := d.Stat("/missing.md"); return err }, os.ErrNotExist},
+		{"list missing", func() error { _, err := d.ReadDir("/missing"); return err }, os.ErrNotExist},
+		{"list missing config", func() error { _, err := d.ReadDir("/.lore"); return err }, os.ErrNotExist},
+		{"mkdir missing parent", func() error { return d.Mkdir("/missing/child") }, os.ErrNotExist},
+		{"mkdir existing", func() error { return d.Mkdir("/directory.md") }, os.ErrExist},
+		{"mkdirall under file", func() error { return d.MkdirAll("/file.md/child") }, syscall.ENOTDIR},
+		{"remove missing", func() error { return d.Remove("/missing.md") }, os.ErrNotExist},
+		{"removeall missing", func() error { return d.RemoveAll("/missing", vfs.RemoveOpts{}) }, os.ErrNotExist},
+		{"write under file", func() error {
+			_, err := d.WriteFileAtomic("/file.md/child.md", []byte("x"), vfs.WriteOpts{})
+			return err
+		}, syscall.ENOTDIR},
+		{"write precondition under file", func() error {
+			_, err := d.WriteFileAtomic("/file.md/child.md", []byte("x"), vfs.WriteOpts{IfNoneMatch: true})
+			return err
+		}, syscall.ENOTDIR},
+		{"write rename over directory", func() error {
+			_, err := d.WriteFileAtomic("/directory.md", []byte("x"), vfs.WriteOpts{})
+			return err
+		}, os.ErrExist},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.run()
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("error = %v, want %v", err, tc.want)
+			}
+			if strings.Contains(err.Error(), root) || strings.Contains(err.Error(), ".tmp-") {
+				t.Fatalf("error leaks host path: %v", err)
+			}
+		})
+	}
 }
 
 func TestDirFSFailedBatchRestoresXattrs(t *testing.T) {

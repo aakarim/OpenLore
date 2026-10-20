@@ -276,6 +276,21 @@ func TestConfigViewValidatesBeforePersistAndReloadsExplicitly(t *testing.T) {
 	if _, ok := s.findAuthIdentity("bot"); !ok {
 		t.Fatal("reload did not activate persisted config")
 	}
+	// Missing backing files must not disclose the host config location through
+	// the synthetic config mount, and must retain their missing-file cause.
+	if err := os.Remove(authPath); err != nil {
+		t.Fatal(err)
+	}
+	for operation, run := range map[string]func() error{
+		"read":         func() error { _, err := fsys.ReadFile(authConfigVFSPath); return err },
+		"bounded read": func() error { _, err := fsys.ReadFileBounded(authConfigVFSPath, 1024); return err },
+		"stat":         func() error { _, err := fsys.Stat(authConfigVFSPath); return err },
+		"write":        func() error { _, err := fsys.WriteFileAtomic(authConfigVFSPath, b, vfs.WriteOpts{}); return err },
+	} {
+		if err := run(); !os.IsNotExist(err) || strings.Contains(err.Error(), filepath.Dir(authPath)) {
+			t.Fatalf("%s: want missing-file cause without host path, got %v", operation, err)
+		}
+	}
 	revoked := *next
 	revoked.Roles = map[string]config.RoleSpec{"admin": {}}
 	writeAuthFixture(t, authPath, &revoked)
