@@ -31,6 +31,10 @@ necessarily the current version. Dates are the GitHub publication dates in UTC.
 
 ## Unreleased
 
+- Added the [Share a coding style guide with every agent](coding-style-guide.md)
+  recipe: a `style` docset with `size/lines` and `size/tokens` budgets, a
+  prompt that has an agent write the guide from Google's style guide, and an
+  `AGENTS.md` section that points agents at it.
 - Added the [Build an LLM wiki on OpenLore](llm-wiki.md) recipe, which runs
   Karpathy's LLM wiki pattern on a server: existing docsets as the read-only
   raw layer, a `wiki` docset as an OKF bundle for the index and log, a schema
