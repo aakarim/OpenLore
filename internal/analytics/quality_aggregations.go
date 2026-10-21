@@ -206,8 +206,20 @@ type fileReads struct {
 // fileUsagePartial records reads and the latest scalars of files under a
 // prefix. Whether a file still exists is decided against current facts.
 type fileUsagePartial struct {
-	prefix string
-	Files  map[string]*fileReads `json:"files"`
+	prefix      string
+	summaryOnly bool
+	pathBytes   int
+	Files       map[string]*fileReads `json:"files"`
+	Overflow    bool                  `json:"overflow,omitempty"`
+}
+
+// Rankings retain only per-file summaries. Bound both their cardinality and
+// path storage, including deleted files that only exist in recorded events.
+const maxFileUsagePaths = 25_000
+const maxFileUsagePathBytes = 4 * 1024 * 1024
+
+func fileUsageBudgetError() error {
+	return fmt.Errorf("file usage exceeds memory budget; narrow --param path or --since")
 }
 
 func newFileUsagePartial(prefix string) *fileUsagePartial {
@@ -217,18 +229,29 @@ func newFileUsagePartial(prefix string) *fileUsagePartial {
 func (f *fileUsagePartial) file(path string) *fileReads {
 	file := f.Files[path]
 	if file == nil {
+		if f.summaryOnly && (len(f.Files) >= maxFileUsagePaths || len(path) > maxFileUsagePathBytes-f.pathBytes) {
+			f.Overflow = true
+			return nil
+		}
 		file = &fileReads{}
 		f.Files[path] = file
+		f.pathBytes += len(path)
 	}
 	return file
 }
 
 func (f *fileUsagePartial) Add(e Event) {
+	if f.Overflow {
+		return
+	}
 	filePath := vfs.CleanPath(fieldString(e, "path"))
 	if !pathWithin(f.prefix, filePath) {
 		return
 	}
 	file := f.file(filePath)
+	if file == nil {
+		return
+	}
 	switch e.Type {
 	case "doc.read", "doc.hit":
 		if e.Type == "doc.read" {
@@ -240,6 +263,10 @@ func (f *fileUsagePartial) Add(e Event) {
 		if file.LastRead == nil || e.Time.After(*file.LastRead) {
 			last := e.Time
 			file.LastRead, file.ReadHash = &last, hash
+		}
+		if f.summaryOnly {
+			file.ReadHash = ""
+			return
 		}
 		if file.Coverage == nil {
 			file.Coverage = map[string]*lineCoverage{}
@@ -258,6 +285,9 @@ func (f *fileUsagePartial) Add(e Event) {
 		if file.Scalars == nil || !e.Time.Before(file.Scalars.Time) {
 			after := scalarFields(e.Fields["after"])
 			observation := &scalarObservation{Time: e.Time, Hash: fieldString(e, "content_hash"), Lines: int(after["lines"])}
+			if f.summaryOnly {
+				observation.Hash, observation.Lines = "", 0
+			}
 			if tokens, ok := after["tokens"]; ok {
 				observation.Tokens = &tokens
 			}
@@ -267,8 +297,22 @@ func (f *fileUsagePartial) Add(e Event) {
 }
 
 func (f *fileUsagePartial) Merge(later Partial) {
-	for path, next := range later.(*fileUsagePartial).Files {
+	nextPartial := later.(*fileUsagePartial)
+	if f.Overflow || nextPartial.Overflow {
+		f.Overflow = true
+		return
+	}
+	// JSON restores exported state, not this running byte count.
+	if f.pathBytes == 0 {
+		for path := range f.Files {
+			f.pathBytes += len(path)
+		}
+	}
+	for path, next := range nextPartial.Files {
 		file := f.file(path)
+		if file == nil {
+			return
+		}
 		file.Reads += next.Reads
 		file.Hits += next.Hits
 		if next.LastRead != nil && (file.LastRead == nil || next.LastRead.After(*file.LastRead)) {
@@ -276,6 +320,9 @@ func (f *fileUsagePartial) Merge(later Partial) {
 		}
 		if next.Scalars != nil && (file.Scalars == nil || !next.Scalars.Time.Before(file.Scalars.Time)) {
 			file.Scalars = next.Scalars
+		}
+		if f.summaryOnly {
+			continue
 		}
 		for hash, coverage := range next.Coverage {
 			if file.Coverage == nil {
@@ -292,8 +339,23 @@ func (f *fileUsagePartial) Merge(later Partial) {
 
 // usage joins recorded reads with the current inventory under prefix.
 func (f *fileUsagePartial) usage(ctx context.Context, facts ContentFacts) ([]DocUsage, error) {
+	if f.summaryOnly {
+		bytes := 0
+		for path := range f.Files {
+			bytes += len(path)
+		}
+		f.Overflow = f.Overflow || len(f.Files) > maxFileUsagePaths || bytes > maxFileUsagePathBytes
+	}
+	if f.Overflow {
+		return nil, fileUsageBudgetError()
+	}
 	var result []DocUsage
+	pathBytes := 0
 	if err := facts.Walk(ctx, f.prefix, WalkOptions{StatOnly: true}, func(d DocScalars) error {
+		if f.summaryOnly && (len(result) >= maxFileUsagePaths || len(d.Path) > maxFileUsagePathBytes-pathBytes) {
+			return fileUsageBudgetError()
+		}
+		pathBytes += len(d.Path)
 		u := DocUsage{Path: d.Path, Scalars: map[string]float64{"bytes": d.Scalars["bytes"]}}
 		if file := f.Files[d.Path]; file != nil {
 			u.Reads, u.Hits, u.LastReadAt, u.ContentHash = file.Reads, file.Hits, file.LastRead, file.ReadHash
@@ -301,7 +363,7 @@ func (f *fileUsagePartial) usage(ctx context.Context, facts ContentFacts) ([]Doc
 				if state.Tokens != nil {
 					u.Scalars["tokens"] = *state.Tokens
 				}
-				if state.Hash != "" && state.Lines > 0 {
+				if !f.summaryOnly && state.Hash != "" && state.Lines > 0 {
 					u.ContentHash = state.Hash
 					covered := make([]bool, state.Lines)
 					if coverage := file.Coverage[state.Hash]; coverage != nil {
@@ -349,7 +411,9 @@ func newPrefixFileUsage(p Params) Partial {
 	if prefix == "" {
 		prefix = "/"
 	}
-	return newFileUsagePartial(prefix)
+	partial := newFileUsagePartial(prefix)
+	partial.summaryOnly = true
+	return partial
 }
 
 func coldLineUnits(covered []bool) []ContentUnit {

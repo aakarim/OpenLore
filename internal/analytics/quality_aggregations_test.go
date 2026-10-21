@@ -99,6 +99,157 @@ func TestFileAndFolderUsageIncludeNeverReadInventory(t *testing.T) {
 	}
 }
 
+func TestFileUsageRankingsDoNotAllocateLineCoverage(t *testing.T) {
+	files := testFS{}
+	for i := range 3500 {
+		files[fmt.Sprintf("/docs/%04d.md", i)] = []byte("content")
+	}
+	now := time.Now().UTC()
+	source := summarySource{
+		{Time: now.Add(-time.Hour), Type: "doc.read", Fields: map[string]any{"path": "/docs/0000.md", "content_hash": "old", "unit": map[string]any{"lines": map[string]any{"start": 2, "end": 3}}}},
+		{Time: now, Type: "doc.hit", Fields: map[string]any{"path": "/docs/0001.md", "content_hash": "new"}},
+		// Rankings need tokens, not a bitmap of every line in a document.
+		{Time: now, Type: "doc.scalars", Fields: map[string]any{"path": "/docs/0000.md", "content_hash": "new", "after": map[string]any{"lines": float64(1 << 60), "tokens": float64(2000)}}},
+	}
+	for _, name := range []string{"least-used-files", "most-used-files", "least-used-folders"} {
+		t.Run(name, func(t *testing.T) {
+			table, err := builtin(name)(t.Context(), source, NewContentFacts(files), Params{Since: now.Add(-7 * 24 * time.Hour), Until: now, Limit: 0, Extra: map[string]string{"path": "/docs"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if name == "least-used-folders" {
+				if len(table.Rows) != 1 || table.Rows[0][2] != 3500 || table.Rows[0][3] != 3498 {
+					t.Fatalf("folder rows = %#v", table.Rows)
+				}
+				return
+			}
+			if table.Total != 3500 || len(table.Rows) != 3500 {
+				t.Fatalf("got %d rows, total %d", len(table.Rows), table.Total)
+			}
+			index := 3498
+			if name == "most-used-files" {
+				index = 1
+			}
+			row := table.Rows[index]
+			if row[0] != "/docs/0000.md" || row[2] != 1 || row[4] != float64(2000) || row[5] != .5 {
+				t.Fatalf("read row = %#v", row)
+			}
+		})
+	}
+}
+
+func TestFileUsageRankingsEnforceBudget(t *testing.T) {
+	for _, inventory := range []bool{false, true} {
+		t.Run(fmt.Sprintf("inventory=%t", inventory), func(t *testing.T) {
+			files := testFS{"/docs/keep.md": []byte("keep")}
+			var events summarySource
+			count := maxFileUsagePaths
+			if inventory {
+				count-- // keep.md also counts toward the inventory budget.
+			}
+			for i := range count {
+				path := fmt.Sprintf("/archive/%05d.md", i)
+				if inventory {
+					files[path] = []byte("archived")
+				} else {
+					events = append(events, Event{Type: "doc.read", Fields: map[string]any{"path": path}})
+				}
+			}
+			p := Params{Extra: map[string]string{"path": "/"}}
+			if _, err := builtin("least-used-files")(t.Context(), events, NewContentFacts(files), p); err != nil {
+				t.Fatalf("at budget: %v", err)
+			}
+			if inventory {
+				files["/extra.md"] = []byte("extra")
+			} else {
+				events = append(events, Event{Type: "doc.read", Fields: map[string]any{"path": "/extra.md"}})
+			}
+			if _, err := builtin("least-used-files")(t.Context(), events, NewContentFacts(files), p); err == nil || !strings.Contains(err.Error(), "narrow --param path or --since") {
+				t.Fatalf("over budget: %v", err)
+			}
+			p.Extra["path"] = "/docs"
+			table, err := builtin("least-used-files")(t.Context(), events, NewContentFacts(files), p)
+			if err != nil || len(table.Rows) != 1 || table.Rows[0][0] != "/docs/keep.md" {
+				t.Fatalf("narrowed query: table=%+v err=%v", table, err)
+			}
+		})
+	}
+}
+
+func TestFileUsageRankingsPreserveBudgetErrorsAcrossCachedMerges(t *testing.T) {
+	inc := builtinIncremental("least-used-files")
+	p := Params{Extra: map[string]string{"path": "/"}}
+	for _, budget := range []struct {
+		name      string
+		paths     int
+		pathBytes int
+	}{
+		{"path-count", maxFileUsagePaths, 32},
+		{"path-bytes", 128, maxFileUsagePathBytes / 128},
+	} {
+		t.Run(budget.name, func(t *testing.T) {
+			path := func(i int) string {
+				return fmt.Sprintf("/archive/%0*d.md", budget.pathBytes-len("/archive/.md"), i)
+			}
+			facts := NewContentFacts(testFS{path(0): []byte("keep")})
+			build := func(start, end int) Partial {
+				partial := inc.New(p)
+				for i := start; i < end; i++ {
+					partial.Add(Event{Type: "doc.read", Fields: map[string]any{"path": path(i)}})
+				}
+				return partial
+			}
+			cached := func(t *testing.T, partial Partial) Partial {
+				t.Helper()
+				encoded, err := json.Marshal(partial)
+				if err != nil {
+					t.Fatal(err)
+				}
+				decoded := inc.New(p)
+				if err := json.Unmarshal(encoded, decoded); err != nil {
+					t.Fatal(err)
+				}
+				return decoded
+			}
+			for _, scenario := range []string{"combined", "overflowed-receiver", "overflowed-later"} {
+				t.Run(scenario, func(t *testing.T) {
+					var receiver, later Partial
+					if scenario == "combined" {
+						receiver = cached(t, build(0, budget.paths-1))
+						later = cached(t, build(budget.paths-1, budget.paths+1))
+						// Both daily partials fit independently. A single added
+						// path reaches the boundary and must still produce rows.
+						for _, partial := range []Partial{receiver, later} {
+							if _, err := inc.Table(t.Context(), partial, facts, p); err != nil {
+								t.Fatalf("individually valid partial: %v", err)
+							}
+						}
+						boundary := cached(t, receiver)
+						boundary.Merge(cached(t, build(budget.paths-1, budget.paths)))
+						table, err := inc.Table(t.Context(), boundary, facts, p)
+						if err != nil || len(table.Rows) != 1 || table.Rows[0][0] != path(0) || table.Rows[0][2] != 1 {
+							t.Fatalf("at budget: rows=%d err=%v", len(table.Rows), err)
+						}
+					} else {
+						// The overflowed partial retains only the paths that fit.
+						// Losing its overflow marker would silently return rows.
+						receiver = cached(t, build(0, budget.paths+1))
+						later = cached(t, build(0, 1))
+						if scenario == "overflowed-later" {
+							receiver, later = later, receiver
+						}
+					}
+					receiver.Merge(later)
+					table, err := inc.Table(t.Context(), cached(t, receiver), facts, p)
+					if err == nil || !strings.Contains(err.Error(), "memory budget") || len(table.Rows) != 0 {
+						t.Fatalf("expected a budget error, not truncated rows: rows=%d err=%v", len(table.Rows), err)
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestLeastUsedLinesIgnoresStaleContentHashes(t *testing.T) {
 	facts := NewContentFacts(testFS{"/docs/a.md": []byte("one\ntwo\nthree\nfour\nfive\n")})
 	current, err := facts.Stat(context.Background(), "/docs/a.md")
@@ -446,7 +597,7 @@ func TestIncrementalAggregationsMergeExactly(t *testing.T) {
 func TestRepeatedReadsAreStoredOnce(t *testing.T) {
 	p := Params{Extra: map[string]string{"path": "/docs/a.md"}}
 	lines := builtinIncremental("most-used-lines").New(p).(*lineReadsPartial)
-	files := builtinIncremental("most-used-files").New(p).(*fileUsagePartial)
+	files := newFileUsagePartial("/docs/a.md")
 	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	for i := range 1000 {
 		unit := map[string]any{"lines": map[string]any{"start": float64(1 + i%2), "end": float64(2 + i%2)}}

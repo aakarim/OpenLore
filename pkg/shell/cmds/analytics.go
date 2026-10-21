@@ -119,7 +119,7 @@ func CmdAnalytics(ctx CmdContext, args []string, w, errW io.Writer, _ io.Reader)
 		}
 		m, err := service.Registry().Run(context.Background(), args[1], p, opts)
 		if err != nil {
-			fmt.Fprintln(errW, "analytics show:", err)
+			fmt.Fprintf(errW, "analytics show %s: %v\n", args[1], err)
 			return 1
 		}
 		jsonOut := false
