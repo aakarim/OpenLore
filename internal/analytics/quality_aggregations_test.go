@@ -99,6 +99,83 @@ func TestFileAndFolderUsageIncludeNeverReadInventory(t *testing.T) {
 	}
 }
 
+func TestFileUsageRankingsDoNotAllocateLineCoverage(t *testing.T) {
+	files := testFS{}
+	for i := range 3500 {
+		files[fmt.Sprintf("/docs/%04d.md", i)] = []byte("content")
+	}
+	now := time.Now().UTC()
+	source := summarySource{
+		{Time: now.Add(-time.Hour), Type: "doc.read", Fields: map[string]any{"path": "/docs/0000.md", "content_hash": "old", "unit": map[string]any{"lines": map[string]any{"start": 2, "end": 3}}}},
+		{Time: now, Type: "doc.hit", Fields: map[string]any{"path": "/docs/0001.md", "content_hash": "new"}},
+		// Rankings need tokens, not a bitmap of every line in a document.
+		{Time: now, Type: "doc.scalars", Fields: map[string]any{"path": "/docs/0000.md", "content_hash": "new", "after": map[string]any{"lines": float64(1 << 60), "tokens": float64(2000)}}},
+	}
+	for _, name := range []string{"least-used-files", "most-used-files", "least-used-folders"} {
+		t.Run(name, func(t *testing.T) {
+			table, err := builtin(name)(t.Context(), source, NewContentFacts(files), Params{Since: now.Add(-7 * 24 * time.Hour), Until: now, Limit: 0, Extra: map[string]string{"path": "/docs"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if name == "least-used-folders" {
+				if len(table.Rows) != 1 || table.Rows[0][2] != 3500 || table.Rows[0][3] != 3498 {
+					t.Fatalf("folder rows = %#v", table.Rows)
+				}
+				return
+			}
+			if table.Total != 3500 || len(table.Rows) != 3500 {
+				t.Fatalf("got %d rows, total %d", len(table.Rows), table.Total)
+			}
+			index := 3498
+			if name == "most-used-files" {
+				index = 1
+			}
+			row := table.Rows[index]
+			if row[0] != "/docs/0000.md" || row[2] != 1 || row[4] != float64(2000) || row[5] != .5 {
+				t.Fatalf("read row = %#v", row)
+			}
+		})
+	}
+}
+
+func TestFileUsageRankingsEnforceBudget(t *testing.T) {
+	for _, inventory := range []bool{false, true} {
+		t.Run(fmt.Sprintf("inventory=%t", inventory), func(t *testing.T) {
+			files := testFS{"/docs/keep.md": []byte("keep")}
+			var events summarySource
+			count := maxFileUsagePaths
+			if inventory {
+				count-- // keep.md also counts toward the inventory budget.
+			}
+			for i := range count {
+				path := fmt.Sprintf("/archive/%05d.md", i)
+				if inventory {
+					files[path] = []byte("archived")
+				} else {
+					events = append(events, Event{Type: "doc.read", Fields: map[string]any{"path": path}})
+				}
+			}
+			p := Params{Extra: map[string]string{"path": "/"}}
+			if _, err := builtin("least-used-files")(t.Context(), events, NewContentFacts(files), p); err != nil {
+				t.Fatalf("at budget: %v", err)
+			}
+			if inventory {
+				files["/extra.md"] = []byte("extra")
+			} else {
+				events = append(events, Event{Type: "doc.read", Fields: map[string]any{"path": "/extra.md"}})
+			}
+			if _, err := builtin("least-used-files")(t.Context(), events, NewContentFacts(files), p); err == nil || !strings.Contains(err.Error(), "narrow --param path or --since") {
+				t.Fatalf("over budget: %v", err)
+			}
+			p.Extra["path"] = "/docs"
+			table, err := builtin("least-used-files")(t.Context(), events, NewContentFacts(files), p)
+			if err != nil || len(table.Rows) != 1 || table.Rows[0][0] != "/docs/keep.md" {
+				t.Fatalf("narrowed query: table=%+v err=%v", table, err)
+			}
+		})
+	}
+}
+
 func TestLeastUsedLinesIgnoresStaleContentHashes(t *testing.T) {
 	facts := NewContentFacts(testFS{"/docs/a.md": []byte("one\ntwo\nthree\nfour\nfive\n")})
 	current, err := facts.Stat(context.Background(), "/docs/a.md")
@@ -446,7 +523,7 @@ func TestIncrementalAggregationsMergeExactly(t *testing.T) {
 func TestRepeatedReadsAreStoredOnce(t *testing.T) {
 	p := Params{Extra: map[string]string{"path": "/docs/a.md"}}
 	lines := builtinIncremental("most-used-lines").New(p).(*lineReadsPartial)
-	files := builtinIncremental("most-used-files").New(p).(*fileUsagePartial)
+	files := newFileUsagePartial("/docs/a.md")
 	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	for i := range 1000 {
 		unit := map[string]any{"lines": map[string]any{"start": float64(1 + i%2), "end": float64(2 + i%2)}}
