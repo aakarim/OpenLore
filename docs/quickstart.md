@@ -80,6 +80,26 @@ Tell your agents when to use it:
 ssh -p 2222 localhost agents >> AGENTS.md
 ```
 
+### Claude Code: allow the OpenLore tools
+
+Claude Code's auto mode reviews every tool call. OpenLore looks like a
+filesystem, so a search such as `grep -r "retry" /` can be mistaken for a scan
+of your local disk and blocked. Allow the server once in `~/.claude/settings.json`
+or the project's `.claude/settings.json`:
+
+```json
+{
+  "permissions": {
+    "allow": ["mcp__openlore"]
+  }
+}
+```
+
+Keep the `agents` section in `CLAUDE.md` as well; it tells Claude that `/` is
+the documentation root, not your machine. See
+[Claude Code with OpenLore](start-claude-code.md#3-allow-the-openlore-tools)
+for the details.
+
 ## Next steps
 
 - [Claude Code with OpenLore](start-claude-code.md)
