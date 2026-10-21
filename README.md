@@ -83,6 +83,7 @@ There's no vector database, ingestion pipeline or SDK. Your knowledge stays as o
 - [Deploy to Render](docs/render.md)
 - [Prune a knowledge repository from its analytics](docs/knowledge-cleanup.md)
 - [Build an LLM wiki on OpenLore](docs/llm-wiki.md)
+- [Share a coding style guide with every agent](docs/coding-style-guide.md)
 - [All documentation](https://openlore.sh/docs/)
 
 
