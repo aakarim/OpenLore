@@ -2,7 +2,7 @@
 
 Give Claude Code a shared knowledge repository over MCP.
 
-We are going to serve a docs directory, connect Claude Code to it over MCP, teach Claude when to use it, and limit what it can see.
+We are going to serve a docs directory, connect Claude Code to it over MCP, allow the OpenLore tools, teach Claude when to use it, and limit what it can see.
 
 Before you start, [install OpenLore](quickstart.md#install).
 
@@ -46,7 +46,29 @@ Claude runs `grep -r 'retry' /` through the `shell` tool and answers from the re
 
 ---
 
-### 3. Teach Claude the conventions
+### 3. Allow the OpenLore tools
+
+Claude Code reviews every tool call before it runs. In Manual mode it asks you; in auto mode (the default) a classifier decides. The classifier only sees the tool name and the command, not the tool's description, and OpenLore looks like a filesystem. A call such as `grep -r "retry" /` reads as a scan of your local disk for secrets, so Claude can refuse it with `Permission denied by the Claude Code auto mode classifier`. It happens most on the first few searches, before Claude has learned what the server is.
+
+Allow the server once. Add this to `~/.claude/settings.json` for every project, or to `.claude/settings.json` in the project:
+
+```json
+{
+  "permissions": {
+    "allow": ["mcp__openlore"]
+  }
+}
+```
+
+`mcp__openlore` covers every tool the server exposes. Use `mcp__openlore__shell` to allow only the shell. Wildcards such as `mcp__openlore__*` do not match.
+
+With the rule in place, Claude Code skips both the prompt and the classifier for OpenLore calls. You can also set it for one session: `claude --allowedTools mcp__openlore`.
+
+> **Note:** A project `.claude/settings.json` only applies after you have accepted the folder-trust prompt that Claude Code shows the first time it starts in that directory. Until then the rule is ignored and calls are still reviewed.
+
+---
+
+### 4. Teach Claude the conventions
 
 Every OpenLore server has an `agents` command that prints a ready-made instructions section.
 
@@ -54,11 +76,11 @@ Every OpenLore server has an `agents` command that prints a ready-made instructi
 ssh -p 2222 localhost agents >> CLAUDE.md
 ```
 
-The section tells Claude when to search the knowledge repository and which commands to use.
+The section tells Claude when to search the knowledge repository and which commands to use. The auto mode classifier reads `CLAUDE.md` too, so this is also what tells it that `/` is the documentation root and not your machine. Do this even with the permission rule from step 3 in place.
 
 ---
 
-### 4. Limit what Claude can see
+### 5. Limit what Claude can see
 
 Right now anyone who connects sees every file you served. A `lore.json` file scopes the view. Anonymous callers, including Claude over MCP, use the built-in `guest` role, so grant it read access to one docset.
 
@@ -96,7 +118,7 @@ Learn more about [identities, roles and docsets](auth.md).
 
 ---
 
-### 5. Require a login
+### 6. Require a login
 
 To give Claude its own identity, so that it can read private docsets or publish, turn on OAuth for MCP. Claude Code then opens a browser to sign in with a passkey the next time it connects.
 
