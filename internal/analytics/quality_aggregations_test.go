@@ -176,6 +176,80 @@ func TestFileUsageRankingsEnforceBudget(t *testing.T) {
 	}
 }
 
+func TestFileUsageRankingsPreserveBudgetErrorsAcrossCachedMerges(t *testing.T) {
+	inc := builtinIncremental("least-used-files")
+	p := Params{Extra: map[string]string{"path": "/"}}
+	for _, budget := range []struct {
+		name      string
+		paths     int
+		pathBytes int
+	}{
+		{"path-count", maxFileUsagePaths, 32},
+		{"path-bytes", 128, maxFileUsagePathBytes / 128},
+	} {
+		t.Run(budget.name, func(t *testing.T) {
+			path := func(i int) string {
+				return fmt.Sprintf("/archive/%0*d.md", budget.pathBytes-len("/archive/.md"), i)
+			}
+			facts := NewContentFacts(testFS{path(0): []byte("keep")})
+			build := func(start, end int) Partial {
+				partial := inc.New(p)
+				for i := start; i < end; i++ {
+					partial.Add(Event{Type: "doc.read", Fields: map[string]any{"path": path(i)}})
+				}
+				return partial
+			}
+			cached := func(t *testing.T, partial Partial) Partial {
+				t.Helper()
+				encoded, err := json.Marshal(partial)
+				if err != nil {
+					t.Fatal(err)
+				}
+				decoded := inc.New(p)
+				if err := json.Unmarshal(encoded, decoded); err != nil {
+					t.Fatal(err)
+				}
+				return decoded
+			}
+			for _, scenario := range []string{"combined", "overflowed-receiver", "overflowed-later"} {
+				t.Run(scenario, func(t *testing.T) {
+					var receiver, later Partial
+					if scenario == "combined" {
+						receiver = cached(t, build(0, budget.paths-1))
+						later = cached(t, build(budget.paths-1, budget.paths+1))
+						// Both daily partials fit independently. A single added
+						// path reaches the boundary and must still produce rows.
+						for _, partial := range []Partial{receiver, later} {
+							if _, err := inc.Table(t.Context(), partial, facts, p); err != nil {
+								t.Fatalf("individually valid partial: %v", err)
+							}
+						}
+						boundary := cached(t, receiver)
+						boundary.Merge(cached(t, build(budget.paths-1, budget.paths)))
+						table, err := inc.Table(t.Context(), boundary, facts, p)
+						if err != nil || len(table.Rows) != 1 || table.Rows[0][0] != path(0) || table.Rows[0][2] != 1 {
+							t.Fatalf("at budget: rows=%d err=%v", len(table.Rows), err)
+						}
+					} else {
+						// The overflowed partial retains only the paths that fit.
+						// Losing its overflow marker would silently return rows.
+						receiver = cached(t, build(0, budget.paths+1))
+						later = cached(t, build(0, 1))
+						if scenario == "overflowed-later" {
+							receiver, later = later, receiver
+						}
+					}
+					receiver.Merge(later)
+					table, err := inc.Table(t.Context(), cached(t, receiver), facts, p)
+					if err == nil || !strings.Contains(err.Error(), "memory budget") || len(table.Rows) != 0 {
+						t.Fatalf("expected a budget error, not truncated rows: rows=%d err=%v", len(table.Rows), err)
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestLeastUsedLinesIgnoresStaleContentHashes(t *testing.T) {
 	facts := NewContentFacts(testFS{"/docs/a.md": []byte("one\ntwo\nthree\nfour\nfive\n")})
 	current, err := facts.Stat(context.Background(), "/docs/a.md")
