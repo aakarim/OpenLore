@@ -84,6 +84,41 @@ test("desktop tree opens a production API document and switches views without lo
   expect(await screen.findByRole("heading", { name: "Start" })).toBeVisible();
 });
 
+test("tree width is bounded, remembered, and resettable without losing collapse support", async () => {
+  mockAPI();
+  const first = render(<App />);
+  const user = userEvent.setup();
+  const handle = await screen.findByRole("separator", { name: "Resize file tree" });
+  // jsdom lacks pointer capture; actual capture is also checked in Chromium.
+  handle.setPointerCapture = () => {};
+  handle.releasePointerCapture = () => fireEvent.lostPointerCapture(handle);
+  await user.pointer([
+    { target: handle, keys: "[MouseLeft>]", coords: { x: 210, y: 120 } },
+    { coords: { x: 357, y: 120 } },
+    { keys: "[/MouseLeft]" },
+  ]);
+  expect(handle).toHaveAttribute("aria-valuenow", "357");
+  handle.focus();
+  await user.keyboard("{ArrowRight}{ArrowRight}{ArrowLeft}");
+  expect(handle).toHaveAttribute("aria-valuenow", "367");
+  await user.keyboard("{Home}{ArrowLeft}");
+  expect(handle).toHaveAttribute("aria-valuenow", "180");
+  await user.keyboard("{End}{ArrowRight}");
+  expect(handle).toHaveAttribute("aria-valuenow", "600");
+  await user.keyboard("{ArrowLeft}");
+  expect(handle).toHaveAttribute("aria-valuenow", "590");
+  first.unmount();
+  render(<App />);
+  const restored = await screen.findByRole("separator", { name: "Resize file tree" });
+  expect(restored).toHaveAttribute("aria-valuenow", "590");
+  await user.click(screen.getByRole("button", { name: "Collapse tree" }));
+  expect(screen.queryByRole("separator", { name: "Resize file tree" })).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Expand tree" }));
+  expect(screen.getByRole("separator", { name: "Resize file tree" })).toHaveAttribute("aria-valuenow", "590");
+  fireEvent.doubleClick(screen.getByRole("separator", { name: "Resize file tree" }));
+  expect(screen.getByRole("separator", { name: "Resize file tree" })).toHaveAttribute("aria-valuenow", "210");
+});
+
 test("overview renders full-depth interactive sunburst and attribution series", async () => {
   history.replaceState(
     null,
