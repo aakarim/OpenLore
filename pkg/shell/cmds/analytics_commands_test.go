@@ -2,10 +2,13 @@ package cmds_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aakarim/go-openlore/internal/analytics"
 	"github.com/aakarim/go-openlore/internal/config"
@@ -26,6 +29,66 @@ func newAnalyticsService(t *testing.T, fs vfs.FileSystem) *analytics.Service {
 	}
 	t.Cleanup(func() { _ = service.Close(t.Context()) })
 	return service
+}
+
+func TestAnalyticsShowFormatsTextWithoutChangingJSON(t *testing.T) {
+	fs := newMapFS()
+	service := newAnalyticsService(t, fs)
+	service.Registry().SetPaused(false)
+	stamp := time.Date(2026, 10, 10, 12, 12, 22, 421936657, time.UTC)
+	var never *time.Time
+	if err := service.RegisterAggregations([]analytics.Aggregation{{
+		Name: "formatting",
+		Compute: func(context.Context, analytics.EventSource, analytics.ContentFacts, analytics.Params) (analytics.Table, error) {
+			return analytics.Table{
+				Columns: []string{"path", "bytes", "p50_ms", "error_rate", "reads_per_ktok", "last_read_at", "last_seen", "count"},
+				Rows: [][]any{
+					{"/large.md", float64(1923962), 1529975.6, 0.49544548051528053, 1.23456, &stamp, stamp, 18553},
+					{"2026-10-10T12:12:22.421936657Z", float64(-1923962), 0.4, 8.312766402664672e-05, nil, never, nil, 0},
+				},
+			}, nil
+		},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	sh := shell.NewShell(fs)
+	sh.SetAnalytics(service)
+	sh.SetAnalyticsAuthorizer(func() error { return nil })
+	for _, flags := range []string{"--fresh", "", "--fresh --json", "--json"} {
+		t.Run(flags, func(t *testing.T) {
+			var out, errOut bytes.Buffer
+			if code := sh.Exec("analytics show formatting "+flags, &out, &errOut, nil); code != 0 {
+				t.Fatalf("exit=%d stderr=%q", code, errOut.String())
+			}
+			if strings.Contains(flags, "--json") {
+				var result analytics.Materialized
+				if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+					t.Fatal(err)
+				}
+				want := [][]any{
+					{"/large.md", float64(1923962), 1529975.6, 0.49544548051528053, 1.23456, "2026-10-10T12:12:22.421936657Z", "2026-10-10T12:12:22.421936657Z", float64(18553)},
+					{"2026-10-10T12:12:22.421936657Z", float64(-1923962), 0.4, 8.312766402664672e-05, nil, nil, nil, float64(0)},
+				}
+				if !reflect.DeepEqual(result.Table.Rows, want) {
+					t.Fatalf("JSON rows=%v, want %v", result.Table.Rows, want)
+				}
+				return
+			}
+			lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+			want := []string{
+				"/large.md 1923962 1529976 0.495 1.235 2026-10-10T12:12:22Z 2026-10-10T12:12:22Z 18553",
+				"2026-10-10T12:12:22.421936657Z -1923962 0 0 - - - 0",
+			}
+			if len(lines) != 4 {
+				t.Fatalf("unexpected text table: %q", out.String())
+			}
+			for i, row := range want {
+				if got := strings.Join(strings.Fields(lines[i+2]), " "); got != row {
+					t.Errorf("row=%q, want %q", got, row)
+				}
+			}
+		})
+	}
 }
 
 func TestAnalyticsFactsUseShellFileSystem(t *testing.T) {
