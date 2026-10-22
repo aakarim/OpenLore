@@ -1,6 +1,6 @@
 # Changelog
 
-**Current release: [v0.7.5](https://github.com/aakarim/OpenLore/releases/tag/v0.7.5).**
+**Current release: [v0.7.5](https://github.com/aakarim/OpenLore/releases/tag/v0.7.5) — Dashboard setup, folder icons, and reliability fixes.**
 
 ## Which version do these docs describe?
 
