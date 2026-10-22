@@ -84,7 +84,7 @@ never holds it.
 Muse reports the tool list and the output of both commands, then confirms the
 skill is saved. Start a fresh conversation and ask something your docs answer,
 such as "what does the knowledge repository say about our retry policy?". It
-should search with `grep -r` through the `shell` tool and answer from the
+should search with `grep -r` through the `lore_bash` tool and answer from the
 result.
 
 If you would rather not hand Muse a token, ask it to use the server's OAuth
@@ -136,7 +136,7 @@ never touches. See [Auth](../../concepts/auth.md) for roles, grants and docsets.
 
 ## What Muse can do
 
-Muse reaches OpenLore through the `shell` tool, which runs OpenLore's restricted
+Muse reaches OpenLore through the `lore_bash` tool, which runs OpenLore's restricted
 shell over the virtual filesystem, not a shell on Muse's computer or yours:
 `ls`, `cat`, `grep`, `find`, `head`, `tail` and pipes work, and nothing can
 execute on the host. A token minted with `--scope read` can never write, and

@@ -67,7 +67,7 @@ Use the openlore shell tool to run `tree -L 2 /` and show me the output.
 
 Then message Duet with something your docs answer, such as "use openlore to
 find what the knowledge repository says about our retry policy". It should
-search with `grep -r` through the `shell` tool and answer from the result.
+search with `grep -r` through the `lore_bash` tool and answer from the result.
 
 ## Tell Duet when to use it
 
@@ -116,7 +116,7 @@ only way to read, so limit access with docsets instead.
 
 ## What Duet can do
 
-Duet reaches OpenLore through the `shell` tool, which runs OpenLore's
+Duet reaches OpenLore through the `lore_bash` tool, which runs OpenLore's
 restricted shell over the virtual filesystem, not a shell on Duet's computer
 or yours: `ls`, `cat`, `grep`, `find`, `head`, `tail` and pipes work, and
 nothing can execute on the host. Duet asks before consequential actions, and

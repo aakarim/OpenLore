@@ -27,7 +27,7 @@ Add OpenLore to `opencode.json` at the root of your project, or to
 ```
 
 Ask OpenCode something your docs answer, such as "what does the knowledge repository say
-about our retry policy?". It should search with `grep -r` through the `shell`
+about our retry policy?". It should search with `grep -r` through the `lore_bash`
 tool and answer from the result.
 
 ## Tell OpenCode when to use it
@@ -96,7 +96,7 @@ tokens are issued and scoped.
 
 ## What OpenCode can do
 
-OpenCode reaches OpenLore through its `shell` tool, which runs OpenLore's
+OpenCode reaches OpenLore through its `lore_bash` tool, which runs OpenLore's
 restricted shell over the virtual filesystem, not a shell on your machine:
 `ls`, `cat`, `grep`, `find`, `head`, `tail` and pipes work, and nothing can
 execute on the host. Writes are only possible when the server runs with

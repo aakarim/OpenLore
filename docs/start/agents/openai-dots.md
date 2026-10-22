@@ -60,7 +60,7 @@ Use the openlore app's shell tool to run `tree -L 2 /` and show me the output.
 
 Then message your dot with something your docs answer, such as "use the
 openlore app to find what the knowledge repository says about our retry
-policy". It should search with `grep -r` through the `shell` tool and answer
+policy". It should search with `grep -r` through the `lore_bash` tool and answer
 from the result. The plugin needs no extra step to reach the dot, because a dot
 uses the plugins installed on your account.
 
@@ -104,7 +104,7 @@ grants and delegates.
 
 ## What your dot can do
 
-Your dot reaches OpenLore through the `shell` tool, which runs OpenLore's
+Your dot reaches OpenLore through the `lore_bash` tool, which runs OpenLore's
 restricted shell over the virtual filesystem, not a shell on the dot's computer
 or yours: `ls`, `cat`, `grep`, `find`, `head`, `tail` and pipes work, and
 nothing can execute on the host.

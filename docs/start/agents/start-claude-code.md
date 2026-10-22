@@ -46,7 +46,7 @@ Add this to `~/.claude/settings.json` for every project, or to `.claude/settings
 }
 ```
 
-`mcp__openlore` covers every tool the server exposes. Use `mcp__openlore__shell` to allow only the shell. Wildcards such as `mcp__openlore__*` do not match. With the rule in place, Claude Code skips both the prompt and the classifier for OpenLore calls. You can also set it for one session: `claude --allowedTools mcp__openlore`.
+`mcp__openlore` covers every tool the server exposes. Use `mcp__openlore__lore_bash` to allow only the shell tool. Wildcards such as `mcp__openlore__*` do not match. With the rule in place, Claude Code skips both the prompt and the classifier for OpenLore calls. You can also set it for one session: `claude --allowedTools mcp__openlore`.
 
 > **Note:** A project `.claude/settings.json` only applies after you have accepted the folder-trust prompt that Claude Code shows the first time it starts in that directory. Until then the rule is ignored and calls are still reviewed. `~/.claude/settings.json` always applies.
 
@@ -56,7 +56,7 @@ Now start Claude Code and ask it something about your docs.
 > What does the knowledge repository say about our retry policy?
 ```
 
-Claude runs `grep -r 'retry' /` through the `shell` tool and answers from the result.
+Claude runs `grep -r 'retry' /` through the `lore_bash` tool and answers from the result.
 
 > **Note:** Claude gets a restricted shell over a virtual filesystem, not a shell on your machine. It can `cat`, `grep`, `find` and pipe, and nothing else.
 

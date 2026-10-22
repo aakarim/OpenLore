@@ -6,12 +6,12 @@ against the same filesystem: the `openlore` MCP server, when it is connected
 in this harness, and SSH otherwise. Prefer the MCP tool when it is available;
 only fall back to `ssh` when it is not.
 
-The MCP tool runs a restricted interpreter (`ls`, `cat`, `grep`, `find`,
-`tree`, `jq`, redirects, `publish`) over a virtual filesystem on the OpenLore
-server. `/` is the root of the documentation, not this machine's filesystem;
-reads and writes go to the server's docsets and nothing it runs touches the
-local host. Search it before guessing: `grep -r "term" /`, then `cat` the
-file.
+The MCP server's `lore_bash` tool runs a restricted interpreter (`ls`, `cat`,
+`grep`, `find`, `tree`, `jq`, redirects, `publish`) over a virtual filesystem
+on the OpenLore server. `/` is the root of the documentation, not this
+machine's filesystem; reads and writes go to the server's docsets and nothing
+it runs touches the local host. Search it before guessing:
+`grep -r "term" /`, then `cat` the file.
 
 **When to use it:** any task touching project docs, runbooks, prior
 decisions, or shared team knowledge — search the knowledge repository before
