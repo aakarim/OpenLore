@@ -108,7 +108,7 @@ Folders near 100% are deletion candidates as a unit; folders in the middle need 
 
 ## 4. List the files in a folder, with age and size
 
-For each folder you want to review, three queries give the evidence. All three run in the restricted shell, so the same lines work over `ssh` or through the MCP `shell` tool.
+For each folder you want to review, three queries give the evidence. All three run in the restricted shell, so the same lines work over `ssh` or through the MCP `lore_bash` tool.
 
 Files never read since the horizon, with their modification time. `least-used-files` prints path, last read, reads, grep hits, tokens and reads per thousand tokens; a null last read is a file nobody has opened. `stat` adds the age.
 
@@ -172,7 +172,7 @@ Here lines 1 to 60 are read repeatedly and almost everything after line 62 never
 
 ## 6. Run the prompt
 
-Give a coding agent the prompt below, connected to the server through the MCP `shell` tool or `ssh` with the identity from step 1. Replace `/agent/claw` with the folders you want reviewed, and `crawler` with the principal from step 2, or remove that sentence.
+Give a coding agent the prompt below, connected to the server through the MCP `lore_bash` tool or `ssh` with the identity from step 1. Replace `/agent/claw` with the folders you want reviewed, and `crawler` with the principal from step 2, or remove that sentence.
 
 ```text
 Review the OpenLore knowledge repository for files to prune and write a

@@ -31,6 +31,14 @@ necessarily the current version. Dates are the GitHub publication dates in UTC.
 
 ## Unreleased
 
+- **Breaking:** the MCP `shell` tool is now `lore_bash`. Claude Code's
+  auto-mode classifier judges a call by the tool name and the command, and a
+  tool called `shell` running `grep -r term /` reads as a scan of the local
+  disk; under `lore_bash` the same calls were denied in 1 of 12 test runs
+  instead of 4 and never sent for escalated review. The HTTP `/api/shell`
+  endpoint and SSH are unchanged. Update any permission rule that names the
+  tool, such as `mcp__openlore__shell` → `mcp__openlore__lore_bash`; the
+  server-wide `mcp__openlore` rule keeps working. `list_commands` is unchanged.
 - Added the [Share a coding style guide with every agent](coding-style-guide.md)
   recipe: a `style` docset with `size/lines` and `size/tokens` budgets, a
   prompt that has an agent write the guide from Google's style guide, and an

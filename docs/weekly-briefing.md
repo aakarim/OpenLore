@@ -110,7 +110,7 @@ The `okf` block from step 1 rejects a `log.md` that drifts from this shape, so t
 
 ## 4. Run the queries by hand
 
-The prompt in the next step asks the agent to run three queries. Run them once yourself so you know what it will see. All three run in the restricted shell, so the same lines work over `ssh` or through the MCP `shell` tool.
+The prompt in the next step asks the agent to run three queries. Run them once yourself so you know what it will see. All three run in the restricted shell, so the same lines work over `ssh` or through the MCP `lore_bash` tool.
 
 The timeline, filtered to this week and reduced to the fields that matter. [`history`](commands.md#history---principal-name---actor-name) prints one JSON object per committed write, newest first, scoped to the docsets you can read.
 
@@ -134,7 +134,7 @@ One synced transcript, reduced to the tools Claude called. Transcript lines are 
 cat /sessions/claude/<session-id>.jsonl | jq -r 'select(.type == "assistant") | .message.content[]? | select(.type == "tool_use") | .name' | sort | uniq -c | sort -rn
 ```
 
-The output is a count per tool, with `mcp__openlore__shell` listed when Claude used the knowledge repository. Prompts are `user` lines whose `message.content` is a string and whose `isMeta` is not `true`; `cwd` and `gitBranch` give the repository, and `message.model` the model.
+The output is a count per tool, with `mcp__openlore__lore_bash` listed when Claude used the knowledge repository. Prompts are `user` lines whose `message.content` is a string and whose `isMeta` is not `true`; `cwd` and `gitBranch` give the repository, and `message.model` the model.
 
 ---
 

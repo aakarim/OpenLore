@@ -48,12 +48,12 @@ The MCP server, over HTTP or stdio, exposes two tools:
 
 | Tool | Description |
 |---|---|
-| `shell` | Execute a command against the virtual filesystem |
+| `lore_bash` | Execute a command against the virtual filesystem |
 | `list_commands` | List commands supported by that server |
 
 ### Command results
 
-The `shell` tool returns completed command invocations as normal MCP results,
+The `lore_bash` tool returns completed command invocations as normal MCP results,
 including when the command exits non-zero. Its structured content keeps
 `stdout`, `stderr`, and `exit_code` separate. The existing `output` field and
 text content contain stdout followed by stderr for compatibility, without a
@@ -81,7 +81,7 @@ variables, lasts:
 | Transport | Shell state |
 |---|---|
 | SSH | Lasts for the connection |
-| MCP over HTTP | Each `shell` call starts a fresh shell. The MCP session ID stays the same across calls. |
+| MCP over HTTP | Each `lore_bash` call starts a fresh shell. The MCP session ID stays the same across calls. |
 | JSON API, `POST /api/shell` | Each request starts a fresh shell |
 | JSON API, persistent session | Lasts until the session is closed or idle for 30 minutes |
 
