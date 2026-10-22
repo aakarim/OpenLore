@@ -22,7 +22,7 @@ SSH listens on port 2222; the web view and the MCP endpoint share port 8080.
 ssh -p 2222 localhost "grep -r 'retry policy' /"
 ```
 
-Learn more about [ways to use OpenLore](usage.md).
+Learn more about [ways to use OpenLore](how-to/usage.md).
 
 ---
 
@@ -42,7 +42,7 @@ Any agent with a shell connects over SSH. The `agents` command prints the instru
 ssh -p 2222 localhost agents >> AGENTS.md
 ```
 
-Learn more about connecting [Claude Code](start-claude-code.md) or [any agent over SSH](start-ssh.md).
+Learn more about connecting [Claude Code](start/agents/start-claude-code.md) or [any agent over SSH](start/agents/start-ssh.md).
 
 ---
 
@@ -65,13 +65,13 @@ Once more than one agent is connected, you will want them to see different thing
 
 A docset is a set of paths with an access rule. An identity is an SSH key, passkey or OAuth login with roles. An agent connecting as `backend-agent` sees `/backend`; anyone else sees `/public` and nothing more.
 
-Learn more about [docsets](docsets.md) and [identities and roles](auth.md).
+Learn more about [docsets](concepts/docsets.md) and [identities and roles](concepts/auth.md).
 
 ---
 
 ## Govern
 
-OpenLore is read-only by default. When you turn writes on, every write goes through one path that checks who is writing, whether the file passes the folder's [rules](folder-rules.md), and whether the file changed since the agent read it. Stale writes are rejected, not merged.
+OpenLore is read-only by default. When you turn writes on, every write goes through one path that checks who is writing, whether the file passes the folder's [rules](concepts/folder-rules.md), and whether the file changed since the agent read it. Stale writes are rejected, not merged.
 
 ```bash
 echo "# Findings" | publish /backend/research/findings.md
@@ -79,7 +79,7 @@ echo "# Findings" | publish /backend/research/findings.md
 
 `publish` lets an agent contribute into a docset's inbox without being able to edit anything else.
 
-Learn more about [writing and publishing](writing.md).
+Learn more about [writing and publishing](concepts/writing.md).
 
 ---
 
@@ -87,7 +87,7 @@ Learn more about [writing and publishing](writing.md).
 
 The dashboard shows what agents are reading, how large each file is in tokens, and which documents nobody has touched.
 
-Learn more about the [dashboard](dashboard.md).
+Learn more about the [dashboard](concepts/dashboard.md).
 
 ---
 
@@ -103,12 +103,12 @@ No. Commands are Go functions over the virtual filesystem. There is no `bash`, `
 
 **Can agents write?**
 
-Only if you enable it, only in docsets they have a grant on, and only through whole-file atomic writes that reject stale content. Learn more about [writing and publishing](writing.md).
+Only if you enable it, only in docsets they have a grant on, and only through whole-file atomic writes that reject stale content. Learn more about [writing and publishing](concepts/writing.md).
 
 ---
 
 ## Next steps
 
-- [Connect Claude Code](start-claude-code.md) to a served directory over MCP.
-- [Connect any agent over SSH](start-ssh.md) and give it an identity.
-- Learn how [identities, roles and docsets](auth.md) scope what each agent sees.
+- [Connect Claude Code](start/agents/start-claude-code.md) to a served directory over MCP.
+- [Connect any agent over SSH](start/agents/start-ssh.md) and give it an identity.
+- Learn how [identities, roles and docsets](concepts/auth.md) scope what each agent sees.

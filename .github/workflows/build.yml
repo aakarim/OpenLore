@@ -30,7 +30,7 @@ jobs:
       - name: Verify generated documentation
         run: |
           nix develop --command go generate ./docs/...
-          git diff --exit-code docs/rules-stdlib.md
+          git diff --exit-code docs/reference/rules-stdlib.md
 
       - name: Test
         run: nix develop --command go test -race ${{ github.event_name == 'push' && '-short' || '' }} ./...

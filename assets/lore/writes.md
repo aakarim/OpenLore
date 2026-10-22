@@ -4,7 +4,7 @@ OpenLore is read-only by default — but it can also be a **safe, writable**
 knowledge layer your agents and teammates share over SSH. Writes are atomic,
 scoped per identity, optionally gated behind human approval, and never give
 anyone a real shell. This page covers the write commands; for the design and
-internals see `docs/write-system.md` in the repo.
+internals see `docs/reference/write-system.md` in the repo.
 
 ## Is writing even on?
 
@@ -136,4 +136,4 @@ surface is the whole-file write verbs above, `mkdir` inside docsets, and (for
 explicitly trusted identities) `spawn`. The shell is an interpreter, not bash.
 
 See also: `cat /auth.md` for identities and capabilities, and the repo's
-`docs/write-system.md` for the full internal design.
+`docs/reference/write-system.md` for the full internal design.

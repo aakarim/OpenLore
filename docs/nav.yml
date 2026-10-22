@@ -1,0 +1,75 @@
+# Navigation for the manual at https://openlore.sh/docs/.
+#
+# openlore.sh renders every Markdown file in this directory and reads this file
+# for the sidebar's groups, order and labels. A page's URL is /docs/<file name>/
+# regardless of its folder, so file names must be unique. Every .md file under
+# docs/ must appear here exactly once; `go test ./docs/` and the site build both
+# fail otherwise. Paths are relative to this directory.
+groups:
+  - name: Introduction
+    pages:
+      - { path: introduction.md, label: What is OpenLore }
+      - { path: changelog.md, label: Changelog }
+
+  - name: Start
+    pages:
+      - { path: start/quickstart.md, label: Quickstart }
+      - subgroup: Agents
+        pages:
+          - { path: start/agents/start-claude-code.md, label: Claude Code }
+          - { path: start/agents/codex.md, label: Codex }
+          - { path: start/agents/cursor.md, label: Cursor }
+          - { path: start/agents/opencode.md, label: OpenCode }
+          - { path: start/agents/meta-muse.md, label: Meta Muse }
+          - { path: start/agents/openai-dots.md, label: OpenAI dots }
+          - { path: start/agents/grok-bot.md, label: Grok Bot }
+          - { path: start/agents/claude-duet.md, label: Claude Duet }
+          - { path: start/agents/start-ssh.md, label: Any agent over SSH }
+      - { path: start/deploy.md, label: Deploy }
+
+  # Concepts explain how OpenLore works; How to pages are task walkthroughs;
+  # Recipes combine several features into one end-to-end workflow;
+  # Reference pages are lookup material: endpoints, interfaces, keys, internals.
+  - name: Concepts
+    pages:
+      - { path: concepts/docsets.md, label: Docsets }
+      - { path: concepts/transports.md, label: Transports }
+      - { path: concepts/auth.md, label: Auth }
+      - { path: concepts/writing.md, label: Writing & publishing }
+      - { path: concepts/folder-rules.md, label: Folder rules }
+      - { path: concepts/plugins.md, label: Plugins & formats }
+      - { path: concepts/dashboard.md, label: Dashboard & metrics }
+
+  - name: How to
+    pages:
+      - { path: how-to/usage.md, label: Ways to use OpenLore }
+      - { path: how-to/configure-the-server.md, label: Configure the server }
+      - { path: how-to/production-checklist.md, label: Production checklist }
+      - { path: how-to/publish-to-inbox.md, label: Let an agent publish into an inbox }
+      - { path: how-to/editors.md, label: Browse and edit from an editor }
+      - { path: how-to/shellm.md, label: Run headlong / shellm }
+      - subgroup: Deploy
+        pages:
+          - { path: how-to/deploy/render.md, label: Render }
+          - { path: how-to/deploy/ec2.md, label: EC2 }
+          - { path: how-to/deploy/digitalocean.md, label: DigitalOcean }
+          - { path: how-to/deploy/fly.md, label: Fly.io }
+
+  - name: Recipes
+    pages:
+      - { path: recipes/company-brain.md, label: Build your company brain }
+      - { path: recipes/weekly-briefing.md, label: Weekly briefing from docset changes }
+      - { path: recipes/knowledge-cleanup.md, label: Prune a knowledge repository from its analytics }
+      - { path: recipes/llm-wiki.md, label: Build an LLM wiki }
+      - { path: recipes/coding-style-guide.md, label: Share a coding style guide }
+
+  - name: Reference
+    pages:
+      - { path: reference/commands.md, label: Commands & CLI }
+      - { path: reference/openlore-yml.md, label: openlore.yml }
+      - { path: reference/rules-stdlib.md, label: Rules standard library }
+      - { path: reference/inbox.md, label: HTTP inbox API }
+      - { path: reference/authenticated-oauth-clients.md, label: OAuth clients }
+      - { path: reference/write-system.md, label: Write system internals }
+      - { path: reference/building-from-source.md, label: Building from source }
+      - { path: reference/dashboard-build.md, label: Build the dashboard }

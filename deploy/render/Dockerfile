@@ -1,4 +1,4 @@
-# Image for the Deploy to Render button (see render.yaml and docs/render.md).
+# Image for the Deploy to Render button (see render.yaml and docs/how-to/deploy/render.md).
 # Render passes service environment variables as build arguments, so set
 # OPENLORE_VERSION on the service to pin a release such as 0.7.3.
 ARG OPENLORE_VERSION=latest
