@@ -1060,7 +1060,7 @@ func buildMCPB(output, name, description, docsDir string) {
 			"mcp_config":  mcpConfig,
 		},
 		"tools": []map[string]string{
-			{"name": "shell", "description": "Execute bash commands against the documentation filesystem"},
+			{"name": "lore_bash", "description": "Run a command in OpenLore's restricted shell over the documentation filesystem"},
 			{"name": "list_commands", "description": "List all available shell commands"},
 		},
 		"compatibility": map[string]any{

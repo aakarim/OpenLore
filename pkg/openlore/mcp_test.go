@@ -54,7 +54,7 @@ func TestMCPToolAnnotations(t *testing.T) {
 				tools[tool.Name] = tool
 			}
 
-			shellTool, ok := tools["shell"]
+			shellTool, ok := tools["lore_bash"]
 			if !ok {
 				t.Fatal("shell tool is not registered")
 			}
@@ -141,7 +141,7 @@ func TestMCPShellErrorClassification(t *testing.T) {
 	defer clientSession.Close()
 
 	result, err := clientSession.CallTool(t.Context(), &mcp.CallToolParams{
-		Name:      "shell",
+		Name:      "lore_bash",
 		Arguments: map[string]any{"command": "echo structured-output; cat /does/not/exist"},
 	})
 	if err != nil {
@@ -181,7 +181,7 @@ func TestMCPShellErrorClassification(t *testing.T) {
 	}
 
 	result, err = clientSession.CallTool(t.Context(), &mcp.CallToolParams{
-		Name:      "shell",
+		Name:      "lore_bash",
 		Arguments: map[string]any{"command": "grep -c absent /docs/a.md"},
 	})
 	if err != nil {
