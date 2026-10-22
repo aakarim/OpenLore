@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -140,8 +141,8 @@ func CmdAnalytics(ctx CmdContext, args []string, w, errW io.Writer, _ io.Reader)
 		}
 		fmt.Fprintln(tw)
 		for _, row := range m.Table.Rows {
-			for _, v := range row {
-				fmt.Fprintf(tw, "%v\t", v)
+			for i, v := range row {
+				fmt.Fprintf(tw, "%s\t", analyticsTextCell(m.Table.Columns[i], v))
 			}
 			fmt.Fprintln(tw)
 		}
@@ -216,6 +217,35 @@ func CmdAnalytics(ctx CmdContext, args []string, w, errW io.Writer, _ io.Reader)
 		}
 		fmt.Fprintln(errW, analyticsUsage)
 		return 1
+	}
+}
+
+func analyticsTextCell(column string, value any) string {
+	switch v := value.(type) {
+	case nil:
+		return "-"
+	case *time.Time:
+		if v == nil {
+			return "-"
+		}
+		return v.Format(time.RFC3339)
+	case time.Time:
+		return v.Format(time.RFC3339)
+	case string:
+		// Cached tables round-trip through JSON, so timestamps become strings.
+		if column == "last_read_at" || column == "last_seen" {
+			if stamp, err := time.Parse(time.RFC3339Nano, v); err == nil {
+				return stamp.Format(time.RFC3339)
+			}
+		}
+		return v
+	case float64:
+		if strings.HasSuffix(column, "_ms") {
+			return strconv.FormatFloat(v, 'f', 0, 64)
+		}
+		return strings.TrimRight(strings.TrimRight(strconv.FormatFloat(v, 'f', 3, 64), "0"), ".")
+	default:
+		return fmt.Sprint(v)
 	}
 }
 
