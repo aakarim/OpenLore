@@ -228,7 +228,7 @@ matter; do not invent variants such as `grants` or `permissions`:
 Validate the complete JSON. A docset without an `access.allow` entry is
 reachable only as an identity's `home`, which is implicitly read/write for its
 owner. If the running server disagrees with this schema, trust
-`docs/auth.md` on the server (`cat /docs/auth.md` over SSH) over this
+`docs/concepts/auth.md` on the server (`cat /docs/concepts/auth.md` over SSH) over this
 template and report
 the difference.
 

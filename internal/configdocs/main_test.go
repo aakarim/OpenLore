@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// TestReferenceIsCurrent fails when docs/openlore-yml.md does not match what
+// TestReferenceIsCurrent fails when docs/reference/openlore-yml.md does not match what
 // the generator produces, so a config change cannot land without regenerating
 // the reference. Fix with: go generate ./docs
 func TestReferenceIsCurrent(t *testing.T) {
@@ -15,12 +15,12 @@ func TestReferenceIsCurrent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := os.ReadFile("../../docs/openlore-yml.md")
+	got, err := os.ReadFile("../../docs/reference/openlore-yml.md")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(got, want) {
-		t.Fatal("docs/openlore-yml.md is stale; run `go generate ./docs`")
+		t.Fatal("docs/reference/openlore-yml.md is stale; run `go generate ./docs`")
 	}
 }
 

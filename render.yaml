@@ -1,4 +1,4 @@
-# Render Blueprint for the "Deploy to Render" button. See docs/render.md.
+# Render Blueprint for the "Deploy to Render" button. See docs/how-to/deploy/render.md.
 services:
   - type: web
     name: openlore

@@ -225,7 +225,7 @@ host_key_path: .ssh/openlore_ed25519
 # OpenLore tokens at the token endpoint (grant_type=jwt-bearer). Each issuer's
 # JWKS is discovered and its assertions are verified (issuer + our audience) and
 # mapped to identities via `match` rules in lore.json. See
-# docs/auth.md (Workload Identity Federation).
+# docs/concepts/auth.md (Workload Identity Federation).
 # oidc_issuers:
 #   - issuer_url: https://token.actions.githubusercontent.com
 #     jwks:
@@ -343,7 +343,7 @@ files:
 #
 # Rules (size caps, OKF, link checks) are declared per docset in lore.json and
 # per folder in .lore/config.yaml files inside the content tree. See
-# docs/folder-rules.md. The only server-wide setting is the default growth
+# docs/concepts/folder-rules.md. The only server-wide setting is the default growth
 # multiplier for `max: initial` size rules (must be >= 1). `rules.tokenizer`
 # is reserved and rejected until a real tokenizer ships.
 # rules:

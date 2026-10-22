@@ -56,7 +56,7 @@ func DecodeFile(content []byte) (FileConfig, error) {
 		return FileConfig{}, fmt.Errorf("version: expected 1, got %d", config.Version)
 	}
 	if config.Icon != "" && FolderIcon(config.Icon) == "" {
-		return FileConfig{}, fmt.Errorf("icon: unknown name %q (see the folder icons in docs/folder-rules.md)", config.Icon)
+		return FileConfig{}, fmt.Errorf("icon: unknown name %q (see the folder icons in docs/concepts/folder-rules.md)", config.Icon)
 	}
 	for _, reserved := range []struct {
 		name    string

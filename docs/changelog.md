@@ -31,11 +31,11 @@ necessarily the current version. Dates are the GitHub publication dates in UTC.
 
 ## Unreleased
 
-- Added the [Share a coding style guide with every agent](coding-style-guide.md)
+- Added the [Share a coding style guide with every agent](recipes/coding-style-guide.md)
   recipe: a `style` docset with `size/lines` and `size/tokens` budgets, a
   prompt that has an agent write the guide from Google's style guide, and an
   `AGENTS.md` section that points agents at it.
-- Added the [Build an LLM wiki on OpenLore](llm-wiki.md) recipe, which runs
+- Added the [Build an LLM wiki on OpenLore](recipes/llm-wiki.md) recipe, which runs
   Karpathy's LLM wiki pattern on a server: existing docsets as the read-only
   raw layer, a `wiki` docset as an OKF bundle for the index and log, a schema
   page every agent reads, and ingest, query and lint through any agent.
@@ -60,13 +60,13 @@ necessarily the current version. Dates are the GitHub publication dates in UTC.
 - `ls -l` and `stat` now show write bits according to the caller's grant.
 - `publish` rejects extra arguments instead of silently ignoring them; its
   two-argument examples have been corrected.
-- Added a [knowledge cleanup](knowledge-cleanup.md) recipe and a
-  [deployment guide](deploy.md) with Fly.io, EC2 and DigitalOcean platform pages.
-- Added the [Build your company brain on OpenLore](company-brain.md) recipe,
+- Added a [knowledge cleanup](recipes/knowledge-cleanup.md) recipe and a
+  [deployment guide](start/deploy.md) with Fly.io, EC2 and DigitalOcean platform pages.
+- Added the [Build your company brain on OpenLore](recipes/company-brain.md) recipe,
   which explains what OpenLore already solves for a shared knowledge layer and
   walks through laying it out as docsets, connecting data sources, giving it to
   agents and capturing knowledge from across the organisation.
-- Added a **Setup** view to the [dashboard](dashboard.md) that shows how the
+- Added a **Setup** view to the [dashboard](concepts/dashboard.md) that shows how the
   instance is configured for the signed-in identity: connection addresses,
   server features, each docset's paths, grants, inbox and folder rules, and a
   configuration tree listing every readable `.lore/config.yaml` and, for
@@ -85,12 +85,12 @@ necessarily the current version. Dates are the GitHub publication dates in UTC.
 
 [Release notes and downloads](https://github.com/aakarim/OpenLore/releases/tag/v0.7.4)
 
-- Added the [Docsets](docsets.md) concept page, which explains what a docset
+- Added the [Docsets](concepts/docsets.md) concept page, which explains what a docset
   is, why access is organised around docsets, and how nesting, grants, aliases
-  and startup validation work. Added the [Transports](transports.md) concept
+  and startup validation work. Added the [Transports](concepts/transports.md) concept
   page, which holds the MCP tools, command result format, session behaviour,
   JSON API endpoints and instruction commands formerly in
-  [Ways to use OpenLore](usage.md). Ways to use OpenLore moved from Concepts to
+  [Ways to use OpenLore](how-to/usage.md). Ways to use OpenLore moved from Concepts to
   How to.
 - The dashboard has a fuzzy file finder: press Ctrl+P (⌘P on macOS) or the
   Find button, type part of a name or path, and press Enter to open the file
@@ -109,15 +109,15 @@ necessarily the current version. Dates are the GitHub publication dates in UTC.
 - Fixed `printf` looping forever when the format has no conversions but arguments are given ([#167](https://github.com/aakarim/OpenLore/pull/167)).
 - Documented that a successful write is saved but not fully validated: file
   checks run on write, while link resolution, OKF bundle structure and alias
-  checks run only under `lore validate`. The [writing guide](writing.md#saved-is-not-validated)
+  checks run only under `lore validate`. The [writing guide](concepts/writing.md#saved-is-not-validated)
   and the `openlore` skill now carry a write → validate → finish workflow.
 - Regrouped the documentation into Introduction, Start, Concepts, How to and
-  Reference. Added the [Auth](auth.md) concept page, which explains how each
+  Reference. Added the [Auth](concepts/auth.md) concept page, which explains how each
   credential resolves to an identity and now holds the workload identity
   federation guide (the old `workload-identity-federation` page redirects
   there). Moved the inbox API, OAuth clients and write system pages to
   Reference. Split the old configuration and identity page: server setup is
-  now the [Configure the server](configure-the-server.md) how-to, and
+  now the [Configure the server](how-to/configure-the-server.md) how-to, and
   posture, roles, docsets, identities and inbox credentials live in Auth.
 - `awk` supports `next` instead of exiting 2 as unsupported ([#175](https://github.com/aakarim/OpenLore/pull/175)).
 - Fixed `awk` regex patterns, variables and `$0` comparisons giving wrong results ([#144](https://github.com/aakarim/OpenLore/pull/144)).
@@ -145,9 +145,9 @@ necessarily the current version. Dates are the GitHub publication dates in UTC.
   follow the effective configuration instead of the default ports.
 - Fixed agent instruction commands hard-coding `/docs`, port 2222 and an invalid `publish` form, and `xargs -I{}` being rejected ([#174](https://github.com/aakarim/OpenLore/pull/174)).
 - Fixed the MCP server reporting version `1.0.0` in `serverInfo` instead of the build version ([#168](https://github.com/aakarim/OpenLore/pull/168)).
-- Added setup guides for [Codex](codex.md), [OpenCode](opencode.md) and
-  [Cursor](cursor.md), a [Deploy to Render](render.md) guide, and a Recipes
-  section starting with the [weekly briefing](weekly-briefing.md) recipe. The
+- Added setup guides for [Codex](start/agents/codex.md), [OpenCode](start/agents/opencode.md) and
+  [Cursor](start/agents/cursor.md), a [Deploy to Render](how-to/deploy/render.md) guide, and a Recipes
+  section starting with the [weekly briefing](recipes/weekly-briefing.md) recipe. The
   `history` command is now documented in the command reference.
 - The dashboard matches the openlore.sh design, adds a system-aware dark mode,
   an outline view for Markdown documents, a file path tooltip, and mobile

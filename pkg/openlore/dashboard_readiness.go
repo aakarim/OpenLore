@@ -40,7 +40,7 @@ func (s *Server) dashboardReadiness(frontendBuilt bool) DashboardReadiness {
 	r := DashboardReadiness{URL: s.config.HTTPBaseURL() + "/dashboard/"}
 	if !frontendBuilt {
 		r.Reason = "not included in this build (go install/go build are backend-only)"
-		r.NextSteps = []string{"install a release binary, or build one with `make distribution` (see docs/dashboard-build.md)"}
+		r.NextSteps = []string{"install a release binary, or build one with `make distribution` (see docs/reference/dashboard-build.md)"}
 		return r
 	}
 	r.Reason, r.NextSteps = s.dashboardSignInBlocker()
