@@ -105,12 +105,34 @@ select:focus-visible,
 .app {
   height: 100%;
   display: grid;
-  grid-template-columns: 252px minmax(0, 1fr);
+  grid-template-columns: var(--tree-width, 252px) minmax(0, 1fr);
   grid-template-rows: 76px minmax(0, 1fr);
   overflow: hidden;
 }
 .app.tree-collapsed {
   grid-template-columns: 0 minmax(0, 1fr);
+}
+.tree-resizer {
+  grid-area: 2 / 1;
+  justify-self: end;
+  width: 8px;
+  margin-right: -4px;
+  z-index: 2;
+  cursor: col-resize;
+  touch-action: none;
+}
+.tree-resizer:hover,
+.tree-resizer:focus-visible,
+.tree-resizing .tree-resizer {
+  background: var(--purple);
+}
+.tree-resizer:focus-visible {
+  outline: none;
+}
+.tree-resizing,
+.tree-resizing * {
+  cursor: col-resize !important;
+  user-select: none;
 }
 .tree-toggle {
   align-self: center;
@@ -299,6 +321,7 @@ select:focus-visible,
   white-space: nowrap;
 }
 .sidebar {
+  grid-column: 1;
   grid-row: 2;
   overflow-y: auto;
   background: var(--bg);
@@ -1638,9 +1661,6 @@ button.primary:hover:not(:disabled) {
   margin-bottom: 0;
 }
 @media (min-width: 761px) and (max-width: 1100px) {
-  .app:not(.tree-collapsed) {
-    grid-template-columns: 210px minmax(0, 1fr);
-  }
   .file-layout {
     height: auto;
     grid-template-columns: minmax(0, 1fr);
@@ -1669,6 +1689,9 @@ button.primary:hover:not(:disabled) {
   }
 }
 @media (max-width: 760px) {
+  .tree-resizer {
+    display: none;
+  }
   html,
   body,
   #root {

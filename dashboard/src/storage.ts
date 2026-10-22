@@ -1,5 +1,6 @@
 export type Preferences = {
   ratio: 4 | 6;
+  treeWidth: number | null;
   contextWindow: number;
   openPaths: string[];
   expandedPaths: string[];
@@ -7,6 +8,7 @@ export type Preferences = {
 };
 export const defaults: Preferences = {
   ratio: 4,
+  treeWidth: null,
   contextWindow: 200000,
   openPaths: [],
   expandedPaths: ["/"],
@@ -39,6 +41,9 @@ export function readPreferences(key: string): Preferences {
     const openPaths = paths(value.openPaths);
     return {
       ratio: value.ratio === 6 ? 6 : 4,
+      treeWidth: Number.isFinite(value.treeWidth)
+        ? Math.max(180, Math.min(600, value.treeWidth))
+        : null,
       contextWindow: [128000, 200000, 1000000].includes(value.contextWindow)
         ? value.contextWindow
         : defaults.contextWindow,

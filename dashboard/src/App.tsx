@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import {
   Analytics,
   AnalyticsProgress,
@@ -173,6 +179,18 @@ function Workspace({ session }: { session: Session }) {
   const [finder, setFinder] = useState(false);
   const [mode, setMode] = useState<"preview" | "source">("preview");
   const [collapsed, setCollapsed] = useState(false);
+  const [resizing, setResizing] = useState(false);
+  const treeDrag = useRef<{
+    pointer: number;
+    x: number;
+    width: number;
+  } | null>(null);
+  const [viewportWidth, setViewportWidth] = useState(window.innerWidth);
+  useEffect(() => {
+    const resize = () => setViewportWidth(window.innerWidth);
+    addEventListener("resize", resize);
+    return () => removeEventListener("resize", resize);
+  }, []);
   const [days, setDays] = useState(30);
   const [computed, setComputed] = useState("");
   const [processing, setProcessing] = useState<Record<string, ProcessingItem>>(
@@ -385,8 +403,18 @@ function Workspace({ session }: { session: Session }) {
     onFile: selectFile,
     onFolder: openFolder,
   };
+  const maxTreeWidth = Math.max(180, Math.min(600, viewportWidth - 400));
+  const treeWidth = Math.min(
+    prefs.treeWidth ?? (viewportWidth <= 1100 ? 210 : 252),
+    maxTreeWidth,
+  );
+  const resizeTree = (width: number) =>
+    setPreference({ treeWidth: Math.max(180, Math.min(maxTreeWidth, width)) });
   return (
-    <div className={`app ${view}${collapsed ? " tree-collapsed" : ""}`}>
+    <div
+      className={`app ${view}${collapsed ? " tree-collapsed" : ""}${resizing ? " tree-resizing" : ""}`}
+      style={{ "--tree-width": `${treeWidth}px` } as CSSProperties}
+    >
       <header className="topbar">
         <button
           className="tree-toggle"
@@ -451,6 +479,55 @@ function Workspace({ session }: { session: Session }) {
         ) : (
           <Tree {...treeProps} />
         ))}
+      {!collapsed && (
+        <div
+          className="tree-resizer"
+          role="separator"
+          aria-label="Resize file tree"
+          aria-orientation="vertical"
+          aria-valuemin={180}
+          aria-valuemax={maxTreeWidth}
+          aria-valuenow={treeWidth}
+          tabIndex={0}
+          title="Drag to resize; double-click to reset"
+          onPointerDown={(event) => {
+            if (event.button !== 0) return;
+            event.preventDefault();
+            event.currentTarget.focus();
+            event.currentTarget.setPointerCapture(event.pointerId);
+            treeDrag.current = {
+              pointer: event.pointerId,
+              x: event.clientX,
+              width: treeWidth,
+            };
+            setResizing(true);
+          }}
+          onPointerMove={(event) => {
+            const drag = treeDrag.current;
+            if (drag?.pointer === event.pointerId)
+              resizeTree(drag.width + event.clientX - drag.x);
+          }}
+          onPointerUp={(event) => {
+            if (treeDrag.current?.pointer === event.pointerId)
+              event.currentTarget.releasePointerCapture(event.pointerId);
+          }}
+          onLostPointerCapture={() => {
+            treeDrag.current = null;
+            setResizing(false);
+          }}
+          onDoubleClick={() => setPreference({ treeWidth: null })}
+          onKeyDown={(event) => {
+            if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key))
+              return;
+            event.preventDefault();
+            const width =
+              event.key === "Home" ? 180
+                : event.key === "End" ? maxTreeWidth
+                  : treeWidth + (event.key === "ArrowRight" ? 10 : -10);
+            resizeTree(width);
+          }}
+        />
+      )}
       <main className="workspace">
         {view === "setup" ? (
           <SetupView
