@@ -74,18 +74,11 @@ codex mcp add openlore --url http://localhost:8080/mcp
 ssh -p 2222 localhost "grep -r 'retry' /"
 ```
 
-Tell your agents when to use it:
-
-```bash
-ssh -p 2222 localhost agents >> AGENTS.md
-```
-
-### Claude Code: allow the OpenLore tools
-
-Claude Code's auto mode reviews every tool call. OpenLore looks like a
-filesystem, so a search such as `grep -r "retry" /` can be mistaken for a scan
-of your local disk and blocked. Allow the server once in `~/.claude/settings.json`
-or the project's `.claude/settings.json`:
+Claude Code also needs the OpenLore tools allowed before the first call.
+Claude Code reviews every tool call, and OpenLore looks like a filesystem, so
+a search such as `grep -r "retry" /` can be mistaken for a scan of your local
+disk and prompted for or blocked. Allow the server once in
+`~/.claude/settings.json` or the project's `.claude/settings.json`:
 
 ```json
 {
@@ -95,9 +88,15 @@ or the project's `.claude/settings.json`:
 }
 ```
 
-Keep the `agents` section in `CLAUDE.md` as well; it tells Claude that `/` is
-the documentation root, not your machine. See
-[Claude Code with OpenLore](start-claude-code.md#3-allow-the-openlore-tools)
+Then tell your agents when to use it:
+
+```bash
+ssh -p 2222 localhost agents >> AGENTS.md
+```
+
+The section also tells Claude that `/` is the documentation root, not your
+machine, so keep it in `CLAUDE.md` too. See
+[Claude Code with OpenLore](start-claude-code.md#2-add-the-server-and-allow-its-tools)
 for the details.
 
 ## Next steps
