@@ -150,7 +150,7 @@ transport. A connection is handled entirely against a virtual filesystem:
    passkey, or OAuth login to an identity.
 2. **Compose a view** — mount only the docsets and paths granted to that identity.
 3. **Explore** — run shell commands implemented as pure Go functions over that
-   view, or use the equivalent MCP `shell` tool.
+   view, or use the equivalent MCP `lore_bash` tool.
 4. **Contribute safely** — if writing is enabled, authorise and validate a
    whole-file change before committing it atomically.
 

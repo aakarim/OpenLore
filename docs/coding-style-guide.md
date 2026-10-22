@@ -81,7 +81,7 @@ The numbers are a starting point. A 300-line guide is roughly 3,000 to 4,000 tok
 
 ## 2. Have an agent write the guide
 
-Give a coding agent the prompt below from inside the repository the guide should describe. The agent fetches Google's guide with its own web tool, because the restricted shell on the server has no network access, and writes the result into `/style` through the MCP `shell` tool or `ssh`. Replace `go` with your language and the Google URLs with the matching guide.
+Give a coding agent the prompt below from inside the repository the guide should describe. The agent fetches Google's guide with its own web tool, because the restricted shell on the server has no network access, and writes the result into `/style` through the MCP `lore_bash` tool or `ssh`. Replace `go` with your language and the Google URLs with the matching guide.
 
 ```text
 Write our team's Go style guide into the OpenLore knowledge repository. Use
@@ -159,7 +159,7 @@ never cat the whole folder. If the guide and the code you are editing
 disagree, follow the guide and say so in your reply.
 ```
 
-For an agent on MCP, change the command line to `cat /style/go/guide.md` and say it runs in the openlore `shell` tool. Everything else is the same: the path is the same on every transport, and the identity's grant decides what it can see.
+For an agent on MCP, change the command line to `cat /style/go/guide.md` and say it runs in the openlore `lore_bash` tool. Everything else is the same: the path is the same on every transport, and the identity's grant decides what it can see.
 
 The section costs an agent one `cat` per session for the guide and one more for a decisions page when a question comes up. With the budgets from step 1 that is at most 300 lines plus 2,000 tokens, a number you chose rather than one that grows with the guide.
 

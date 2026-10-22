@@ -82,7 +82,7 @@ func TestMCPTracingUsesEachRequestParent(t *testing.T) {
 		if traceID != "" {
 			parent = "00-" + traceID + "-aaaaaaaaaaaaaaaa-01"
 		}
-		body := post(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"tools/call","params":{"name":"shell","arguments":{"command":"cat /doc.md; false"}}}`, i+2), parent)
+		body := post(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"tools/call","params":{"name":"lore_bash","arguments":{"command":"cat /doc.md; false"}}}`, i+2), parent)
 		if !strings.Contains(body, "private-document-body") || !strings.Contains(body, `"exit_code":1`) {
 			t.Fatalf("shell result changed: %s", body)
 		}
@@ -145,7 +145,7 @@ func TestMCPTracingAcceptsMetadataWithoutChangingArguments(t *testing.T) {
 	}
 	defer cs.Close()
 	result, err := cs.CallTool(t.Context(), &mcp.CallToolParams{
-		Name: "shell", Arguments: map[string]any{"command": "echo private-argument"},
+		Name: "lore_bash", Arguments: map[string]any{"command": "echo private-argument"},
 		Meta: mcp.Meta{"traceparent": "00-44444444444444444444444444444444-bbbbbbbbbbbbbbbb-01"},
 	})
 	if err != nil || contentText(result) != "private-argument\n" {
