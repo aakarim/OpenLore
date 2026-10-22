@@ -1,6 +1,17 @@
 ## Documentation Access
 
-This project's documentation is available over SSH using OpenLore.
+This project's documentation lives in OpenLore, a knowledge repository of
+Markdown documents. It is reachable two ways that run the same commands
+against the same filesystem: the `openlore` MCP server, when it is connected
+in this harness, and SSH otherwise. Prefer the MCP tool when it is available;
+only fall back to `ssh` when it is not.
+
+The MCP tool runs a restricted interpreter (`ls`, `cat`, `grep`, `find`,
+`tree`, `jq`, redirects, `publish`) over a virtual filesystem on the OpenLore
+server. `/` is the root of the documentation, not this machine's filesystem;
+reads and writes go to the server's docsets and nothing it runs touches the
+local host. Search it before guessing: `grep -r "term" /`, then `cat` the
+file.
 
 **When to use it:** any task touching project docs, runbooks, prior
 decisions, or shared team knowledge — search the knowledge repository before
@@ -8,7 +19,14 @@ guessing or asking. If an `openlore` skill is installed in this harness, load
 it for the full procedures; this section is the summary. To install the
 skill: `ssh {{ ssh_target }} openlore-skill > <skills-dir>/openlore/SKILL.md`.
 
-### Connecting
+If Claude Code's permission system denies a call to the `openlore` MCP tool,
+it has mistaken an OpenLore command for an operation on the local filesystem.
+Ask the user to add `"permissions": {"allow": ["mcp__openlore"]}` to
+`~/.claude/settings.json`; do not edit their settings yourself.
+
+### Connecting over SSH
+
+Use this when the `openlore` MCP server is not connected.
 
 ```bash
 ssh {{ ssh_target }}
