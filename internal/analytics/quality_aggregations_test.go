@@ -99,6 +99,88 @@ func TestFileAndFolderUsageIncludeNeverReadInventory(t *testing.T) {
 	}
 }
 
+func TestFileUsageRankingsFallBackToCurrentTokens(t *testing.T) {
+	service := newIndexedTestService(t, testFS{
+		"/docs/read.md":   []byte("abcdefgh"),
+		"/docs/unused.md": []byte("abcdefghijkl"),
+		"/docs/empty.md":  {},
+		"/docs/event.md":  []byte("abcd"),
+	})
+	facts := service.Facts()
+	// Populate the same current-facts cache used by tree-size and largest-docs.
+	if _, err := builtin("largest-docs")(t.Context(), nil, facts, Params{}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	source := summarySource{
+		{Time: now.Add(-48 * time.Hour), Type: "doc.scalars", Fields: map[string]any{"path": "/docs/read.md", "after": map[string]any{"tokens": float64(99)}}},
+		{Time: now, Type: "doc.read", Fields: map[string]any{"path": "/docs/read.md"}},
+		// A scalar observation without tokens must also fall back to facts.
+		{Time: now, Type: "doc.scalars", Fields: map[string]any{"path": "/docs/empty.md", "after": map[string]any{"bytes": float64(0)}}},
+		{Time: now, Type: "doc.scalars", Fields: map[string]any{"path": "/docs/event.md", "after": map[string]any{"tokens": float64(2000)}}},
+	}
+	for _, name := range []string{"least-used-files", "most-used-files"} {
+		t.Run(name, func(t *testing.T) {
+			table, err := builtin(name)(t.Context(), source, facts, Params{Since: now.Add(-24 * time.Hour), Until: now, Extra: map[string]string{"path": "/docs"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(table.Rows) != 4 {
+				t.Fatalf("rows = %#v", table.Rows)
+			}
+			for _, row := range table.Rows {
+				var tokens float64
+				var rate any
+				switch row[0] {
+				case "/docs/read.md":
+					tokens, rate = 2, float64(500)
+				case "/docs/unused.md":
+					tokens, rate = 3, float64(0)
+				case "/docs/empty.md":
+					tokens = 0 // Empty files have tokens, but no per-token ratio.
+				case "/docs/event.md":
+					tokens, rate = 2000, float64(0) // Preserve in-window observations.
+				default:
+					t.Fatalf("unexpected row = %#v", row)
+				}
+				if row[4] != tokens || row[5] != rate {
+					t.Errorf("%s: tokens=%v rate=%v, want %v %v", row[0], row[4], row[5], tokens, rate)
+				}
+			}
+		})
+	}
+}
+
+func TestFileUsageRankingsRetainUnreadableInventory(t *testing.T) {
+	facts := NewContentFacts(&controlledFactsFS{
+		testFS: testFS{
+			"/docs/a.md": []byte("readable"),
+			"/docs/b.md": []byte("unreadable"),
+		},
+		failPath: "/docs/b.md",
+	})
+	for _, name := range []string{"least-used-files", "most-used-files"} {
+		for _, limit := range []int{0, 1} {
+			t.Run(fmt.Sprintf("%s/limit=%d", name, limit), func(t *testing.T) {
+				table, err := builtin(name)(t.Context(), summarySource{}, facts, Params{Limit: limit})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if table.Total != 2 || table.Rows[0][0] != "/docs/a.md" || table.Rows[0][4] != float64(2) {
+					t.Fatalf("table = %#v", table)
+				}
+				if limit == 1 {
+					if len(table.Rows) != 1 || table.Note != "" {
+						t.Fatalf("limited table = %#v", table)
+					}
+				} else if len(table.Rows) != 2 || table.Rows[1][0] != "/docs/b.md" || table.Rows[1][4] != nil || table.Rows[1][5] != nil || table.Note != "Token counts unavailable for unreadable files, first: /docs/b.md" {
+					t.Fatalf("unreadable inventory = %#v", table)
+				}
+			})
+		}
+	}
+}
+
 func TestFileUsageRankingsDoNotAllocateLineCoverage(t *testing.T) {
 	files := testFS{}
 	for i := range 3500 {

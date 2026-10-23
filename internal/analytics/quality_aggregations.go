@@ -462,8 +462,30 @@ func fileUsageTable(order string) Incremental {
 			}
 			return left.Before(*right)
 		})
+		total := len(usage)
+		if p.Limit > 0 && len(usage) > p.Limit {
+			usage = usage[:p.Limit]
+		}
 		rows := make([][]any, 0, len(usage))
+		note := ""
 		for _, u := range usage {
+			// Preserve in-window observations, but do not require a write in
+			// the window to report context cost. Stat uses the current facts cache.
+			if _, ok := u.Scalars["tokens"]; !ok {
+				current, err := facts.Stat(ctx, u.Path)
+				if ctx.Err() != nil {
+					return Table{}, ctx.Err()
+				}
+				if err != nil {
+					// Keep usage visible even if the content cannot be read.
+					// Do not expose errors that may contain host paths.
+					if note == "" {
+						note = "Token counts unavailable for unreadable files, first: " + u.Path
+					}
+				} else if value, ok := current.Scalars["tokens"]; ok {
+					u.Scalars["tokens"] = value
+				}
+			}
 			var tokens any
 			var readsPerKTok any
 			if value, ok := u.Scalars["tokens"]; ok {
@@ -474,7 +496,7 @@ func fileUsageTable(order string) Incremental {
 			}
 			rows = append(rows, []any{u.Path, u.LastReadAt, u.Reads, u.Hits, tokens, readsPerKTok})
 		}
-		return Table{Columns: []string{"path", "last_read_at", "reads", "hits", "tokens", "reads_per_ktok"}, Rows: limitRows(rows, p), Total: len(rows)}, nil
+		return Table{Columns: []string{"path", "last_read_at", "reads", "hits", "tokens", "reads_per_ktok"}, Rows: rows, Total: total, Note: note}, nil
 	}}
 }
 
