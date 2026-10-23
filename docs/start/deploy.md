@@ -63,7 +63,7 @@ host_key_path: /var/lib/openlore/ssh/openlore_ed25519
 
 Agents verify the server against this key. Publish it so they can check it before the first connection: the server serves the public key at `https://<domain>/host-key`, and a client appends it to `known_hosts` once.
 
-```bash
+```shell
 echo "<domain> $(curl -s https://<domain>/host-key)" >> ~/.ssh/known_hosts
 ```
 

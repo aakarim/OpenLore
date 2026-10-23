@@ -48,11 +48,11 @@ Then ask the initial question again (options A and B).
 1. Ask for the server address and SSH port if they have not given them.
    Default port: 2222 (openlore.sh uses 22).
 2. Verify the connection:
-   ```bash
+   ```shell
    ssh {{ ssh_target }}
    ```
 3. Show them how to explore:
-   ```bash
+   ```shell
    tree -L 2 /          # list all documentation
    lore docsets         # mounts and access levels
    grep -r "term" /     # search across docs
@@ -61,7 +61,7 @@ Then ask the initial question again (options A and B).
    ```
 4. Offer to onboard their agents. The server carries its own instructions —
    fetch and follow them:
-   ```bash
+   ```shell
    ssh {{ ssh_target }} openlore-skill  # portable Agent Skills file
    ssh {{ ssh_target }} agents          # AGENTS.md snippet
    ```
@@ -72,14 +72,14 @@ Then ask the initial question again (options A and B).
 The `setup` skill creates and locally verifies a deployable OpenLore project,
 one question at a time. Fetch it and follow it now:
 
-```bash
+```shell
 ssh openlore.sh setup
 ```
 
 Then stop here — the `setup` skill takes over. After it, `onboarding` adds
 identities and `deploy` shares the server with the team:
 
-```bash
+```shell
 ssh openlore.sh onboarding
 ssh openlore.sh deploy
 ```
@@ -89,7 +89,7 @@ ssh openlore.sh deploy
 Every guide ships on the server itself. Fetch what the moment needs instead of
 keeping it all in context:
 
-```bash
+```shell
 ssh <address> skills      # list every guide the server carries
 ssh <address> <name>      # fetch one, e.g. passkeys, upgrade, deploy-fly
 ```

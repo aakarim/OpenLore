@@ -92,7 +92,7 @@ server with the team — or later via `ssh openlore.sh deploy | <agent-cli>`.
 
 If the person stops here, open the setup record for them and say so:
 
-```bash
+```shell
 open .local/filesystem/channel/infrastructure/openlore-server.md   # macOS
 xdg-open .local/filesystem/channel/infrastructure/openlore-server.md   # Linux
 ```

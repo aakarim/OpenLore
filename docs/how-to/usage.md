@@ -6,14 +6,14 @@ transports relate, what they return and how long shell state lasts.
 
 ## Serve a directory over SSH, web, and MCP
 
-```bash
+```shell
 openlore ./docs
 ```
 
 This starts SSH on port 2222 and HTTP on port 8080. The HTTP server includes the
 human-facing front page and the default MCP endpoint at `/mcp`.
 
-```bash
+```shell
 ssh -p 2222 localhost
 ssh -p 2222 localhost "find / -name '*.md' | head -20"
 ssh -p 2222 localhost "cat /docs/api-reference.md"
@@ -29,7 +29,7 @@ built-in defaults. Command-line flags always win.
 
 Add a directory listing or the built-in agent instructions to `AGENTS.md`:
 
-```bash
+```shell
 ssh -p 2222 localhost "tree -L 2 /" >> AGENTS.md
 ssh -p 2222 localhost agents >> AGENTS.md
 ```
@@ -50,7 +50,7 @@ command list.
 Save a server's [instruction commands](../concepts/transports.md#instruction-commands) as
 agent instructions or skills:
 
-```bash
+```shell
 ssh <server> agents > AGENTS.md
 ssh <server> agents-shellm > .skills/openlore/SKILL.md
 ```
@@ -60,7 +60,7 @@ See [shellm.md](shellm.md) for Docker caveats and trajectory sharing.
 Pipe an instruction command from a public OpenLore server into your coding
 agent, for example:
 
-```bash
+```shell
 ssh openlore.sh setup | amp
 ```
 
@@ -76,7 +76,7 @@ container image.
 
 Place docs in `assets/lore/` and build:
 
-```bash
+```shell
 make dashboard-build   # optional: include the web UI
 go build -o my-docs ./cmd/openlore
 ```
@@ -89,7 +89,7 @@ no directory argument. Embedded docs are always read-only.
 
 Extract embedded docs when needed:
 
-```bash
+```shell
 openlore export -o ./extracted-docs
 ```
 
@@ -111,7 +111,7 @@ toolchain. The resulting binary does not require Node at runtime.
 The Streamable HTTP MCP endpoint shares the HTTP server and its TLS or reverse
 proxy configuration:
 
-```bash
+```shell
 openlore ./docs
 # SSH:  ssh -p 2222 localhost
 # Web:  http://localhost:8080
@@ -140,7 +140,7 @@ endpoints are described in [Transports](../concepts/transports.md).
 
 Use stdio for clients that launch a local process, including Claude Desktop:
 
-```bash
+```shell
 openlore mcp
 openlore mcp ./docs
 openlore mcp --allowed '*.md,*.txt' --ignore '.git,node_modules' ./docs
@@ -163,7 +163,7 @@ Example MCP client configuration:
 
 Package an embedded binary as an MCPB extension for one-click installation:
 
-```bash
+```shell
 go build -o openlore ./cmd/openlore
 ./openlore mcpb -o openlore.mcpb
 ```
@@ -183,7 +183,7 @@ other compatible editors, save behaviour, and limitations.
 
 SFTP also lets local tools mount a read-only view of the virtual filesystem:
 
-```bash
+```shell
 mkdir -p /mnt/docs
 sshfs -p 2222 localhost:/ /mnt/docs -o ro
 
@@ -198,7 +198,7 @@ umount /mnt/docs          # macOS
 
 The front page is enabled on port 8080 by default:
 
-```bash
+```shell
 openlore ./docs
 openlore --http-port 3000 ./docs
 openlore --http-port 0 ./docs

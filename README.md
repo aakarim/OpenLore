@@ -29,7 +29,7 @@ Point OpenLore at a folder of Markdown and every agent on your team reads the sa
 
 Install and serve a folder:
 
-```bash
+```shell
 brew install --cask aakarim/tap/lore
 openlore ./docs
 ```
@@ -38,7 +38,7 @@ SSH runs on port `2222`. The web view and MCP share port `8080`. The contents of
 
 Connect an agent:
 
-```bash
+```shell
 # Claude Code
 claude mcp add --transport http openlore http://localhost:8080/mcp
 
@@ -51,13 +51,13 @@ ssh -p 2222 localhost "grep -r 'retry' /"
 
 Tell your agents when to use it:
 
-```bash
+```shell
 ssh -p 2222 localhost agents >> AGENTS.md
 ```
 
 Or let your agent do the whole setup:
 
-```bash
+```shell
 ssh openlore.sh teach | claude
 ```
 
@@ -176,7 +176,7 @@ OpenLore is read-only by default. Writable deployments keep a single,
 policy-controlled write path for redirects, append, `tee`, `patch`, `sed -i`,
 file moves, publishing, and trusted external jobs.
 
-```bash
+```shell
 echo "# Research" | publish /backend/findings.md
 cat change.diff | patch /backend/api.md
 sed -i 's/old/new/g' /backend/runbook.md
@@ -201,7 +201,7 @@ Place documentation in `assets/lore/` and build. The resulting binary contains
 the docs and serves them read-only at `/docs` when run with no directory
 argument:
 
-```bash
+```shell
 make dashboard-build   # optional: include the web UI
 go build -o my-docs ./cmd/openlore
 ```
@@ -228,7 +228,7 @@ official OpenLore release, and deployment artifacts. It builds a working local
 server and verifies HTTP, MCP, authenticated SSH, writes, and persistence before
 deployment:
 
-```bash
+```shell
 ssh openlore.sh setup | amp
 ```
 
@@ -258,7 +258,7 @@ onboarding policy or server configuration. Before the service starts, the
 deployment must put `openlore.yml` and `lore.json` in the persistent config
 directory and run:
 
-```bash
+```shell
 ./out --config /var/lib/openlore/config/openlore.yml
 ```
 

@@ -87,7 +87,7 @@ standalone agent without changing historical attribution.
 
 Standalone agents can request delegated tokens with their own OpenLore JWT:
 
-```bash
+```shell
 curl -X POST https://your-host/oauth/token \
   -d grant_type=urn:openlore:oauth:grant-type:delegation \
   -d actor_token="$OPENLORE_AGENT_TOKEN" \
@@ -100,7 +100,7 @@ Grant `lore:config:edit` through a role to expose the validated configuration at
 `/opt/openlore/lore.json`. Whole-file writes are atomically persisted but do not
 change running policy until explicitly activated:
 
-```bash
+```shell
 cat /opt/openlore/lore.json
 cat updated.json > /opt/openlore/lore.json
 lore config reload
@@ -111,7 +111,7 @@ the separate host-local audit log, not the content write log.
 
 Content history remains independently queryable by either side of a delegation:
 
-```bash
+```shell
 history --principal adil
 history --actor claude@claude.ai
 ```
@@ -142,7 +142,7 @@ The `publish_dir` is a directory on disk where published files are written. If i
 
 Use the `publish` command to write files:
 
-```bash
+```shell
 echo "content" | publish <docset> <path>
 ```
 
@@ -150,7 +150,7 @@ Running `publish` with no args lists writable docsets.
 
 Remote usage over SSH:
 
-```bash
+```shell
 echo "content" | ssh -p 2222 server publish <docset> <path>
 ```
 

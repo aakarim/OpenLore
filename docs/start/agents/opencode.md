@@ -6,7 +6,7 @@ OpenCode connects to OpenLore as a remote MCP server, so it can search and read 
 
 Start a server with the folder you want to share. Its contents appear at `/`.
 
-```bash
+```shell
 openlore ./docs
 ```
 
@@ -34,7 +34,7 @@ tool and answer from the result.
 
 OpenCode reads `AGENTS.md` from your project automatically. Every OpenLore server prints a ready-made section for it:
 
-```bash
+```shell
 ssh -p 2222 localhost agents >> AGENTS.md
 ```
 
@@ -87,7 +87,7 @@ tokens:
 
 Restart the server, then sign OpenCode in. It opens a browser so you can log in with a passkey:
 
-```bash
+```shell
 opencode mcp auth openlore
 ```
 

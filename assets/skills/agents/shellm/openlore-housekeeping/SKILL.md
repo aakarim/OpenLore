@@ -19,14 +19,14 @@ the checks below target `{{.Mount}}` — repeat them for each mount.{{end}}
 Documents carry frontmatter. Use `lore meta` to list paths with dates, then
 flag old ones:
 
-```bash
+```shell
 ssh $OPENLORE_SSH "lore meta {{.Mount}} | jq -r 'select(.updated != null) | [.updated, .path] | @tsv' | sort"
 ```
 
 Flag anything older than the agreed threshold (default: 90 days). Also flag
 documents with no frontmatter date at all:
 
-```bash
+```shell
 ssh $OPENLORE_SSH "lore meta {{.Mount}} | jq -r 'select(.updated == null) | .path'"
 ```
 
@@ -34,7 +34,7 @@ ssh $OPENLORE_SSH "lore meta {{.Mount}} | jq -r 'select(.updated == null) | .pat
 
 Extract relative Markdown links and check each target exists:
 
-```bash
+```shell
 ssh $OPENLORE_SSH "grep -rho ']([^)h][^)]*)' {{.Mount}} | tr -d ']()' | sort -u"
 ```
 
@@ -45,7 +45,7 @@ For each path, test it: `ssh $OPENLORE_SSH "test -e {{sub .Mount "<target>"}} ||
 Items published into an inbox wait for a human to move them into the docset.
 List what is waiting and how old it is:
 
-```bash
+```shell
 ssh $OPENLORE_SSH "find / -type f | grep '/inbox/' | xargs -I{} stat {}"
 ```
 
@@ -56,7 +56,7 @@ Flag inbox items older than 7 days: they are stuck and need a human decision.
 This server has a `/trajectories` docset. Confirm recent agent runs are being
 synced (`ls -l` shows modification times):
 
-```bash
+```shell
 ssh $OPENLORE_SSH "ls -l /trajectories"
 ```
 
@@ -68,7 +68,7 @@ missing (see the `openlore` skill for the sync procedure).
 This server hosts a `/skills` collection. Verify every skill directory has a
 `SKILL.md`:
 
-```bash
+```shell
 ssh $OPENLORE_SSH "ls /skills | while read -r d; do test -e /skills/\$d/SKILL.md || echo missing: \$d; done"
 ```
 
@@ -78,7 +78,7 @@ Write one Markdown report with a section per check and only actionable
 findings. Publish it; the inbox keeps reports out of the docset until a human
 accepts them:
 {{if .Publish}}
-```bash
+```shell
 cat report.md | ssh $OPENLORE_SSH "publish /{{.PublishDocset}}/housekeeping/$(date +%Y-%m-%d).md"
 ```
 {{else}}

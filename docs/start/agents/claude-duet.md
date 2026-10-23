@@ -26,7 +26,7 @@ yours.
 
 Check that the MCP endpoint is up and asking for a credential:
 
-```bash
+```shell
 curl -si -X POST https://lore.example.com/mcp \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json, text/event-stream' \

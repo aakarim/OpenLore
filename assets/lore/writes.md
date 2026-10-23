@@ -21,7 +21,7 @@ is the safe default, not a bug.
 Everything writes **whole files atomically** — there is no streaming or partial
 write. A file either fully updates or it doesn't.
 
-```bash
+```shell
 # Overwrite (redirect) — replaces the whole file
 echo "# Notes" > /mydocset/notes.md
 
@@ -62,7 +62,7 @@ you**: the server remembers the hash of every file you read in your session, so
 an overwrite is automatically a compare-and-swap against **the version you last
 read**. You never specify a hash.
 
-```bash
+```shell
 cat /mydocset/shared.md          # you now "know" this version
 # ... edit locally ...
 echo "$NEW" > /mydocset/shared.md
@@ -89,14 +89,14 @@ Notes:
 A docset can require approval for certain paths. When you write such a path, the
 change isn't committed — it becomes a **pending request** for a human to review:
 
-```bash
+```shell
 echo "freeze deploys" > /ops/policy.md
 #   write to /ops/policy.md pending approval as req_ab12 (requires approve@oncall)
 ```
 
 Anyone reviewing can inspect and decide:
 
-```bash
+```shell
 ls /requests                 # list pending requests
 cat /requests/req_ab12       # see who proposed what, plus a diff
 approve req_ab12             # commit it (needs the right capability)
@@ -109,7 +109,7 @@ Trusted identities (those granted the `spawn` capability) can run a slow externa
 command and have its output written back into the lore **for everyone**, without
 blocking:
 
-```bash
+```shell
 spawn --writes /channel/infra/temporal-ns/live.md -- \
     sh -c 'kubectl apply -f ns.yaml && kubectl get all -n temporal -o yaml'
 #   Spawned job_84f3 — writing to /channel/infra/temporal-ns/live.md when done
@@ -118,7 +118,7 @@ spawn --writes /channel/infra/temporal-ns/live.md -- \
 
 The command runs in the background; check its state any time:
 
-```bash
+```shell
 ls /jobs                  # all jobs
 cat /jobs/job_84f3        # running | done | failed, target, timestamps, detail
 ```

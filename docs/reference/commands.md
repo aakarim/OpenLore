@@ -113,7 +113,7 @@ them.
 
 List the docsets you can access with their grants, paths and attributes.
 
-```bash
+```shell
 lore docsets
 ```
 
@@ -121,7 +121,7 @@ lore docsets
 
 Emit document frontmatter as NDJSON, scoped to the current directory or the given path. Pipe it into `jq` to query it.
 
-```bash
+```shell
 lore meta /docs/backend | jq -r 'select(.type == "Metric") | .path'
 ```
 
@@ -131,7 +131,7 @@ Add `--filter skills` to list Agent Skills collections without scanning unrelate
 
 List the compiled-in rule members, or show one member's parameters and example. The same content is in the [rules standard library](rules-stdlib.md).
 
-```bash
+```shell
 lore package doc size/kilobytes
 ```
 
@@ -139,7 +139,7 @@ lore package doc size/kilobytes
 
 Run folder rules over a docset or folder without writing anything. File rules run per file; bundle rules such as OKF bundle structure, local links and alias portability run once at the root. Bundle rules never run on write, so a file that saved successfully can still fail here; see [Saved is not validated](../concepts/writing.md#saved-is-not-validated).
 
-```bash
+```shell
 lore validate /docs/backend/decisions
 ```
 
@@ -149,7 +149,7 @@ Exit status is 1 when any `error` finding is reported and 0 when there are only 
 
 Show a file's size-baseline history and its current cap under `max: initial` rules.
 
-```bash
+```shell
 lore size baseline /docs/backend/decisions/adr-001.md
 ```
 
@@ -157,7 +157,7 @@ lore size baseline /docs/backend/decisions/adr-001.md
 
 Append a new baseline from the file's current content. Needs a write grant on the path and a role listed in the docset's `config.edit`.
 
-```bash
+```shell
 lore size baseline reset /docs/backend/decisions/adr-001.md --note "split into two ADRs"
 ```
 
@@ -186,7 +186,7 @@ baseline reset: previous 412, new 812, new cap 893 lines
 
 Print the commit journal as NDJSON, newest first, with one object per write to a docset you can read. `--principal` keeps writes by one identity and `--actor` keeps writes made through one delegated client.
 
-```bash
+```shell
 history --actor claude-code@claude.ai | jq -r .target | sort | uniq -c | sort -rn
 ```
 
@@ -213,7 +213,7 @@ and collection recovery.
 Discover installed skills with the `skills` metadata filter, then read the
 chosen `SKILL.md`:
 
-```bash
+```shell
 lore meta --filter skills | jq -r 'select((.name + " " + .description) | test("pdf"; "i")) | .path'
 ```
 

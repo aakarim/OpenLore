@@ -10,7 +10,7 @@ made writable.
 
 ## Write operations
 
-```bash
+```shell
 echo "# Notes" > /mydocset/notes.md
 echo "- point" >> /mydocset/notes.md
 cat input.md | tee /mydocset/copy.md
@@ -31,7 +31,7 @@ destination and move files explicitly.
 `publish` lets a contributor read a whole docset while creating or editing only
 inside its inbox:
 
-```bash
+```shell
 echo "# API Notes" | publish /backend/api-notes.md
 ```
 
@@ -162,7 +162,7 @@ Run the loop below from one session. It uses a docset with an `okf` block (or
 `link/resolves` under `rules`), which is what makes link checking part of
 `lore validate`.
 
-```bash
+```shell
 # 1. Write. Exit 0 means the file is saved and passed every file-scope check.
 printf -- '---\ntype: Note\n---\n# Retry policy\n\nSee [the queue design](queue-design.md).\n' \
   > /docs/retry-policy.md
@@ -177,7 +177,7 @@ see: lore package doc link/resolves
 1 error, 0 warnings
 ```
 
-```bash
+```shell
 # 3. Fix the finding: write the missing target (or correct the link), then re-validate.
 printf -- '---\ntype: Note\n---\n# Queue design\n' > /docs/queue-design.md
 lore validate /docs
@@ -187,7 +187,7 @@ lore validate /docs
 0 errors, 0 warnings
 ```
 
-```bash
+```shell
 # 4. Finish only when validate exits 0.
 lore validate /docs && echo done
 ```

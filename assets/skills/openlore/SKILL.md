@@ -17,7 +17,7 @@ independent session, so use absolute paths.
 
 ## Reading and searching
 
-```bash
+```shell
 ssh {{ ssh_target }} "tree -L 2 /"                        # discover layout
 ssh {{ ssh_target }} "grep -rn 'search term' {{.Mount}}"    # search
 ssh {{ ssh_target }} "cat {{.File}}"                        # read
@@ -34,7 +34,7 @@ This identity can publish to {{range $i, $t := .Publish}}{{if $i}}, {{end}}`/{{$
 argument is one path, `/<docset>/<file>`, where the docset name is the first
 segment:
 
-```bash
+```shell
 ssh {{ ssh_target }} "publish"                                        # list writable paths
 cat report.md | ssh {{ ssh_target }} "publish /{{.PublishDocset}}/report.md"  # publish from stdin
 ```
@@ -46,7 +46,7 @@ explanation on stderr.
 This identity can write directly to {{range $i, $m := .Writable}}{{if $i}}, {{end}}`{{$m}}`{{end}} with
 the ordinary write verbs:
 
-```bash
+```shell
 cat report.md | ssh {{ ssh_target }} "cat > {{sub (index .Writable 0) "report.md"}}"
 ```
 
@@ -65,7 +65,7 @@ declared in `lore.json` by the server operator and in `.lore/config.yaml`
 files inside the content tree; a folder's config applies to it and everything
 beneath it. Before writing to an unfamiliar folder, look:
 
-```bash
+```shell
 ssh {{ ssh_target }} "cat {{sub .Mount ".lore/config.yaml"}} 2>/dev/null || echo no folder rules"   # rules for this folder, if any
 ssh {{ ssh_target }} "lore package list"                           # compiled-in rule members
 ssh {{ ssh_target }} "lore package doc size/lines"                 # a member's parameters and example
@@ -83,7 +83,7 @@ finish condition, not the exit status of the write.
 
 Write → validate → finish:
 
-```bash
+```shell
 # 1. Write every file the change needs (exit 0 = saved, file checks passed)
 {{if .Publish}}cat retry-policy.md | ssh {{ ssh_target }} "publish /{{.PublishDocset}}/retry-policy.md"
 # 2. Validate the docset root (not / and not just the subfolder)
@@ -129,7 +129,7 @@ working around it. `size/tokens` limits are estimates, so leave a margin.
 If your identity has a role in the docset's `config.edit`, you can add rules to
 a folder by writing its `.lore/config.yaml`:
 
-```bash
+```shell
 cat <<'EOF' | ssh {{ ssh_target }} "cat > {{sub .Mount "<folder>/.lore/config.yaml"}}"
 version: 1
 rules:

@@ -6,7 +6,7 @@ Cursor connects to OpenLore over MCP, so its agent can search and read a shared 
 
 Start a server with the folder you want to share. Its contents appear at `/`.
 
-```bash
+```shell
 openlore ./docs
 ```
 
@@ -34,7 +34,7 @@ tool and answer from the result.
 
 Cursor reads `AGENTS.md` from your project. Every OpenLore server prints a ready-made section for it:
 
-```bash
+```shell
 ssh -p 2222 localhost agents >> AGENTS.md
 ```
 

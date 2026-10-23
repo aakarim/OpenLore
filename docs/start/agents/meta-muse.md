@@ -23,7 +23,7 @@ server's address throughout; substitute yours.
 
 Check that the MCP endpoint is up and asking for a credential:
 
-```bash
+```shell
 curl -si -X POST https://lore.example.com/mcp \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json, text/event-stream' \
@@ -44,14 +44,14 @@ Muse can see is whatever that identity is granted.
 From a shell on the server, add the identity and restart the service so the
 policy loads:
 
-```bash
+```shell
 openlore identity add --name muse --role user \
   --auth /var/lib/openlore/config/lore.json
 ```
 
 Then mint a read-only token for it:
 
-```bash
+```shell
 openlore token mint --identity muse --scope read --ttl 720h \
   --config /var/lib/openlore/config/openlore.yml
 ```
@@ -156,7 +156,7 @@ Muse Code, Meta's coding agent for the terminal, declares MCP servers in
 `~/.config/muse/settings.json`. It runs on your machine, so a local server
 works too:
 
-```bash
+```shell
 openlore ./docs
 ```
 
@@ -178,13 +178,13 @@ openlore ./docs
 server and its tools. For a deployed server with `mcp.require_auth: true`,
 point `url` at it and sign in with a passkey:
 
-```bash
+```shell
 muse mcp login openlore
 ```
 
 Muse Code reads `AGENTS.md` from your project once you have trusted the
 folder, so the usual instruction step applies:
 
-```bash
+```shell
 ssh -p 2222 localhost agents >> AGENTS.md
 ```

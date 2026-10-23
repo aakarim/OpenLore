@@ -12,13 +12,13 @@ Agents use the tools they already know, such as `cat`, `grep`, `find` and pipes,
 
 You start by serving a directory.
 
-```bash
+```shell
 openlore ./docs
 ```
 
 SSH listens on port 2222; the web view and the MCP endpoint share port 8080.
 
-```bash
+```shell
 ssh -p 2222 localhost "grep -r 'retry policy' /"
 ```
 
@@ -32,13 +32,13 @@ Any agent that can run a shell command or speak MCP can use OpenLore. There is n
 
 Claude Code connects over MCP.
 
-```bash
+```shell
 claude mcp add --transport http openlore http://localhost:8080/mcp
 ```
 
 Any agent with a shell connects over SSH. The `agents` command prints the instructions to paste into `AGENTS.md`.
 
-```bash
+```shell
 ssh -p 2222 localhost agents >> AGENTS.md
 ```
 
@@ -73,7 +73,7 @@ Learn more about [docsets](concepts/docsets.md) and [identities and roles](conce
 
 OpenLore is read-only by default. When you turn writes on, every write goes through one path that checks who is writing, whether the file passes the folder's [rules](concepts/folder-rules.md), and whether the file changed since the agent read it. Stale writes are rejected, not merged.
 
-```bash
+```shell
 echo "# Findings" | publish /backend/research/findings.md
 ```
 

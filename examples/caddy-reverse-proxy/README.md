@@ -5,14 +5,14 @@ Forward requests to `/agents` on your existing domain to the OpenLore HTTP front
 ## Setup
 
 1. Start OpenLore with the HTTP server enabled:
-   ```bash
+   ```shell
    openlore --http-port 8080 ./docs
    ```
 
 2. Update the Caddyfile with your domain and backend port.
 
 3. Run Caddy:
-   ```bash
+   ```shell
    caddy run --config Caddyfile
    ```
 

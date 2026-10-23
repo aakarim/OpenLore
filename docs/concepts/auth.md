@@ -80,7 +80,7 @@ SSH otherwise relies on trust on first use. OpenLore displays its public host
 key on the web front page and serves it from `GET /host-key`. Put the HTTP server
 behind TLS, then install the key before connecting:
 
-```bash
+```shell
 curl -s https://docs.example.com/host-key | \
   awk '{print "[docs.example.com]:2222 " $0}' >> ~/.ssh/known_hosts
 
@@ -234,7 +234,7 @@ The home docset's display path becomes `$HOME`, enabling `~`, `~/path`, and `cd`
 with no arguments. It does not change the initial directory, which remains
 `default_cwd`.
 
-```bash
+```shell
 ssh -p 2222 server 'echo $HOME'
 ssh -p 2222 server 'cat ~/notes.md'
 ssh -p 2222 server 'cd && pwd'
@@ -247,7 +247,7 @@ boundaries and do not inherit that access.
 
 Add an identity from the CLI:
 
-```bash
+```shell
 openlore identity add \
   --name my-agent \
   --key "ssh-ed25519 AAAA..." \
@@ -273,7 +273,7 @@ management endpoints (`POST/GET /inbox/tokens`, `DELETE /inbox/tokens/{id}`),
 while a generated `olin_...` bearer or HMAC authenticates
 `POST /inbox/{docset}`. The CLI equivalents are:
 
-```bash
+```shell
 openlore inbox token create --identity alice --ttl 24h --config openlore.yml
 openlore inbox token list --config openlore.yml
 openlore inbox token revoke TOKEN_ID --config openlore.yml
@@ -482,7 +482,7 @@ volumes:
             path: token
 ```
 
-```bash
+```shell
 # in-container: exchange the projected token
 JWT=$(cat /var/run/secrets/openlore/token)
 OL=$(curl -sS -X POST https://openlore.example/oauth/token \
@@ -501,7 +501,7 @@ part of this flow.
 The exchanged token is an ordinary OpenLore bearer token. Present it to **both**
 endpoints:
 
-```bash
+```shell
 # MCP-over-HTTP
 curl -X POST https://openlore.example/mcp \
   -H "Authorization: Bearer $OL_TOKEN" \

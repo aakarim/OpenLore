@@ -9,24 +9,24 @@ Many corporate networks block non-standard ports. By also listening on port 443 
 ## Setup
 
 1. Install Caddy with the SSH module:
-   ```bash
+   ```shell
    xcaddy build --with github.com/mohammed90/caddy-ssh
    ```
 
 2. Start OpenLore:
-   ```bash
+   ```shell
    openlore --http-port 8080 -p 2222 ./docs
    ```
 
 3. Run Caddy:
-   ```bash
+   ```shell
    sudo caddy run --config Caddyfile
    ```
    (sudo required for ports 22, 80, 443)
 
 ## Connection Options
 
-```bash
+```shell
 # Standard SSH port
 ssh docs.example.com
 

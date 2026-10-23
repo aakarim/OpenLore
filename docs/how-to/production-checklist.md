@@ -88,7 +88,7 @@ that grants only the docsets it needs. People sign in to OAuth-based agents
 and the dashboard with a passkey; register yours by minting a short-lived
 token on the server, then asking for a registration link:
 
-```bash
+```shell
 # On the server
 openlore token mint --identity alice --ttl 15m --config /var/lib/openlore/config/openlore.yml
 
@@ -116,7 +116,7 @@ it before the first connection. See
 Run these from your own machine against the public address. The first two
 should name your `https://` origin; the third must be a `401`:
 
-```bash
+```shell
 curl -s https://lore.example.com/.well-known/oauth-protected-resource
 curl -s https://lore.example.com/host-key
 curl -si -X POST https://lore.example.com/mcp -H 'Content-Type: application/json' \

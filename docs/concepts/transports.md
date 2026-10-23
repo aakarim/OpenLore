@@ -108,7 +108,7 @@ A server can also give agents their instructions. Instruction commands such as
 stdout rather than existing as files, so you pipe them into an agent or save
 them as `AGENTS.md` or a `SKILL.md`:
 
-```bash
+```shell
 ssh <server> agents > AGENTS.md
 ssh <server> agents-shellm > .skills/openlore/SKILL.md
 ```

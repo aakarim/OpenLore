@@ -30,7 +30,7 @@ delegate entry — recommended for any third-party client.
 
 ## The editing loop
 
-```bash
+```shell
 # 1. Read the current config
 cat /opt/openlore/lore.json
 
@@ -62,7 +62,7 @@ Every write is guarded:
 
 Example — create a role and put an identity in it:
 
-```bash
+```shell
 cat /opt/openlore/lore.json          # read (also arms compare-and-swap)
 # … produce the updated JSON with the new role + membership …
 echo "$NEW_CONFIG" | write /opt/openlore/lore.json
@@ -104,7 +104,7 @@ and writable by `engineer`:
 
 After the restart, verify from a session:
 
-```bash
+```shell
 lore docsets      # the new docset appears with its grants and path
 ```
 

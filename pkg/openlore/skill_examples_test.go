@@ -125,7 +125,7 @@ func exampleCommands(doc string) []string {
 	for _, raw := range strings.Split(doc, "\n") {
 		line := strings.TrimSpace(raw)
 		switch {
-		case strings.HasPrefix(line, "```bash"):
+		case strings.HasPrefix(line, "```shell"):
 			inBash = true
 			continue
 		case strings.HasPrefix(line, "```"):
@@ -170,7 +170,7 @@ func exampleCommands(doc string) []string {
 }
 
 func TestExampleCommandsUnwrapsSSHAndSkipsLocalOnlyLines(t *testing.T) {
-	doc := "text\n```bash\n# comment\nssh -p 2299 <host> \"tree -L 2 /\"   # discover\n" +
+	doc := "text\n```shell\n# comment\nssh -p 2299 <host> \"tree -L 2 /\"   # discover\n" +
 		"cat report.md | ssh $OPENLORE_SSH \"publish /backend/r.md\"\n" +
 		"ssh -p 2299 <host>\nsshfs -p 2299 <host>:/ /mnt -o ro\nexport OPENLORE_SSH=\"-p 1 h\"\n" +
 		"cat <<'EOF' | ssh -p 2299 <host> \"cat > /x\"\nbody: 1\nEOF\n" +

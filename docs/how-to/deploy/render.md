@@ -35,14 +35,14 @@ The starter `admin` identity has no key yet. Mint a short-lived token on the ser
 
 Open your service in the Render Dashboard, go to **Shell**, and run:
 
-```bash
+```shell
 ./out token mint --identity admin --ttl 15m \
   --config /var/lib/openlore/config/openlore.yml
 ```
 
 Copy the printed token. On your own machine, ask OpenLore for a registration link:
 
-```bash
+```shell
 export OPENLORE_URL=https://openlore-abcd.onrender.com
 export TOKEN=<token from the Render shell>
 
@@ -63,7 +63,7 @@ Open the printed `/passkey/r/...` link within five minutes and create the passke
 
 Add the server to your agent. It opens a browser so you can sign in with the passkey from step 2.
 
-```bash
+```shell
 # Claude Code: add the server, then run /mcp inside Claude Code to sign in
 claude mcp add --transport http openlore https://openlore-abcd.onrender.com/mcp
 
@@ -80,7 +80,7 @@ Ask the agent to run `tree -L 2 /` through OpenLore. It should see `/user/admin`
 
 Edit `lore.json` to add identities, roles and docsets. From the Render **Shell**:
 
-```bash
+```shell
 ./out identity add --name alice --role user \
   --auth /var/lib/openlore/config/lore.json
 ```

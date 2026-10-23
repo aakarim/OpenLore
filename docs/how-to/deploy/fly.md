@@ -15,7 +15,7 @@ Fly.io forwards raw TCP, which most platform load balancers do not. The `deploy-
 
 Pipe the routine into your coding agent:
 
-```bash
+```shell
 ssh openlore.sh deploy-fly | claude
 ```
 
@@ -27,7 +27,7 @@ The agent provisions the app, volume, HTTPS and the TCP listener on port `22`, t
 
 From your own machine, connect the way an agent will:
 
-```bash
+```shell
 ssh <domain> whoami
 ```
 

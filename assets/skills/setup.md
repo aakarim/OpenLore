@@ -457,7 +457,7 @@ serving (Go binary or Compose) and how to restart it, selected release version,
 local URLs, identity/home, ports, and key used. Do not narrate successful
 internal checks. Give these commands for a new terminal:
 
-```bash
+```shell
 ssh -F .local/ssh_config lore-local
 ssh -F .local/ssh_config lore-local 'cat /channel/general/INDEX.md'
 ssh -F .local/ssh_config lore-local 'cat /channel/infrastructure/openlore-server.md'
@@ -474,7 +474,7 @@ authoritative server; do not create staging environments.
 
 If the person stops here, open the finished setup record for them and say so:
 
-```bash
+```shell
 open .local/filesystem/channel/infrastructure/openlore-server.md   # macOS
 xdg-open .local/filesystem/channel/infrastructure/openlore-server.md   # Linux
 ```

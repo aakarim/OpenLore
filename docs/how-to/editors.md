@@ -17,7 +17,7 @@ Use an SFTP filesystem extension rather than Microsoft's **Remote - SSH**. For
 example, install
 [SFTP FS](https://marketplace.visualstudio.com/items?itemName=LewLie.sftpfs):
 
-```bash
+```shell
 code --install-extension LewLie.sftpfs
 ```
 
@@ -58,7 +58,7 @@ editor server on the OpenLore host:
 
 For Vim installations that include netrw, open a file with:
 
-```bash
+```shell
 vim 'sftp://user@server:2222//docs/notes.md'
 ```
 

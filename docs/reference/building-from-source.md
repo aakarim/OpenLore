@@ -19,7 +19,7 @@ environment, or install them yourself.
 
 ## Build with the web UI
 
-```bash
+```shell
 git clone https://github.com/aakarim/go-openlore.git
 cd go-openlore
 nix develop        # optional: provides the pinned Go and Node
@@ -28,7 +28,7 @@ make distribution  # builds the web UI, then ./openlore
 
 `make distribution` runs these two steps, which you can also run yourself:
 
-```bash
+```shell
 npm --prefix dashboard ci
 npm --prefix dashboard run build   # writes assets/dashboard/dist
 go build -trimpath -o openlore ./cmd/openlore
@@ -55,7 +55,7 @@ A build without the web UI prints
 `go install`, `go build`, and `make build` on a clean checkout skip the web UI
 and do not need Node:
 
-```bash
+```shell
 go install github.com/aakarim/go-openlore/cmd/openlore@latest
 ```
 

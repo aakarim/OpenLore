@@ -180,7 +180,7 @@ volumes:
             path: token
 ```
 
-```bash
+```shell
 # in-container: exchange the projected token
 JWT=$(cat /var/run/secrets/openlore/token)
 OL=$(curl -sS -X POST https://openlore.example/oauth/token \
@@ -199,7 +199,7 @@ part of this flow.
 The exchanged token is an ordinary OpenLore bearer token. Present it to **both**
 endpoints:
 
-```bash
+```shell
 # MCP-over-HTTP
 curl -X POST https://openlore.example/mcp \
   -H "Authorization: Bearer $OL_TOKEN" \

@@ -89,7 +89,7 @@ Three kinds of folder cover most companies: sources that machines write and ever
 
 Restart the server and check the view from each identity.
 
-```bash
+```shell
 ssh -p 2222 -i ~/.ssh/crm-sync <server> "lore docsets"
 ```
 
@@ -119,7 +119,7 @@ Anything that can produce a file can be a source. Choose the route by what the s
 
 **A script or scheduled job, over SSH.** Export in whatever format the system gives you and pipe it to `tee`. `tee` creates the folder on first use, the write is attributed to `crm-sync` in the journal, and any folder rules on the path apply.
 
-```bash
+```shell
 ./export-accounts.sh | ssh -p 2222 -i ~/.ssh/crm-sync <server> "tee /sources/crm/accounts.md" >/dev/null
 ```
 
@@ -127,7 +127,7 @@ Run it from cron, a CI schedule or the system's own export hook. A CI job can sk
 
 **A webhook or a service that only speaks HTTP.** Create an inbox credential for the `crm-sync` identity and point the source at `POST /inbox/sources`.
 
-```bash
+```shell
 openlore inbox token create --identity crm-sync --label support-webhook --config openlore.yml
 curl -H 'Authorization: Bearer olin_ID_SECRET' -H 'Content-Type: text/markdown' \
   --data-binary @ticket-4821.md 'https://<server>/inbox/sources?name=ticket-4821.md'
@@ -145,7 +145,7 @@ Keep raw exports raw. Agents can read a CSV or a JSON Lines file directly with `
 
 Every agent that can run a shell command or speak MCP can use the brain, and each one gets the view its identity was granted. For Claude Code, add the server over MCP; for an agent with a shell, give it an SSH identity and the server's own instructions.
 
-```bash
+```shell
 claude mcp add --transport http openlore https://<server>/mcp
 ssh -p 2222 -i ~/.ssh/platform-agent <server> agents >> AGENTS.md
 ```
@@ -164,7 +164,7 @@ Reading is half of a company brain. The other half is getting what people and ag
 
 **Agents contribute through inboxes.** A `publish` grant lets an agent read a whole docset and write only inside its inbox, never delete. `research-agent` from step 1 can hand findings to the platform team without touching a runbook.
 
-```bash
+```shell
 echo "# Findings: retry storms on the queue" | publish /platform/retry-storms.md
 ```
 
@@ -194,7 +194,7 @@ Keep the shape of what comes in. The `doc-size` rule from step 1 already bounds 
 
 After the first sync, the first agent and the first contribution, read the journal as yourself.
 
-```bash
+```shell
 ssh -p 2222 -i ~/.ssh/adil <server> "history | jq -c '{time, attribution, action, target}' | head"
 ```
 
@@ -208,7 +208,7 @@ You should see one line per write, newest first, each naming who made it and whe
 
 Then check the boundaries from the identities you trust least.
 
-```bash
+```shell
 ssh -p 2222 -i ~/.ssh/crm-sync <server> "ls /teams"
 echo x | ssh -p 2222 -i ~/.ssh/research-agent <server> "tee /teams/platform/runbooks/x.md"
 ```

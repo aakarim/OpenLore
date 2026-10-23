@@ -11,7 +11,7 @@ Every OpenLore server ships instruction commands per agent type (see the
 `teach` skill's "Onboarding Agents" index). For headlong there are two, and
 each prints a ready headlong-format `SKILL.md`:
 
-```bash
+```shell
 mkdir -p .skills/openlore .skills/openlore-housekeeping
 ssh <server> agents-shellm > .skills/openlore/SKILL.md
 ssh <server> agents-shellm-housekeeping > .skills/openlore-housekeeping/SKILL.md
@@ -25,7 +25,7 @@ publishes a report for human review.
 
 Point the skill at your server with an environment variable:
 
-```bash
+```shell
 export OPENLORE_SSH="-p 2222 docs.internal"
 ```
 
@@ -104,7 +104,7 @@ Sync whole trajectory directories after a run completes, uploading `blobs/`
 and child directories before the `trajectory.jsonl` that references them (the
 `SKILL.md` served by the `shellm` command carries the same snippet):
 
-```bash
+```shell
 sync_traj() {
   local dir="$1" dest="/trajectories/$(basename "$1")"
   (cd "$dir" && find . -type f | sort | while read -r f; do
@@ -129,7 +129,7 @@ does not expose those namespace operations.
 Trajectories are ordinary docset files, so any authorised session can inspect
 them:
 
-```bash
+```shell
 # What runs are shared?
 ssh $OPENLORE_SSH "ls /trajectories"
 

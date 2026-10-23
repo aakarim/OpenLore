@@ -5,7 +5,7 @@ Register a passkey so humans can browse docs in a web browser via WebAuthn
 
 ## Register a passkey
 
-```bash
+```shell
 ssh <server> passkey register --identity <identity> --name "Adil MacBook"
 ```
 
@@ -19,7 +19,7 @@ command.
 
 ## Manage passkeys
 
-```bash
+```shell
 # List all registered passkeys
 ssh <server> passkey list
 

@@ -10,13 +10,13 @@ CI, releases, containers, and the distribution GitHub Action. It also pins Go
 for local development, CI, and release binaries; Railpack keeps its Go provider.
 Enter that environment with:
 
-```bash
+```shell
 nix develop
 ```
 
 The frontend build contract is:
 
-```bash
+```shell
 npm --prefix dashboard ci
 npm --prefix dashboard run build
 ```

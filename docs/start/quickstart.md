@@ -6,7 +6,7 @@ Install OpenLore, serve a folder of Markdown, and connect an agent.
 
 ### macOS and Linux: Homebrew
 
-```bash
+```shell
 brew install --cask aakarim/tap/lore
 ```
 
@@ -14,7 +14,7 @@ brew install --cask aakarim/tap/lore
 
 Download and install the latest x86-64 release:
 
-```bash
+```shell
 curl -L https://github.com/aakarim/OpenLore/releases/latest/download/openlore_linux_amd64.tar.gz | tar xz
 sudo install openlore /usr/local/bin/openlore
 ```
@@ -54,7 +54,7 @@ To run a hosted server instead, see [Deploy a shared server](deploy.md).
 
 ## Serve a folder
 
-```bash
+```shell
 openlore ./docs
 ```
 
@@ -63,7 +63,7 @@ of `./docs` appear at `/`.
 
 ## Connect an agent
 
-```bash
+```shell
 # Claude Code
 claude mcp add --transport http openlore http://localhost:8080/mcp
 
@@ -90,7 +90,7 @@ disk and prompted for or blocked. Allow the server once in
 
 Then tell your agents when to use it:
 
-```bash
+```shell
 ssh -p 2222 localhost agents >> AGENTS.md
 ```
 

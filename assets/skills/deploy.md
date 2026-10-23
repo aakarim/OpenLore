@@ -127,7 +127,7 @@ If OpenLore does not start or behaves unexpectedly after configuration changes,
 temporarily add `-debug` to the existing server command, preserving all current
 arguments. For the standard container command, run:
 
-```bash
+```shell
 ./out -debug --config /var/lib/openlore/config/openlore.yml
 ```
 
@@ -171,7 +171,7 @@ Once every required check passes, complete the setup record on the deployed
 server — it is authoritative now, so write through OpenLore SSH as the
 principal identity, not by editing `.local`:
 
-```bash
+```shell
 ssh <domain> 'cat /channel/infrastructure/openlore-server.md' > /tmp/openlore-server.md
 # edit the copy, then
 cat /tmp/openlore-server.md | ssh <domain> 'cat > /channel/infrastructure/openlore-server.md'
@@ -225,7 +225,7 @@ If they want one, guide them through it one step at a time:
 1. Register over SSH against the deployed server, using their identity name
    from `lore.json` (for example `onboarding`) and a friendly device label:
 
-   ```bash
+   ```shell
    ssh <domain> passkey register --identity onboarding --name "<their device>"
    ```
 
@@ -245,7 +245,7 @@ Then open the completed setup record for them and say so. With a passkey, open
 the rendered page on the server; otherwise open the local copy when `.local`
 was kept, or give the SSH command to read it:
 
-```bash
+```shell
 open "https://<domain>/lore/channel/infrastructure/openlore-server.md"   # passkey registered (xdg-open on Linux)
 open .local/filesystem/channel/infrastructure/openlore-server.md        # no passkey, .local kept
 ssh <domain> 'cat /channel/infrastructure/openlore-server.md'          # otherwise

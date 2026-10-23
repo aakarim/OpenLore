@@ -53,7 +53,7 @@ The `analytics` command is operator-only: every subcommand needs the `lore:analy
 
 Restart the server, then check the grant took.
 
-```bash
+```shell
 analytics list
 ```
 
@@ -67,7 +67,7 @@ The output lists the aggregations and their status; `least-used-files`, `least-u
 
 "Never read" only means "not read since analytics started recording", so find that date first. The first bucket of `sessions-over-time` is the earliest event.
 
-```bash
+```shell
 analytics show sessions-over-time --limit 1 --json | jq -r '.table.rows[0][0]'
 ```
 
@@ -75,7 +75,7 @@ The output is a date such as `2026-09-17`. A file modified after it and never re
 
 Then see who is reading. A crawler, backup job or a dashboard preview that walks the tree with `stat` and `cat` inflates read counts without anyone using the content.
 
-```bash
+```shell
 analytics show commands-by-principal --limit 20
 ```
 
@@ -89,7 +89,7 @@ A principal with hundreds of thousands of `stat`, `cat` and `find` calls and one
 
 `least-used-folders` puts the folders nobody reads at the top. From the root with `depth=2` it gives one row per top-level folder and its children; the `NEVER_READ` column counts files in the folder with no read since the horizon.
 
-```bash
+```shell
 analytics show least-used-folders --param path=/ --param depth=2 --json | jq -r '.table.rows[] | select(.[2] > 0) | [.[0], .[2], .[3], ((.[3] / .[2] * 100) | floor)] | @tsv'
 ```
 
@@ -112,7 +112,7 @@ For each folder you want to review, three queries give the evidence. All three r
 
 Files never read since the horizon, with their modification time. `least-used-files` prints path, last read, reads, grep hits, tokens and reads per thousand tokens; a null last read is a file nobody has opened. `stat` adds the age.
 
-```bash
+```shell
 analytics show least-used-files --param path=/agent/claw --limit 0 --json | jq -r '.table.rows[] | select(.[1] == null) | .[0]' | xargs -I{} stat {} | grep -E '^  File|^Modify' | paste - -
 ```
 
@@ -123,7 +123,7 @@ analytics show least-used-files --param path=/agent/claw --limit 0 --json | jq -
 
 Files that only ever matched a `grep` and were never read in full. These show up in search results but nobody opens them, which is the signature of a file whose title or headings are more useful than its body.
 
-```bash
+```shell
 analytics show least-used-files --param path=/agent/claw --limit 0 --json | jq -r '.table.rows[] | select(.[1] != null and .[2] == 0) | [.[0], .[3]] | @tsv'
 ```
 
@@ -131,7 +131,7 @@ The columns are path and grep hits.
 
 The largest files, so the agent weighs an unread 400-token note differently from an unread 400,000-token dump.
 
-```bash
+```shell
 analytics show largest-docs --param path=/agent/claw --limit 20 --json | jq -r '.table.rows[] | [.[0], .[1], .[3]] | @tsv'
 ```
 
@@ -143,7 +143,7 @@ The columns are path, bytes and tokens. `tree-size --param path=<folder> --param
 
 Two things analytics alone does not show. Byte-identical copies are the cheapest consolidation there is: keep one, link the rest. `md5sum` runs in the restricted shell.
 
-```bash
+```shell
 find /agent/zeb -name '*.md' | xargs md5sum | sort | awk '{print $1}' | uniq -d
 ```
 
@@ -151,7 +151,7 @@ Each line is a hash that appears more than once. List the paths behind one with 
 
 Cold sections inside a file that is read often. `least-used-lines` prints one row per line range with its last read and read count; a null last read is a range no read has covered.
 
-```bash
+```shell
 analytics show least-used-lines --param path=/runbooks/gateway-oom-session-overflow.md --json | jq -r '.table.rows[] | select(.[3] == null) | [.[1], .[2]] | map(tostring) | join("-")'
 wc -l /runbooks/gateway-oom-session-overflow.md
 ```
@@ -269,13 +269,13 @@ The agent writes one report and reports its path. Narrow the rules in step 6 to 
 
 Once the prompt produces a report you trust, keep it in the repository as an [Agent Skill](../concepts/plugins.md#install-the-agent-skills-plugin), so any agent connected to the server can discover and run it without you pasting the prompt. Enable the `skills` docset from step 1 as a collection, then write the skill. Each immediate child directory of the collection is one skill and must contain a `SKILL.md` with `name` and `description` frontmatter.
 
-```bash
+```shell
 skills enable /skills
 ```
 
 Save the prompt as the body of `/skills/knowledge-cleanup/SKILL.md`. The `description` is what an agent matches against when it searches for a skill, so say when to use it.
 
-```bash
+```shell
 tee /skills/knowledge-cleanup/SKILL.md <<'EOF'
 ---
 name: knowledge-cleanup
@@ -291,7 +291,7 @@ EOF
 
 Check that the skill validates and is discoverable.
 
-```bash
+```shell
 skills validate /skills
 lore meta --filter skills | jq -r 'select(.name == "knowledge-cleanup") | .path'
 ```
@@ -306,7 +306,7 @@ The second command prints `/skills/knowledge-cleanup/SKILL.md`. An agent then ru
 
 The report's "Commands to apply" section lists one command per row. Review the tables, delete the rows you disagree with, and run the rest in the shell as an identity with `rw` on the folders.
 
-```bash
+```shell
 rm /agent/claw/bin/x.txt
 mv /agent/claw/inbox/archive/projects/doodad-20260727162741.md /agent/claw/archive/doodad-20260727162741.md
 ```
@@ -321,7 +321,7 @@ Each `rm` and `mv` is one journaled write. [`history`](../reference/commands.md#
 
 After the first run, read each section's "Context freed" line and spot-check one row from each table against the queries in steps 4 and 5.
 
-```bash
+```shell
 cat /reports/cleanup/2026-10-13.md | sed -n 1,30p
 ```
 

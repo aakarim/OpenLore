@@ -6,13 +6,13 @@ Codex connects to OpenLore over MCP, so it can search and read a shared knowledg
 
 Start a server with the folder you want to share. Its contents appear at `/`.
 
-```bash
+```shell
 openlore ./docs
 ```
 
 Add OpenLore as an MCP server:
 
-```bash
+```shell
 codex mcp add openlore --url http://localhost:8080/mcp
 ```
 
@@ -36,7 +36,7 @@ tool and answer from the result.
 
 Codex reads `AGENTS.md` at the start of every session. Every OpenLore server prints a ready-made section for it:
 
-```bash
+```shell
 ssh -p 2222 localhost agents >> AGENTS.md
 ```
 
@@ -89,7 +89,7 @@ tokens:
 
 Restart the server, then sign Codex in. It opens a browser so you can log in with a passkey:
 
-```bash
+```shell
 codex mcp login openlore
 ```
 

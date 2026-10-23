@@ -28,7 +28,7 @@ Ask the user to add `"permissions": {"allow": ["mcp__openlore"]}` to
 
 Use this when the `openlore` MCP server is not connected.
 
-```bash
+```shell
 ssh {{ ssh_target }}
 ```
 
@@ -41,7 +41,7 @@ Run `lore docsets` to see each mount with your access level.
 {{end}}
 ### Useful Commands
 
-```bash
+```shell
 # List all available documentation
 tree -L 2 /
 
@@ -63,7 +63,7 @@ lore meta {{.Mount}} | jq -r '.path'
 Publish content into a docset's inbox for human review. The path is
 `/<docset>/<file>`; the docset name is the first path segment.
 
-```bash
+```shell
 # List docsets you can publish to
 publish
 
@@ -76,7 +76,7 @@ Writable docsets: {{range $i, $t := .Publish}}{{if $i}}, {{end}}`/{{$t.Name}}/`{
 This identity can write directly to {{range $i, $m := .Writable}}{{if $i}}, {{end}}`{{$m}}`{{end}} with the
 ordinary write verbs:
 
-```bash
+```shell
 echo "# My Research Notes" > {{sub (index .Writable 0) "research-notes.md"}}
 ```
 {{else}}
@@ -91,6 +91,6 @@ ls, cat, head, tail, grep, find, tree, stat, wc, sort, uniq, cut, sed, awk, tr, 
 
 Mount docs as a local filesystem:
 
-```bash
+```shell
 sshfs {{ ssh_target }}:/ /mnt/openlore -o ro
 ```

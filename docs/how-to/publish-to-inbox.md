@@ -47,13 +47,13 @@ In `lore.json`, name the inbox folder and grant the agent's role `publish`.
 
 Connect as the agent and pipe content into `publish`. The path is the docset name followed by the file name; the server routes it into the inbox.
 
-```bash
+```shell
 echo "# Retry policy findings" | ssh -p 2222 -i ~/.ssh/research_agent localhost publish /backend/retry-findings.md
 ```
 
 The command prints the path it wrote. Run `publish` with no arguments to list the docsets you can publish to.
 
-```bash
+```shell
 ssh -p 2222 -i ~/.ssh/research_agent localhost publish
 ```
 
@@ -63,7 +63,7 @@ ssh -p 2222 -i ~/.ssh/research_agent localhost publish
 
 The same identity is refused outside the inbox.
 
-```bash
+```shell
 echo "edit" | ssh -p 2222 -i ~/.ssh/research_agent localhost "tee /backend/api.md"
 ```
 
@@ -75,7 +75,7 @@ The command reports `read-only filesystem` and `api.md` is unchanged. `rm` insid
 
 Read the file back as any identity that can see the docset.
 
-```bash
+```shell
 ssh -p 2222 -i ~/.ssh/research_agent localhost "cat /backend/inbox/retry-findings.md"
 ```
 

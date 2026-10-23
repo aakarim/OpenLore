@@ -23,12 +23,12 @@ OpenLore uses Go's `embed` package to bake your documentation into a single bina
    ```
 
 2. Build:
-   ```bash
+   ```shell
    go build -o my-docs-server ./cmd/openlore
    ```
 
 3. The binary contains everything. Run it anywhere:
-   ```bash
+   ```shell
    ./my-docs-server
    # SSH server starts, serving embedded docs
    ```
@@ -48,6 +48,6 @@ Automate builds with the OpenLore GitHub Action:
 
 Extract docs from an existing binary:
 
-```bash
+```shell
 openlore export -o ./extracted-docs
 ```

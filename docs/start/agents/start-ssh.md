@@ -12,7 +12,7 @@ Before you start, [install OpenLore](../quickstart.md#install).
 
 Pick any folder of Markdown. We will use `./docs`.
 
-```bash
+```shell
 openlore ./docs
 ```
 
@@ -24,19 +24,19 @@ The server logs SSH on port `2222` and HTTP on port `8080`. The contents of `./d
 
 Any SSH client works, with or without a key.
 
-```bash
+```shell
 ssh -p 2222 localhost "tree -L 2 /"
 ```
 
 Commands compose the way they do in a normal shell.
 
-```bash
+```shell
 ssh -p 2222 localhost "grep -rl 'retry' / | xargs wc -l"
 ```
 
 Run `help` to see every command the server supports.
 
-```bash
+```shell
 ssh -p 2222 localhost help
 ```
 
@@ -79,7 +79,7 @@ auth_file: ./lore.json
 
 Connect with the agent's key and check who the server thinks you are.
 
-```bash
+```shell
 ssh -p 2222 -i ~/.ssh/backend_agent localhost whoami
 ```
 
@@ -93,7 +93,7 @@ Learn more about [identities, roles and docsets](../../concepts/auth.md).
 
 Every OpenLore server has an `agents` command that prints a ready-made instructions section. Append it to the file your agent reads on start.
 
-```bash
+```shell
 ssh -p 2222 localhost agents >> AGENTS.md
 ```
 

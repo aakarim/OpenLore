@@ -12,7 +12,7 @@ Before you start, [install OpenLore](../quickstart.md#install).
 
 Pick any folder of Markdown. We will use `./docs`.
 
-```bash
+```shell
 openlore ./docs
 ```
 
@@ -20,7 +20,7 @@ The server logs SSH on port `2222` and HTTP on port `8080`. The contents of `./d
 
 Check that the MCP endpoint is up.
 
-```bash
+```shell
 curl -s -X POST localhost:8080/mcp -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
 ```
 
@@ -32,7 +32,7 @@ The response is an `initialize` result whose `serverInfo.name` is `openlore`.
 
 Register the server, then allow its tools before you ask Claude anything. Claude Code reviews every tool call before it runs, and OpenLore looks like a filesystem: a search such as `grep -r "retry" /` reads as a scan of your local disk for secrets. Without the rule, Manual mode prompts on the first call and auto mode can refuse it with `Permission denied by the Claude Code auto mode classifier`.
 
-```bash
+```shell
 claude mcp add --transport http openlore http://localhost:8080/mcp
 ```
 
@@ -66,7 +66,7 @@ Claude runs `grep -r 'retry' /` through the `shell` tool and answers from the re
 
 Every OpenLore server has an `agents` command that prints a ready-made instructions section.
 
-```bash
+```shell
 ssh -p 2222 localhost agents >> CLAUDE.md
 ```
 
@@ -102,7 +102,7 @@ Restart the server. Claude now sees `/public` and nothing else.
 
 ##### Verify
 
-```bash
+```shell
 ssh -p 2222 localhost "lore docsets"
 ```
 

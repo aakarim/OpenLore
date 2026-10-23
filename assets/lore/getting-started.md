@@ -9,13 +9,13 @@ See the
 
 ## Serve Your Docs
 
-```bash
+```shell
 openlore ./docs
 ```
 
 ## Connect
 
-```bash
+```shell
 ssh -p 2222 localhost
 ```
 
@@ -24,7 +24,7 @@ ssh -p 2222 localhost
 Once connected, agents can use familiar shell-style commands in OpenLore's
 restricted interpreter (not Bash):
 
-```bash
+```shell
 # List all documentation
 tree -L 2 /
 
@@ -48,7 +48,7 @@ MCP-over-HTTP endpoint **on by default**, mounted at `/mcp` on the HTTP server
 (so it shares the same port and TLS), letting MCP-aware clients like Claude
 Desktop and Cowork browse your docs without SSH:
 
-```bash
+```shell
 openlore ./docs
 #   MCP:  http://localhost:8080/mcp
 ```

@@ -66,7 +66,7 @@ One docset holds every language's guide. The `curator` role writes it; everyone 
 
 Restart the server and check the docset and the rules are in effect.
 
-```bash
+```shell
 lore docsets
 lore package doc size/tokens
 ```
@@ -184,7 +184,7 @@ The `suggested:` line is the right remedy for a style guide: the rule stays in `
 
 To see what the guide costs before an agent reads it, measure it in the shell. Tokens are bytes divided by four under `estimate/v1`.
 
-```bash
+```shell
 wc -l -c /style/go/guide.md
 wc -c /style/go/decisions/*.md | grep -v total | sort -rn | head -5
 ```
@@ -210,7 +210,7 @@ Write it as the curator with `tee /style/go/decisions/.lore/config.yaml`; only r
 
 Connect as an agent would and read the guide the way `AGENTS.md` says to.
 
-```bash
+```shell
 ssh -p 2222 -i ~/.ssh/coding-agent <server> "wc -l /style/go/guide.md; ls /style/go/decisions; lore validate /style"
 ```
 

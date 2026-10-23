@@ -17,13 +17,13 @@ SSH session.
 
 Set `OPENLORE_SSH` to the SSH arguments for this OpenLore server:
 
-```bash
+```shell
 export OPENLORE_SSH="{{ ssh_target }}"
 ```
 
 Then run commands non-interactively:
 
-```bash
+```shell
 ssh $OPENLORE_SSH "tree -L 2 /"
 ```
 
@@ -32,7 +32,7 @@ variables does not persist between invocations, so use absolute paths.
 
 ## Reading and searching
 
-```bash
+```shell
 # Discover what is available
 ssh $OPENLORE_SSH "tree -L 2 /"
 
@@ -61,7 +61,7 @@ This identity can publish to {{range $i, $t := .Publish}}{{if $i}}, {{end}}`/{{$
 argument is one path, `/<docset>/<file>`, where the docset name is the first
 segment; the file lands in that docset's inbox for human review:
 
-```bash
+```shell
 # List docsets you can publish to
 ssh $OPENLORE_SSH "publish"
 
@@ -75,7 +75,7 @@ status with an explanation on stderr.
 This identity can write directly to {{range $i, $m := .Writable}}{{if $i}}, {{end}}`{{$m}}`{{end}} with
 the ordinary write verbs:
 
-```bash
+```shell
 cat report.md | ssh $OPENLORE_SSH "cat > {{sub (index .Writable 0) "report.md"}}"
 ```
 
@@ -96,7 +96,7 @@ This identity can write to it directly. Sync the whole directory —
 `trajectory.jsonl`, `blobs/`, and nested child-run directories — uploading
 blobs before the JSONL that references them:
 
-```bash
+```shell
 sync_traj() {
   local dir="$1" dest="/trajectories/$(basename "$1")"
   (cd "$dir" && find . -type f | sort | while read -r f; do
@@ -120,7 +120,7 @@ This identity cannot write to `/trajectories`; ask the server operator for a
 {{end}}
 Read shared trajectories from any session:
 
-```bash
+```shell
 ssh $OPENLORE_SSH "cat /trajectories/<run>/trajectory.jsonl | jq -r 'select(.type == \"final\") | .content'"
 ```
 
@@ -146,7 +146,7 @@ ssh $OPENLORE_SSH "cat /trajectories/<run>/trajectory.jsonl | jq -r 'select(.typ
 
 From a machine with access to an OpenLore server:
 
-```bash
+```shell
 mkdir -p .skills/openlore .skills/openlore-housekeeping
 ssh $OPENLORE_SSH agents-shellm > .skills/openlore/SKILL.md
 ssh $OPENLORE_SSH agents-shellm-housekeeping > .skills/openlore-housekeeping/SKILL.md

@@ -15,7 +15,7 @@ With a TCP listener on public port `22`, agents connect with `ssh <domain>` and 
 
 Pipe the routine into your coding agent:
 
-```bash
+```shell
 ssh openlore.sh deploy-aws | claude
 ```
 
@@ -27,7 +27,7 @@ The agent provisions the EC2 instance, EBS volume and TCP load balancer, deploys
 
 From your own machine, connect the way an agent will:
 
-```bash
+```shell
 ssh <domain> whoami
 ```
 

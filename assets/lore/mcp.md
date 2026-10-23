@@ -16,7 +16,7 @@ The MCP-over-HTTP endpoint (Streamable HTTP transport) is **on by default** and
 mounted at a path on the HTTP server — so it reuses the same port and TLS as the
 front page (and any load balancer rule fronting it):
 
-```bash
+```shell
 openlore ./docs
 #   SSH:  ssh -p 2222 localhost
 #   HTTP: http://localhost:8080
@@ -49,7 +49,7 @@ For clients that prefer simple REST calls over the MCP wire protocol, a plain
 JSON HTTP API is mounted on the HTTP server. It is backed by the same MCP server
 (requests are routed through the MCP tools) and exposes the same two tools:
 
-```bash
+```shell
 # Run a shell command
 curl -X POST http://localhost:8080/api/shell \
   -H 'Content-Type: application/json' \
@@ -74,7 +74,7 @@ api:
 For clients that launch a local process and talk over stdio, run the dedicated
 `mcp` subcommand:
 
-```bash
+```shell
 # Serve the embedded docs over MCP (stdio)
 openlore mcp
 
@@ -103,7 +103,7 @@ Point your MCP client at the command. For example, in a `mcpServers` config:
 For one-click installation in Claude Desktop, package the binary (with its
 embedded docs) as an MCPB extension:
 
-```bash
+```shell
 go build -o openlore ./cmd/openlore
 ./openlore mcpb -o openlore.mcpb
 ```
@@ -120,7 +120,7 @@ the `default` lore, read-only, and cannot see docsets outside it. To act as a
 **specific identity** (with that identity's docset access, write capability, and
 home), a caller presents a bearer token:
 
-```bash
+```shell
 curl -X POST https://your-host/api/shell \
   -H 'Authorization: Bearer <token>' \
   -H 'Content-Type: application/json' \
@@ -155,7 +155,7 @@ client like the Obsidian plugin uses.
 
 **1. Register a passkey for an identity.** Ask your agent (or run in the shell):
 
-```bash
+```shell
 passkey register --identity alice --name "Adil MacBook"
 ```
 
@@ -183,7 +183,7 @@ docsets and capabilities from the human's authority. OpenLore then redirects
 the browser back to your `redirect_uri` with an authorization `code` (and your
 `state`). The client exchanges the code:
 
-```bash
+```shell
 curl -X POST https://your-host/oauth/token \
   -d grant_type=authorization_code \
   -d code=<code> \

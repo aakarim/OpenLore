@@ -60,7 +60,7 @@ Only `wiki` carries the `okf` block. Transcripts are JSON Lines, and briefings l
 
 Claude Code runs a `SessionEnd` hook when a session closes and passes `session_id` and `transcript_path` on stdin. Save this script as `~/.claude/hooks/sync-session.sh` and make it executable. `<server>` is your OpenLore host, and `~/.ssh/openlore` is the key for the identity from step 1.
 
-```bash
+```shell
 #!/bin/bash
 input=$(cat)
 id=$(jq -r .session_id <<<"$input")
@@ -82,7 +82,7 @@ ssh -p 2222 -i ~/.ssh/openlore <server> "tee /sessions/claude/$id.jsonl" <"$tran
 
 Close a Claude Code session, then list the docset.
 
-```bash
+```shell
 ssh -p 2222 -i ~/.ssh/openlore <server> "ls /sessions/claude"
 ```
 
@@ -114,7 +114,7 @@ The prompt in the next step asks the agent to run three queries. Run them once y
 
 The timeline, filtered to this week and reduced to the fields that matter. [`history`](../reference/commands.md#history---principal-name---actor-name) prints one JSON object per committed write, newest first, scoped to the docsets you can read.
 
-```bash
+```shell
 history | jq -c 'select(.time >= "2026-10-06") | {time, attribution, action, target}'
 ```
 
@@ -122,7 +122,7 @@ Each line names a target and who wrote it. Writes made through Claude Code over 
 
 The wiki log, cut to the headings dated this week.
 
-```bash
+```shell
 cat /wiki/log.md | awk '/^## /{keep = ($2 >= "2026-10-06")} keep'
 ```
 
@@ -130,7 +130,7 @@ The output is the top of `log.md` down to the first heading older than the cutof
 
 One synced transcript, reduced to the tools Claude called. Transcript lines are JSON objects with a `type` of `user` or `assistant`; assistant content is a list of blocks, and `tool_use` blocks carry the tool `name`.
 
-```bash
+```shell
 cat /sessions/claude/<session-id>.jsonl | jq -r 'select(.type == "assistant") | .message.content[]? | select(.type == "tool_use") | .name' | sort | uniq -c | sort -rn
 ```
 
@@ -190,7 +190,7 @@ The agent writes one file per week and reports its path. Change the sections or 
 
 After the first scheduled run, list the briefings with their sources.
 
-```bash
+```shell
 lore meta /briefings | jq -c '{path, title, sources: [.sources[].resource]}'
 ```
 

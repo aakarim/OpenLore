@@ -15,7 +15,7 @@ With a TCP forwarding rule on public port `22`, agents connect with `ssh <domain
 
 Pipe the routine into your coding agent:
 
-```bash
+```shell
 ssh openlore.sh deploy-digitalocean | claude
 ```
 
@@ -27,7 +27,7 @@ The agent provisions the Droplet, block-storage volume and load balancer, deploy
 
 From your own machine, connect the way an agent will:
 
-```bash
+```shell
 ssh <domain> whoami
 ```
 

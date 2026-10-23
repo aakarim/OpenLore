@@ -103,7 +103,7 @@ The raw layer is a selection, not a folder. Every docset the wiki agent can read
 
 If `notes` and `meetings` already exist in your `lore.json`, the only change to them is the `"wiki-agent": "ro"` entry. Restart the server and check the view from the agent's key.
 
-```bash
+```shell
 ssh -p 2222 -i ~/.ssh/wiki-agent <server> "lore docsets"
 ssh -p 2222 -i ~/.ssh/wiki-agent <server> "ls /journal"
 ```
@@ -118,7 +118,7 @@ ls: /journal: No such file or directory
 
 That table is the agent's raw layer: two read-only docsets and one it writes. `journal` is not forbidden, it is absent, so nothing in it can leak into a wiki page. Then try to break the first rule of the pattern.
 
-```bash
+```shell
 echo "tidied" | ssh -p 2222 -i ~/.ssh/wiki-agent <server> "tee /notes/articles/software-2-0.md"
 ```
 
@@ -144,7 +144,7 @@ rules: /wiki/concepts/software-2-0.md: size/tokens (page-size @ lore.json#docset
 
 OKF reserves `index.md` and `log.md` at the bundle root, which are the two files the gist describes. Write them once as the curator; the agent maintains them from then on.
 
-```bash
+```shell
 ssh -p 2222 -i ~/.ssh/adil <server> "tee /wiki/index.md" <<'EOF'
 ---
 okf_version: "0.2"
@@ -186,7 +186,7 @@ So the agent puts each event as a bullet under today's heading, with the operati
 
 The schema is the third layer: the document that turns a general agent into a disciplined wiki maintainer. In the gist it is a `CLAUDE.md` on one machine. Here it is a page in the wiki, so every agent and every session reads the same version and the journal shows who last changed it.
 
-```bash
+```shell
 ssh -p 2222 -i ~/.ssh/adil <server> "tee /wiki/schema.md" <<'EOF'
 ---
 type: Guide
@@ -238,7 +238,7 @@ EOF
 
 Point each agent at it. Claude Code reads `CLAUDE.md` and Codex reads `AGENTS.md`; append the server's own `agents` section to whichever applies, then one line naming the schema.
 
-```bash
+```shell
 ssh -p 2222 -i ~/.ssh/wiki-agent <server> agents >> CLAUDE.md
 echo "Before any wiki operation, read /wiki/schema.md and follow it." >> CLAUDE.md
 ```
@@ -255,7 +255,7 @@ A source is any file in a raw docset, and the raw docsets keep filling the way t
 
 **From a shell.** Pipe the file to `tee`; the folder is created on first use.
 
-```bash
+```shell
 ssh -p 2222 -i ~/.ssh/adil <server> "tee /notes/articles/software-2-0.md" < software-2-0.md >/dev/null
 ```
 
@@ -263,7 +263,7 @@ ssh -p 2222 -i ~/.ssh/adil <server> "tee /notes/articles/software-2-0.md" < soft
 
 **From a webhook or script that only speaks HTTP.** Create an inbox credential for your identity and `POST` to `/inbox/notes`. Uploads land under `/notes/inbox/` with a timestamped name, so a feed of articles accumulates without one overwriting another.
 
-```bash
+```shell
 openlore inbox token create --identity adil --label clipper --config openlore.yml
 curl -H 'Authorization: Bearer olin_ID_SECRET' -H 'Content-Type: text/markdown' \
   --data-binary @article.md 'https://<server>/inbox/notes?name=article.md'
@@ -285,7 +285,7 @@ The agent reads the source with `cat`, writes a page under `sources/`, creates o
 
 For a docset that fills itself, ask for the backlog instead of one file. Every raw file the agent can see minus every file a wiki page already cites is what remains to ingest:
 
-```bash
+```shell
 find / -name '*.md' | grep -v '^/wiki/'
 lore meta /wiki | jq -r '.sources[]?.resource' | sort -u
 ```
@@ -316,7 +316,7 @@ A filed answer is a page like any other, with `type: Synthesis`, a `sources:` li
 
 Frontmatter is queryable, so the questions Dataview answers in a local vault are one command here. Which pages were compiled from a given source:
 
-```bash
+```shell
 lore meta /wiki | jq -r 'select(.sources[]?.resource == "/notes/articles/software-2-0.md") | .path'
 ```
 
@@ -328,7 +328,7 @@ sources/software-2-0.md
 
 How the wiki is shaped:
 
-```bash
+```shell
 lore meta /wiki | jq -r 'select(.type != null) | .type' | sort | uniq -c
 ```
 
@@ -342,7 +342,7 @@ The gist's lint pass looks for contradictions, stale claims, orphan pages, missi
 
 Broken links and malformed pages:
 
-```bash
+```shell
 lore validate /wiki
 ```
 
@@ -357,7 +357,7 @@ Here a concept page was renamed and two references were not. The exit status is 
 
 Orphan pages, counted by how many other pages mention their filename:
 
-```bash
+```shell
 for f in $(find /wiki -name '*.md' | grep -vE '/(index|log)\.md$'); do echo "$(grep -rl "$(basename $f)" /wiki | grep -vc "$f") $f"; done | sort -n | head
 ```
 
@@ -372,7 +372,7 @@ A page at zero is one nothing links to, not even the index, and the agent should
 
 Who changed what, for the lint report and for your own curiosity:
 
-```bash
+```shell
 history | jq -c '{time, attribution, action, target}' | head
 ```
 
@@ -401,7 +401,7 @@ After the first ingest, check the three things the pattern depends on.
 
 The agent cannot change a source, and the ingest left the bundle valid:
 
-```bash
+```shell
 echo x | ssh -p 2222 -i ~/.ssh/wiki-agent <server> "tee /notes/articles/software-2-0.md"
 ssh -p 2222 -i ~/.ssh/wiki-agent <server> "lore validate /wiki"
 ```
@@ -413,7 +413,7 @@ tee: /notes/articles/software-2-0.md: read-only filesystem
 
 Every page names the source it was compiled from, and the log and the journal agree on what happened:
 
-```bash
+```shell
 ssh -p 2222 -i ~/.ssh/adil <server> "lore meta /wiki | jq -c 'select(.type != null) | {path, type, sources: [.sources[]?.resource]}'"
 ssh -p 2222 -i ~/.ssh/adil <server> "grep '^## ' /wiki/log.md | head -3"
 ```

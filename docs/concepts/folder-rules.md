@@ -381,7 +381,7 @@ add its tighter cap under a new name instead.
 
 Check the result without writing anything:
 
-```bash
+```shell
 lore validate /docs/backend/decisions
 ```
 

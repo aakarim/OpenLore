@@ -130,20 +130,20 @@ remain out of the response, keeping discovery cheap:
 
 List every document's frontmatter under the current directory:
 
-```bash
+```shell
 lore meta
 ```
 
 Each line is one document. Pipe the stream into `jq` to answer a question, for
 example which document types exist:
 
-```bash
+```shell
 lore meta | jq -r .type | sort -u
 ```
 
 Or to read every document of one type:
 
-```bash
+```shell
 lore meta | jq -r 'select(.type=="Metric").path' | xargs cat
 ```
 
@@ -157,7 +157,7 @@ When OKF applies to a document, the plugin enriches its metadata record:
 {"path":"draft.md","title":"No type","okf":{"valid":false,"error":"frontmatter is missing the required non-empty 'type' field"}}
 ```
 
-```bash
+```shell
 lore meta | jq -r 'select(.okf.valid == false) | .path'
 ```
 
@@ -193,13 +193,13 @@ Agents discover skills the same way they query OKF metadata. The `skills`
 filter scopes `lore meta` to Agent Skills collections and returns only valid
 `SKILL.md` records — frontmatter plus the skill's path:
 
-```bash
+```shell
 lore meta --filter skills
 ```
 
 Search the names and descriptions to find a skill for a task:
 
-```bash
+```shell
 lore meta --filter skills | jq -r 'select((.name + " " + .description) | test("pdf"; "i")) | .path'
 ```
 

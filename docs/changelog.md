@@ -11,7 +11,7 @@ release that introduced it, rather than assumed to work on older installations.
 
 Check your installed binary:
 
-```bash
+```shell
 openlore version
 ```
 
@@ -185,7 +185,7 @@ No configuration migration is required. Unsupported shell options now fail clear
 
 #### Install or upgrade
 
-```bash
+```shell
 go install github.com/aakarim/go-openlore/cmd/openlore@v0.7.3
 openlore version
 ```
@@ -321,7 +321,7 @@ Sticky baselines are durable, append-only state stored beside the governed conte
 
 ### Install or upgrade
 
-```bash
+```shell
 go install github.com/aakarim/go-openlore/cmd/openlore@v0.6.0
 openlore version   # openlore 0.6.0
 ```
@@ -443,7 +443,7 @@ WIF verification is covered by the injected-verifier test suite. A live-IdP exch
 
 ### Install or upgrade
 
-```bash
+```shell
 go install github.com/aakarim/go-openlore/cmd/openlore@v0.5.0
 openlore version
 ```
@@ -503,7 +503,7 @@ Full changes: https://github.com/aakarim/OpenLore/compare/v0.4.0...v0.4.1
 - **Agent-legible management.** `skills status` and `skills validate` report collection state, linked remotes, and findings as NDJSON. Ordered ChangeSet batches are rollback-safe, so a failed import leaves no partial state.
 - **Discovery.** `lore meta --filter skills` scopes metadata to Skills collections and returns only valid `SKILL.md` records — frontmatter plus path:
 
-  ```bash
+  ```shell
   lore meta --filter skills | jq -r 'select((.name + " " + .description) | test("pdf"; "i")) | .path'
   ```
 

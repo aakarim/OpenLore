@@ -90,7 +90,7 @@ docs.example.com {
 }
 ```
 
-```bash
+```shell
 openlore --http-port 8080 ./docs
 caddy run --config Caddyfile
 ```
@@ -135,7 +135,7 @@ Whichever route you took, the OAuth discovery document should name your
 `https://` origin as the resource, and an unauthenticated MCP request should
 point clients at it:
 
-```bash
+```shell
 curl -s https://docs.example.com/.well-known/oauth-protected-resource
 curl -si -X POST https://docs.example.com/mcp -H 'Content-Type: application/json' \
   -H 'Accept: application/json, text/event-stream' -d '{}'
