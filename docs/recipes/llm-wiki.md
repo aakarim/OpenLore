@@ -108,7 +108,7 @@ ssh -p 2222 -i ~/.ssh/wiki-agent <server> "lore docsets"
 ssh -p 2222 -i ~/.ssh/wiki-agent <server> "ls /journal"
 ```
 
-```text
+```
 DOCSET    GRANTS  ATTRIBUTES  PATH       TARGET
 meetings  ro      -           /meetings  -
 notes     ro      inbox       /notes     -
@@ -122,7 +122,7 @@ That table is the agent's raw layer: two read-only docsets and one it writes. `j
 echo "tidied" | ssh -p 2222 -i ~/.ssh/wiki-agent <server> "tee /notes/articles/software-2-0.md"
 ```
 
-```text
+```
 tee: /notes/articles/software-2-0.md: read-only filesystem
 ```
 
@@ -130,7 +130,7 @@ tee: /notes/articles/software-2-0.md: read-only filesystem
 
 The `page-size` rule caps each wiki page at an estimated 3,000 tokens and leaves `index.md` and `log.md` alone, because those two grow with the wiki by design. An agent that keeps appending to a concept page gets a rejection that names the rule and the fix:
 
-```text
+```
 rules: /wiki/concepts/software-2-0.md: size/tokens (page-size @ lore.json#docsets.wiki)
   3410 tokens exceeds the limit of 3000 (max: 3000)
   suggested: keep software-2-0.md under 3000 tokens; move the new material into a sibling file such as software-2-0-details.md and add a link to it from software-2-0.md so readers can drill in
@@ -167,14 +167,14 @@ EOF
 
 `index.md` is the only file in the bundle allowed frontmatter without a `type`; it declares the OKF version. Every other page the agent writes must open with frontmatter that has a `type`, or the write is refused:
 
-```text
+```
 okf: /wiki/concepts/draft.md: missing YAML frontmatter block (a concept must open with a '---' delimited block)
   see: lore package doc okf
 ```
 
 The log format differs from the gist in one detail. Karpathy suggests one heading per event, such as `## [2026-04-02] ingest | Article Title`, appended at the bottom. OKF groups entries under one `## YYYY-MM-DD` heading per day, newest first, and `lore validate` enforces both the date form and the order:
 
-```text
+```
 log.md:1:1: error [okf/log-date] log.md date headings must use ISO 8601 YYYY-MM-DD form
 ```
 
@@ -269,7 +269,7 @@ curl -H 'Authorization: Bearer olin_ID_SECRET' -H 'Content-Type: text/markdown' 
   --data-binary @article.md 'https://<server>/inbox/notes?name=article.md'
 ```
 
-```text
+```
 {"paths":["/notes/inbox/2026-10-17T232432-894c0447ebfb08ce-article.md"]}
 ```
 
@@ -277,7 +277,7 @@ curl -H 'Authorization: Bearer olin_ID_SECRET' -H 'Content-Type: text/markdown' 
 
 Then ask the agent to ingest. Stay in the loop the way the gist recommends: one source at a time, read the summary, steer what to emphasise.
 
-```text
+```
 Ingest /notes/articles/software-2-0.md following /wiki/schema.md.
 ```
 
@@ -290,7 +290,7 @@ find / -name '*.md' | grep -v '^/wiki/'
 lore meta /wiki | jq -r '.sources[]?.resource' | sort -u
 ```
 
-```text
+```
 /meetings/2026-10-16-standup.md
 /notes/articles/software-2-0.md
 /notes/inbox/2026-10-17T232432-894c0447ebfb08ce-article.md
@@ -307,7 +307,7 @@ Here the standup and the clipped article are uncompiled. The first command works
 
 Ask questions against the wiki, not the sources. The agent reads `index.md`, follows the links it needs and answers with citations to pages. This is the gist's query operation, and the index is what makes `grep` enough.
 
-```text
+```
 What does the wiki say about the relationship between Software 2.0 and
 scaling? Cite pages. If the answer is worth keeping, file it under syntheses/.
 ```
@@ -320,7 +320,7 @@ Frontmatter is queryable, so the questions Dataview answers in a local vault are
 lore meta /wiki | jq -r 'select(.sources[]?.resource == "/notes/articles/software-2-0.md") | .path'
 ```
 
-```text
+```
 concepts/software-2-0.md
 entities/andrej-karpathy.md
 sources/software-2-0.md
@@ -346,7 +346,7 @@ Broken links and malformed pages:
 lore validate /wiki
 ```
 
-```text
+```
 index.md:10:4: error [openlore/broken-link] local link "concepts/software-2-0.md" does not resolve
 log.md:2:102: error [openlore/broken-link] local link "concepts/software-2-0.md" does not resolve
 see: lore package doc link/resolves
@@ -361,7 +361,7 @@ Orphan pages, counted by how many other pages mention their filename:
 for f in $(find /wiki -name '*.md' | grep -vE '/(index|log)\.md$'); do echo "$(grep -rl "$(basename $f)" /wiki | grep -vc "$f") $f"; done | sort -n | head
 ```
 
-```text
+```
 0 /wiki/concepts/orphan.md
 1 /wiki/schema.md
 3 /wiki/entities/andrej-karpathy.md
@@ -376,7 +376,7 @@ Who changed what, for the lint report and for your own curiosity:
 history | jq -c '{time, attribution, action, target}' | head
 ```
 
-```text
+```
 {"action":"write","attribution":"wiki-agent","target":"/wiki/index.md","time":"2026-10-17T10:14:02Z"}
 {"action":"write","attribution":"wiki-agent","target":"/wiki/concepts/software-2-0.md","time":"2026-10-17T10:13:51Z"}
 {"action":"write","attribution":"adil","target":"/notes/articles/software-2-0.md","time":"2026-10-17T10:12:30Z"}
@@ -384,7 +384,7 @@ history | jq -c '{time, attribution, action, target}' | head
 
 Give the agent all three in one prompt and let it write the judgement part itself.
 
-```text
+```
 Lint the wiki following /wiki/schema.md. Run lore validate /wiki, list
 orphan pages, and read the pages changed in the last week from history.
 Report contradictions, superseded claims and missing concept pages, fix
@@ -406,7 +406,7 @@ echo x | ssh -p 2222 -i ~/.ssh/wiki-agent <server> "tee /notes/articles/software
 ssh -p 2222 -i ~/.ssh/wiki-agent <server> "lore validate /wiki"
 ```
 
-```text
+```
 tee: /notes/articles/software-2-0.md: read-only filesystem
 0 errors, 0 warnings
 ```
@@ -418,7 +418,7 @@ ssh -p 2222 -i ~/.ssh/adil <server> "lore meta /wiki | jq -c 'select(.type != nu
 ssh -p 2222 -i ~/.ssh/adil <server> "grep '^## ' /wiki/log.md | head -3"
 ```
 
-```text
+```
 {"path":"concepts/software-2-0.md","sources":["/notes/articles/software-2-0.md"],"type":"Concept"}
 {"path":"entities/andrej-karpathy.md","sources":["/notes/articles/software-2-0.md"],"type":"Entity"}
 {"path":"schema.md","sources":null,"type":"Guide"}

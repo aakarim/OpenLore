@@ -33,7 +33,7 @@ ssh <domain> whoami
 
 You should see:
 
-```text
+```
 guest
 ```
 

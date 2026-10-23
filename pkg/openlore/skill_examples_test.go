@@ -175,7 +175,7 @@ func TestExampleCommandsUnwrapsSSHAndSkipsLocalOnlyLines(t *testing.T) {
 		"ssh -p 2299 <host>\nsshfs -p 2299 <host>:/ /mnt -o ro\nexport OPENLORE_SSH=\"-p 1 h\"\n" +
 		"cat <<'EOF' | ssh -p 2299 <host> \"cat > /x\"\nbody: 1\nEOF\n" +
 		"f() {\n  inner\n}\nf ~/x\nssh $OPENLORE_SSH \"cat /t/<run>/x\"\ngrep -r \"q\" /backend\n```\n" +
-		"```text\nnot a command\n```\n"
+		"```\nnot a command\n```\n"
 	got := exampleCommands(doc)
 	want := []string{"tree -L 2 /", "echo x | publish /backend/r.md", `grep -r "q" /backend`}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {

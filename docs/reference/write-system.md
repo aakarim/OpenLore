@@ -273,7 +273,7 @@ returning `op.Pending(ref)`. The seam surfaces this to the caller as
 `*vfs.PendingChangeError`, and the write verbs report it informationally (exit
 code 0) as:
 
-```text
+```
 <cmd>: <path> change pending as <ref>
 ```
 

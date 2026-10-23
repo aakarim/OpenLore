@@ -95,7 +95,7 @@ analytics show least-used-folders --param path=/ --param depth=2 --json | jq -r 
 
 The columns are path, files, never-read files and the never-read percentage.
 
-```text
+```
 /user/alfie/Bookmarks   83   80   96
 /agent/jared/wiki-research/site   50   42   84
 /agent/miles/logs   12   12   100
@@ -116,7 +116,7 @@ Files never read since the horizon, with their modification time. `least-used-fi
 analytics show least-used-files --param path=/agent/claw --limit 0 --json | jq -r '.table.rows[] | select(.[1] == null) | .[0]' | xargs -I{} stat {} | grep -E '^  File|^Modify' | paste - -
 ```
 
-```text
+```
   File: /agent/claw/bin/x.txt	Modify: 2026-07-05 22:36:35
   File: /agent/claw/inbox/archive/oxted-health-centre.md	Modify: 2026-07-27 15:20:49
 ```
@@ -156,7 +156,7 @@ analytics show least-used-lines --param path=/runbooks/gateway-oom-session-overf
 wc -l /runbooks/gateway-oom-session-overflow.md
 ```
 
-```text
+```
 62-68
 70-70
 72-81
@@ -174,7 +174,7 @@ Here lines 1 to 60 are read repeatedly and almost everything after line 62 never
 
 Give a coding agent the prompt below, connected to the server through the MCP `shell` tool or `ssh` with the identity from step 1. Replace `/agent/claw` with the folders you want reviewed, and `crawler` with the principal from step 2, or remove that sentence.
 
-```text
+```
 Review the OpenLore knowledge repository for files to prune and write a
 cleanup report. Use the openlore MCP shell for every command. Do not delete,
 move or edit anything outside /reports. Let TODAY be today's ISO date.
@@ -327,7 +327,7 @@ cat /reports/cleanup/2026-10-13.md | sed -n 1,30p
 
 You should see the frontmatter with `horizon` and `scope`, then the summary:
 
-```text
+```
 ---
 title: Knowledge cleanup, 2026-10-13
 type: Report

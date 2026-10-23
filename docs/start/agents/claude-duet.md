@@ -61,7 +61,7 @@ to it under **Customize → Connectors**.
 Try it in a Claude chat first: open the `+` menu, enable `openlore` under
 **Connectors**, and ask:
 
-```text
+```
 Use the openlore shell tool to run `tree -L 2 /` and show me the output.
 ```
 
@@ -75,7 +75,7 @@ Duet shares memory with your Claude account, so you tell it once. Every
 OpenLore server prints a ready-made instructions section with the `agents`
 command; ask Duet to read it and keep the relevant parts:
 
-```text
+```
 Run `agents` through the openlore shell tool. Remember its "When to use it",
 "Layout" and "Useful Commands" sections, and run those commands through the
 openlore tool rather than over SSH. Search the knowledge repository before

@@ -142,7 +142,7 @@ The output is a count per tool, with `mcp__openlore__shell` listed when Claude u
 
 Give a coding agent the prompt below on a weekly schedule. In Claude Code Desktop, open **Routines**, create a local routine, set it to weekly, and paste the prompt; the routine connects to the same MCP server as your sessions. Scheduled tasks created inside a session with `/loop` expire after seven days, so use a routine or a tool that keeps its own schedule, such as an Amp thread schedule.
 
-```text
+```
 Write the weekly briefing for the OpenLore knowledge repository. Use the
 openlore MCP shell for every command. Let WEEK_START be the Monday seven days
 ago as an ISO date, and WEEK the ISO week number of that Monday.
@@ -196,7 +196,7 @@ lore meta /briefings | jq -c '{path, title, sources: [.sources[].resource]}'
 
 You should see one line per week:
 
-```text
+```
 {"path":"2026-W41.md","title":"Weekly briefing, 2026-W41","sources":["../sessions/claude/3c90a1e2-7b4f-4d8e-9a21-5f6e7d8c9b0a.jsonl","../wiki/log.md"]}
 ```
 

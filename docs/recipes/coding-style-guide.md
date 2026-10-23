@@ -83,7 +83,7 @@ The numbers are a starting point. A 300-line guide is roughly 3,000 to 4,000 tok
 
 Give a coding agent the prompt below from inside the repository the guide should describe. The agent fetches Google's guide with its own web tool, because the restricted shell on the server has no network access, and writes the result into `/style` through the MCP `shell` tool or `ssh`. Replace `go` with your language and the Google URLs with the matching guide.
 
-```text
+```
 Write our team's Go style guide into the OpenLore knowledge repository. Use
 the openlore MCP shell for every command on the server (or
 `ssh -p 2222 <server> '<command>'`); the server shell has no network, so
@@ -171,7 +171,7 @@ The section costs an agent one `cat` per session for the guide and one more for 
 
 The rules from step 1 run on every write to `/style`, from any agent or person and over any transport. An agent that appends a section to a full guide sees the rejection below and the write is not saved.
 
-```text
+```
 rules: /style/go/guide.md: size/lines (guide-length @ lore.json#docsets.style)
   318 lines exceeds the limit of 300 (max: 300)
   this file cannot grow past 300 lines under this rule
@@ -216,7 +216,7 @@ ssh -p 2222 -i ~/.ssh/coding-agent <server> "wc -l /style/go/guide.md; ls /style
 
 You should see a line count under 300, one file per topic, and `0 errors, 0 warnings` from `lore validate`, which exits 0 when every page is within budget.
 
-```text
+```
  284 /style/go/guide.md
 commentary.md
 errors.md

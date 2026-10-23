@@ -167,7 +167,7 @@ to run from a directory above docsets that declare bundle rules
 
 Example `lore size baseline` output:
 
-```text
+```
 /docs/backend/decisions/adr-001.md  (size/lines via adr-length @ /docs/backend/.lore/config.yaml, growth 1.1)
   2026-08-30T09:12:04Z  create      agent:claude@acme.com   412 lines  12 KiB  3900 tokens (estimate/v1)
   2026-09-02T14:01:37Z  reset       adil                    812 lines  21 KiB  6400 tokens (estimate/v1)  "ADR grew after review"
@@ -178,7 +178,7 @@ A file with no history prints `no baseline recorded`. A reset prints the
 previous and new baseline and the resulting cap, and is also recorded in the
 server audit log as `rules.baseline.reset`:
 
-```text
+```
 baseline reset: previous 412, new 812, new cap 893 lines
 ```
 
@@ -219,7 +219,7 @@ lore meta --filter skills | jq -r 'select((.name + " " + .description) | test("p
 
 Example `lore docsets` output:
 
-```text
+```
 DOCSET    GRANTS      ATTRIBUTES   PATH             TARGET
 public    ro          -            /docs/public     -
 backend   publish,rw  inbox        /docs/backend    -
@@ -259,7 +259,7 @@ partial, or offset writes.
 
 ## OpenLore CLI
 
-```text
+```
 Usage: openlore [command] [flags] [directory]
 
 Commands:

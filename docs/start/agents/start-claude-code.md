@@ -52,7 +52,7 @@ Add this to `~/.claude/settings.json` for every project, or to `.claude/settings
 
 Now start Claude Code and ask it something about your docs.
 
-```text
+```
 > What does the knowledge repository say about our retry policy?
 ```
 

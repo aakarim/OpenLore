@@ -4,7 +4,7 @@
 
 ## `link/alias`
 
-```text
+```
 link/alias — rule, scope: bundle
 evaluated: by lore validate only (never on write)
 
@@ -13,7 +13,7 @@ Warn when a link originates from or targets an aliased docset path.
 
 ## `link/resolves`
 
-```text
+```
 link/resolves — rule, scope: bundle
 evaluated: by lore validate only (never on write)
 
@@ -22,7 +22,7 @@ Require every local link to resolve to a target inside the validated bundle.
 
 ## `okf`
 
-```text
+```
 okf — rule, scope: file
 evaluated: on every write (rejects) and by lore validate
 
@@ -31,7 +31,7 @@ Validate one file for OKF concept conformance.
 
 ## `okf/bundle`
 
-```text
+```
 okf/bundle — rule, scope: bundle
 evaluated: by lore validate only (never on write)
 
@@ -40,7 +40,7 @@ Validate root index.md and log.md structure, okf_version, and OKF family fields.
 
 ## `size/kilobytes`
 
-```text
+```
 size/kilobytes — rule, scope: file
 evaluated: on every write (rejects) and by lore validate
 
@@ -57,7 +57,7 @@ EXAMPLE
 
 ## `size/lines`
 
-```text
+```
 size/lines — rule, scope: file
 evaluated: on every write (rejects) and by lore validate
 
@@ -74,7 +74,7 @@ EXAMPLE
 
 ## `size/tokens`
 
-```text
+```
 size/tokens — rule, scope: file
 evaluated: on every write (rejects) and by lore validate
 

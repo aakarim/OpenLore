@@ -45,7 +45,7 @@ the same namespace. Scalar providers may add new flat keys,
 but the built-in `bytes`, `lines`, `words`, and `tokens` keys are reserved;
 plugins replace token counting through `TokenizerProvider` instead.
 
-```text
+```
 INFO plugin registered name=shellexec version=1.0.0
 INFO plugin registered name=okf version=0.2.0
 INFO plugin registered name=inbox version=1.0.0
@@ -104,7 +104,7 @@ if err := okf.Validate(path, content); err != nil {
 `lore validate [bundle]` scans the current or selected bundle, invokes enabled
 plugin validators, and adds OpenLore's local-link and alias-portability checks:
 
-```text
+```
 tables/orders.md:1:1: error [okf/concept] frontmatter is missing the required non-empty 'type' field
 metrics/revenue.md:12:19: error [openlore/broken-link] local link "../tables/missing.md" does not resolve
 metrics/revenue.md:15:8: warning [openlore/alias-target] link targets aliased docset path /wiki; it may resolve differently on another machine

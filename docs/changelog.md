@@ -295,7 +295,7 @@ rules:
 
 ### When a write exceeds its budget
 
-```text
+```
 rules: /docs/adr/a.md: size/lines (adr-sticky @ /docs/adr/.lore/config.yaml)
   11 lines exceeds the limit of 10 (baseline 10 lines × growth 1, set 2026-09-04 on create)
   this file cannot grow past 10 lines under this rule
@@ -352,7 +352,7 @@ Upgrading from v0.5.0 requires no policy migration. Deployments without rules ke
 
 ### Artifacts and checksums (SHA-256)
 
-```text
+```
 3474fa0ff448165c176116e67b7902fda62015838a8cf61ece6c153277a430f4  openlore-darwin-amd64
 7025259f9d972a03058e444171c2f1b620efa366fe3ff0b0af8be89f790a6744  openlore-darwin-arm64
 6452e56413dea2218711cf5ef1d23ab914600bc37e35f7307fde5247e53fcca5  openlore-linux-amd64
@@ -464,7 +464,7 @@ Upgrading from v0.4.x requires no config changes. WIF and authenticated clients 
 
 #### SHA256
 
-```text
+```
 56e5ac4a165c64f61c5d4abdc4077bd8ea0ac64fd60f5d2316e12209186d9308  openlore-darwin-amd64
 7eb07a06647a255ea1bf225125f8f77d3793929fcd8306a591d06b1be487d335  openlore-darwin-arm64
 1207f9c6ac8efb1f5e21ae063101669b7b99337b2acaad434161c15dcc0e0886  openlore-linux-amd64

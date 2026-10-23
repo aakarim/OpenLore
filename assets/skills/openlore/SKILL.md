@@ -108,7 +108,7 @@ a broken link to a file you have not written yet is expected until it lands.
 
 The error names the rule, the limit, what to do, and how to override:
 
-```text
+```
 rules: {{sub .Mount "decisions/adr-001.md"}}: size/lines (adr-length @ {{sub .Mount ".lore/config.yaml"}})
   812 lines exceeds the limit of 800 (baseline 640 lines × growth 1.25, set 2026-08-30 on create)
   this file cannot grow past 800 lines under this rule

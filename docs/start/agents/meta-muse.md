@@ -63,7 +63,7 @@ chose, and you mint a new one when it does.
 
 Ask Muse to build the connector. One message is enough:
 
-```text
+```
 Build a custom connector to OpenLore, our team's knowledge server. It is a
 remote MCP server over Streamable HTTP at
 https://lore.example.com/mcp. Every request needs an
@@ -98,7 +98,7 @@ Every OpenLore server prints a ready-made instructions section with the
 `agents` command. Muse keeps its own skills and memory, so ask it to fold that
 section into the skill it just saved:
 
-```text
+```
 Run `agents` through the openlore shell tool. Add its "When to use it",
 "Layout" and "Useful Commands" sections to the openlore skill, running every
 command through the openlore shell tool rather than over SSH.

@@ -36,7 +36,7 @@ lore.json  docsets.X.rules:   │  applies under docset X's display roots
   `.lore/config.yaml` is written (or at boot for `lore.json`, or by
   `lore validate`):
 
-  ```text
+  ```
   .lore/config.yaml: rules.doc-size: conflicts with doc-size @ lore.json (max: 400 vs 60); use a new rule name to tighten
   ```
 
@@ -75,7 +75,7 @@ Rule-level keys are exactly `match`, `exclude`, `use`, `with`, `enforce` and
 against the member's declared parameters. Unknown keys, unknown members and
 unknown parameters are rejected with a suggestion:
 
-```text
+```
 .lore/config.yaml: rules.adr-length.with.maxx: unknown parameter for size/lines (did you mean "max"?)
 ```
 
@@ -202,7 +202,7 @@ if the named directory is *above* docsets that declare bundle rules, those
 rules would not be in effect at the root and would silently not run, so the
 command refuses instead:
 
-```text
+```
 lore validate: / is above docsets docs, wiki with bundle rules; run lore validate per docset
 ```
 
@@ -236,7 +236,7 @@ just had its write refused. It answers, in order: what was measured and what
 the limit is, what cannot be done, what to do instead, and how a privileged
 human can override.
 
-```text
+```
 rules: /docs/backend/decisions/adr-001.md: size/lines (adr-length @ /docs/backend/.lore/config.yaml)
   812 lines exceeds the limit of 800 (baseline 640 lines × growth 1.25, set 2026-08-30 on create)
   this file cannot grow past 800 lines under this rule
@@ -259,7 +259,7 @@ pointless when the overrun is large.
 `okf` rejections keep their existing one-line diagnostic (it already names the
 fix) and add only the `see:` line:
 
-```text
+```
 okf: /docs/bad.md: missing YAML frontmatter block (a concept must open with a '---' delimited block)
   see: lore package doc okf
 ```
@@ -310,7 +310,7 @@ re-taken on the next write while kilobyte and line baselines are untouched.
 
 ### Inspecting and resetting a baseline
 
-```text
+```
 $ lore size baseline /docs/backend/decisions/adr-001.md
 /docs/backend/decisions/adr-001.md  (size/lines via adr-length @ /docs/backend/.lore/config.yaml, growth 1.1)
   2026-08-30T09:12:04Z  create      agent:claude@acme.com   412 lines  12 KiB  3900 tokens (estimate/v1)
@@ -326,7 +326,7 @@ and a role in the owning docset's `config.edit`, the same as editing
 the server audit log as `rules.baseline.reset` with the previous and new
 baseline and the note.
 
-```text
+```
 $ lore size baseline reset /docs/backend/decisions/adr-001.md --note "ADR grew after review"
 baseline reset: previous 412, new 812, new cap 893 lines
 ```

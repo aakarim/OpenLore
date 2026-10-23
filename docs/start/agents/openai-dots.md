@@ -54,7 +54,7 @@ dot itself.
 Try it in an ordinary chat before involving your dot. Type `@`, pick
 `openlore`, and ask:
 
-```text
+```
 Use the openlore app's shell tool to run `tree -L 2 /` and show me the output.
 ```
 
@@ -70,7 +70,7 @@ Your dot keeps memory across conversations, so you tell it once. Every OpenLore
 server prints a ready-made instructions section with the `agents` command; ask
 your dot to read it and keep the relevant parts:
 
-```text
+```
 Run `agents` through the openlore app's shell tool. Remember its "When to use
 it", "Layout" and "Useful Commands" sections, and run those commands through
 the openlore app rather than over SSH. Search the knowledge repository before

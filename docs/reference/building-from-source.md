@@ -42,7 +42,7 @@ source.
 
 The startup banner shows whether the web UI was embedded:
 
-```text
+```
   HTTP:       http://localhost:8080
   Dashboard:  http://localhost:8080/dashboard/
 ```

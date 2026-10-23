@@ -92,7 +92,7 @@ Override the policy for a specific docset in `lore.json`:
 A write plugin can hold a write instead of committing or rejecting it. The
 command then reports the write as pending rather than done:
 
-```text
+```
 tee: /ops/policy.md change pending as <ref>
 ```
 
@@ -171,7 +171,7 @@ printf -- '---\ntype: Note\n---\n# Retry policy\n\nSee [the queue design](queue-
 lore validate /docs
 ```
 
-```text
+```
 retry-policy.md:6:6: error [openlore/broken-link] local link "queue-design.md" does not resolve
 see: lore package doc link/resolves
 1 error, 0 warnings
@@ -183,7 +183,7 @@ printf -- '---\ntype: Note\n---\n# Queue design\n' > /docs/queue-design.md
 lore validate /docs
 ```
 
-```text
+```
 0 errors, 0 warnings
 ```
 

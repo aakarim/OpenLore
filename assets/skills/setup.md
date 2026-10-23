@@ -25,7 +25,7 @@ impact—not a technical postmortem—unless asked.
 
 Produce one Git repository named from the user's team with this shape:
 
-```text
+```
 <team-slug>-lore/
 ├── Containerfile
 ├── openlore.yml

@@ -93,7 +93,7 @@ Restart the server and check the view from each identity.
 ssh -p 2222 -i ~/.ssh/crm-sync <server> "lore docsets"
 ```
 
-```text
+```
 DOCSET   GRANTS  ATTRIBUTES  PATH      TARGET
 sources  rw      inbox       /sources  -
 ```
@@ -102,7 +102,7 @@ sources  rw      inbox       /sources  -
 
 The `doc-size` rule caps every Markdown file in the team area at an estimated 4,000 tokens. An agent that keeps appending to a runbook gets a rejection that names the rule and suggests a split, rather than a document that no longer fits in a prompt:
 
-```text
+```
 rules: /teams/platform/runbooks/big.md: size/tokens (doc-size @ lore.json#docsets.platform)
   5000 tokens exceeds the limit of 4000 (max: 4000)
 ```
@@ -168,7 +168,7 @@ Reading is half of a company brain. The other half is getting what people and ag
 echo "# Findings: retry storms on the queue" | publish /platform/retry-storms.md
 ```
 
-```text
+```
 Published /teams/platform/inbox/retry-storms.md (38 bytes)
 ```
 
@@ -200,7 +200,7 @@ ssh -p 2222 -i ~/.ssh/adil <server> "history | jq -c '{time, attribution, action
 
 You should see one line per write, newest first, each naming who made it and where it landed:
 
-```text
+```
 {"action":"write","attribution":"crm-sync","target":"/sources/support/inbox/2026-10-15T115806-63622ca2bd7628d7-ticket-4821.md","time":"2026-10-15T11:58:06Z"}
 {"action":"write","attribution":"research-agent","target":"/teams/platform/inbox/retry-storms.md","time":"2026-10-15T11:57:47Z"}
 {"action":"write","attribution":"crm-sync","target":"/sources/crm/accounts.md","time":"2026-10-15T11:57:22Z"}
@@ -213,7 +213,7 @@ ssh -p 2222 -i ~/.ssh/crm-sync <server> "ls /teams"
 echo x | ssh -p 2222 -i ~/.ssh/research-agent <server> "tee /teams/platform/runbooks/x.md"
 ```
 
-```text
+```
 ls: /teams: No such file or directory
 tee: /teams/platform/runbooks/x.md: read-only filesystem
 ```

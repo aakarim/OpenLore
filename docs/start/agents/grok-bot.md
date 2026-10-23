@@ -59,7 +59,7 @@ list.
 
 Now open a conversation with a Bot, type `@`, pick `openlore`, and ask:
 
-```text
+```
 Use the openlore plugin's shell tool to run `tree -L 2 /` and show me the
 output.
 ```
@@ -74,7 +74,7 @@ A Bot keeps memory, and skills are a library shared by all your Bots, so you
 tell it once. Every OpenLore server prints a ready-made instructions section
 with the `agents` command; ask a Bot to turn it into a skill:
 
-```text
+```
 Run `agents` through the openlore plugin's shell tool. Save its "When to use
 it", "Layout" and "Useful Commands" sections as a skill called "openlore",
 with every command run through the openlore plugin rather than over SSH.

@@ -11,7 +11,7 @@ SSH and MCP work as soon as `openlore` starts. Dashboard data does not: it
 needs an `auth_file` with identities and a registered passkey to sign in with.
 The startup banner says which state you are in and what moves you forward:
 
-```text
+```
   Dashboard:  no authentication is configured; dashboard data needs identities to sign in as
               next step: set `auth_file: ./lore.json` in openlore.yml and restart (see docs/configuration-and-identity.md)
 ```
@@ -28,7 +28,7 @@ restart. There is nothing to enable on a fresh install.
 The last state, no passkey registered yet, is a short guide rather than one
 line, because registration happens in two places (an SSH shell and a browser):
 
-```text
+```
   Dashboard:  no passkey is registered yet
               next steps:
               1. from any SSH shell, run `ssh -p 2222 localhost passkey register --identity adil` (any identity in lore.json, with or without an SSH key)
