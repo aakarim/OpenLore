@@ -125,7 +125,7 @@ func CmdPublish(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdi
 			return 1
 		}
 		if errors.Is(err, vfs.ErrReadOnly) {
-			fmt.Fprintf(errW, "publish: no access to %s\n", dest)
+			fmt.Fprintf(errW, "publish: no access to %s: %s\n", dest, err)
 		} else {
 			fmt.Fprintf(errW, "publish: %s\n", err)
 		}
