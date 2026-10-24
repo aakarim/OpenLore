@@ -36,6 +36,7 @@ type Shell struct {
 	allowedActions      map[cmds.Action]bool
 	actionAuthorizer    func(cmds.Action) bool
 	actionDeniedMessage string
+	writeDenialReason   func(resolvedPath string) error
 	// conflictPolicyFn resolves the write-conflict policy for a resolved path.
 	// nil means "use the default" (vfs.PolicyHash). The server sets this to a
 	// per-docset resolver; standalone shells get the default.
@@ -146,6 +147,12 @@ func (s *Shell) SetActionAuthorizer(fn func(cmds.Action) bool) { s.actionAuthori
 // the denied command. An empty message retains the default "command not found"
 // behavior.
 func (s *Shell) SetActionDeniedMessage(message string) { s.actionDeniedMessage = message }
+
+// SetWriteDenialReason explains a redirect blocked by the shell's capability
+// gate without attempting a mutation. It does not grant write authority.
+func (s *Shell) SetWriteDenialReason(fn func(resolvedPath string) error) {
+	s.writeDenialReason = fn
+}
 
 // SetConflictPolicyFn installs a resolver that maps a resolved path to its
 // write-conflict policy. Passing nil restores the default (vfs.PolicyHash).
@@ -542,6 +549,12 @@ func (s *Shell) execCallObserved(call *parser.CallExpr, w io.Writer, errW io.Wri
 			if s.actionDeniedMessage != "" {
 				fmt.Fprintf(errW, "redirect: %s: %s\n", target, s.actionDeniedMessage)
 				return 1
+			}
+			if s.writeDenialReason != nil {
+				if err := s.writeDenialReason(s.Resolve(target)); err != nil {
+					fmt.Fprintf(errW, "redirect: %s: %s\n", target, err)
+					return 1
+				}
 			}
 			fmt.Fprintf(errW, "redirect: %s: read-only filesystem\n", target)
 			return 1

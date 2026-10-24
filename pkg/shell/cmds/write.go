@@ -176,11 +176,7 @@ func writeResultMsg(errW io.Writer, cmdName, p string, err error) int {
 		fmt.Fprintf(errW, "%s: %s: file changed concurrently — re-read and retry\n", cmdName, p)
 		return 1
 	}
-	if errors.Is(err, vfs.ErrReadOnly) {
-		fmt.Fprintf(errW, "%s: %s: read-only filesystem\n", cmdName, p)
-	} else {
-		fmt.Fprintf(errW, "%s: %s: %s\n", cmdName, p, err)
-	}
+	fmt.Fprintf(errW, "%s: %s: %s\n", cmdName, p, err)
 	return 1
 }
 
@@ -189,6 +185,6 @@ func writeRuleRejection(errW io.Writer, err error) bool {
 	if !errors.As(err, &rejection) {
 		return false
 	}
-	fmt.Fprintln(errW, rejection.Error())
+	fmt.Fprintln(errW, err)
 	return true
 }

@@ -6,6 +6,7 @@ import (
 	"testing/fstest"
 
 	"github.com/aakarim/go-openlore/internal/config"
+	"github.com/aakarim/go-openlore/pkg/shell"
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
 
@@ -88,6 +89,20 @@ func TestIdentityCanWrite_Publish(t *testing.T) {
 	}
 	if s.identityCanWrite(id, vfs.ChangeActionRemoveAll, "/alfie/inbox") {
 		t.Fatal("publish must NOT remove_all")
+	}
+
+	base, _ := newWritableDirFS(t)
+	sh := shell.NewShell(newScopedWriteFS(base, func(action vfs.ChangeAction, p string) error {
+		return s.identityWriteError(id, action, p)
+	}))
+	if _, errs, code := run(sh, "echo note > /alfie/inbox/from-miles.md"); code != 0 {
+		t.Fatalf("publish-granted write failed: %s", errs)
+	}
+	if _, errs, code := run(sh, "rm /alfie/inbox/from-miles.md"); code != 1 || !strings.Contains(errs, "grants (publish) do not permit remove") || !strings.Contains(errs, "lore docsets") {
+		t.Fatalf("delete: exit=%d stderr=%q", code, errs)
+	}
+	if out, _, code := run(sh, "cat /alfie/inbox/from-miles.md"); code != 0 || out != "note\n" {
+		t.Fatalf("denied delete changed the file: exit=%d content=%q", code, out)
 	}
 }
 

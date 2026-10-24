@@ -1,7 +1,6 @@
 package cmds
 
 import (
-	"errors"
 	"fmt"
 	"io"
 
@@ -52,11 +51,7 @@ func CmdMkdir(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin 
 			err = wfs.Mkdir(resolved)
 		}
 		if err != nil {
-			if errors.Is(err, vfs.ErrReadOnly) {
-				fmt.Fprintf(errW, "mkdir: %s: read-only filesystem\n", t)
-			} else {
-				fmt.Fprintf(errW, "mkdir: %s: %s\n", t, err)
-			}
+			fmt.Fprintf(errW, "mkdir: %s: %s\n", t, err)
 			exit = 1
 		}
 	}

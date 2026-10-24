@@ -112,8 +112,8 @@ func (d *DirFS) PreflightChange(change vfs.Change) error {
 	p := change.Target
 	clean := vfs.CleanPath(p)
 	dirConfig := isDirConfigPath(p)
-	if isTrashPath(clean) || (hasReservedPath(p) && !dirConfig) || hasTraversal(p) || (isIgnored(p, d.files) && !dirConfig) {
-		return fmt.Errorf("access denied: %s", p)
+	if err := d.mutationPathError(p, dirConfig); err != nil {
+		return err
 	}
 	switch change.Action {
 	case vfs.ChangeActionWrite:
@@ -127,8 +127,10 @@ func (d *DirFS) PreflightChange(change vfs.Change) error {
 		if !change.Write.Opts.ContentPolicyValidated && int64(len(change.Write.Bytes)) > max {
 			return fmt.Errorf("write rejected: %d bytes exceeds limit of %d", len(change.Write.Bytes), max)
 		}
-		if !dirConfig && !change.Write.Opts.ContentPolicyValidated && !isAllowed(path.Base(p), d.files) {
-			return fmt.Errorf("access denied: %s", p)
+		if !dirConfig && !change.Write.Opts.ContentPolicyValidated {
+			if err := filePatternError(path.Base(p), d.files); err != nil {
+				return fmt.Errorf("write rejected: %s: %w", p, err)
+			}
 		}
 	case vfs.ChangeActionMkdir, vfs.ChangeActionMkdirAll:
 		if clean == "/" || !d.insideDocset(clean) {
@@ -155,14 +157,13 @@ func (d *DirFS) WriteFileAtomic(p string, content []byte, opts vfs.WriteOpts) (s
 	if !opts.ContentPolicyValidated && int64(len(content)) > max {
 		return "", fmt.Errorf("write rejected: %d bytes exceeds limit of %d", len(content), max)
 	}
-	if isTrashPath(vfs.CleanPath(p)) || (hasReservedPath(p) && !dirConfig) || hasTraversal(p) {
-		return "", fmt.Errorf("access denied: %s", p)
+	if err := d.mutationPathError(p, dirConfig); err != nil {
+		return "", err
 	}
-	if !dirConfig && !opts.ContentPolicyValidated && !isAllowed(path.Base(p), d.files) {
-		return "", fmt.Errorf("access denied: %s", p)
-	}
-	if !dirConfig && isIgnored(p, d.files) {
-		return "", fmt.Errorf("access denied: %s", p)
+	if !dirConfig && !opts.ContentPolicyValidated {
+		if err := filePatternError(path.Base(p), d.files); err != nil {
+			return "", fmt.Errorf("write rejected: %s: %w", p, err)
+		}
 	}
 
 	// Hold RLock for the whole mutation: it permits concurrent writers but
@@ -215,8 +216,8 @@ func (d *DirFS) Mkdir(p string) error {
 	if clean == "/" {
 		return fmt.Errorf("cannot create docset root: %s", p)
 	}
-	if isTrashPath(clean) || hasReservedPath(p) || hasTraversal(p) || isIgnored(p, d.files) {
-		return fmt.Errorf("access denied: %s", p)
+	if err := d.mutationPathError(p, false); err != nil {
+		return err
 	}
 	if !d.insideDocset(clean) {
 		return fmt.Errorf("cannot create folder outside a docset: %s", p)
@@ -305,6 +306,21 @@ func hasTraversal(p string) bool {
 	return false
 }
 
+// mutationPathError is shared by batch preflight and direct writes so the
+// same file-policy rejection explains its gate on either submission path.
+func (d *DirFS) mutationPathError(p string, dirConfig bool) error {
+	switch {
+	case isTrashPath(vfs.CleanPath(p)) || (hasReservedPath(p) && !dirConfig):
+		return fmt.Errorf("write rejected: %s: reserved path", p)
+	case hasTraversal(p):
+		return fmt.Errorf("write rejected: %s: parent traversal is not allowed", p)
+	case !dirConfig && isIgnored(p, d.files):
+		return fmt.Errorf("write rejected: %s: path matches server's ignore patterns (%s)", p, strings.Join(d.files.Ignore, ", "))
+	default:
+		return nil
+	}
+}
+
 // docsetRootFor returns the docset root that clean sits strictly below, and
 // whether one exists. With no docset roots configured the whole DirFS is one
 // docset rooted at "/" (which always exists).
@@ -334,8 +350,8 @@ func (d *DirFS) docsetRootFor(clean string) (string, bool) {
 // already established that the virtual directory is valid and visible.
 func (d *DirFS) materializeDir(p string) error {
 	clean := vfs.CleanPath(p)
-	if isTrashPath(clean) || hasReservedPath(p) || hasTraversal(p) || isIgnored(clean, d.files) {
-		return fmt.Errorf("access denied: %s", p)
+	if err := d.mutationPathError(p, false); err != nil {
+		return err
 	}
 	d.stateMu.RLock()
 	defer d.stateMu.RUnlock()
@@ -356,8 +372,8 @@ func (d *DirFS) MkdirAll(p string) error {
 	if clean == "/" {
 		return fmt.Errorf("cannot create docset root: %s", p)
 	}
-	if isTrashPath(clean) || hasReservedPath(p) || hasTraversal(p) || isIgnored(p, d.files) {
-		return fmt.Errorf("access denied: %s", p)
+	if err := d.mutationPathError(p, false); err != nil {
+		return err
 	}
 	if _, ok := d.docsetRootFor(clean); !ok {
 		return fmt.Errorf("cannot create folder outside a docset: %s", p)
@@ -385,8 +401,8 @@ func (d *DirFS) Remove(p string) error {
 	if clean == "/" {
 		return fmt.Errorf("cannot delete docset root: %s", p)
 	}
-	if isTrashPath(clean) || (hasReservedPath(p) && !dirConfig) || hasTraversal(p) || (isIgnored(p, d.files) && !dirConfig) {
-		return fmt.Errorf("access denied: %s", p)
+	if err := d.mutationPathError(p, dirConfig); err != nil {
+		return err
 	}
 	if !d.insideDocset(clean) {
 		return fmt.Errorf("cannot delete outside a docset: %s", p)
@@ -405,8 +421,10 @@ func (d *DirFS) Remove(p string) error {
 	if err != nil {
 		return withoutHostPath(err)
 	}
-	if !dirConfig && !info.IsDir() && !isAllowed(info.Name(), d.files) {
-		return fmt.Errorf("access denied: %s", p)
+	if !dirConfig && !info.IsDir() {
+		if err := filePatternError(info.Name(), d.files); err != nil {
+			return fmt.Errorf("delete rejected: %s: %w", p, err)
+		}
 	}
 	if err := os.Remove(full); err != nil {
 		return withoutHostPath(err)
@@ -424,8 +442,8 @@ func (d *DirFS) RemoveAll(p string, opts vfs.RemoveOpts) error {
 	if clean == "/" {
 		return fmt.Errorf("cannot delete docset root: %s", p)
 	}
-	if isTrashPath(clean) || hasReservedPath(p) || hasTraversal(p) || isIgnored(p, d.files) {
-		return fmt.Errorf("access denied: %s", p)
+	if err := d.mutationPathError(p, false); err != nil {
+		return err
 	}
 	if !d.insideDocset(clean) {
 		return fmt.Errorf("cannot delete outside a docset: %s", p)
@@ -1342,6 +1360,18 @@ func isAllowed(name string, files config.FilesConfig) bool {
 	}
 
 	return false
+}
+
+func filePatternError(name string, files config.FilesConfig) error {
+	if isAllowed(name, files) {
+		return nil
+	}
+	for _, pattern := range files.Denied {
+		if matched, _ := path.Match(pattern, name); matched {
+			return fmt.Errorf("filename %q matches server's denied pattern %q", name, pattern)
+		}
+	}
+	return fmt.Errorf("filename %q does not match server's allowed patterns (%s)", name, strings.Join(files.Allowed, ", "))
 }
 
 // isIgnored checks if a path matches any ignore patterns.

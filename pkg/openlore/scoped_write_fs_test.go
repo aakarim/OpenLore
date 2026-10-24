@@ -3,6 +3,7 @@ package openlore
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -17,21 +18,21 @@ import (
 // rootsAuthz builds a writeAuthorizer that permits writes strictly inside any of
 // the given display roots — the classic per-identity write-isolation behavior.
 func rootsAuthz(roots ...string) writeAuthorizer {
-	return func(_ vfs.ChangeAction, p string) bool {
+	return func(action vfs.ChangeAction, p string) error {
 		clean := vfs.CleanPath(p)
 		for _, r := range roots {
 			r = vfs.CleanPath(r)
 			if r == "/" {
 				if clean != "/" {
-					return true
+					return nil
 				}
 				continue
 			}
 			if strings.HasPrefix(clean, r+"/") {
-				return true
+				return nil
 			}
 		}
-		return false
+		return fmt.Errorf("%w: write scope denies %s on %s (run 'lore docsets')", vfs.ErrReadOnly, action, p)
 	}
 }
 
@@ -133,7 +134,7 @@ func TestScopedWriteFSMoveFailureNamesCause(t *testing.T) {
 			if code != 1 || out.Len() != 0 || !strings.Contains(errOut.String(), tc.want) {
 				t.Fatalf("move: exit=%d stdout=%q stderr=%q; want %q", code, out.String(), errOut.String(), tc.want)
 			}
-			if !tc.readOnly && strings.Contains(errOut.String(), "read-only filesystem") {
+			if tc.name == "unsupported atomic move" && strings.Contains(errOut.String(), "read-only filesystem") {
 				t.Fatalf("writable backend misreported as read-only: %s", errOut.String())
 			}
 			for path, want := range map[string]string{"/source/a.md": "source\n", "/dest/b.md": "destination\n"} {
