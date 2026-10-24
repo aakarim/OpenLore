@@ -264,18 +264,23 @@ func (p *rulesPlugin) WriteMiddleware() []WriteMiddleware {
 					if leaf.Action == vfs.ChangeActionWrite && leaf.Write != nil {
 						dir := path.Dir(path.Dir(leaf.Target))
 						if err := p.engine.CheckConfigFile(ctx, dir, leaf.Write.Bytes); err != nil {
-							return WriteResult{}, err
+							return WriteResult{}, p.rejectionError(err)
 						}
 					}
 					continue
 				}
 				if err := p.engine.AdmitLeaf(ctx, leaf, op.Attribution.String(), p.existing(leaf.Target)); err != nil {
-					return WriteResult{}, err
+					return WriteResult{}, p.rejectionError(err)
 				}
 			}
 			return next(ctx, op)
 		}
 	}}
+}
+
+func (p *rulesPlugin) rejectionError(err error) error {
+	info := p.Info()
+	return fmt.Errorf("rejected by %s@%s: %w", info.Name, info.Version, err)
 }
 
 // PreApply re-evaluates rules against the serialized filesystem state. This
@@ -290,19 +295,19 @@ func (p *rulesPlugin) PreApply(attribution Attribution, changes vfs.ChangeSet) e
 		}
 	}
 	if configChanges != 0 && len(leaves) != 1 {
-		return fmt.Errorf("rules: folder config mutations must be submitted separately")
+		return p.rejectionError(fmt.Errorf("rules: folder config mutations must be submitted separately"))
 	}
 	for _, leaf := range leaves {
 		if rules.IsDirConfigPath(leaf.Target) {
 			if leaf.Action == vfs.ChangeActionWrite && leaf.Write != nil {
 				if err := p.engine.CheckConfigFile(context.Background(), path.Dir(path.Dir(leaf.Target)), leaf.Write.Bytes); err != nil {
-					return err
+					return p.rejectionError(err)
 				}
 			}
 			continue
 		}
 		if err := p.engine.PreApplyLeaf(context.Background(), leaf, attribution.String(), p.existing(leaf.Target)); err != nil {
-			return err
+			return p.rejectionError(err)
 		}
 	}
 	return nil

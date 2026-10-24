@@ -395,8 +395,8 @@ func newServerWithRoot(rootDir string, rootFS vfs.FileSystem, lowerFS fs.FS, opt
 		s.writeLog.SetPreApply(func(identity *Identity, attribution Attribution, changes vfs.ChangeSet) error {
 			for _, change := range changes.Leaves() {
 				if identity != nil {
-					if !s.identityCanWrite(*identity, change.Action, change.Target) {
-						return mutationDeniedError(s.merge, change.Action, change.Target)
+					if err := s.identityWriteError(*identity, change.Action, change.Target); err != nil {
+						return err
 					}
 				} else if isDirConfigPath(change.Target) || (change.Action == vfs.ChangeActionRemoveAll && treeContainsDirConfig(s.merge, change.Target)) {
 					// Approved/deferred submissions preserve attribution but not the
@@ -856,7 +856,7 @@ func (s *Server) RegisterPlugin(p any) error {
 // is read-only (no write log), it returns vfs.ErrReadOnly.
 func (s *Server) CommitChangeSet(ctx context.Context, attribution Attribution, cs vfs.ChangeSet) (WriteResult, error) {
 	if s.writeLog == nil {
-		return WriteResult{}, vfs.ErrReadOnly
+		return WriteResult{}, fmt.Errorf("%w: server has no write log; check readonly setting", vfs.ErrReadOnly)
 	}
 	cs = s.canonicalChangeSet(cs)
 	h, err := s.writeLog.Submit(ctx, attribution, cs)
@@ -865,15 +865,15 @@ func (s *Server) CommitChangeSet(ctx context.Context, attribution Attribution, c
 
 func (s *Server) AdmitChangeSet(ctx context.Context, id Identity, cs vfs.ChangeSet) (WriteResult, error) {
 	if s.writeLog == nil {
-		return WriteResult{}, vfs.ErrReadOnly
+		return WriteResult{}, fmt.Errorf("%w: server has no write log; check readonly setting", vfs.ErrReadOnly)
 	}
 	cs = s.canonicalChangeSet(cs)
 	if err := vfs.ValidateChangeSet(cs); err != nil {
 		return WriteResult{}, err
 	}
 	for _, change := range cs.Leaves() {
-		if !s.identityCanWrite(id, change.Action, change.Target) {
-			return WriteResult{}, mutationDeniedError(s.merge, change.Action, change.Target)
+		if err := s.identityWriteError(id, change.Action, change.Target); err != nil {
+			return WriteResult{}, err
 		}
 	}
 	return s.writeChain()(ctx, newIdentityWriteOp(id, cs))
@@ -1066,17 +1066,17 @@ func (s *Server) buildCanonicalSessionFS(id Identity) vfs.FileSystem {
 	canWrite := s.authEnforced && id.IdentityName != "" && id.IdentityName != "guest" && scopeGrantsWrite(id.Scopes)
 	// Every mutation is checked against current role membership, the governing
 	// docset ACL, token scope, and readonly locks. A grant such as `publish` can
-	// further restrict actions and paths. Guest/read-only identities receive a
-	// nil authorizer and fail closed.
+	// further restrict actions and paths. Sessions with no write authority fail
+	// closed; read-only locks and token ceilings retain their denial reasons.
 	if s.authEnforced {
 		var authz writeAuthorizer
-		if canWrite {
+		if canWrite || s.config.Readonly || !scopeGrantsWrite(id.Scopes) {
 			// Writes deliberately resolve current policy on every operation. The
 			// session snapshot remains authoritative for its stable read view.
 			writeID := id
 			writeID.policySnapshot = nil
-			authz = func(action vfs.ChangeAction, p string) bool {
-				return s.identityCanWrite(writeID, action, p)
+			authz = func(action vfs.ChangeAction, p string) error {
+				return s.identityWriteError(writeID, action, p)
 			}
 		}
 		sessionFS = newScopedWriteFS(sessionFS, authz)
@@ -1237,6 +1237,9 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 	// an unrecognized/guest identity is read-only; a recognized
 	// identity may write and publish within its docsets.
 	if s.authEnforced {
+		sh.SetWriteDenialReason(func(p string) error {
+			return s.identityWriteError(id, vfs.ChangeActionWrite, p)
+		})
 		if canWrite || canAdmin {
 			allowed := []cmds.Action{}
 			if canWrite {

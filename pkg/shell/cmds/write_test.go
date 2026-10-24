@@ -9,7 +9,7 @@ import (
 	"github.com/aakarim/go-openlore/pkg/rules"
 )
 
-func TestWriteResultMsgPrintsRuleRejectionVerbatim(t *testing.T) {
+func TestWriteResultMsgPreservesRuleRejectionContext(t *testing.T) {
 	rejection := &rules.Rejection{
 		Path:   "/docs/six.md",
 		Rule:   "doc-size",
@@ -25,7 +25,7 @@ func TestWriteResultMsgPrintsRuleRejectionVerbatim(t *testing.T) {
 	if code := writeResultMsg(&errOut, "redirect", "/docs/six.md", fmt.Errorf("admission: %w", rejection)); code != 1 {
 		t.Fatalf("exit code = %d, want 1", code)
 	}
-	want := rejection.Error() + "\n"
+	want := "admission: " + rejection.Error() + "\n"
 	if got := errOut.String(); got != want {
 		t.Fatalf("stderr:\n got %q\nwant %q", got, want)
 	}

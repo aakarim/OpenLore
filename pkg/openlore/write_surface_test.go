@@ -2,8 +2,10 @@ package openlore
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -63,6 +65,92 @@ func TestRedirect_ReadOnly_HardError(t *testing.T) {
 	}
 	if _, err := os.Stat(d.resolve("/a.md")); !os.IsNotExist(err) {
 		t.Fatalf("read-only redirect must not create the file")
+	}
+}
+
+func TestRedirect_FilePolicyDenialsNameRule(t *testing.T) {
+	root := t.TempDir()
+	d := NewDirFS(root, config.FilesConfig{
+		Allowed: []string{"*.md", "*.json"},
+		Denied:  []string{".*", "secret.md"},
+		Ignore:  []string{"private"},
+	})
+	if err := d.SetWriteable(); err != nil {
+		t.Fatal(err)
+	}
+	sh := shell.NewShell(d)
+	for _, tc := range []struct{ target, want string }{
+		{"/notes.new", "allowed patterns (*.md, *.json)"},
+		{"/.writetest", "denied pattern \".*\""},
+		{"/secret.md", "denied pattern \"secret.md\""},
+		{"/private/notes.md", "ignore patterns (private)"},
+		{"/.lore/secret.md", "reserved path"},
+	} {
+		t.Run(tc.target, func(t *testing.T) {
+			_, errs, code := run(sh, "echo test > "+tc.target)
+			if code == 0 || !strings.Contains(errs, tc.want) || strings.Contains(errs, root) {
+				t.Fatalf("exit=%d stderr=%q; want %q without host paths", code, errs, tc.want)
+			}
+		})
+	}
+	if _, errs, code := run(sh, "echo test > /notes.md"); code != 0 {
+		t.Fatalf("allowed write failed: %s", errs)
+	}
+	if out, _, code := run(sh, "cat /notes.md"); code != 0 || out != "test\n" {
+		t.Fatalf("allowed readback: exit=%d out=%q", code, out)
+	}
+}
+
+func TestSessionWriteDenialsNameFailedGate(t *testing.T) {
+	for _, tc := range []struct {
+		name, target, content, grant, scope, want string
+		serverReadonly, docsetReadonly            bool
+	}{
+		{name: "allowed", target: "/docs/good.md", content: validDoc, grant: "rw"},
+		{name: "filename", target: "/docs/log.new", grant: "rw", want: "allowed patterns (*.md, *.json)"},
+		{name: "validator", target: "/docs/bad.md", content: invalidDoc, grant: "rw", want: "rejected by rules@0.1.0: okf:"},
+		{name: "no grant", target: "/other/note.md", grant: "rw", want: "no grant permits this operation (run 'lore docsets')"},
+		{name: "read grant", target: "/docs/note.md", grant: "ro", want: "grants (ro) do not permit write"},
+		{name: "token scope", target: "/docs/note.md", grant: "rw", scope: ScopeRead, want: "token scope does not allow writes"},
+		{name: "docset lock", target: "/docs/note.md", grant: "rw", docsetReadonly: true, want: "docset containing /docs/note.md is read-only"},
+		{name: "server lock", target: "/docs/note.md", grant: "rw", serverReadonly: true, want: "server is read-only (readonly: true)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			auth := serverAuth(map[string]config.DocsetSpec{"docs": docset("/docs", &config.OKFDocsetConfig{})}, nil)
+			docs := auth.Docsets["docs"]
+			docs.Access.Allow["writer"] = tc.grant
+			docs.Readonly = &tc.docsetReadonly
+			auth.Docsets["docs"] = docs
+			authFile := filepath.Join(t.TempDir(), "lore.json")
+			writeAuthFixture(t, authFile, auth)
+			root := t.TempDir()
+			server, err := NewServer(root, WithReadonly(tc.serverReadonly), config.WithDataDir(t.TempDir()), config.WithAuthFile(authFile), WithAllowedPatterns([]string{"*.md", "*.json"}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = server.Shutdown(context.Background()) })
+			id := testIdentity("alice")
+			if tc.scope != "" {
+				id.Scopes = []string{tc.scope}
+			}
+			sh := server.buildSessionShell(id)
+			_, errs, code := run(sh, "echo '"+tc.content+"' > "+tc.target)
+			if tc.want == "" {
+				if code != 0 {
+					t.Fatalf("allowed write failed: %s", errs)
+				}
+				if got, errs, code := run(sh, "cat "+tc.target); code != 0 || got != tc.content+"\n" {
+					t.Fatalf("readback=%q stderr=%q exit=%d", got, errs, code)
+				}
+			} else {
+				if code == 0 || !strings.Contains(errs, tc.want) || strings.Contains(errs, root) {
+					t.Fatalf("exit=%d stderr=%q; want %q without host paths", code, errs, tc.want)
+				}
+				if _, err := os.Stat(filepath.Join(root, tc.target)); !os.IsNotExist(err) {
+					t.Fatalf("denied write created a file: %v", err)
+				}
+			}
+		})
 	}
 }
 

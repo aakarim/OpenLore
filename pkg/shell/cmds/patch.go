@@ -97,10 +97,6 @@ func CmdPatch(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin 
 			fmt.Fprintf(errW, "patch: %s: file changed concurrently — re-read and retry\n", target)
 			return 1
 		}
-		if errors.Is(err, vfs.ErrReadOnly) {
-			fmt.Fprintf(errW, "patch: %s: read-only filesystem\n", target)
-			return 1
-		}
 		fmt.Fprintf(errW, "patch: %s: %s\n", target, err)
 		return 1
 	}

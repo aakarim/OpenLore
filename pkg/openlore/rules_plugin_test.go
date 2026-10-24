@@ -583,7 +583,7 @@ func TestRulesServerBootAdmissionAndValidateOutput(t *testing.T) {
 func TestRulesServerBootLegacyOKFMessage(t *testing.T) {
 	server, _ := bootRulesServer(t, serverAuth(map[string]config.DocsetSpec{"docs": docset("/docs", &config.OKFDocsetConfig{})}, nil), nil)
 	err := admitServer(server, "/docs/bad.md", invalidDoc)
-	want := "okf: /docs/bad.md: missing YAML frontmatter block (a concept must open with a '---' delimited block)\n  see: lore package doc okf"
+	want := "rejected by rules@0.1.0: okf: /docs/bad.md: missing YAML frontmatter block (a concept must open with a '---' delimited block)\n  see: lore package doc okf"
 	if err == nil || err.Error() != want {
 		t.Fatalf("error=%q, want %q", err, want)
 	}
