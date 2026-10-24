@@ -87,6 +87,9 @@ func TestLoreBrowserServesPWAAssetsWithoutAuthentication(t *testing.T) {
 		if got := manifest["start_url"]; got != "/knowledge/" {
 			t.Errorf("start_url = %q", got)
 		}
+		if got := manifest["scope"]; got != "/" {
+			t.Errorf("scope = %q; must include both knowledge and dashboard routes", got)
+		}
 	})
 
 	t.Run("app icons", func(t *testing.T) {

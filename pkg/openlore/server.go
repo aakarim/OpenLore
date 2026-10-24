@@ -1882,7 +1882,7 @@ func (s *Server) ListenAndServe() error {
 				// Preserve published file links, while replacing the primary
 				// browser rather than adding a second competing interface.
 				lorePath := s.dashboardLorePath()
-				httpCfg.ExtraHandlers[lorePath] = dashboardShell(frontend)
+				httpCfg.ExtraHandlers[lorePath] = s.dashboardShell(frontend)
 				httpCfg.ExtraHandlers[lorePath+"/"] = s.dashboardLoreHandler(frontend)
 			}
 
