@@ -140,15 +140,18 @@ func (s *Server) dashboardRoutes(frontend fs.FS) HTTPRouteRegistrar {
 			dashboardError(w, http.StatusNotFound, "not found")
 		})
 		if frontend != nil {
-			mux.Handle("GET /dashboard/{$}", dashboardShell(frontend))
+			mux.Handle("GET /dashboard/{$}", s.dashboardShell(frontend))
 			mux.Handle("GET /dashboard/assets/", http.StripPrefix("/dashboard/", http.FileServer(http.FS(frontend))))
 		}
 	}
 }
 
 func (s *Server) dashboardLoreHandler(frontend fs.FS) http.Handler {
-	shell := dashboardShell(frontend)
+	shell := s.dashboardShell(frontend)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if passkeys.ServePWAAsset(w, r, s.dashboardLorePath()) {
+			return
+		}
 		if r.URL.Query().Get("raw") == "1" {
 			if r.Method != http.MethodGet && r.Method != http.MethodHead {
 				w.Header().Set("Allow", "GET, HEAD")
@@ -166,7 +169,7 @@ func (s *Server) dashboardLoreHandler(frontend fs.FS) http.Handler {
 	})
 }
 
-func dashboardShell(frontend fs.FS) http.Handler {
+func (s *Server) dashboardShell(frontend fs.FS) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			w.Header().Set("Allow", "GET, HEAD")
@@ -178,6 +181,7 @@ func dashboardShell(frontend fs.FS) http.Handler {
 			http.NotFound(w, r)
 			return
 		}
+		index = bytes.Replace(index, []byte("</head>"), []byte(passkeys.PWAHead(s.dashboardLorePath())+"</head>"), 1)
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Referrer-Policy", "no-referrer")

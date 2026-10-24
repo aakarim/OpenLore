@@ -74,7 +74,7 @@ func (p *Passkeys) LoreBrowserHandler(fsForIdentity func(identity string) vfs.Fi
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if servePWAAsset(w, r, lorePath) {
+		if ServePWAAsset(w, r, lorePath) {
 			return
 		}
 
@@ -312,23 +312,32 @@ func (p *Passkeys) renderDir(w http.ResponseWriter, fsys vfs.FileSystem, lorePat
 var appIcons embed.FS
 
 func pwaHead(lorePath string) string {
-	manifestURL := html.EscapeString(lorePath + "/manifest.webmanifest")
-	iconURL := html.EscapeString(lorePath + "/apple-touch-icon.svg")
 	serviceWorkerURL, _ := json.Marshal(lorePath + "/service-worker.js")
-	return fmt.Sprintf(`<link rel="manifest" href="%s"><link rel="apple-touch-icon" href="%s"><meta name="theme-color" content="#1d1a23"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="OpenLore"><script>if('serviceWorker'in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register(%s))</script>`, manifestURL, iconURL, serviceWorkerURL)
+	return PWAHead(lorePath) + fmt.Sprintf(`<script>if('serviceWorker'in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register(%s))</script>`, serviceWorkerURL)
 }
 
-func servePWAAsset(w http.ResponseWriter, r *http.Request, lorePath string) bool {
+// PWAHead supplies shared install metadata without inline scripts, so the
+// dashboard can use it under its strict Content-Security-Policy.
+func PWAHead(lorePath string) string {
+	manifestURL := html.EscapeString(lorePath + "/manifest.webmanifest")
+	iconURL := html.EscapeString(lorePath + "/apple-touch-icon.svg")
+	return fmt.Sprintf(`<link rel="manifest" href="%s"><link rel="apple-touch-icon" href="%s"><meta name="theme-color" content="#1d1a23"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="OpenLore">`, manifestURL, iconURL)
+}
+
+// ServePWAAsset serves public install assets and reports whether it handled the request.
+func ServePWAAsset(w http.ResponseWriter, r *http.Request, lorePath string) bool {
 	switch r.URL.Path {
 	case lorePath + "/manifest.webmanifest":
 		w.Header().Set("Content-Type", "application/manifest+json")
 		w.Header().Set("Cache-Control", "public, max-age=3600")
 		json.NewEncoder(w).Encode(map[string]any{
-			"name":             "OpenLore",
-			"short_name":       "OpenLore",
-			"description":      "Browse your OpenLore knowledge filesystem.",
-			"start_url":        lorePath + "/",
-			"scope":            lorePath + "/",
+			"name":        "OpenLore",
+			"short_name":  "OpenLore",
+			"description": "Browse your OpenLore knowledge filesystem.",
+			"start_url":   lorePath + "/",
+			// Files live under lorePath, but dashboard views and sign-in use
+			// sibling paths. Keep them all inside the installed app.
+			"scope":            "/",
 			"display":          "standalone",
 			"background_color": "#1d1a23",
 			"theme_color":      "#1d1a23",
