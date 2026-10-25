@@ -24,6 +24,7 @@ groups:
           - { path: start/agents/openai-dots.md, label: OpenAI dots }
           - { path: start/agents/grok-bot.md, label: Grok Bot }
           - { path: start/agents/claude-duet.md, label: Claude Duet }
+          - { path: start/agents/langchain.md, label: LangChain }
           - { path: start/agents/start-ssh.md, label: Any agent over SSH }
       - { path: start/deploy.md, label: Deploy }
 
