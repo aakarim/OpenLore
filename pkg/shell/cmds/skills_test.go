@@ -88,7 +88,7 @@ func (f *skillsFS) AdmitChangeSet(cs vfs.ChangeSet) error {
 	return nil
 }
 
-func runSkills(t *testing.T, f *skillsFS, cwd, command string, enabled bool, grant string) (map[string]any, string, int) {
+func runSkills(t *testing.T, f vfs.FileSystem, cwd, command string, enabled bool, grant string) (map[string]any, string, int) {
 	t.Helper()
 	sh := shell.NewShell(f)
 	sh.SetCwd(cwd)
@@ -126,10 +126,34 @@ func TestSkillsDisabledResultHasRequiredFields(t *testing.T) {
 	if code == 0 || r["status"] != "unsupported" || r["path"] != "/docs/skills" || r["operation"] != "status" {
 		t.Fatalf("result=%v code=%d", r, code)
 	}
+	if message, _ := r["message"].(string); !strings.Contains(message, "plugins.skills.enabled") {
+		t.Fatalf("missing plugin remediation: %v", r)
+	}
 	for _, k := range []string{"collections", "errors", "warnings"} {
 		if _, ok := r[k]; !ok {
 			t.Fatalf("missing %s: %v", k, r)
 		}
+	}
+}
+
+func TestSkillsMarkerFailuresAreNotSuccessfulValidation(t *testing.T) {
+	for _, command := range []string{"skills status", "skills enable", "skills validate", "skills import owner/repo"} {
+		t.Run(command, func(t *testing.T) {
+			f := newSkillsFS()
+			// Hide xattrs as a transport or backend without marker support would.
+			r, _, code := runSkills(t, f.mapFS, "/docs/skills", command, true, "rw")
+			message, _ := r["message"].(string)
+			if code == 0 || r["status"] != "unsupported" || !strings.Contains(message, "collection markers") {
+				t.Fatalf("result=%v code=%d", r, code)
+			}
+		})
+	}
+	f := newSkillsFS()
+	f.AddDir("/docs/skills/nested")
+	f.conflict["/docs/skills/nested"] = true
+	r, _, code := runSkills(t, f, "/docs/skills", "skills validate", true, "rw")
+	if code == 0 || r["status"] != "conflict" || r["message"] == nil {
+		t.Fatalf("nested marker error hidden: result=%v code=%d", r, code)
 	}
 }
 

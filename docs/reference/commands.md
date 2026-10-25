@@ -197,6 +197,13 @@ Each object has `commit_id`, `time`, `attribution`, `target`, `action` and `hash
 These commands require `plugins.skills.enabled: true`. Mutating commands also
 require a named `rw` grant on the destination docset.
 
+Run `lore config plugins` to inspect registered plugin names and versions (the
+Skills plugin is listed as `agent_skills`). This read-only view does not require
+configuration-edit permission. Failed Skills operations return non-zero and
+include an actionable `message` in their NDJSON result. In particular, failure
+to read collection markers is an error, not a successful `no_collections`
+validation; an accessible scope with no enabled collections still warns.
+
 | Command | Description |
 |---|---|
 | `skills status [folder]` | Report collection state and linked remote skills as NDJSON |

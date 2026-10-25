@@ -20,8 +20,51 @@ import (
 	"github.com/aakarim/go-openlore/pkg/agentskills"
 	"github.com/aakarim/go-openlore/pkg/openlore/meta"
 	"github.com/aakarim/go-openlore/pkg/openlore/skillsremote"
+	"github.com/aakarim/go-openlore/pkg/shell"
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
+
+func TestAgentSkillsHTTPShellCollectionLifecycle(t *testing.T) {
+	for _, admin := range []bool{false, true} {
+		t.Run(fmt.Sprintf("config-admin=%v", admin), func(t *testing.T) {
+			root := t.TempDir()
+			folder := filepath.Join(root, "docs", "skills", "valid")
+			if err := os.MkdirAll(folder, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(folder, "SKILL.md"), skillBytes("valid"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			auth := serverAuth(map[string]config.DocsetSpec{"docs": docset("/docs", nil)}, nil)
+			if admin {
+				auth.Roles["writer"] = config.RoleSpec{Allow: config.CapabilityRules{Capabilities: []string{"lore:config:edit"}}}
+			}
+			authFile := filepath.Join(t.TempDir(), "lore.json")
+			writeAuthFixture(t, authFile, auth)
+			server, err := NewServer(root, config.WithEmbeddedConfig([]byte("plugins:\n  skills:\n    enabled: true\n"), ""), WithReadonly(false), config.WithAuthFile(authFile), config.WithDataDir(t.TempDir()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = server.Shutdown(context.Background()) })
+			factory := func(context.Context) *shell.Shell { return server.buildSessionShell(testIdentity("alice")) }
+			api := NewMCPHTTPAPI(NewMCPServer(server.merge, withMCPShellFactory(factory)), factory).Handler("/api")
+			for _, step := range []struct{ command, want string }{
+				{"lore config plugins", "agent_skills\t1.0.0"},
+				{"skills enable /docs/skills", `"status":"enabled"`},
+				{"skills status /docs/skills", `"status":"enabled"`},
+				{"skills validate /docs/skills", `"status":"valid"`},
+				{"lore meta /docs/skills --filter skills", `"name":"valid"`},
+				{"skills disable /docs/skills", `"status":"disabled"`},
+				{"skills status /docs/skills", `"status":"disabled"`},
+			} {
+				resp := runShell(t, api, step.command)
+				if resp.ExitCode != 0 || !strings.Contains(resp.Output, step.want) {
+					t.Fatalf("%s: exit=%d output=%s; want %s", step.command, resp.ExitCode, resp.Output, step.want)
+				}
+			}
+		})
+	}
+}
 
 func skillBytes(name string) []byte {
 	return []byte("---\nname: " + name + "\ndescription: useful\n---\n")

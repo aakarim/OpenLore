@@ -233,7 +233,78 @@ func (f *configViewFS) AdmitChangeSet(cs vfs.ChangeSet) error {
 	return admitter.AdmitChangeSet(cs)
 }
 
+// Collection markers belong to the underlying docsets, not the synthetic
+// configuration tree. Preserve xattr support for config-admin sessions.
+func (f *configViewFS) GetXattr(p, name string) ([]byte, error) {
+	if pathWithinRoot("/opt", vfs.CleanPath(p)) {
+		return nil, syscall.ENOTSUP
+	}
+	x, ok := f.WritableFS.(vfs.XattrReader)
+	if !ok {
+		return nil, syscall.ENOTSUP
+	}
+	return x.GetXattr(p, name)
+}
+
+func (f *configViewFS) ListXattrs(p string) ([]string, error) {
+	if pathWithinRoot("/opt", vfs.CleanPath(p)) {
+		return nil, syscall.ENOTSUP
+	}
+	x, ok := f.WritableFS.(vfs.XattrReader)
+	if !ok {
+		return nil, syscall.ENOTSUP
+	}
+	return x.ListXattrs(p)
+}
+
+func (f *configViewFS) SetXattr(p, name string, value []byte, flags vfs.XattrFlags) error {
+	if pathWithinRoot("/opt", vfs.CleanPath(p)) {
+		return vfs.ErrReadOnly
+	}
+	x, ok := f.WritableFS.(vfs.XattrWriter)
+	if !ok {
+		return syscall.ENOTSUP
+	}
+	return x.SetXattr(p, name, value, flags)
+}
+
+func (f *configViewFS) RemoveXattr(p, name string) error {
+	if pathWithinRoot("/opt", vfs.CleanPath(p)) {
+		return vfs.ErrReadOnly
+	}
+	x, ok := f.WritableFS.(vfs.XattrWriter)
+	if !ok {
+		return syscall.ENOTSUP
+	}
+	return x.RemoveXattr(p, name)
+}
+
+func (f *configViewFS) PreserveAndRecreateXattrs(p string, attrs map[string][]byte) error {
+	if pathWithinRoot("/opt", vfs.CleanPath(p)) {
+		return vfs.ErrReadOnly
+	}
+	x, ok := f.WritableFS.(vfs.XattrMaintenance)
+	if !ok {
+		return syscall.ENOTSUP
+	}
+	return x.PreserveAndRecreateXattrs(p, attrs)
+}
+
+func (f *configViewFS) MigrateXattrs(p string, migration vfs.XattrMigration) error {
+	if pathWithinRoot("/opt", vfs.CleanPath(p)) {
+		return vfs.ErrReadOnly
+	}
+	x, ok := f.WritableFS.(vfs.XattrMaintenance)
+	if !ok {
+		return syscall.ENOTSUP
+	}
+	return x.MigrateXattrs(p, migration)
+}
+
 var (
 	_ vfs.WritableFS        = (*configViewFS)(nil)
 	_ vfs.ChangeSetAdmitter = (*configViewFS)(nil)
+	_ vfs.XattrReader       = (*configViewFS)(nil)
+	_ vfs.XattrWriter       = (*configViewFS)(nil)
+	_ vfs.XattrMaintenance  = (*configViewFS)(nil)
 )
