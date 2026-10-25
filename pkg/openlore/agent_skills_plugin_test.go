@@ -21,6 +21,7 @@ import (
 	"github.com/aakarim/go-openlore/pkg/openlore/meta"
 	"github.com/aakarim/go-openlore/pkg/openlore/skillsremote"
 	"github.com/aakarim/go-openlore/pkg/shell"
+	"github.com/aakarim/go-openlore/pkg/shell/cmds"
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
 
@@ -33,6 +34,13 @@ func TestAgentSkillsHTTPShellCollectionLifecycle(t *testing.T) {
 				t.Fatal(err)
 			}
 			if err := os.WriteFile(filepath.Join(folder, "SKILL.md"), skillBytes("valid"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			configDir := filepath.Join(root, "docs", "skills", ".lore")
+			if err := os.MkdirAll(configDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte("{}\n"), 0o644); err != nil {
 				t.Fatal(err)
 			}
 			auth := serverAuth(map[string]config.DocsetSpec{"docs": docset("/docs", nil)}, nil)
@@ -68,6 +76,49 @@ func TestAgentSkillsHTTPShellCollectionLifecycle(t *testing.T) {
 
 func skillBytes(name string) []byte {
 	return []byte("---\nname: " + name + "\ndescription: useful\n---\n")
+}
+
+func TestAgentSkillsValidateMergeRoot(t *testing.T) {
+	for _, mounted := range []bool{false, true} {
+		t.Run(fmt.Sprintf("named-mount=%v", mounted), func(t *testing.T) {
+			d := markedSkillsFS(t)
+			merge := NewMergeFS()
+			if mounted {
+				merge.Mount("docs", d)
+			} else {
+				merge.SetRoot(d)
+			}
+			sh := shell.NewShell(merge)
+			sh.SetSkillsManagementEnabled(true)
+			sh.SetDocsets([]cmds.DocsetInfo{{Name: "root", Paths: []string{"/"}}})
+			var out, errOut bytes.Buffer
+			if code := sh.ExecPipeline("skills validate /", &out, &errOut, nil); code != 0 || !strings.Contains(out.String(), `"status":"valid","collections":1`) {
+				t.Fatalf("root validation: exit=%d output=%s stderr=%s", code, out.String(), errOut.String())
+			}
+			// A structural root must not mask real backend marker corruption.
+			if err := os.MkdirAll(filepath.Join(d.root, ".lore", "xattrs"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(d.root, ".lore", "xattrs", "self"), []byte("corrupt"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			out.Reset()
+			if code := sh.ExecPipeline("skills validate /", &out, &errOut, nil); code != 1 || !strings.Contains(out.String(), `"status":"conflict"`) {
+				t.Fatalf("backend root error lost: exit=%d output=%s", code, out.String())
+			}
+		})
+	}
+	t.Run("unsupported-root-backend", func(t *testing.T) {
+		merge := NewMergeFS()
+		merge.SetRoot(NewFSAdapter(os.DirFS(t.TempDir())))
+		sh := shell.NewShell(merge)
+		sh.SetSkillsManagementEnabled(true)
+		sh.SetDocsets([]cmds.DocsetInfo{{Name: "root", Paths: []string{"/"}}})
+		var out, errOut bytes.Buffer
+		if code := sh.ExecPipeline("skills validate /", &out, &errOut, nil); code != 1 || !strings.Contains(out.String(), `"status":"unsupported"`) {
+			t.Fatalf("unsupported backend ignored: exit=%d output=%s", code, out.String())
+		}
+	})
 }
 
 func markedSkillsFS(t *testing.T) *DirFS {

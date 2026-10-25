@@ -731,6 +731,20 @@ func skillsMutate(f vfs.FileSystem, ds []DocsetInfo, target, root, op string, re
 		r.Source = source
 		return finish(w, r, 0)
 	}
+	// Inspect all state needed for the result before removing the marker.
+	// A corrupt descendant must not turn a failed disable into a partial write.
+	nested, err := descendantMarkers(f, ds, target)
+	if err != nil {
+		return mutationError(w, r, err)
+	}
+	var inherited bool
+	var inheritedSource string
+	if target != root {
+		_, inherited, inheritedSource, _, err = markerStatus(f, path.Dir(target), root)
+		if err != nil {
+			return mutationError(w, r, err)
+		}
+	}
 	xw, ok := f.(vfs.XattrWriter)
 	if !ok {
 		r.Status = "unsupported"
@@ -746,16 +760,11 @@ func skillsMutate(f vfs.FileSystem, ds []DocsetInfo, target, root, op string, re
 		}
 		return mutationError(w, r, err)
 	}
-	_, inherited, inheritedSource, _, err := markerStatus(f, target, root)
-	if err != nil {
-		return mutationError(w, r, err)
-	}
-	nested, err := descendantMarkers(f, ds, target)
-	if err != nil {
-		return mutationError(w, r, err)
-	}
-	r.Collections = len(nested)
 	for _, c := range nested {
+		if c == target {
+			continue
+		}
+		r.Collections++
 		emitSkill(w, skillCollection{Type: "collection", Path: c, Status: "enabled", Errors: 0})
 	}
 	if inherited {
@@ -783,6 +792,12 @@ func mutationError(w io.Writer, r skillResult, err error) int {
 	} else if errors.Is(err, fs.ErrPermission) {
 		r.Message = "access denied to the collection; check docset grants with 'lore docsets' and ask the owner for access"
 	}
+	// Only expose paths attached by Skills itself, never host paths from a
+	// backend error. The requested scope may be healthy while a child is not.
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) && pathErr.Op == "skills" {
+		emitSkill(w, skillFinding{Type: "finding", Collection: r.Path, Path: pathErr.Path, Severity: "error", Rule: "agent-skills/collection-markers", Message: "cannot inspect collection markers at " + pathErr.Path})
+	}
 	return finish(w, r, 1)
 }
 func errnoStatus(err error) string {
@@ -804,12 +819,12 @@ func boolInt(v bool) int {
 func markerStatus(f vfs.FileSystem, p, root string) (direct, effective bool, source string, unknown bool, err error) {
 	x, ok := f.(vfs.XattrReader)
 	if !ok {
-		return false, false, "", false, syscall.ENOTSUP
+		return false, false, "", false, &fs.PathError{Op: "skills", Path: p, Err: syscall.ENOTSUP}
 	}
 	for cur := p; ; cur = path.Dir(cur) {
 		names, e := x.ListXattrs(cur)
 		if e != nil {
-			return false, false, "", false, e
+			return false, false, "", false, &fs.PathError{Op: "skills", Path: cur, Err: e}
 		}
 		for _, n := range names {
 			if strings.HasPrefix(n, skillsMarkerPrefix) && n != SkillsMarker {
@@ -819,12 +834,12 @@ func markerStatus(f vfs.FileSystem, p, root string) (direct, effective bool, sou
 		b, e := x.GetXattr(cur, SkillsMarker)
 		if e == nil {
 			if len(b) != 0 {
-				return false, false, "", unknown, syscall.EIO
+				return false, false, "", unknown, &fs.PathError{Op: "skills", Path: cur, Err: syscall.EIO}
 			}
 			return cur == p, true, cur, unknown, nil
 		}
 		if !errors.Is(e, syscall.ENODATA) {
-			return false, false, "", unknown, e
+			return false, false, "", unknown, &fs.PathError{Op: "skills", Path: cur, Err: e}
 		}
 		if cur == root {
 			break
@@ -886,17 +901,17 @@ func discoverDirect(f vfs.FileSystem, root string, bounds map[string]bool) ([]st
 			return err
 		}
 		if unknown {
-			return syscall.EPROTONOSUPPORT
+			return &fs.PathError{Op: "skills", Path: d, Err: syscall.EPROTONOSUPPORT}
 		}
 		if direct {
 			out = append(out, d)
 		}
 		es, e := f.ReadDir(d)
 		if e != nil {
-			return e
+			return &fs.PathError{Op: "skills", Path: d, Err: e}
 		}
 		for _, x := range es {
-			if x.IsDir() {
+			if x.IsDir() && x.Name() != ".lore" {
 				if err := walk(path.Join(d, x.Name())); err != nil {
 					return err
 				}
@@ -925,7 +940,7 @@ func discoverCollections(f vfs.FileSystem, ds []DocsetInfo, scope string) ([]str
 				return nil, e
 			}
 			if unknown {
-				return nil, syscall.EPROTONOSUPPORT
+				return nil, &fs.PathError{Op: "skills", Path: start, Err: syscall.EPROTONOSUPPORT}
 			}
 			if eff {
 				set[src] = true

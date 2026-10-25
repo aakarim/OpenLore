@@ -151,9 +151,34 @@ func TestSkillsMarkerFailuresAreNotSuccessfulValidation(t *testing.T) {
 	f := newSkillsFS()
 	f.AddDir("/docs/skills/nested")
 	f.conflict["/docs/skills/nested"] = true
-	r, _, code := runSkills(t, f, "/docs/skills", "skills validate", true, "rw")
-	if code == 0 || r["status"] != "conflict" || r["message"] == nil {
+	r, out, code := runSkills(t, f, "/docs/skills", "skills validate", true, "rw")
+	if code == 0 || r["status"] != "conflict" || !strings.Contains(out, `"path":"/docs/skills/nested"`) {
 		t.Fatalf("nested marker error hidden: result=%v code=%d", r, code)
+	}
+}
+
+func TestSkillsDisableDiscoveryFailurePreservesCollection(t *testing.T) {
+	f := newSkillsFS()
+	f.attrs["/docs/skills"] = map[string][]byte{cmds.SkillsMarker: {}}
+	f.AddDir("/docs/skills/broken")
+	f.conflict["/docs/skills/broken"] = true
+	f.AddDir("/docs/skills/independent")
+	f.attrs["/docs/skills/independent"] = map[string][]byte{cmds.SkillsMarker: {}}
+	r, out, code := runSkills(t, f, "/docs/skills", "skills disable", true, "rw")
+	if code != 1 || r["status"] != "conflict" || !strings.Contains(out, `"path":"/docs/skills/broken"`) {
+		t.Fatalf("result=%v code=%d", r, code)
+	}
+	r, _, code = runSkills(t, f, "/docs/skills", "skills status", true, "rw")
+	if code != 0 || r["status"] != "enabled" {
+		t.Fatalf("failed disable changed collection: result=%v code=%d", r, code)
+	}
+	r, _, code = runSkills(t, f, "/docs/skills", "skills disable /docs/skills/broken --recreate-xattrs", true, "rw")
+	if code != 0 {
+		t.Fatalf("repair failed: result=%v code=%d", r, code)
+	}
+	r, out, code = runSkills(t, f, "/docs/skills", "skills disable", true, "rw")
+	if code != 0 || r["status"] != "disabled" || r["collections"] != float64(1) || !strings.Contains(out, `"path":"/docs/skills/independent","status":"enabled"`) {
+		t.Fatalf("disable after repair: result=%v code=%d output=%s", r, code, out)
 	}
 }
 

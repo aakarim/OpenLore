@@ -972,7 +972,12 @@ func (m *MergeFS) GetXattr(p, name string) ([]byte, error) {
 		return nil, err
 	}
 	if backend == nil {
-		return nil, syscall.ENOTSUP
+		// The merge root is structural when there is no root backend. It has
+		// no markers, but must not prevent discovery in the named mounts.
+		if m.root == nil {
+			return nil, syscall.ENODATA
+		}
+		sub, backend = "/", m.root
 	}
 	x, ok := backend.(vfs.XattrReader)
 	if !ok {
@@ -986,7 +991,10 @@ func (m *MergeFS) ListXattrs(p string) ([]string, error) {
 		return nil, err
 	}
 	if backend == nil {
-		return nil, syscall.ENOTSUP
+		if m.root == nil {
+			return nil, nil
+		}
+		sub, backend = "/", m.root
 	}
 	x, ok := backend.(vfs.XattrReader)
 	if !ok {
