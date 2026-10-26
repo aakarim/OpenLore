@@ -71,6 +71,9 @@ one tree serve all of them.
 | `config.edit` | Roles that may change `.lore/config.yaml` files in the docset. | [Folder rules](folder-rules.md#permissions) |
 | `readonly`, `write_conflict_policy`, `max_write_size` | Per-docset write behaviour. | [Writing and publishing](writing.md) |
 
+`publish` grants contributor inbox writes, not public visibility. To serve
+public and internal docs from one corpus, [grant `guest` `ro` only on the public docset](auth.md#serving-public-and-internal-docs-from-one-corpus).
+
 An identity can also name one docset as its `home`. That docset becomes `$HOME`
 and the identity gets `rw` on it. See
 [Identity home directories](auth.md#identity-home-directories).

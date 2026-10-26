@@ -28,8 +28,12 @@ destination and move files explicitly.
 
 ## Publish to an inbox
 
-`publish` lets a contributor read a whole docset while creating or editing only
-inside its inbox:
+The `publish` grant is contributor write access: read a whole docset while
+creating or editing only inside its inbox, never deleting. It does not make
+documents public or change who can read them. For public read access, see
+[Serving public and internal docs from one corpus](auth.md#serving-public-and-internal-docs-from-one-corpus).
+
+Use the `publish` command to contribute stdin to an inbox:
 
 ```shell
 echo "# API Notes" | publish /backend/api-notes.md
