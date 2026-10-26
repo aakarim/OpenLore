@@ -224,7 +224,7 @@ test("restores and tracks window scroll on mobile while desktop uses document sc
     <FileReader {...readerProps} scrollPosition={123} onScroll={onScroll} />,
   );
   await screen.findByText("Plain text knowledge");
-  expect(scrollTo).toHaveBeenCalledWith(0, 123);
+  await waitFor(() => expect(scrollTo).toHaveBeenCalledWith(0, 123));
   fireEvent.scroll(window);
   expect(onScroll).toHaveBeenCalledWith(456);
   unmount();
@@ -242,7 +242,7 @@ test("restores and tracks window scroll on mobile while desktop uses document sc
   const container = view.container.querySelector(
     ".document-scroll",
   ) as HTMLElement;
-  expect(container.scrollTop).toBe(77);
+  await waitFor(() => expect(container.scrollTop).toBe(77));
   container.scrollTop = 81;
   fireEvent.scroll(container);
   expect(desktopScroll).toHaveBeenCalledWith(81);

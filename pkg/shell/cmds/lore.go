@@ -96,8 +96,26 @@ func init() {
 }
 
 func cmdLoreConfig(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.Reader) int {
+	if len(args) == 1 && args[0] == "plugins" {
+		provider, ok := ctx.(interface{ ConfigPlugins() map[string]string })
+		if !ok {
+			fmt.Fprintln(errW, "lore config: plugin information is unavailable")
+			return 1
+		}
+		plugins := provider.ConfigPlugins()
+		names := make([]string, 0, len(plugins))
+		for name := range plugins {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		fmt.Fprintln(w, "PLUGIN\tVERSION")
+		for _, name := range names {
+			fmt.Fprintf(w, "%s\t%s\n", name, plugins[name])
+		}
+		return 0
+	}
 	if len(args) != 1 || args[0] != "reload" {
-		fmt.Fprintln(errW, "usage: lore config reload")
+		fmt.Fprintln(errW, "usage: lore config plugins | reload")
 		return 1
 	}
 	provider, ok := ctx.(configReloadContext)

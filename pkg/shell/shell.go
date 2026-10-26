@@ -64,6 +64,7 @@ type Shell struct {
 	sshTarget            string
 	attribution          cmds.JobAttribution
 	configReload         cmds.ConfigReloadBackend
+	configPlugins        map[string]string
 	history              cmds.HistoryBackend
 	jobs                 cmds.JobBackend
 	size                 cmds.SizeBackend
@@ -214,6 +215,8 @@ func (s *Shell) SetCommandAttribution(a cmds.JobAttribution)       { s.attributi
 func (s *Shell) CommandAttribution() cmds.JobAttribution           { return s.attribution }
 func (s *Shell) SetConfigReloadBackend(b cmds.ConfigReloadBackend) { s.configReload = b }
 func (s *Shell) ConfigReloadBackend() cmds.ConfigReloadBackend     { return s.configReload }
+func (s *Shell) SetConfigPlugins(plugins map[string]string)        { s.configPlugins = plugins }
+func (s *Shell) ConfigPlugins() map[string]string                  { return s.configPlugins }
 func (s *Shell) SetHistoryBackend(b cmds.HistoryBackend)           { s.history = b }
 func (s *Shell) HistoryBackend() cmds.HistoryBackend               { return s.history }
 func (s *Shell) SetJobBackend(b cmds.JobBackend)                   { s.jobs = b }

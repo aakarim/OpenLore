@@ -80,6 +80,7 @@ type Server struct {
 	passkeys           *passkeys.Passkeys
 	logger             *slog.Logger
 	motd               string
+	plugins            map[string]string
 
 	onConnect    OnConnectFunc
 	onDisconnect OnDisconnectFunc
@@ -962,9 +963,15 @@ func (s *Server) registerPlugin(p any) error {
 	// Record the plugin's identity + version in the boot logs. Logged per
 	// registration so it captures plugins registered after NewServer (e.g. the
 	// inbox plugin, wired by the CLI via RegisterPlugin) too.
-	if ip, ok := p.(PluginInfoProvider); ok && s.logger != nil {
+	if ip, ok := p.(PluginInfoProvider); ok {
 		info := ip.Info()
-		s.logger.Info("plugin registered", "name", info.Name, "version", info.Version)
+		if s.plugins == nil {
+			s.plugins = make(map[string]string)
+		}
+		s.plugins[info.Name] = info.Version
+		if s.logger != nil {
+			s.logger.Info("plugin registered", "name", info.Name, "version", info.Version)
+		}
 	}
 	if hp, ok := p.(HTTPRouteProvider); ok {
 		s.httpRoutes = append(s.httpRoutes, hp)
@@ -1281,6 +1288,7 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 	// `publish`. Computed once here, where the access authority lives.
 	sh.SetDocsets(s.sessionDocsets(id))
 	sh.SetSkillsManagementEnabled(s.config.Plugins.Skills.Enabled)
+	sh.SetConfigPlugins(s.plugins)
 	sh.SetSkillsRemoteConfig(s.config.Plugins.Skills.RemoteTimeout, s.config.Plugins.Skills.RemoteMaxBytes)
 	sh.SetMetaFilters(s.sessionMetaFilters(id))
 	sh.SetPublishTargets(s.sessionPublishTargets(id))
