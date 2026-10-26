@@ -4,6 +4,11 @@ Give an agent a place to contribute notes without letting it edit anything else.
 
 A `publish` grant lets an identity read a whole docset but write only inside one folder of it, the inbox. The agent cannot overwrite existing documents or delete anything, so you can accept contributions from an agent you do not fully trust.
 
+Despite the name, `publish` is contributor inbox-write access, not a public
+visibility setting. It does not change who can read the docset. To serve
+documents publicly while keeping internal notes private, use
+[separate docset access blocks with `guest: ro` only on the public docset](../concepts/auth.md#serving-public-and-internal-docs-from-one-corpus).
+
 > **Tip:** Use `rw` instead of `publish` when the agent should maintain existing documents. Grants are per role and per docset, so one agent can have `rw` on its own docset and `publish` on a shared one.
 
 ---

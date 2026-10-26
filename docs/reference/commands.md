@@ -102,8 +102,11 @@ them.
 | `mkdir` | Create a directory (`-p` for parents) |
 | `mv` | Move a file |
 | `rm` | Remove a file or tree (`-r`) |
-| `publish` | Publish stdin into a docset inbox |
+| `publish` | Contribute stdin into a docset inbox; does not make the docset public or change who can read it |
 | `spawn` | Run configured external work asynchronously when explicitly trusted |
+
+The `publish` grant is contributor inbox-write access, not public read access.
+To serve documents publicly, [grant `guest` `ro` on their docset](../concepts/auth.md#serving-public-and-internal-docs-from-one-corpus).
 
 ## Introspection
 
@@ -235,6 +238,8 @@ home      rw          alias        /backend         /home/backend
 ```
 
 `GRANTS` contains `ro`, `publish`, `rw`, or plugin-defined grants.
+Here `publish` means read access plus create/edit access inside the docset's
+inbox, never delete; it does not expose the docset to other readers.
 `ATTRIBUTES` may include `home`, `inbox`, and `alias`; aliases point to their
 canonical path in `TARGET`. `ls -l` and `stat` show an alias as a link
 (`backend -> /home/backend`), and `find` does not descend into it unless you
