@@ -58,6 +58,9 @@ func TestMCPToolAnnotations(t *testing.T) {
 			if !ok {
 				t.Fatal("shell tool is not registered")
 			}
+			if !strings.Contains(shellTool.Description, "heredoc") {
+				t.Error("shell tool description should document heredocs")
+			}
 			shellAnnotations := shellTool.Annotations
 			if shellAnnotations == nil {
 				t.Fatal("shell annotations are nil")
