@@ -26,6 +26,27 @@ Every operation is a whole-object atomic swap. Directory moves are not
 supported because the filesystem has no atomic tree-move operation; create the
 destination and move files explicitly.
 
+### Multi-line documents over MCP
+
+Use a heredoc to create a multi-line document over MCP. The shell tool accepts
+a command string, not a separate stdin stream, so include the body in that
+same command string with real newlines:
+
+```shell
+cat <<'EOF' > /mydocset/guide.md
+# Field guide
+
+- Keep $VARIABLES literal.
+- Preserve indentation and Unicode: ───
+EOF
+```
+
+The quoted delimiter keeps the body literal. Put the closing `EOF` alone on
+its own line, without quotes or indentation; choose another delimiter if a body
+line is exactly `EOF`. The heredoc supplies stdin to `cat`, and `>` writes the
+whole document atomically. It does not bypass write permissions or conflict
+checks; read an existing file before replacing it.
+
 ## Publish to an inbox
 
 The `publish` grant is contributor write access: read a whole docset while

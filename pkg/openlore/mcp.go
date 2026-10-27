@@ -105,7 +105,7 @@ func NewMCPServer(fs vfs.FileSystem, opts ...MCPOption) *mcp.Server {
 	)
 	server.AddReceivingMiddleware(mcpTracingMiddleware)
 
-	shellDesc := "Run a command in OpenLore's restricted, Bash-like knowledge-repository shell. It cannot run arbitrary executables and never touches the local machine. Supports ls, cat, grep, find, tree, head, tail, wc, stat, sort, uniq, cut, sed, awk, jq, xargs, pipes, loops, and more; use list_commands for the available surface."
+	shellDesc := "Run a command in OpenLore's restricted, Bash-like knowledge-repository shell. It cannot run arbitrary executables and never touches the local machine. Supports ls, cat, grep, find, tree, head, tail, wc, stat, sort, uniq, cut, sed, awk, jq, xargs, pipes, loops, heredocs, and more; use list_commands for the available surface. For multi-line writes, include a heredoc in the command string: cat <<'EOF' > /path followed by a newline, the body, and EOF alone on the final line. Write permissions still apply."
 	if cfg.shellDescription != "" {
 		shellDesc = cfg.shellDescription
 	}

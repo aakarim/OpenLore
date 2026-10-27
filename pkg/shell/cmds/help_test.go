@@ -19,6 +19,9 @@ func TestHelp(t *testing.T) {
 	if !strings.Contains(out, "globs expand; bare patterns use the current directory") {
 		t.Error("help should document glob expansion")
 	}
+	if !strings.Contains(out, "cat <<'EOF' > file") || !strings.Contains(out, "heredoc") {
+		t.Error("help should document multi-line heredoc writes")
+	}
 	for _, command := range []string{"mkdir", "mv", "rm"} {
 		if !strings.Contains(out, command) {
 			t.Errorf("help should list %s", command)

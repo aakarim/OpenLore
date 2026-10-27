@@ -72,6 +72,8 @@ func CmdHelp(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 	if ctx.ActionAllowed(ActionWrite) {
 		fmt.Fprintln(w, "WRITES")
 		fmt.Fprintln(w, "  cmd > file  /  cmd >> file               Redirect output to a file")
+		fmt.Fprintln(w, "  cat <<'EOF' > file ... EOF               Write a multi-line file (heredoc)")
+		fmt.Fprintln(w, "    Put the body on following lines and EOF alone on the final line")
 		fmt.Fprintln(w, "  tee <file>                               Pass stdin to stdout and a file")
 		fmt.Fprintln(w, "  patch <file>                             Apply a unified diff (atomic)")
 		fmt.Fprintln(w, "  sed -i 's/a/b/' <file>                   Edit a file in place")
