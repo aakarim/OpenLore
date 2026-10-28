@@ -10,6 +10,7 @@ import userEvent from "@testing-library/user-event";
 import { onTestFinished, vi } from "vitest";
 import { App, loginURL } from "../App";
 import { pollDelay } from "../Analytics";
+import { defaults, storageKey, writePreferences } from "../storage";
 import { mockAPI } from "./fixtures";
 
 async function openStatus() {
@@ -82,6 +83,113 @@ test("desktop tree opens a production API document and switches views without lo
   );
   await user.click(screen.getByRole("button", { name: /Files 1/ }));
   expect(await screen.findByRole("heading", { name: "Start" })).toBeVisible();
+});
+
+test.each([
+  ["Close", ["a", "c", "d"], "c"],
+  ["Close Others", ["b"], "b"],
+  ["Close to the Right", ["a", "b"], "b"],
+  ["Close to the Left", ["b", "c", "d"], "c"],
+  ["Close All", [], ""],
+] as [string, string[], string][])(
+  "tab menu %s closes only the intended files and persists the result",
+  async (action, remaining, active) => {
+    const fetch = mockAPI();
+    const fallback = fetch.getMockImplementation()!;
+    fetch.mockImplementation(async (input, init) => {
+      const url = new URL(String(input), location.origin);
+      if (url.pathname.endsWith("/file")) {
+        const path = url.searchParams.get("path")!;
+        return new Response(
+          JSON.stringify({
+            path,
+            name: path.split("/").at(-1),
+            source: "# Document",
+            html: `<h1>${path}</h1>`,
+            content_type: "text/markdown",
+            facts: { bytes: 10, lines: 1, characters: 10, tokens: 3 },
+            binary: false,
+          }),
+        );
+      }
+      return fallback(input, init);
+    });
+    const key = await storageKey("private@example.test");
+    writePreferences(key, {
+      ...defaults,
+      openPaths: ["a", "b", "c", "d"].map((p) => `/guide/${p}.md`),
+    });
+    history.replaceState(null, "", "/dashboard/?view=files&path=/guide/c.md");
+    const first = render(<App />);
+    const user = userEvent.setup();
+    const target = await screen.findByRole("tab", { name: "b.md" });
+    await user.pointer({ target, keys: "[MouseRight]" });
+    expect(screen.getByRole("tab", { name: "c.md" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await user.click(screen.getByRole("menuitem", { name: action }));
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(screen.queryAllByRole("tab").map((tab) => tab.textContent)).toEqual(
+      remaining.map((p) => `${p}.md`),
+    );
+    if (active) {
+      expect(screen.getByRole("tab", { name: `${active}.md` })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+      expect(
+        new URLSearchParams(location.search).get("path") ||
+          location.pathname.replace("/lore", ""),
+      ).toBe(`/guide/${active}.md`);
+      expect(
+        await screen.findByRole("heading", { name: `/guide/${active}.md` }),
+      ).toBeVisible();
+    } else {
+      expect(
+        await screen.findByRole("heading", { name: "Open a file" }),
+      ).toBeVisible();
+      expect(new URLSearchParams(location.search).get("path")).toBe("/");
+      await waitFor(() =>
+        expect(
+          screen.getByRole("tablist", { name: "Open files" }),
+        ).toHaveFocus(),
+      );
+    }
+    first.unmount();
+    render(<App />);
+    await screen.findByRole("tablist", { name: "Open files" });
+    expect(screen.queryAllByRole("tab").map((tab) => tab.textContent)).toEqual(
+      remaining.map((p) => `${p}.md`),
+    );
+  },
+);
+
+test("tab menu supports keyboard navigation, disabled actions, and dismissal", async () => {
+  mockAPI();
+  history.replaceState(null, "", "/dashboard/?view=files&path=/guide/start.md");
+  render(<App />);
+  const user = userEvent.setup();
+  const tab = await screen.findByRole("tab", { name: "start.md" });
+  tab.focus();
+  await user.keyboard("{Shift>}{F10}{/Shift}");
+  expect(screen.getByRole("menuitem", { name: "Close" })).toHaveFocus();
+  for (const name of [
+    "Close Others",
+    "Close to the Left",
+    "Close to the Right",
+  ]) {
+    expect(screen.getByRole("menuitem", { name })).toBeDisabled();
+  }
+  await user.keyboard("{ArrowDown}");
+  expect(screen.getByRole("menuitem", { name: "Close All" })).toHaveFocus();
+  await user.keyboard("{ArrowDown}{Escape}");
+  await waitFor(() => expect(tab).toHaveFocus());
+  expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  await user.pointer({ target: tab, keys: "[MouseRight]" });
+  await user.click(screen.getByRole("heading", { name: "Start" }));
+  expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  expect(tab).toHaveAttribute("aria-selected", "true");
 });
 
 test("tree width is bounded, remembered, and resettable without losing collapse support", async () => {

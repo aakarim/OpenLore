@@ -16,6 +16,7 @@ import {
 } from "./Analytics";
 import { APIError, api } from "./api";
 import { FileReader, MobileDetails, Sheet } from "./FileReader";
+import { FileTabs } from "./FileTabs";
 import { FuzzyFinder, finderShortcut, isFinderShortcut } from "./FuzzyFinder";
 import { useAsync } from "./hooks";
 import {
@@ -379,10 +380,10 @@ function Workspace({ session }: { session: Session }) {
       setToast("Clipboard unavailable. Select and copy the path instead.");
     }
   };
-  const closeFile = (path: string) => {
-    const remaining = prefs.openPaths.filter((p) => p !== path);
+  const closeFiles = (paths: string[]) => {
+    const remaining = prefs.openPaths.filter((p) => !paths.includes(p));
     setPreference({ openPaths: remaining });
-    if (activeFile === path) {
+    if (paths.includes(activeFile)) {
       setActiveFile(remaining.at(-1) || "");
       navigate("files", remaining.at(-1) || "/");
     }
@@ -635,25 +636,12 @@ function Workspace({ session }: { session: Session }) {
           </>
         ) : (
           <>
-            <div className="file-tabs" role="tablist" aria-label="Open files">
-              {prefs.openPaths.map((p) => (
-                <div className={p === activeFile ? "active" : ""} key={p}>
-                  <button
-                    role="tab"
-                    aria-selected={p === activeFile}
-                    onClick={() => openFile(p)}
-                  >
-                    {name(p)}
-                  </button>
-                  <button
-                    aria-label={`Close ${name(p)}`}
-                    onClick={() => closeFile(p)}
-                  >
-                    <CloseIcon />
-                  </button>
-                </div>
-              ))}
-            </div>
+            <FileTabs
+              paths={prefs.openPaths}
+              active={activeFile}
+              onOpen={openFile}
+              onClose={closeFiles}
+            />
             {activeFile ? (
               <FileReader
                 key={activeFile}
@@ -767,7 +755,7 @@ function Workspace({ session }: { session: Session }) {
                   </button>
                   <button
                     aria-label={`Close ${name(p)}`}
-                    onClick={() => closeFile(p)}
+                    onClick={() => closeFiles([p])}
                   >
                     <CloseIcon />
                   </button>
