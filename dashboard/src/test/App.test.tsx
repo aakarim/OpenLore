@@ -86,14 +86,14 @@ test("desktop tree opens a production API document and switches views without lo
 });
 
 test.each([
-  ["Close", ["a", "c", "d"], "c"],
-  ["Close Others", ["b"], "b"],
-  ["Close to the Right", ["a", "b"], "b"],
-  ["Close to the Left", ["b", "c", "d"], "c"],
-  ["Close All", [], ""],
-] as [string, string[], string][])(
+  ["Close", ["a", "c", "d"], "c", "c"],
+  ["Close Others", ["b"], "b", "b"],
+  ["Close to the Right", ["a", "b"], "b", "b"],
+  ["Close to the Left", ["b", "c", "d"], "c", "b"],
+  ["Close All", [], "", ""],
+] as [string, string[], string, string][])(
   "tab menu %s closes only the intended files and persists the result",
-  async (action, remaining, active) => {
+  async (action, remaining, active, focused) => {
     const fetch = mockAPI();
     const fallback = fetch.getMockImplementation()!;
     fetch.mockImplementation(async (input, init) => {
@@ -145,6 +145,7 @@ test.each([
       expect(
         await screen.findByRole("heading", { name: `/guide/${active}.md` }),
       ).toBeVisible();
+      expect(screen.getByRole("tab", { name: `${focused}.md` })).toHaveFocus();
     } else {
       expect(
         await screen.findByRole("heading", { name: "Open a file" }),
@@ -190,6 +191,49 @@ test("tab menu supports keyboard navigation, disabled actions, and dismissal", a
   await user.click(screen.getByRole("heading", { name: "Start" }));
   expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   expect(tab).toHaveAttribute("aria-selected", "true");
+});
+
+test.each(["scroll", "resize", "blur"])(
+  "tab menu restores focus on %s only while it owns focus",
+  async (event) => {
+    mockAPI();
+    history.replaceState(
+      null,
+      "",
+      "/dashboard/?view=files&path=/guide/start.md",
+    );
+    render(<App />);
+    const user = userEvent.setup();
+    const tab = await screen.findByRole("tab", { name: "start.md" });
+    const outside = screen.getByRole("button", { name: "Find file" });
+    const target = event === "scroll" ? document : window;
+
+    await user.pointer({ target: tab, keys: "[MouseRight]" });
+    fireEvent(target, new Event(event));
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(tab).toHaveFocus();
+
+    await user.pointer({ target: tab, keys: "[MouseRight]" });
+    outside.focus();
+    fireEvent(target, new Event(event));
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(outside).toHaveFocus();
+  },
+);
+
+test("clicking another control dismisses the tab menu without stealing focus back", async () => {
+  mockAPI();
+  history.replaceState(null, "", "/dashboard/?view=files&path=/guide/start.md");
+  render(<App />);
+  const user = userEvent.setup();
+  const tab = await screen.findByRole("tab", { name: "start.md" });
+  await screen.findByRole("heading", { name: "Start" });
+  await user.pointer({ target: tab, keys: "[MouseRight]" });
+  const source = screen.getByRole("button", { name: "Source" });
+  await user.click(source);
+  expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  await new Promise((resolve) => requestAnimationFrame(resolve));
+  expect(source).toHaveFocus();
 });
 
 test("tree width is bounded, remembered, and resettable without losing collapse support", async () => {

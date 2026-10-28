@@ -1,4 +1,10 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { CloseIcon } from "./icons";
 
 const name = (path: string) => path.split("/").at(-1);
@@ -23,17 +29,23 @@ export function FileTabs({
     trigger: HTMLButtonElement;
   } | null>(null);
 
-  const dismiss = () => {
-    setMenu(null);
-    requestAnimationFrame(() => {
-      const target = menu?.trigger.isConnected
-        ? menu.trigger
-        : tabs.current?.querySelector<HTMLButtonElement>(
-            '[aria-selected="true"]',
-          ) || tabs.current;
-      target?.focus();
-    });
-  };
+  const dismiss = useCallback(
+    (closingPaths: string[] = []) => {
+      if (menuRef.current?.contains(document.activeElement)) {
+        const remaining = paths.filter((path) => !closingPaths.includes(path));
+        const fallback = remaining.includes(active) ? active : remaining.at(-1);
+        const target =
+          menu && remaining.includes(menu.path) && menu.trigger.isConnected
+            ? menu.trigger
+            : tabs.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[
+                paths.indexOf(fallback || "")
+              ] || tabs.current;
+        target?.focus({ preventScroll: true });
+      }
+      setMenu(null);
+    },
+    [active, menu, paths],
+  );
 
   useLayoutEffect(() => {
     if (!menu || !menuRef.current) return;
@@ -47,9 +59,9 @@ export function FileTabs({
   useEffect(() => {
     if (!menu) return;
     const outside = (event: PointerEvent) => {
-      if (!menuRef.current?.contains(event.target as Node)) setMenu(null);
+      if (!menuRef.current?.contains(event.target as Node)) dismiss();
     };
-    const hide = () => setMenu(null);
+    const hide = () => dismiss();
     document.addEventListener("pointerdown", outside);
     window.addEventListener("resize", hide);
     window.addEventListener("blur", hide);
@@ -60,7 +72,7 @@ export function FileTabs({
       window.removeEventListener("blur", hide);
       document.removeEventListener("scroll", hide, true);
     };
-  }, [menu]);
+  }, [dismiss, menu]);
 
   const index = menu ? paths.indexOf(menu.path) : -1;
   const actions = menu
@@ -168,8 +180,8 @@ export function FileTabs({
               tabIndex={-1}
               disabled={!action.paths.length}
               onClick={() => {
+                dismiss(action.paths);
                 onClose(action.paths);
-                dismiss();
               }}
             >
               {action.label}
