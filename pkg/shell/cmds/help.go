@@ -17,11 +17,14 @@ func CmdHelp(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 		// command entries and their continuation lines stay in one place.
 		var catalogue strings.Builder
 		CmdHelp(ctx, nil, &catalogue, errW, stdin)
+		// These three commands are handled directly by Shell.execArgs,
+		// rather than registered in the command catalogue.
+		known := IsKnown(args[0]) || slices.Contains([]string{"pwd", "exit", "quit"}, args[0])
 		matched, found := false, false
 		for _, line := range strings.Split(catalogue.String(), "\n") {
 			if !strings.HasPrefix(line, "    ") {
 				matched = false
-				if strings.HasPrefix(line, "  ") {
+				if known && strings.HasPrefix(line, "  ") {
 					usage, _, _ := strings.Cut(strings.TrimSpace(line), "  ")
 					for _, form := range strings.Split(usage, " / ") {
 						name := strings.Fields(form)[0]

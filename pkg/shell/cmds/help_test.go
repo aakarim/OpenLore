@@ -39,6 +39,9 @@ func TestHelpCommand(t *testing.T) {
 		{"sha256sum", "  md5sum/sha1sum/sha256sum [-c] [file]      Compute checksums\n"},
 		{"false", "  true / false                              Exit with 0 / 1\n"},
 		{"eval", "  source <file> / eval <cmd>               Execute commands\n"},
+		{"pwd", "  pwd                                      Print working directory\n"},
+		{"exit", "  exit / quit                              Close session\n"},
+		{"quit", "  exit / quit                              Close session\n"},
 	} {
 		t.Run(tt.command, func(t *testing.T) {
 			out, errs, code := execCmd(t, testFS(), "help "+tt.command)
@@ -56,7 +59,7 @@ func TestHelpCommand(t *testing.T) {
 		t.Fatalf("sed help includes unrelated entries: %q", out)
 	}
 
-	for _, command := range []string{"nonexistent", "te", "write"} {
+	for _, command := range []string{"nonexistent", "te", "write", "Unquoted", "cmd", "since"} {
 		out, errs, code := execCmd(t, testFS(), "help "+command)
 		if code != 1 || out != "" || errs != "help: no entry for "+command+"\n" {
 			t.Fatalf("unknown entry %s: code=%d stderr=%q stdout=%q", command, code, errs, out)
