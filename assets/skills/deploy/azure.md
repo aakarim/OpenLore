@@ -15,7 +15,7 @@ HTTPS/MCP, authenticated OpenLore SSH, and Azure administrative access.
 
 - Use a root `Containerfile` derived from an exact pinned semver such as `FROM ghcr.io/aakarim/openlore:1.2.3`, never a floating tag. Deploy the derivative, retain room for future package customization, and do not bake configuration into it.
 - Root `openlore.yml` is Git/IaC authoritative and deployed separately at `/var/lib/openlore/config/openlore.yml`. Configure `auth_file: /var/lib/openlore/config/lore.json`, `writable_dir: /var/lib/openlore/published`, `data_dir: /var/lib/openlore/data`, `host_key_path: /var/lib/openlore/ssh/openlore_ed25519`, internal SSH `2222`, and the selected HTTP port.
-- Runtime bootstrap state lives only in gitignored `.local/lore.json` and `.local/filesystem`.
+- Runtime bootstrap state lives only in gitignored `.local/lore.json` and `content/`. Deploy the committed `home/` directory beside `openlore.yml`; the server validates `home/*/sources.yaml` at startup.
 - Store idempotent scripts/templates and non-secret IDs under `deploy/azure/`. Discover/tag resources before creation, show diffs, and offer commits only with explicit approval; do not mandate one IaC tool.
 
 ## Provision and networking
@@ -27,7 +27,7 @@ HTTPS/MCP, authenticated OpenLore SSH, and Azure administrative access.
 
 ## Bootstrap and production verification
 
-Use the provider administrative shell to inspect `/var/lib/openlore`. Copy or reconcile root `openlore.yml` to the persistent config path. Transfer `.local/lore.json` and `.local/filesystem` only when the remote lore file is absent and published/data state is empty. Securely create `config`, `published`, `data`, and `ssh`. Stop if mutable remote state exists; never overwrite or merge lore or filesystem content.
+Use the provider administrative shell to inspect `/var/lib/openlore`. Copy or reconcile root `openlore.yml` to the persistent config path. Transfer `.local/lore.json` and `content/` only when the remote lore file is absent and published/data state is empty. Securely create `config`, `published`, `data`, and `ssh`. Stop if mutable remote state exists; never overwrite or merge lore or filesystem content.
 
 Verify valid HTTPS, MCP initialization, authenticated OpenLore SSH, a unique write/read probe, persistence after container and VM restart (including auth and host key), Azure administrative shell, and NSG/LB exposure. With port 22 mapping, verify `ssh <domain>` without `-p` and confirm public `2222` is closed.
 

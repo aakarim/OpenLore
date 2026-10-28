@@ -65,6 +65,7 @@ type Shell struct {
 	attribution          cmds.JobAttribution
 	configReload         cmds.ConfigReloadBackend
 	configPlugins        map[string]string
+	sourceLister         func() ([]cmds.SourceInfo, error)
 	history              cmds.HistoryBackend
 	jobs                 cmds.JobBackend
 	size                 cmds.SizeBackend
@@ -175,6 +176,14 @@ func (s *Shell) SetDocsets(d []cmds.DocsetInfo) { s.docsets = d }
 
 // Docsets reports the per-session docset views. Implements CmdContext.
 func (s *Shell) Docsets() []cmds.DocsetInfo { return s.docsets }
+
+func (s *Shell) SetSourceLister(list func() ([]cmds.SourceInfo, error)) { s.sourceLister = list }
+func (s *Shell) Sources() ([]cmds.SourceInfo, error) {
+	if s.sourceLister == nil {
+		return nil, nil
+	}
+	return s.sourceLister()
+}
 
 // SetPublishTargets installs the per-session publish inboxes used by `publish`.
 func (s *Shell) SetPublishTargets(t []cmds.PublishTarget) { s.publishTargets = t }

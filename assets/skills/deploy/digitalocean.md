@@ -14,7 +14,7 @@ HTTPS/MCP, authenticated OpenLore SSH, and Droplet administrative access.
 
 - Create a root `Containerfile` derived from an exact semver (`FROM ghcr.io/aakarim/openlore:1.2.3`, never `latest`) and deploy that derivative, leaving room for future package customization. Do not bake configuration into it.
 - Root `openlore.yml` is authoritative and deployed separately at `/var/lib/openlore/config/openlore.yml`. Set `auth_file: /var/lib/openlore/config/lore.json`, `writable_dir: /var/lib/openlore/published`, `data_dir: /var/lib/openlore/data`, `host_key_path: /var/lib/openlore/ssh/openlore_ed25519`, internal OpenLore SSH `2222`, and the selected HTTP port.
-- Bootstrap state is exclusively gitignored `.local/lore.json` and `.local/filesystem`.
+- Bootstrap state is exclusively gitignored `.local/lore.json` and `content/`. Deploy the committed `home/` directory beside `openlore.yml`; the server validates `home/*/sources.yaml` at startup.
 - Put idempotent, discovery-first scripts and non-secret resource metadata under `deploy/digitalocean/`. Tag/check before creating, show diffs, and commit only with explicit approval. IaC is allowed but no specific tool is mandatory.
 
 ## Provision and networking
@@ -26,7 +26,7 @@ HTTPS/MCP, authenticated OpenLore SSH, and Droplet administrative access.
 
 ## Bootstrap and production verification
 
-Use provider-default administrative SSH to inspect the mounted volume. Copy or reconcile root `openlore.yml` to the persistent config path. Upload `.local/lore.json` and `.local/filesystem` only if the remote lore file is absent and published/data state is empty. Create secure `config`, `published`, `data`, and `ssh` directories. If mutable remote state exists, stop and preserve it; never overwrite or merge remote lore or filesystem content.
+Use provider-default administrative SSH to inspect the mounted volume. Copy or reconcile root `openlore.yml` to the persistent config path. Upload `.local/lore.json` and `content/` only if the remote lore file is absent and published/data state is empty. Create secure `config`, `published`, `data`, and `ssh` directories. If mutable remote state exists, stop and preserve it; never overwrite or merge remote lore or filesystem content.
 
 Verify valid HTTPS, MCP initialization, authenticated OpenLore SSH, write/read of a unique probe, persistence following container and Droplet restart (including auth and host key), provider administrative shell access, and intended firewall/LB rules. When LB port 22 exists, verify `ssh <domain>` without `-p` and confirm public `2222` is closed.
 

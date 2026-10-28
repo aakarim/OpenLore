@@ -44,6 +44,16 @@ ssh -p 2222 localhost agents >> AGENTS.md
 
 Learn more about connecting [Claude Code](start/agents/start-claude-code.md) or [any agent over SSH](start/agents/start-ssh.md).
 
+### Link knowledge you already keep elsewhere
+
+Not every piece of context starts life in OpenLore. Coding rules live in a Git repository, Claude Code keeps its instructions and memory next to each project, and plenty of notes sit in plain folders. The knowledge gateway lets you link those sources into OpenLore without moving them: the `lore` client copies the files into the server's docstore, you choose which of them to expose as a read-only docset, and from then on agents see them alongside everything else. The original stays where it is and stays authoritative; run `lore sync` again whenever it changes.
+
+```shell
+lore source add ~/notes --name notes
+```
+
+One `lore sync` later, the folder is a docset your agents can read. Learn more about the [knowledge gateway](concepts/knowledge-gateway.md) and [importing knowledge](start/import-knowledge.md).
+
 ---
 
 ## Scope
@@ -111,4 +121,5 @@ Only if you enable it, only in docsets they have a grant on, and only through wh
 
 - [Connect Claude Code](start/agents/start-claude-code.md) to a served directory over MCP.
 - [Connect any agent over SSH](start/agents/start-ssh.md) and give it an identity.
+- [Import knowledge](start/import-knowledge.md) from folders, Git repositories and Claude Code with the `lore` client.
 - Learn how [identities, roles and docsets](concepts/auth.md) scope what each agent sees.

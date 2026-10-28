@@ -87,8 +87,9 @@ type Server struct {
 	sessionFSFn  SessionFSFn
 
 	// jobs runs async external work (Part D), surfaced read-only at /jobs.
-	jobs    *JobManager
-	history HistoryStore
+	jobs     *JobManager
+	history  HistoryStore
+	docstore *Docstore
 
 	// writeLog is the single ordered write log + serialized applier: the sole
 	// writer to the substrate. Non-nil only when the substrate is writable
@@ -203,6 +204,10 @@ func newServerWithRoot(rootDir string, rootFS vfs.FileSystem, lowerFS fs.FS, opt
 		dataDir = ".openlore"
 	}
 	s.audit = NewJSONLAuditLog(filepath.Join(dataDir, "audit", "events.jsonl"))
+	s.docstore, err = OpenDocstore(dataDir)
+	if err != nil {
+		return nil, fmt.Errorf("opening docstore: %w", err)
+	}
 
 	// Construct shellexec now, but register built-ins after auth/docsets are
 	// loaded so Agent Skills admission can be the outermost write middleware.
@@ -312,6 +317,9 @@ func newServerWithRoot(rootDir string, rootFS vfs.FileSystem, lowerFS fs.FS, opt
 	} else if lowerFS != nil {
 		s.merge.SetRoot(NewFSAdapter(lowerFS, cfg.Files))
 	}
+	if err := s.mountProjections(); err != nil {
+		return nil, err
+	}
 
 	if cfg.Analytics.IsEnabled() {
 		analyticsCfg := cfg.Analytics
@@ -371,7 +379,8 @@ func newServerWithRoot(rootDir string, rootFS vfs.FileSystem, lowerFS fs.FS, opt
 			return nil, fmt.Errorf("opening history blob store: %w", blobErr)
 		}
 		commitPath := filepath.Join(dataDir, "history", "commits.jsonl")
-		s.writeLog.SetCommitJournal(fileCommitJournal(commitPath), blobs, cfg.Analytics.HistoryBlobsEnabled())
+		var journal CommitJournal = docstoreJournal{server: s, journal: fileCommitJournal(commitPath)}
+		s.writeLog.SetCommitJournal(journal, blobs, cfg.Analytics.HistoryBlobsEnabled())
 		s.historyPath = commitPath
 		if s.analytics != nil {
 			cursor, cursorErr := OpenHistoryCursor(commitPath, HistoryPosition{})
@@ -719,6 +728,9 @@ func (s *Server) sftpSubsystem(sess ssh.Session) {
 	// outside their grants over SFTP.
 	id := s.resolveIdentity(sess)
 	handler := NewSFTPHandler(s.buildSessionFS(id))
+	handler.denied = func(p string) error {
+		return s.mutationDenied(vfs.ChangeActionWrite, p)
+	}
 	handler.writesDisabled = s.config.Readonly
 	server := sftp.NewRequestServer(sess, sftp.Handlers{
 		FileGet:  handler,
@@ -1287,6 +1299,7 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 	// Per-session docset views for `lore docsets` and publish inboxes for
 	// `publish`. Computed once here, where the access authority lives.
 	sh.SetDocsets(s.sessionDocsets(id))
+	sh.SetSourceLister(func() ([]cmds.SourceInfo, error) { return s.sourceRows(id) })
 	sh.SetSkillsManagementEnabled(s.config.Plugins.Skills.Enabled)
 	sh.SetConfigPlugins(s.plugins)
 	sh.SetSkillsRemoteConfig(s.config.Plugins.Skills.RemoteTimeout, s.config.Plugins.Skills.RemoteMaxBytes)
@@ -1801,6 +1814,8 @@ func (s *Server) ListenAndServe() error {
 					}
 				}
 				httpCfg.ExtraHandlers[apiPath+"/"] = s.authMiddleware(s.transportMiddleware(api.Handler(apiPath), "http"), httpAuthRequired)
+				prefix := apiPath + "/docstore/"
+				httpCfg.ExtraHandlers[prefix] = s.authMiddleware(s.transportMiddleware(s.docstoreHandler(prefix), "http"), true)
 				s.logger.Info("HTTP API mounted", "path", apiPath, "http_port", s.config.HTTPPort)
 			}
 

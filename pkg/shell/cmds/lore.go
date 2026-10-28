@@ -31,6 +31,31 @@ type configReloadContext interface {
 	ConfigReloadBackend() ConfigReloadBackend
 }
 
+type SourceInfo struct{ Store, Docset, Snapshot string }
+type sourceContext interface{ Sources() ([]SourceInfo, error) }
+
+func cmdLoreSources(ctx CmdContext, args []string, w, errW io.Writer, _ io.Reader) int {
+	if len(args) != 0 {
+		fmt.Fprintln(errW, "usage: lore sources")
+		return 1
+	}
+	provider, ok := ctx.(sourceContext)
+	if !ok {
+		fmt.Fprintln(errW, "lore sources: unavailable")
+		return 1
+	}
+	sources, err := provider.Sources()
+	if err != nil {
+		fmt.Fprintln(errW, "lore sources:", err)
+		return 1
+	}
+	fmt.Fprintln(w, "STORE · DOCSET · LAST SNAPSHOT")
+	for _, source := range sources {
+		fmt.Fprintf(w, "%s · %s · %s\n", source.Store, source.Docset, source.Snapshot)
+	}
+	return 0
+}
+
 // RegisterLoreSub adds (or replaces) a core `lore` subcommand.
 func RegisterLoreSub(sub LoreSub) {
 	loreSubs[sub.Name] = sub
@@ -85,6 +110,7 @@ func printLoreUsage(w io.Writer) {
 }
 
 func init() {
+	RegisterLoreSub(LoreSub{Name: "sources", Summary: "List synced sources, projections, and last snapshots", Run: cmdLoreSources})
 	RegisterLoreSub(LoreSub{
 		Name:    "docsets",
 		Summary: "List the docsets you can access, their paths, and attributes",

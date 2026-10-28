@@ -8,7 +8,7 @@ failures, and end each identity with a plain-language ✅ summary.
 
 ## Preconditions
 
-Require root `openlore.yml`, `.local/lore.json`, and `.local/filesystem`. If
+Require root `openlore.yml`, `.local/lore.json`, and `content/`. If
 `.local` was discarded or `deploy/` records a verified deployment, stop: edit
 the authoritative server instead. Validate current policy before changes; never
 incidentally remove or weaken access.
@@ -44,8 +44,9 @@ docset boundaries, and grants before writing. Never access or store private keys
 
 ## Apply coherently
 
-Edit `.local/lore.json` atomically and create matching virtual paths (for example
-`.local/filesystem/user/alice/` and `channel/general/`). Never
+Edit root `lore.json` and its `.local/lore.json` runtime copy atomically, keeping
+the committed policy blueprint current. Create matching virtual paths (for example
+`content/user/alice/` and `channel/general/`). Never
 put host keys, signing material, logs, or databases in bootstrap state.
 Put a short `README.md` in every newly created empty docset so its purpose and
 successful visibility are obvious; never overwrite existing content.
@@ -56,7 +57,7 @@ minimal JSON edit, validate the whole result, and preserve formatting.
 Update the setup record in the same step, so it never lags the policy:
 
 - add or amend the identity's row in `# Identities and access` of
-  `.local/filesystem/channel/infrastructure/openlore-server.md` (identity,
+  `content/channel/infrastructure/openlore-server.md` (identity,
   roles, home, docsets and grants, delegates); list new docsets there too;
 - refresh `generated.at` (UTC, `date -u +%Y-%m-%dT%H:%M:%SZ`) and set
   `generated.by` to yourself as `<agent name>/<model or version>`;
@@ -85,16 +86,17 @@ Quietly connect directly and prove:
 Remove only disposable verification files. Report the exact SSH command and
 finish with a friendly ✅ summary of the identity, home, roles, visible folders,
 and what read/write means in practice. Give a ready-to-run terminal command and
-an example that reads the new home `README.md`. `.local` is gitignored, so do
-not offer to commit its policy or filesystem contents. Ask whether to add
+an example that reads the new home `README.md`. `.local/` and `content/` are
+gitignored; offer only the root `lore.json` blueprint diff for review, never runtime
+state or source content. Ask whether to add
 another identity; if not, offer to continue with “run deploy” — to share the
 server with the team — or later via `ssh openlore.sh deploy | <agent-cli>`.
 
 If the person stops here, open the setup record for them and say so:
 
-```shell
-open .local/filesystem/channel/infrastructure/openlore-server.md   # macOS
-xdg-open .local/filesystem/channel/infrastructure/openlore-server.md   # Linux
+```bash
+open content/channel/infrastructure/openlore-server.md   # macOS
+xdg-open content/channel/infrastructure/openlore-server.md   # Linux
 ```
 
 If neither opener exists, give the absolute path instead.

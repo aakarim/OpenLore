@@ -25,31 +25,39 @@ impact—not a technical postmortem—unless asked.
 
 Produce one Git repository named from the user's team with this shape:
 
-```
+```text
 <team-slug>-lore/
 ├── Containerfile
 ├── openlore.yml
+├── lore.json
+├── home/                    # per-identity lore CLI settings
+│   └── <identity>/sources.yaml
 ├── .gitignore
 ├── deploy/
 │   └── README.md
+├── content/                 # gitignored; local throwaway server content
+│   ├── user/onboarding/README.md
+│   ├── channel/general/INDEX.md
+│   └── channel/infrastructure/
+│       ├── index.md
+│       ├── openlore-server.md
+│       └── log.md
 └── .local/
     ├── compose.yml
-    ├── lore.json
+    ├── lore.json            # disposable runtime copy of the blueprint
     ├── known_hosts
     ├── ssh_config
-    ├── filesystem/
-    │   ├── user/onboarding/README.md
-    │   ├── channel/general/INDEX.md
-    │   └── channel/infrastructure/
-    │       ├── index.md
-    │       ├── openlore-server.md
-    │       └── log.md
+    ├── sources/             # lore CLI clones and source copies
+    ├── sync.json            # lore CLI per-identity sync state
     └── runtime.env
 ```
 
 `openlore.yml` is the project marker and the Git/IaC authority for server
 configuration. `.local/` is gitignored bootstrap state. It is never part of the
-image and is never committed.
+image and is never committed. `home/<identity>/sources.yaml` commits each person's source definitions only;
+`lore.json` commits identities, roles, docsets and projections, never tokens or
+private keys. `content/` is reserved for a future `lore pull`; for this throwaway
+local server only, seed its example files there. V1 `lore sync` never writes it.
 
 ## 1. Interview and inspect
 
@@ -106,6 +114,7 @@ port: 2222
 http_port: 8080
 metrics_port: 0
 default_cwd: /
+external_url: http://localhost:<selected HTTP port>
 
 host_key_path: /var/lib/openlore/ssh/openlore_ed25519
 auth_file: /var/lib/openlore/config/lore.json
@@ -141,7 +150,11 @@ passkeys:
 These standard Unix paths are identical locally and remotely. Dynamic policy
 does not belong in this file.
 
-Create `.gitignore` with `/.local/`. Create `deploy/README.md` explaining that
+Do not create `home/` by hand; `lore source add` and `lore agent import` write
+`home/<identity>/sources.yaml` for the logged-in identity. Source sync is on by
+default and is a manual push (`lore sync`) only.
+Create `.gitignore` with both `/.local/` and `/content/`.
+Create `deploy/README.md` explaining that
 provider deployment skills place committed scripts and non-secret resource
 metadata below `deploy/<provider>/`; credentials and runtime state never go
 there.
@@ -175,8 +188,11 @@ what you are about to grant:
   before granting it. The delegate entry denies that capability, so the agent
   cannot edit policy while acting for the person.
 
-Then create `.local/lore.json` exactly in this schema — field names and nesting
-matter; do not invent variants such as `grants` or `permissions`:
+Then create root `lore.json` exactly in this schema and copy it to
+`.local/lore.json` for the disposable writable runtime. The root file is the
+committed policy blueprint; never copy runtime tokens, signing keys or private
+keys into it. Field names and nesting matter; do not invent variants such as
+`grants` or `permissions`:
 
 ```json
 {
@@ -232,7 +248,7 @@ owner. If the running server disagrees with this schema, trust
 template and report
 the difference.
 
-Create all three paths below `.local/filesystem/`. Put a short `README.md` in the
+Create all three paths below `content/`. Put a short `README.md` in the
 private home. Put a concise summary of the confirmed “Who is this for?” answer
 at the very top of `/channel/general/INDEX.md`, followed by useful organization,
 person, and team details without inventing facts. Do not overwrite user content.
@@ -249,7 +265,7 @@ the **Open Knowledge Format (OKF)**: markdown files with a small YAML header
 (frontmatter), which the `okf` rule above validates on every write. Define
 OKF only in that one sentence; do not lecture.
 
-Create the folder `.local/filesystem/channel/infrastructure/` with exactly
+Create the folder `content/channel/infrastructure/` with exactly
 three files. Fill every `<placeholder>` from facts confirmed in this session;
 never invent, and never record key material, private-key paths, tokens, or
 credentials. Agents are named `<agent name>/<model or version>` (for example
@@ -368,8 +384,9 @@ services:
       - "${OPENLORE_HTTP_PORT}:8080"
     volumes:
       - ../openlore.yml:/var/lib/openlore/config/openlore.yml:ro
+      - ../home:/var/lib/openlore/config/home:ro
       - ./lore.json:/var/lib/openlore/config/lore.json
-      - ./filesystem:/var/lib/openlore/published
+      - ../content:/var/lib/openlore/published
       - openlore-data:/var/lib/openlore/data
       - openlore-ssh:/var/lib/openlore/ssh
 volumes:
@@ -401,7 +418,11 @@ architecture:
    Then build `./cmd/openlore` into an ignored local path.
 4. Create an ignored `.local/openlore.local.yml` derived from root
    `openlore.yml`, replacing `/var/lib/openlore` paths with absolute paths below
-   this project's `.local/`. Do not modify the tracked production config.
+   this project's `.local/`, except `writable_dir`, which points at the absolute
+   `content/` path. Copy or symlink root `home/` beside it so the server
+   validates the same `home/*/sources.yaml` files.
+   Set `external_url` to the chosen local HTTP URL so `lore login` can find it.
+   Do not modify the tracked production config.
 5. Run the binary with `--config .local/openlore.local.yml`.
 
 Do not commit the clone, binary, or local config. Use Compose only when no
@@ -451,13 +472,15 @@ as <agent name>/<model or version>”), refresh `generated.at`, add the
 `**Update**` line to `log.md`, and rerun `lore validate /channel/infrastructure`.
 Leave `status: draft` until `deploy` verifies a shared server.
 
-Initialize Git if needed. Show all tracked files and prove `.local/` is ignored.
+Initialize Git if needed. Show all tracked files and prove both `.local/` and
+`content/` are ignored. Keep per-machine `lore login` credentials only in
+`~/.config/lore/` (or `$XDG_CONFIG_HOME/lore/`), never in the blueprint.
 Finish with a friendly ✅ summary: what was created, which local runtime is
 serving (Go binary or Compose) and how to restart it, selected release version,
 local URLs, identity/home, ports, and key used. Do not narrate successful
 internal checks. Give these commands for a new terminal:
 
-```shell
+```bash
 ssh -F .local/ssh_config lore-local
 ssh -F .local/ssh_config lore-local 'cat /channel/general/INDEX.md'
 ssh -F .local/ssh_config lore-local 'cat /channel/infrastructure/openlore-server.md'
@@ -474,9 +497,9 @@ authoritative server; do not create staging environments.
 
 If the person stops here, open the finished setup record for them and say so:
 
-```shell
-open .local/filesystem/channel/infrastructure/openlore-server.md   # macOS
-xdg-open .local/filesystem/channel/infrastructure/openlore-server.md   # Linux
+```bash
+open content/channel/infrastructure/openlore-server.md   # macOS
+xdg-open content/channel/infrastructure/openlore-server.md   # Linux
 ```
 
 If neither opener exists, give the absolute path instead.

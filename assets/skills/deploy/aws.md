@@ -16,7 +16,7 @@ access.
 
 - Create a root `Containerfile` from an exact pinned semver (`FROM ghcr.io/aakarim/openlore:1.2.3`, not `latest`) and deploy that derivative image, retaining it for future package additions. Do not bake configuration into it.
 - Root `openlore.yml` is Git/IaC authoritative and is deployed separately at `/var/lib/openlore/config/openlore.yml`. Set `auth_file: /var/lib/openlore/config/lore.json`, `writable_dir: /var/lib/openlore/published`, `data_dir: /var/lib/openlore/data`, and `host_key_path: /var/lib/openlore/ssh/openlore_ed25519`; use internal SSH `2222` and the chosen HTTP port.
-- Keep bootstrap state exclusively in gitignored `.local/lore.json` and `.local/filesystem`.
+- Keep bootstrap state exclusively in gitignored `.local/lore.json` and `content/`. Deploy the committed `home/` directory beside `openlore.yml`; the server validates `home/*/sources.yaml` at startup.
 - Store idempotent scripts/templates and non-secret IDs/configuration under `deploy/aws/`. Discover/tag resources before creating them, show diffs, and commit only with explicit approval. Do not require one particular IaC tool.
 
 ## Provision and deploy
@@ -28,7 +28,7 @@ access.
 
 ## Bootstrap and verify
 
-Use SSM or provider-default admin access to inspect the mounted EBS filesystem. Copy or reconcile root `openlore.yml` to the persistent config path. Upload `.local/lore.json` and `.local/filesystem` only when the remote lore file is absent and published/data state is empty. Create `config`, `published`, `data`, and `ssh` with restrictive ownership. Stop on any mutable existing state; never overwrite or merge remote lore or filesystem content.
+Use SSM or provider-default admin access to inspect the mounted EBS filesystem. Copy or reconcile root `openlore.yml` to the persistent config path. Upload `.local/lore.json` and `content/` only when the remote lore file is absent and published/data state is empty. Create `config`, `published`, `data`, and `ssh` with restrictive ownership. Stop on any mutable existing state; never overwrite or merge remote lore or filesystem content.
 
 Required checks: valid HTTPS; successful MCP initialization; authenticated OpenLore SSH (without `-p` when NLB port 22 exists); write/read a unique probe; restart both the container and instance and read it again; confirm auth and host key persist; open an AWS administrative session; and inspect ingress to ensure `2222` is not public when port 22 mapping exists.
 

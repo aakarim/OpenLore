@@ -9,6 +9,8 @@ import (
 	"mime"
 	"net/url"
 	"os"
+	"path"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -500,10 +502,11 @@ type JWKSSpec struct {
 
 // DocsetSpec defines a named set of path mappings.
 type DocsetSpec struct {
-	Paths  []PathMapping             `json:"paths"`
-	Access DocsetAccess              `json:"access,omitempty"`
-	Rules  map[string]rules.RuleSpec `json:"rules,omitempty"`
-	Config *DirConfigPermission      `json:"config,omitempty"`
+	Paths      []PathMapping             `json:"paths"`
+	Projection *ProjectionSpec           `json:"projection,omitempty"`
+	Access     DocsetAccess              `json:"access,omitempty"`
+	Rules      map[string]rules.RuleSpec `json:"rules,omitempty"`
+	Config     *DirConfigPermission      `json:"config,omitempty"`
 	// AgentSkills is ignored. Collections are selected dynamically by xattr.
 	AgentSkills bool `json:"-"`
 	// Aliases are alternate display roots for the first path. They expose the
@@ -986,6 +989,9 @@ func WithConfigFile(path string) Option {
 
 		cfg.configFileLoaded = true
 		cfg.ConfigFile = path
+		if err := validateHomeSources(filepath.Dir(path)); err != nil {
+			return err
+		}
 		cfg.Experimental = append([]string(nil), fc.Experimental...)
 		cfg.Tracing = fc.Tracing
 		if err := applyAnalyticsConfig(cfg, fc.Analytics); err != nil {
@@ -1717,6 +1723,34 @@ func ValidateAuthConfig(auth *AuthConfig) error {
 		}
 	}
 	for docset, ds := range auth.Docsets {
+		if ds.Projection != nil {
+			p := ds.Projection
+			parts := strings.Split(p.Store, "/")
+			if docset == "" || strings.ContainsAny(docset, "/\\") || !validProjectionPath(p.Store) || len(parts) < 2 || (parts[0] != "openlore" && len(parts) < 3) || (parts[0] == "git" && len(parts) < 4) || (parts[0] != "claude" && parts[0] != "git" && parts[0] != "folder" && parts[0] != "openlore") || (p.Subpath != "" && !validProjectionPath(p.Subpath)) {
+				return fmt.Errorf("docset %q has invalid projection store/subpath", docset)
+			}
+			// A projection has no backing source directory: it mounts at a
+			// single display path, /<docset> unless one path says otherwise.
+			mount := "/" + docset
+			if len(ds.Paths) > 0 {
+				if len(ds.Paths) != 1 || ds.Paths[0].Display != "" && ds.Paths[0].Display != ds.Paths[0].Source {
+					return fmt.Errorf("projection %q must declare one path", docset)
+				}
+				mount = ds.Paths[0].Source
+				if !strings.HasPrefix(mount, "/") || mount == "/" || path.Clean(mount) != mount {
+					return fmt.Errorf("projection %q path %q must be an absolute, normalized path below /", docset, mount)
+				}
+			}
+			for _, pattern := range append(append([]string{}, p.Include...), p.Exclude...) {
+				if _, err := path.Match(pattern, ""); err != nil {
+					return fmt.Errorf("projection %q invalid glob %q", docset, pattern)
+				}
+			}
+			ds.Paths = []PathMapping{{Source: mount, Display: mount}}
+			readonly := true
+			ds.Readonly = &readonly
+			auth.Docsets[docset] = ds
+		}
 		if ds.Config != nil {
 			if err := validateNames(fmt.Sprintf("docset %q config.edit roles", docset), ds.Config.Edit); err != nil {
 				return err
