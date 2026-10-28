@@ -22,6 +22,7 @@ import (
 
 type agentSkillsPlugin struct {
 	docsets      map[string]config.DocsetSpec
+	liveDocsets  func() map[string]config.DocsetSpec
 	fs           vfs.FileSystem
 	canonicalize func(string) string
 	logger       *slog.Logger
@@ -68,7 +69,11 @@ func (p *agentSkillsPlugin) canonical(pth string) string {
 func (p *agentSkillsPlugin) roots() []string {
 	seen := map[string]bool{}
 	var out []string
-	for _, ds := range p.docsets {
+	docsets := p.docsets
+	if p.liveDocsets != nil {
+		docsets = p.liveDocsets()
+	}
+	for _, ds := range docsets {
 		for _, pm := range ds.Paths {
 			r := p.canonical(displayPath(pm))
 			if !seen[r] {

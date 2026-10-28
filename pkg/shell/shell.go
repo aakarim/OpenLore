@@ -45,7 +45,9 @@ type Shell struct {
 	// from the identity's lore. Read by `lore docsets` and `publish`
 	// respectively. nil for a standalone shell.
 	docsets                 []cmds.DocsetInfo
+	docsetLister            func() []cmds.DocsetInfo
 	publishTargets          []cmds.PublishTarget
+	publishTargetLister     func() []cmds.PublishTarget
 	unsupportedUsageHandler func(UnsupportedUsage)
 	commandObserver         func(CommandExecution)
 	executionContext        context.Context
@@ -174,8 +176,16 @@ func (s *Shell) WriteConflictPolicy(resolvedPath string) vfs.WriteConflictPolicy
 // SetDocsets installs the per-session docset views surfaced by `lore docsets`.
 func (s *Shell) SetDocsets(d []cmds.DocsetInfo) { s.docsets = d }
 
+// SetDocsetLister resolves the current docsets when a command needs them.
+func (s *Shell) SetDocsetLister(list func() []cmds.DocsetInfo) { s.docsetLister = list }
+
 // Docsets reports the per-session docset views. Implements CmdContext.
-func (s *Shell) Docsets() []cmds.DocsetInfo { return s.docsets }
+func (s *Shell) Docsets() []cmds.DocsetInfo {
+	if s.docsetLister != nil {
+		return s.docsetLister()
+	}
+	return s.docsets
+}
 
 func (s *Shell) SetSourceLister(list func() ([]cmds.SourceInfo, error)) { s.sourceLister = list }
 func (s *Shell) Sources() ([]cmds.SourceInfo, error) {
@@ -188,8 +198,18 @@ func (s *Shell) Sources() ([]cmds.SourceInfo, error) {
 // SetPublishTargets installs the per-session publish inboxes used by `publish`.
 func (s *Shell) SetPublishTargets(t []cmds.PublishTarget) { s.publishTargets = t }
 
+// SetPublishTargetLister resolves inboxes against current configuration.
+func (s *Shell) SetPublishTargetLister(list func() []cmds.PublishTarget) {
+	s.publishTargetLister = list
+}
+
 // PublishTargets reports the per-session publish inboxes. Implements CmdContext.
-func (s *Shell) PublishTargets() []cmds.PublishTarget { return s.publishTargets }
+func (s *Shell) PublishTargets() []cmds.PublishTarget {
+	if s.publishTargetLister != nil {
+		return s.publishTargetLister()
+	}
+	return s.publishTargets
+}
 
 // SetSSHTarget installs the ssh arguments that reach this host, substituted
 // into skills that carry the {{ ssh_target }} placeholder.

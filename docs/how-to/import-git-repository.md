@@ -79,7 +79,7 @@ Synced content is invisible until a docset projects it. Add a projection to `lor
 }
 ```
 
-Restart the server. The docset mounts read-only at `/payments-docs` with the `docs/` prefix stripped, so `docs/adr/0007.md` is served as `/payments-docs/adr/0007.md`. Everyone who holds the `engineers` [role](../concepts/auth.md) can read it; a projection takes `access` grants like any other docset.
+Run `lore config reload` in an OpenLore session with `lore:config:edit`; no server restart is needed. The docset mounts read-only at `/payments-docs` with the `docs/` prefix stripped, so `docs/adr/0007.md` is served as `/payments-docs/adr/0007.md`. Everyone who holds the `engineers` [role](../concepts/auth.md) can read it, including in existing sessions; a projection takes `access` grants like any other docset.
 
 ---
 

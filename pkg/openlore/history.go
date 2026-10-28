@@ -413,6 +413,7 @@ func historyReadable(roots []string, target string) bool {
 type scopedHistory struct {
 	store     HistoryStore
 	roots     []string
+	liveRoots func() []string
 	gc        func(context.Context) (HistoryGCStats, error)
 	gcTimeout time.Duration
 }
@@ -436,6 +437,9 @@ func (h scopedHistory) GC() ([]byte, error) {
 
 func (h scopedHistory) Query(principal, actor string) ([]byte, error) {
 	var out []byte
+	if h.liveRoots != nil {
+		h.roots = h.liveRoots()
+	}
 	query := HistoryQuery{Roots: h.roots, Principal: principal, Actor: actor}
 	for {
 		page, err := h.store.Query(context.Background(), query)

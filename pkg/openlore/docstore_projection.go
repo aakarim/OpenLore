@@ -22,20 +22,16 @@ type projectionFS struct {
 }
 
 func (s *Server) mountProjections() error {
-	for name, ds := range s.auth.Docsets {
-		if ds.Projection == nil {
-			continue
+	mounts, err := s.projectionMounts(s.auth)
+	if err != nil {
+		return err
+	}
+	s.initialProjections = mounts
+	s.merge.projections = func() map[string]vfs.FileSystem {
+		if live := s.runtimeConfig.Load(); live != nil {
+			return live.projections
 		}
-		root := primaryDisplayPath(ds)
-		if root == "" {
-			root = "/" + name
-		}
-		for _, system := range []string{"/jobs", "/requests"} {
-			if pathWithinRoot(system, root) {
-				return fmt.Errorf("projection %q conflicts with a system mount", name)
-			}
-		}
-		s.merge.Mount(strings.TrimPrefix(root, "/"), &projectionFS{store: s.docstore, spec: *ds.Projection})
+		return mounts
 	}
 	return nil
 }
@@ -161,6 +157,8 @@ type sourceView struct {
 // visibleSource preserves original source-relative filenames for the API but
 // never leaks files excluded by every projection the reader can access.
 func (s *Server) visibleSource(id Identity, state sourceState) (sourceView, []config.ProjectionSpec, bool) {
+	s = s.readView()
+	id = s.liveReadIdentity(id)
 	view := sourceView{Store: state.Store, Owner: state.Owner, Latest: latestSnapshot(state), Projections: []string{}}
 	projections := []config.ProjectionSpec{}
 	if strings.HasPrefix(state.Store, "openlore/") {

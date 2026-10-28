@@ -17,8 +17,9 @@ const defaultOKFPattern = "*.md"
 // okfPlugin retains OKF's read-side metadata integration and a compatibility
 // validator shim. Write admission and all validation logic live in rulesPlugin.
 type okfPlugin struct {
-	docsets map[string]config.DocsetSpec
-	engine  *rules.Engine
+	docsets     map[string]config.DocsetSpec
+	liveDocsets func() map[string]config.DocsetSpec
+	engine      *rules.Engine
 }
 
 func newOKF(docsets map[string]config.DocsetSpec, logger *slog.Logger) *okfPlugin {
@@ -51,7 +52,11 @@ func (p *okfPlugin) resolve(target string) *config.OKFDocsetConfig {
 	clean := vfs.CleanPath(target)
 	bestLen := -1
 	var best *config.OKFDocsetConfig
-	for _, docset := range p.docsets {
+	docsets := p.docsets
+	if p.liveDocsets != nil {
+		docsets = p.liveDocsets()
+	}
+	for _, docset := range docsets {
 		for _, mapping := range docset.Paths {
 			root := displayPath(mapping)
 			if pathWithinRoot(root, clean) && len(root) > bestLen {

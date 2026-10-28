@@ -36,7 +36,8 @@ type DirFS struct {
 	// docset boundaries for Mkdir: a folder may only be created strictly below
 	// one of them. Empty means the whole DirFS is treated as a single docset
 	// (any non-root path is allowed).
-	docsetRoots []string
+	docsetRoots     []string
+	liveDocsetRoots func() []string
 
 	// stateMu guards the writeable flag and drains in-flight writes. Writers
 	// take RLock for the duration of a mutation; SetReadonly takes the
@@ -79,6 +80,13 @@ func (d *DirFS) WithDocsetRoots(roots []string) *DirFS {
 	}
 	d.docsetRoots = cleaned
 	return d
+}
+
+func (d *DirFS) currentDocsetRoots() []string {
+	if d.liveDocsetRoots != nil {
+		return d.liveDocsetRoots()
+	}
+	return d.docsetRoots
 }
 
 // SetWriteable transitions the substrate to writable. Idempotent. It also
@@ -249,17 +257,18 @@ func (d *DirFS) Mkdir(p string) error {
 // docset root. With no docset roots configured, the whole DirFS is one docset,
 // so any non-root path qualifies.
 func (d *DirFS) insideDocset(clean string) bool {
-	if len(d.docsetRoots) == 0 {
+	roots := d.currentDocsetRoots()
+	if len(roots) == 0 {
 		return clean != "/"
 	}
 	// A nested docset root remains protected even when another docset (such as
 	// "/") contains it.
-	for _, root := range d.docsetRoots {
+	for _, root := range roots {
 		if clean == root {
 			return false
 		}
 	}
-	for _, root := range d.docsetRoots {
+	for _, root := range roots {
 		if root == "/" {
 			if clean != "/" {
 				return true
@@ -326,14 +335,15 @@ func (d *DirFS) mutationPathError(p string, dirConfig bool) error {
 // whether one exists. With no docset roots configured the whole DirFS is one
 // docset rooted at "/" (which always exists).
 func (d *DirFS) docsetRootFor(clean string) (string, bool) {
-	if len(d.docsetRoots) == 0 {
+	roots := d.currentDocsetRoots()
+	if len(roots) == 0 {
 		if clean != "/" {
 			return "/", true
 		}
 		return "", false
 	}
 	best := ""
-	for _, root := range d.docsetRoots {
+	for _, root := range roots {
 		if root == "/" {
 			if clean != "/" && best == "" {
 				best = "/"
@@ -826,6 +836,8 @@ func (d *DirFS) ReadFileBounded(p string, maxBytes int64) ([]byte, error) {
 type MergeFS struct {
 	root   vfs.FileSystem
 	mounts map[string]vfs.FileSystem
+	// Projection maps are immutable and published with the live policy.
+	projections func() map[string]vfs.FileSystem
 	// system marks mount names that are control-plane (e.g. "requests") rather
 	// than lore docsets. System mounts are always readable regardless of an
 	// identity's RBAC policy (see Server.readableRoots / SystemMountPaths).
@@ -838,6 +850,21 @@ func NewMergeFS() *MergeFS {
 		mounts: make(map[string]vfs.FileSystem),
 		system: make(map[string]bool),
 	}
+}
+
+func (m *MergeFS) contentMounts() map[string]vfs.FileSystem {
+	if m.projections == nil {
+		return m.mounts
+	}
+	projections := m.projections()
+	mounts := make(map[string]vfs.FileSystem, len(m.mounts)+len(projections))
+	for name, fsys := range m.mounts {
+		mounts[name] = fsys
+	}
+	for name, fsys := range projections {
+		mounts[name] = fsys
+	}
+	return mounts
 }
 
 // SetRoot sets the root filesystem that serves content at "/".
@@ -1148,13 +1175,14 @@ func (m *MergeFS) resolve(p string) (string, vfs.FileSystem, error) {
 	// (e.g. "user/alice/claude" for a projection nested beneath a home); the
 	// longest mount that is p itself or an ancestor of p wins.
 	best := ""
-	for name := range m.mounts {
+	mounts := m.contentMounts()
+	for name := range mounts {
 		if (p == name || strings.HasPrefix(p, name+"/")) && len(name) > len(best) {
 			best = name
 		}
 	}
 	if best != "" {
-		return "/" + strings.TrimPrefix(p, best), m.mounts[best], nil
+		return "/" + strings.TrimPrefix(p, best), mounts[best], nil
 	}
 
 	// Fall back to root filesystem
@@ -1209,7 +1237,7 @@ func (m *MergeFS) nestedMounts(p string) []string {
 	}
 	seen := map[string]bool{}
 	var out []string
-	for name := range m.mounts {
+	for name := range m.contentMounts() {
 		if !strings.HasPrefix(name, prefix) {
 			continue
 		}

@@ -59,6 +59,9 @@ Every write is guarded:
   lists (`spawn`, `lore:config:edit`, …)
 - **Identities** — add or remove identities, public keys, role membership,
   `home`, token `match` rules, and `delegates`
+- **Docsets** — add, remove or change paths, aliases, projections and their
+  store/subpath/filters, access grants, read-only locks, and per-docset rules
+- **Rules** — change top-level rules as well as docset rules
 
 Example — create a role and put an identity in it:
 
@@ -69,24 +72,17 @@ echo "$NEW_CONFIG" | write /opt/openlore/lore.json
 lore config reload
 ```
 
-Changes apply to authorization checks immediately. A session's *view* (its
-docset table, `$HOME`, visible roots) is fixed at connect time, so affected
-users see the new shape on their next connection.
+Reload validates the complete candidate before replacing the running policy,
+projection mounts and rules together. Existing file-backed sessions observe
+new readable roots, aliases, grants and docset listings on subsequent operations.
+An already-started read may finish with the previous view. Content writes are
+serialized with reload and rechecked at commit. `$HOME`, the current working
+directory and command visibility remain session settings; reconnect to refresh
+those. External authorization stores retain their stable read-policy contract.
 
-## What requires a server restart
-
-Changes to these are **rejected when written through the session mount** — the
-running server cannot apply them live:
-
-- **`docsets`** — creating a docset, mounting it at a display path, adding
-  aliases, and changing its `access` ACL (which roles can see it, and whether
-  `ro`, `rw`, or `publish`)
-- **`allow_keyless`**, **`unknown_identity`**, **`default_cwd`**
-
-For these, edit `lore.json` where the server reads it — on the host, or the
-volume-mounted copy in a container deployment — then restart the process
-(`systemctl restart openlore`, `docker restart openlore`, …). The server
-validates the file at startup and fails loudly on errors.
+Invalid edits through the config mount leave both the file and running policy
+unchanged. A rejected reload of a host-edited file keeps the previous running
+configuration and leaves the supplied file on disk for the operator to fix.
 
 Example — create a docset mounted at `/kb/research`, readable by `reviewer`
 and writable by `engineer`:
@@ -102,11 +98,18 @@ and writable by `engineer`:
 }
 ```
 
-After the restart, verify from a session:
+After saving and running `lore config reload`, verify from the same session:
 
 ```shell
 lore docsets      # the new docset appears with its grants and path
 ```
+
+## What requires a server restart
+
+Changes to **`allow_keyless`**, **`unknown_identity`** and **`default_cwd`** are
+rejected when written through the session mount. Edit the host or volume-mounted
+`lore.json` and restart the process to change them. `openlore.yml` also remains
+startup-only configuration.
 
 ## Quick reference
 
@@ -114,8 +117,9 @@ lore docsets      # the new docset appears with its grants and path
 |---|---|---|
 | Role capabilities | edit mount + `lore config reload` | immediately |
 | Identity keys / roles / home / delegates | edit mount + `lore config reload` | immediately |
-| Create / mount / remove a docset | edit host `lore.json` + restart | on restart |
-| Docset ACLs (which roles see it) | edit host `lore.json` + restart | on restart |
+| Create / mount / remove a docset or projection | edit mount + `lore config reload` | immediately |
+| Docset ACLs, aliases, projection filters | edit mount + `lore config reload` | immediately |
+| Docset and top-level rules | edit mount + `lore config reload` | immediately |
 | `allow_keyless`, `unknown_identity`, `default_cwd` | edit host `lore.json` + restart | on restart |
 
 See `auth.md` for the full `lore.json` shape and RBAC model, and `writes.md`

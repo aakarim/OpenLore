@@ -56,10 +56,11 @@ type Server struct {
 	// as knowledge-backend that does its own scoping): callers get full access.
 	// When true, an access-control policy was loaded and identity scoping is
 	// enforced (docsets filtered, anonymous is read-only).
-	auth         *config.AuthConfig
-	authMu       sync.RWMutex
-	runtimeAuth  atomic.Pointer[config.AuthConfig]
-	authEnforced bool
+	auth               *config.AuthConfig
+	authMu             sync.RWMutex
+	runtimeConfig      atomic.Pointer[liveConfig]
+	initialProjections map[string]vfs.FileSystem
+	authEnforced       bool
 	// grants is the registry of grant types (ro/rw + plugin-contributed like
 	// publish). A grant name in lore.json with no registered type fails startup.
 	grants             *grantRegistry
@@ -271,6 +272,7 @@ func newServerWithRoot(rootDir string, rootFS vfs.FileSystem, lowerFS fs.FS, opt
 	var agentSkills *agentSkillsPlugin
 	if cfg.Plugins.Skills.Enabled {
 		agentSkills = newAgentSkills(s.auth.Docsets, s.merge, s.canonicalPath, logger, cfg.Plugins.Skills)
+		agentSkills.liveDocsets = func() map[string]config.DocsetSpec { return s.currentAuth().Docsets }
 		s.agentSkills = agentSkills
 		if err := s.registerPlugin(agentSkills); err != nil {
 			return nil, err
@@ -284,11 +286,16 @@ func newServerWithRoot(rootDir string, rootFS vfs.FileSystem, lowerFS fs.FS, opt
 		return nil, err
 	}
 	s.rules = rulesPlugin
+	rulesPlugin.liveEngine = func() *rules.Engine {
+		if live := s.runtimeConfig.Load(); live != nil {
+			return live.engine
+		}
+		return rulesPlugin.engine
+	}
 	// OKF metadata remains owned by the existing adapter; admission and
 	// validation are provided exclusively by the rules engine above.
-	if anyDocsetHasOKF(s.auth.Docsets) {
-		s.metaExtenders = append(s.metaExtenders, newOKF(s.auth.Docsets, logger).MetaExtenders()...)
-	}
+	okf := &okfPlugin{liveDocsets: func() map[string]config.DocsetSpec { return s.currentAuth().Docsets }}
+	s.metaExtenders = append(s.metaExtenders, okf.MetaExtenders()...)
 	if shellPlugin != nil {
 		if err := s.registerPlugin(shellPlugin); err != nil {
 			return nil, err
@@ -302,6 +309,7 @@ func newServerWithRoot(rootDir string, rootFS vfs.FileSystem, lowerFS fs.FS, opt
 		s.merge.SetRoot(rootFS)
 	} else if rootDir != "" {
 		dirFS := NewDirFS(rootDir, cfg.Files).WithDocsetRoots(docsetRoots)
+		dirFS.liveDocsetRoots = s.allDocsetRoots
 		s.merge.SetRoot(dirFS)
 	} else if cfg.WritableDir != "" {
 		info, err := os.Stat(cfg.WritableDir)
@@ -309,6 +317,7 @@ func newServerWithRoot(rootDir string, rootFS vfs.FileSystem, lowerFS fs.FS, opt
 			return nil, fmt.Errorf("writable_dir %q is not a directory", cfg.WritableDir)
 		}
 		upper := NewDirFS(cfg.WritableDir, cfg.Files).WithDocsetRoots(docsetRoots)
+		upper.liveDocsetRoots = s.allDocsetRoots
 		if lowerFS != nil {
 			s.merge.SetRoot(NewOverlayFS(upper, NewFSAdapter(lowerFS, cfg.Files)))
 		} else {
@@ -326,20 +335,13 @@ func newServerWithRoot(rootDir string, rootFS vfs.FileSystem, lowerFS fs.FS, opt
 		if !filepath.IsAbs(analyticsCfg.Dir) {
 			analyticsCfg.Dir = filepath.Join(dataDir, analyticsCfg.Dir)
 		}
-		excluded, err := analyticsInternalRoots(s.merge, dataDir, analyticsCfg.Dir)
+		knowledgeScopes, err := s.knowledgeScopes(s.currentAuth())
 		if err != nil {
 			return nil, fmt.Errorf("resolving analytics content exclusions: %w", err)
 		}
 		service, analyticsErr := analytics.New(analyticsCfg, analytics.Deps{FS: s.merge})
 		if analyticsErr != nil {
 			return nil, fmt.Errorf("configuring analytics: %w", analyticsErr)
-		}
-		var knowledgeScopes []analytics.KnowledgeScope
-		contentBoundary := analyticsContentBoundary(cfg.Files)
-		for name, docset := range s.currentAuth().Docsets {
-			for _, mapping := range docset.Paths {
-				knowledgeScopes = append(knowledgeScopes, analytics.KnowledgeScope{Name: name, Root: displayPath(mapping), Exclude: excluded, ContentBoundary: contentBoundary})
-			}
 		}
 		service.SetKnowledgeScopes(knowledgeScopes)
 		s.analytics = service
@@ -524,8 +526,8 @@ func newServerWithRoot(rootDir string, rootFS vfs.FileSystem, lowerFS fs.FS, opt
 }
 
 func (s *Server) currentAuth() *config.AuthConfig {
-	if auth := s.runtimeAuth.Load(); auth != nil {
-		return auth
+	if live := s.runtimeConfig.Load(); live != nil {
+		return live.auth
 	}
 	return s.auth
 }
@@ -1041,9 +1043,10 @@ func (s *Server) buildSessionFS(id Identity) vfs.FileSystem {
 	// Expose this identity's aliases outermost so callers can retain the alias
 	// spelling while every internal operation, including CAS tracking, sees the
 	// canonical path. Ungranted aliases are never added to the session tree.
-	if aliases := s.aliasesForIdentity(id); len(aliases) > 0 {
-		sessionFS = newAliasFS(sessionFS, aliases)
-	}
+	sessionFS = newLiveAliasFS(sessionFS, func() []pathAlias {
+		view := s.readView()
+		return view.aliasesForIdentity(view.liveReadIdentity(id))
+	})
 	return sessionFS
 }
 
@@ -1062,7 +1065,7 @@ func (s *Server) buildCanonicalSessionFS(id Identity) vfs.FileSystem {
 	// unenforced/trusted mode the session sees the whole merge FS (all mounts).
 	sessionFS := vfs.FileSystem(s.merge)
 	if s.authEnforced {
-		sessionFS = newScopedReadFS(sessionFS, s.readableRoots(id), s.allDocsetRoots())
+		sessionFS = &liveReadFS{WritableFS: s.merge, server: s, identity: id}
 	}
 	// Read (before-read) gate: run the read middleware chain in front of every
 	// Stat/ReadDir/ReadFile so a plugin can (e.g.) refresh the substrate or
@@ -1090,8 +1093,7 @@ func (s *Server) buildCanonicalSessionFS(id Identity) vfs.FileSystem {
 	if s.authEnforced {
 		var authz writeAuthorizer
 		if canWrite || s.config.Readonly || !scopeGrantsWrite(id.Scopes) {
-			// Writes deliberately resolve current policy on every operation. The
-			// session snapshot remains authoritative for its stable read view.
+			// Writes deliberately resolve current policy on every operation.
 			writeID := id
 			writeID.policySnapshot = nil
 			authz = func(action vfs.ChangeAction, p string) error {
@@ -1296,15 +1298,20 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 		})
 	}
 
-	// Per-session docset views for `lore docsets` and publish inboxes for
-	// `publish`. Computed once here, where the access authority lives.
-	sh.SetDocsets(s.sessionDocsets(id))
+	// Existing shells discover new docsets and inboxes after a reload.
+	sh.SetDocsetLister(func() []cmds.DocsetInfo {
+		view := s.readView()
+		return view.sessionDocsets(view.liveReadIdentity(id))
+	})
 	sh.SetSourceLister(func() ([]cmds.SourceInfo, error) { return s.sourceRows(id) })
 	sh.SetSkillsManagementEnabled(s.config.Plugins.Skills.Enabled)
 	sh.SetConfigPlugins(s.plugins)
 	sh.SetSkillsRemoteConfig(s.config.Plugins.Skills.RemoteTimeout, s.config.Plugins.Skills.RemoteMaxBytes)
 	sh.SetMetaFilters(s.sessionMetaFilters(id))
-	sh.SetPublishTargets(s.sessionPublishTargets(id))
+	sh.SetPublishTargetLister(func() []cmds.PublishTarget {
+		view := s.readView()
+		return view.sessionPublishTargets(view.liveReadIdentity(id))
+	})
 	sh.SetSSHTarget(s.config.SSHTarget())
 	sh.SetMetaExtenders(s.metaExtenders)
 	sh.SetValidators(s.validators)
@@ -1314,7 +1321,7 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 		sh.SetConfigReloadBackend(s)
 	}
 	if s.history != nil {
-		history := scopedHistory{store: s.history, roots: historyRoots(s.sessionDocsets(id))}
+		history := scopedHistory{store: s.history, liveRoots: func() []string { return historyRoots(sh.Docsets()) }}
 		if canAdmin && s.writeLog != nil {
 			historyDir := filepath.Join(s.config.DataDir, "history")
 			if s.config.DataDir == "" {

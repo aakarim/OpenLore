@@ -83,7 +83,7 @@ Project the store at a path beneath your home docset. A projection with no `acce
 }
 ```
 
-Restart the server. `/user/alice/claude` appears in your home listing and in nobody else's; a teammate with the same roles gets a permission error on that path. Every transport treats it as read-only, so the copy on your machine stays the one you edit.
+Run `lore config reload` in an OpenLore session with `lore:config:edit`; no server restart is needed. `/user/alice/claude` appears in your existing home listing and in nobody else's; a teammate with the same roles cannot read that path. Every transport treats it as read-only, so the copy on your machine stays the one you edit.
 
 > **Note:** To share the same store with a team later, add a second projection at a path outside your home with an `access.allow` block, as in [Import a Claude project](import-claude-project.md).
 

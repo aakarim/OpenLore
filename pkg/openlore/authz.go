@@ -126,9 +126,10 @@ func (s *Server) validateGrantsFor(auth *config.AuthConfig) error {
 }
 
 func (s *Server) currentPolicy(id Identity) (AuthorizationPolicy, error) {
-	s.authMu.RLock()
-	defer s.authMu.RUnlock()
 	store := s.authorizationStore
+	if _, file := store.(fileAuthorizationStore); file {
+		store = fileAuthorizationStore{auth: s.currentAuth()}
+	}
 	if store == nil {
 		return AuthorizationPolicy{}, fmt.Errorf("authorization store unavailable")
 	}

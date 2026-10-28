@@ -22,7 +22,25 @@ type pathAlias struct {
 // authorization, hooks, changesets, and storage observe one path identity.
 type aliasFS struct {
 	vfs.FileSystem
-	aliases []pathAlias
+	aliases     []pathAlias
+	liveAliases func() []pathAlias
+}
+
+func newLiveAliasFS(base vfs.FileSystem, aliases func() []pathAlias) vfs.FileSystem {
+	a := &aliasFS{FileSystem: base, liveAliases: aliases}
+	if writable, ok := base.(vfs.WritableFS); ok {
+		return &writableAliasFS{aliasFS: a, inner: writable}
+	}
+	return a
+}
+
+func (a *aliasFS) currentAliases() []pathAlias {
+	if a.liveAliases == nil {
+		return a.aliases
+	}
+	aliases := a.liveAliases()
+	sort.Slice(aliases, func(i, j int) bool { return len(aliases[i].Alias) > len(aliases[j].Alias) })
+	return aliases
 }
 
 func newAliasFS(base vfs.FileSystem, aliases []pathAlias) vfs.FileSystem {
@@ -41,8 +59,9 @@ func newAliasFS(base vfs.FileSystem, aliases []pathAlias) vfs.FileSystem {
 // canonical maps p through the most-specific alias root.
 func (a *aliasFS) canonical(p string) (string, *pathAlias) {
 	clean := vfs.CleanPath(p)
-	for i := range a.aliases {
-		alias := &a.aliases[i]
+	aliases := a.currentAliases()
+	for i := range aliases {
+		alias := &aliases[i]
 		if pathWithinRoot(alias.Alias, clean) {
 			return replacePathRoot(clean, alias.Alias, alias.Target), alias
 		}
@@ -207,7 +226,7 @@ func (a *aliasFS) ListXattrs(p string) ([]string, error) {
 
 func (a *aliasFS) hasAliasDescendant(parent string) bool {
 	parent = vfs.CleanPath(parent)
-	for _, alias := range a.aliases {
+	for _, alias := range a.currentAliases() {
 		if parent == "/" || pathWithinRoot(parent, alias.Alias) && parent != alias.Alias {
 			return true
 		}
@@ -218,7 +237,7 @@ func (a *aliasFS) hasAliasDescendant(parent string) bool {
 func (a *aliasFS) aliasChildren(parent string) []string {
 	parent = vfs.CleanPath(parent)
 	children := map[string]bool{}
-	for _, alias := range a.aliases {
+	for _, alias := range a.currentAliases() {
 		if parent != "/" && !pathWithinRoot(parent, alias.Alias) {
 			continue
 		}
@@ -241,7 +260,7 @@ func (a *aliasFS) aliasChildren(parent string) []string {
 
 func (a *aliasFS) exactAliasTarget(p string) (string, bool) {
 	clean := vfs.CleanPath(p)
-	for _, alias := range a.aliases {
+	for _, alias := range a.currentAliases() {
 		if alias.Alias == clean {
 			return alias.Target, true
 		}
@@ -283,7 +302,9 @@ func (a *writableAliasFS) AdmitChangeSet(cs vfs.ChangeSet) error {
 			cs.Changes[i].RemoveAll = &remove
 		}
 	}
-	cs.Target, _ = a.canonical(cs.Target)
+	if len(cs.Changes) == 0 {
+		cs.Target, _ = a.canonical(cs.Target)
+	}
 	if cs.RemoveAll != nil {
 		remove := *cs.RemoveAll
 		remove.Opts = a.canonicalRemoveOpts(remove.Opts)
