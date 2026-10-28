@@ -26,6 +26,7 @@ type agentSkillsPlugin struct {
 	canonicalize func(string) string
 	logger       *slog.Logger
 	remote       *skillsremote.Client
+	gateway      *Docstore
 	ttl          time.Duration
 	timeout      time.Duration
 	mu           sync.Mutex
@@ -324,9 +325,22 @@ func (p *agentSkillsPlugin) syncSkill(ctx context.Context, skillDir string, forc
 	if r.Ref == "" {
 		r.Ref = resolvedRef
 	}
+	attempted := r
+	attempted.Commit = sha
+	defer p.recordRejection(skillDir, attempted)
 	if sha == r.Commit && r.Kind == kind {
-		p.setRemoteFailure(skillDir, fingerprint, "")
-		return
+		cached := p.gateway == nil
+		if p.gateway != nil {
+			_, cached, err = p.gateway.LoadSkillArchive(ctx, r.Repo, sha, r.Path)
+			if err != nil {
+				p.setRemoteFailure(skillDir, fingerprint, err.Error())
+				return
+			}
+		}
+		if cached {
+			p.setRemoteFailure(skillDir, fingerprint, "")
+			return
+		}
 	}
 	files, err := p.remote.Fetch(ctx, r.Repo, sha, r.Path)
 	if err != nil {

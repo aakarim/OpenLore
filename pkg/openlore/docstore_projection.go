@@ -163,6 +163,17 @@ type sourceView struct {
 func (s *Server) visibleSource(id Identity, state sourceState) (sourceView, []config.ProjectionSpec, bool) {
 	view := sourceView{Store: state.Store, Owner: state.Owner, Latest: latestSnapshot(state), Projections: []string{}}
 	projections := []config.ProjectionSpec{}
+	if strings.HasPrefix(state.Store, "skills/") {
+		// Public upstream bytes are shared, but source discovery still follows
+		// collection access. Never expose the private installation registry.
+		for dir := range state.Installations {
+			if name, _, ok := s.mostSpecificDocset(dir); ok {
+				if _, allowed := s.effectiveGrantNames(id, name); allowed {
+					return view, nil, true
+				}
+			}
+		}
+	}
 	if strings.HasPrefix(state.Store, "openlore/") {
 		name := strings.TrimPrefix(state.Store, "openlore/")
 		if _, ok := s.effectiveGrantNames(id, name); ok {

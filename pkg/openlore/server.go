@@ -271,6 +271,8 @@ func newServerWithRoot(rootDir string, rootFS vfs.FileSystem, lowerFS fs.FS, opt
 	var agentSkills *agentSkillsPlugin
 	if cfg.Plugins.Skills.Enabled {
 		agentSkills = newAgentSkills(s.auth.Docsets, s.merge, s.canonicalPath, logger, cfg.Plugins.Skills)
+		agentSkills.gateway = s.docstore
+		agentSkills.remote.Store = s.docstore
 		s.agentSkills = agentSkills
 		if err := s.registerPlugin(agentSkills); err != nil {
 			return nil, err
@@ -319,6 +321,11 @@ func newServerWithRoot(rootDir string, rootFS vfs.FileSystem, lowerFS fs.FS, opt
 	}
 	if err := s.mountProjections(); err != nil {
 		return nil, err
+	}
+	if agentSkills != nil {
+		if err := agentSkills.reconcileInstallations(nil); err != nil {
+			return nil, fmt.Errorf("migrating linked skills: %w", err)
+		}
 	}
 
 	if cfg.Analytics.IsEnabled() {
@@ -1131,8 +1138,12 @@ func (s *Server) buildCanonicalSessionFS(id Identity) vfs.FileSystem {
 			switch transformed := sessionFS.(type) {
 			case *writableReadTransformFS:
 				transformed.updateRemoteSkill = s.agentSkills.updateRemoteSkill
+				transformed.skillsRemote = s.agentSkills.remote
+				transformed.skillInstallationInfo = s.agentSkills.installationInfo
 			case *readTransformFS:
 				transformed.updateRemoteSkill = s.agentSkills.updateRemoteSkill
+				transformed.skillsRemote = s.agentSkills.remote
+				transformed.skillInstallationInfo = s.agentSkills.installationInfo
 			}
 		}
 	}
