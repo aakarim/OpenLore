@@ -833,6 +833,31 @@ select:focus-visible,
 .file-tabs > div > button:first-child {
   padding-left: 12px;
 }
+.tab-context-menu {
+  position: fixed;
+  z-index: 100;
+  min-width: 200px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  box-shadow: 0 6px 20px #0003;
+}
+.tab-context-menu button {
+  display: block;
+  width: 100%;
+  border: 0;
+  padding: 8px 12px;
+  text-align: left;
+  font-size: 13px;
+}
+.tab-context-menu button:focus-visible {
+  outline: none;
+  background: var(--selected);
+}
+.tab-context-menu button:last-child {
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+}
 .file-layout {
   height: calc(100dvh - 176px);
   display: grid;
