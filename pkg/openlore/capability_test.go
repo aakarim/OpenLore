@@ -96,12 +96,28 @@ func TestCapability_Help_HonorsScopedSet(t *testing.T) {
 	if strings.Contains(out, "WRITES") || strings.Contains(out, "PUBLISHING") {
 		t.Fatalf("read-only help must omit WRITES/PUBLISHING:\n%s", out)
 	}
+	for _, command := range []string{"tee", "publish", "spawn"} {
+		out, errs, code := run(sh, "help "+command)
+		if code != 1 || out != "" || !strings.Contains(errs, "no entry for "+command) {
+			t.Fatalf("read-only help %s: code=%d stderr=%q stdout=%q", command, code, errs, out)
+		}
+	}
+	out, errs, code := run(sh, "help sed")
+	if code != 0 || errs != "" || !strings.Contains(out, "Stream editor") || strings.Contains(out, "sed -i") {
+		t.Fatalf("read-only sed help: code=%d stderr=%q stdout=%q", code, errs, out)
+	}
 
 	// Writable+publish: help shows both.
 	sh.SetAllowedActions([]cmds.Action{cmds.ActionWrite, cmds.ActionPublish})
 	out, _, _ = run(sh, "help")
 	if !strings.Contains(out, "WRITES") || !strings.Contains(out, "PUBLISHING") {
 		t.Fatalf("writable help must show WRITES and PUBLISHING:\n%s", out)
+	}
+	for _, command := range []string{"tee", "publish"} {
+		out, errs, code := run(sh, "help "+command)
+		if code != 0 || errs != "" || !strings.HasPrefix(out, "  "+command+" ") || strings.Contains(out, "FILESYSTEM") {
+			t.Fatalf("writable help %s: code=%d stderr=%q stdout=%q", command, code, errs, out)
+		}
 	}
 }
 
