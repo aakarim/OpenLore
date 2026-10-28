@@ -4,11 +4,15 @@ Install OpenLore, serve a folder of Markdown, and connect an agent.
 
 ## Install
 
+Every installation ships two binaries: `openlore`, the server, and `lore`, the client that signs in to a server and syncs knowledge into it.
+
 ### macOS and Linux: Homebrew
 
 ```shell
 brew install --cask aakarim/tap/lore
 ```
+
+The cask installs `openlore` and `lore` together.
 
 ### Linux release
 
@@ -16,7 +20,7 @@ Download and install the latest x86-64 release:
 
 ```shell
 curl -L https://github.com/aakarim/OpenLore/releases/latest/download/openlore_linux_amd64.tar.gz | tar xz
-sudo install openlore /usr/local/bin/openlore
+sudo install openlore lore /usr/local/bin
 ```
 
 Arm64 archives are published as `openlore_linux_arm64.tar.gz`.
@@ -32,6 +36,8 @@ Invoke-WebRequest `
 Expand-Archive openlore.zip -DestinationPath .
 .\openlore.exe version
 ```
+
+The archive also contains `lore.exe`; keep both on your `PATH`.
 
 ### Build from source
 

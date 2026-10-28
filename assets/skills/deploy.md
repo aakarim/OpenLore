@@ -12,7 +12,11 @@ changing anything:
 - `Containerfile` must derive from a pinned semantic
   `ghcr.io/aakarim/openlore:<version>` image without configuration baked in;
 - root `openlore.yml` is the Git/IaC authority;
-- `.local/lore.json` and `.local/filesystem` are gitignored bootstrap state;
+- `.local/lore.json` and `content/` are gitignored bootstrap state;
+- root `lore.json` is the policy blueprint, never a copy of runtime credentials;
+- deploy the committed `home/` directory beside `openlore.yml`; its
+  `home/*/sources.yaml` files are validated at startup but never fetched by the
+  server;
 - provider scripts and non-secret deployment metadata belong under `deploy/`;
 - one project has one authoritative deployed server and no staging copy.
 
@@ -108,7 +112,7 @@ dedicated address/listener rather than HTTP hostname routing.
 Before OpenLore first starts against a new volume, prove the volume is empty.
 Copy root `openlore.yml` to `/var/lib/openlore/config/openlore.yml`, transfer
 `.local/lore.json` to `/var/lib/openlore/config/lore.json`, and transfer
-`.local/filesystem` into `/var/lib/openlore/published`. Put no bootstrap or
+`content/` into `/var/lib/openlore/published`. Put no bootstrap or
 mutation logic in the OpenLore process. Generate operational host keys, signing
 keys, logs, and databases on the remote server itself.
 
@@ -127,7 +131,7 @@ If OpenLore does not start or behaves unexpectedly after configuration changes,
 temporarily add `-debug` to the existing server command, preserving all current
 arguments. For the standard container command, run:
 
-```shell
+```bash
 ./out -debug --config /var/lib/openlore/config/openlore.yml
 ```
 
@@ -171,7 +175,7 @@ Once every required check passes, complete the setup record on the deployed
 server — it is authoritative now, so write through OpenLore SSH as the
 principal identity, not by editing `.local`:
 
-```shell
+```bash
 ssh <domain> 'cat /channel/infrastructure/openlore-server.md' > /tmp/openlore-server.md
 # edit the copy, then
 cat /tmp/openlore-server.md | ssh <domain> 'cat > /channel/infrastructure/openlore-server.md'
@@ -194,7 +198,7 @@ In `openlore-server.md`:
 
 Append `**Update** — deploy verified the server on <provider> …` under today's
 date in `log.md` the same way. Never record credentials, tokens, private-key
-paths, or key material. Mirror the same edit into `.local/filesystem` when it
+paths, or key material. Mirror the same edit into `content/` when it
 exists so the recovery copy matches; never copy `.local` back to the server.
 
 Only after every required check passes, ask whether to delete `.local`
@@ -225,7 +229,7 @@ If they want one, guide them through it one step at a time:
 1. Register over SSH against the deployed server, using their identity name
    from `lore.json` (for example `onboarding`) and a friendly device label:
 
-   ```shell
+   ```bash
    ssh <domain> passkey register --identity onboarding --name "<their device>"
    ```
 
@@ -245,8 +249,8 @@ Then open the completed setup record for them and say so. With a passkey, open
 the rendered page on the server; otherwise open the local copy when `.local`
 was kept, or give the SSH command to read it:
 
-```shell
+```bash
 open "https://<domain>/lore/channel/infrastructure/openlore-server.md"   # passkey registered (xdg-open on Linux)
-open .local/filesystem/channel/infrastructure/openlore-server.md        # no passkey, .local kept
+open content/channel/infrastructure/openlore-server.md        # no passkey, content kept
 ssh <domain> 'cat /channel/infrastructure/openlore-server.md'          # otherwise
 ```

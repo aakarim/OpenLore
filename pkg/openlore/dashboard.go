@@ -126,6 +126,7 @@ func (s *Server) dashboardRoutes(frontend fs.FS) HTTPRouteRegistrar {
 			"access": s.dashboardAccess, "usage": s.dashboardUsage,
 			"analytics-status": s.dashboardAnalyticsStatus,
 			"setup":            s.dashboardSetup,
+			"sources":          s.dashboardSources,
 		} {
 			mux.Handle("GET /dashboard/api/"+route, s.dashboardAuth(handler))
 		}
@@ -208,7 +209,21 @@ func dashboardErrorJSON(w http.ResponseWriter, status int, body map[string]any) 
 
 func (s *Server) dashboardSession(w http.ResponseWriter, r *http.Request) {
 	id := s.identityFromContext(r.Context())
-	dashboardJSON(w, map[string]any{"identity": id.IdentityName, "lore_path": s.dashboardLorePath(), "access": s.hasCurrentCapability(id, CapabilityAccessView)})
+	dashboardJSON(w, map[string]any{"identity": id.IdentityName, "lore_path": s.dashboardLorePath(), "access": s.hasCurrentCapability(id, CapabilityAccessView), "sources": true})
+}
+
+// Browser sessions get exactly the same filtered, read-only source view as
+// bearer clients, without depending on the optional shell API being enabled.
+func (s *Server) dashboardSources(w http.ResponseWriter, r *http.Request) {
+	r = r.Clone(r.Context())
+	u := *r.URL
+	r.URL = &u
+	const prefix = "/dashboard/api/sources/"
+	r.URL.Path = prefix + r.URL.Query().Get("store")
+	if r.URL.Query().Get("history") == "true" {
+		r.URL.Path += "/snapshots"
+	}
+	s.docstoreHandler(prefix).ServeHTTP(w, r)
 }
 
 func (s *Server) dashboardPath(r *http.Request) (Identity, vfs.FileSystem, string) {

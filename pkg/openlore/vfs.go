@@ -10,6 +10,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -1143,16 +1144,17 @@ func (m *MergeFS) resolve(p string) (string, vfs.FileSystem, error) {
 		return "", nil, nil // root listing
 	}
 
-	// Check named mounts first
-	parts := strings.SplitN(p, "/", 2)
-	mountName := parts[0]
-
-	if fsys, ok := m.mounts[mountName]; ok {
-		subPath := "/"
-		if len(parts) > 1 {
-			subPath = "/" + parts[1]
+	// Check named mounts first. A mount name may span several segments
+	// (e.g. "user/alice/claude" for a projection nested beneath a home); the
+	// longest mount that is p itself or an ancestor of p wins.
+	best := ""
+	for name := range m.mounts {
+		if (p == name || strings.HasPrefix(p, name+"/")) && len(name) > len(best) {
+			best = name
 		}
-		return subPath, fsys, nil
+	}
+	if best != "" {
+		return "/" + strings.TrimPrefix(p, best), m.mounts[best], nil
 	}
 
 	// Fall back to root filesystem
@@ -1178,30 +1180,54 @@ func (m *MergeFS) HostDir(p string) (string, bool) {
 
 func (m *MergeFS) Stat(p string) (*vfs.FileInfo, error) {
 	subPath, fsys, err := m.resolve(p)
-	if err != nil {
-		return nil, err
-	}
-
-	// Root directory
-	if fsys == nil {
+	if err == nil && fsys == nil {
+		// Root directory
 		return &vfs.FileInfo{
 			FileName: "/",
 			FilePath: "/",
 			Dir:      true,
 		}, nil
 	}
+	var info *vfs.FileInfo
+	if err == nil {
+		info, err = fsys.Stat(subPath)
+	}
+	if err != nil && len(m.nestedMounts(p)) > 0 {
+		// A directory that only exists to hold nested mounts.
+		clean := vfs.CleanPath(p)
+		return &vfs.FileInfo{FileName: path.Base(clean), FilePath: clean, Dir: true}, nil
+	}
+	return info, err
+}
 
-	return fsys.Stat(subPath)
+// nestedMounts returns the names of the immediate children of directory p
+// that lead to (or are) a named mount strictly beneath p.
+func (m *MergeFS) nestedMounts(p string) []string {
+	prefix := strings.TrimPrefix(vfs.CleanPath(p), "/")
+	if prefix != "" {
+		prefix += "/"
+	}
+	seen := map[string]bool{}
+	var out []string
+	for name := range m.mounts {
+		if !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		child := strings.SplitN(strings.TrimPrefix(name, prefix), "/", 2)[0]
+		if child == "" || seen[child] {
+			continue
+		}
+		seen[child] = true
+		out = append(out, child)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func (m *MergeFS) ReadDir(p string) ([]vfs.FileInfo, error) {
 	subPath, fsys, err := m.resolve(p)
-	if err != nil {
-		return nil, err
-	}
-
-	// Root: merge root FS entries with mount points
-	if fsys == nil {
+	if err == nil && fsys == nil {
+		// Root: merge root FS entries with mount points
 		var entries []vfs.FileInfo
 		if m.root != nil {
 			rootEntries, err := m.root.ReadDir("/")
@@ -1209,17 +1235,37 @@ func (m *MergeFS) ReadDir(p string) ([]vfs.FileInfo, error) {
 				entries = append(entries, rootEntries...)
 			}
 		}
-		for name := range m.mounts {
-			entries = append(entries, vfs.FileInfo{
-				FileName: name,
-				FilePath: "/" + name,
-				Dir:      true,
-			})
-		}
-		return entries, nil
+		return m.withNestedMounts(p, entries), nil
 	}
+	var entries []vfs.FileInfo
+	if err == nil {
+		entries, err = fsys.ReadDir(subPath)
+	}
+	if len(m.nestedMounts(p)) == 0 {
+		return entries, err
+	}
+	if err != nil {
+		// A directory that only exists to hold nested mounts.
+		entries = nil
+	}
+	return m.withNestedMounts(p, entries), nil
+}
 
-	return fsys.ReadDir(subPath)
+// withNestedMounts adds a directory entry for every mount nested directly
+// beneath p that the backing filesystem did not already list.
+func (m *MergeFS) withNestedMounts(p string, entries []vfs.FileInfo) []vfs.FileInfo {
+	clean := vfs.CleanPath(p)
+	seen := map[string]bool{}
+	for _, e := range entries {
+		seen[e.FileName] = true
+	}
+	for _, child := range m.nestedMounts(p) {
+		if seen[child] {
+			continue
+		}
+		entries = append(entries, vfs.FileInfo{FileName: child, FilePath: path.Join(clean, child), Dir: true})
+	}
+	return entries
 }
 
 func (m *MergeFS) ReadFile(p string) ([]byte, error) {

@@ -1,4 +1,23 @@
-export type Session = { identity: string; lore_path: string; access: boolean };
+export type Session = {
+  identity: string;
+  lore_path: string;
+  access: boolean;
+  sources?: boolean;
+};
+export type SourceSnapshot = {
+  snapshot: string;
+  time: string;
+  parent?: string;
+  deleted: number;
+  meta?: Record<string, string>;
+  files: Record<string, { sha256: string; size: number; mode: number }>;
+};
+export type Source = {
+  store: string;
+  owner: string;
+  projections: string[];
+  latest: SourceSnapshot;
+};
 export type TreeEntry = {
   path: string;
   name: string;
@@ -24,13 +43,7 @@ export type ContextNode = {
   analytics?: AnalyticsStatus;
 };
 export type AnalyticsStatus = {
-  state:
-    | "ready"
-    | "cold"
-    | "updating"
-    | "disabled"
-    | "failed"
-    | "unavailable";
+  state: "ready" | "cold" | "updating" | "disabled" | "failed" | "unavailable";
   computed_at?: string;
   updating: boolean;
   complete: boolean;

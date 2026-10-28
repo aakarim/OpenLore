@@ -20,11 +20,29 @@ builds:
     ignore:
       - goos: windows
         goarch: arm64
+  - id: lore
+    main: ./cmd/lore
+    binary: lore
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
 
 archives:
   - id: openlore
     ids:
       - openlore
+      - lore
     name_template: "openlore_{{ .Os }}_{{ .Arch }}"
     formats:
       - tar.gz
@@ -49,6 +67,7 @@ homebrew_casks:
       - openlore
     binaries:
       - openlore
+      - lore
     homepage: https://github.com/aakarim/OpenLore
     description: Agent-native knowledge repository that keeps shared context current
     # The release workflow publishes the cask after `brew style --fix` moves
@@ -60,6 +79,7 @@ homebrew_casks:
       postflight_steps do
         on_macos do
           run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "openlore"], chdir: "."
+          run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "lore"], chdir: "."
         end
       end
     repository:

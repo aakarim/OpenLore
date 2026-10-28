@@ -22,13 +22,17 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
+// Protect blobs between capture and publication of their journal references.
+var historyRetentionMu sync.RWMutex
+
 type CommitRecord struct {
-	ID          string        `json:"id,omitempty"`
-	Time        time.Time     `json:"time"`
-	Attribution Attribution   `json:"attribution"`
-	ChangeSet   vfs.ChangeSet `json:"change_set"`
-	Hash        string        `json:"hash,omitempty"`
-	Leaves      []LeafRecord  `json:"leaves,omitempty"`
+	ID                string            `json:"id,omitempty"`
+	Time              time.Time         `json:"time"`
+	Attribution       Attribution       `json:"attribution"`
+	ChangeSet         vfs.ChangeSet     `json:"change_set"`
+	Hash              string            `json:"hash,omitempty"`
+	Leaves            []LeafRecord      `json:"leaves,omitempty"`
+	DocstoreSnapshots map[string]string `json:"docstore_snapshots,omitempty"`
 }
 type LeafRecord struct {
 	Target        string           `json:"target"`
@@ -84,11 +88,19 @@ func (s *fileBlobStore) Put(ctx context.Context, hash string, r io.Reader) error
 	if err = os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
 		return err
 	}
-	tmp := p + ".tmp"
-	if err = os.WriteFile(tmp, b, 0o600); err != nil {
+	f, err := os.CreateTemp(filepath.Dir(p), ".blob-*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, p)
+	defer os.Remove(f.Name())
+	if _, err = f.Write(b); err == nil {
+		err = f.Sync()
+	}
+	err = errors.Join(err, f.Close())
+	if err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), p)
 }
 func (s *fileBlobStore) Get(_ context.Context, hash string) (io.ReadCloser, int64, error) {
 	p, err := s.object(hash)
@@ -976,6 +988,10 @@ func historySegmentBefore(name string, protected *HistoryPosition) bool {
 // GarbageCollectHistoryBlobs first validates every retained journal record,
 // then deletes objects not referenced by any record. Corruption causes no deletes.
 func GarbageCollectHistoryBlobs(ctx context.Context, historyDir string) (HistoryGCStats, error) {
+	historyRetentionMu.Lock()
+	defer historyRetentionMu.Unlock()
+	docstoreMu.Lock()
+	defer docstoreMu.Unlock()
 	active := filepath.Join(historyDir, "commits.jsonl")
 	if b, err := os.ReadFile(active); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return HistoryGCStats{}, err
@@ -990,6 +1006,23 @@ func GarbageCollectHistoryBlobs(ctx context.Context, historyDir string) (History
 		defer closer.Close()
 	}
 	refs := map[string]struct{}{}
+	d := &Docstore{dir: filepath.Join(filepath.Dir(historyDir), "docstore")}
+	states, err := d.states()
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return HistoryGCStats{}, err
+	}
+	for _, state := range states {
+		for _, snap := range state.Snapshots {
+			for _, f := range snap.Files {
+				refs[f.SHA256] = struct{}{}
+			}
+		}
+		for _, snap := range state.Pending {
+			for _, f := range snap.Files {
+				refs[f.SHA256] = struct{}{}
+			}
+		}
+	}
 	for {
 		r, ok, e := c.Next(ctx)
 		if e != nil {

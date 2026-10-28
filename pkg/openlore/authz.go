@@ -221,6 +221,17 @@ func (s *Server) effectiveGrantNames(id Identity, name string) ([]string, bool) 
 	if policy.IdentityName != "guest" && policy.HomeDocset == name {
 		names["rw"] = true
 	}
+	// A projection mounted strictly beneath the caller's home is readable by
+	// them without an access block: it is their own source under their own
+	// root. Writes stay denied because projections have no writable substrate.
+	if ds.Projection != nil && policy.IdentityName != "guest" && policy.HomeDocset != "" {
+		if home, ok := s.currentAuth().Docsets[policy.HomeDocset]; ok {
+			homeRoot, root := primaryDisplayPath(home), primaryDisplayPath(ds)
+			if homeRoot != "" && root != "" && root != homeRoot && pathWithinRoot(homeRoot, root) {
+				names["ro"] = true
+			}
+		}
+	}
 	out := make([]string, 0, len(names))
 	for grant := range names {
 		out = append(out, grant)
@@ -502,6 +513,9 @@ func (s *Server) identityWriteError(id Identity, action vfs.ChangeAction, p stri
 	ds, grants, ok := s.grantsForPath(id, p)
 	if !ok {
 		return mutationDeniedError(s.merge, action, p)
+	}
+	if ds.Projection != nil {
+		return fmt.Errorf("source %s is a read-only source copy: %w", ds.Projection.Store, vfs.ErrReadOnly)
 	}
 	if ds.Readonly != nil && *ds.Readonly {
 		return fmt.Errorf("%w: docset containing %s is read-only (readonly: true)", vfs.ErrReadOnly, p)

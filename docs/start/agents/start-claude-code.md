@@ -129,8 +129,21 @@ Learn more about [authenticated OAuth clients](../../reference/authenticated-oau
 
 ---
 
+### 6. Bring Claude's memory with you
+
+Claude Code already keeps a `CLAUDE.md`, rules and auto memory for each project you work in. The `lore` client syncs them into the server so other agents, and teammates, read the same context:
+
+```shell
+lore agent import claude
+```
+
+Run it from a project directory to pick the project's instructions and memory; [Import a Claude project](../../how-to/import-claude-project.md) walks through sharing them with a team, and [Import your Claude memory](../../how-to/import-claude-memory.md) keeps your personal `~/.claude` files inside your home where nobody else reads them.
+
+---
+
 ## Next steps
 
+- [Import a Claude project](../../how-to/import-claude-project.md) so the team shares what Claude Code has learned about a codebase.
 - [Connect any agent over SSH](start-ssh.md) so a CI job or another coding agent shares the same server.
 - [Let an agent publish into an inbox](../../how-to/publish-to-inbox.md) so Claude can contribute notes without editing anything else.
 - Learn how [writing and publishing](../../concepts/writing.md) keep every write atomic and attributed.

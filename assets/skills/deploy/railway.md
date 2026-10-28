@@ -14,7 +14,7 @@ OpenLore SSH, a persistent volume, and `railway ssh` administrative access.
 
 1. Inspect and show diffs for root `openlore.yml`, `.gitignore`, and a root `Containerfile` based on an exact semver such as `FROM ghcr.io/aakarim/openlore:1.2.3`. Never use `latest`; deploy the derivative image and leave it available for future package customization. Do not bake configuration into it.
 2. Root `openlore.yml` is authoritative and must be deployed separately at `/var/lib/openlore/config/openlore.yml`. Set `auth_file: /var/lib/openlore/config/lore.json`, `writable_dir: /var/lib/openlore/published`, `data_dir: /var/lib/openlore/data`, and `host_key_path: /var/lib/openlore/ssh/openlore_ed25519`; listen for OpenLore SSH on `2222` and HTTP on the Railway application port. After Railway allocates its TCP proxy, record that port as `external_ssh_port` in root `openlore.yml` before deploying the config.
-3. Runtime bootstrap exists only as gitignored `.local/lore.json` and `.local/filesystem`; ensure `.local/` is ignored.
+3. Runtime bootstrap exists only as gitignored `.local/lore.json` and `content/`; ensure both are ignored. Deploy the committed `home/` directory beside `openlore.yml`; the server validates `home/*/sources.yaml` at startup.
 4. Put idempotent scripts and non-secret project/service/environment/volume/domain metadata under `deploy/railway/`. Discover before creating, show diffs, and offer commits only after explicit approval.
 
 ## Provision and deploy
@@ -28,7 +28,7 @@ OpenLore SSH, a persistent volume, and `railway ssh` administrative access.
 
 ## Bootstrap without data loss
 
-Inspect `/var/lib/openlore` using `railway ssh` or Railway volume file operations before upload. Deploy root `openlore.yml` to the persistent config directory. Transfer `.local/lore.json` and `.local/filesystem` only when mutable state is empty: no remote lore file and no existing published/data filesystem state. Create `config`, `published`, `data`, and `ssh` beneath `/var/lib/openlore` with restrictive permissions. If mutable remote state exists, stop; never overwrite or merge over remote `lore.json` or filesystem data.
+Inspect `/var/lib/openlore` using `railway ssh` or Railway volume file operations before upload. Deploy root `openlore.yml` to the persistent config directory. Transfer `.local/lore.json` and `content/` only when mutable state is empty: no remote lore file and no existing published/data filesystem state. Create `config`, `published`, `data`, and `ssh` beneath `/var/lib/openlore` with restrictive permissions. If mutable remote state exists, stop; never overwrite or merge over remote `lore.json` or filesystem data.
 
 ## Required production verification
 

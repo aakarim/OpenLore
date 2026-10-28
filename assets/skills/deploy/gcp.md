@@ -16,7 +16,7 @@ access.
 
 - Build/deploy a root `Containerfile` derived from an exact semver, e.g. `FROM ghcr.io/aakarim/openlore:1.2.3`; no floating tags. Keep the derivative for future package customization and do not bake configuration into it.
 - Root `openlore.yml` is authoritative, deployed separately at `/var/lib/openlore/config/openlore.yml`, and must set `auth_file: /var/lib/openlore/config/lore.json`, `writable_dir: /var/lib/openlore/published`, `data_dir: /var/lib/openlore/data`, and `host_key_path: /var/lib/openlore/ssh/openlore_ed25519`, with OpenLore SSH internal port `2222` and the configured HTTP port.
-- Bootstrap state is only gitignored `.local/lore.json` and `.local/filesystem`.
+- Bootstrap state is only gitignored `.local/lore.json` and `content/`. Deploy the committed `home/` directory beside `openlore.yml`; the server validates `home/*/sources.yaml` at startup.
 - Put rerunnable, discovery-first scripts and non-secret resource metadata under `deploy/gcp/`; use labels and checks for idempotency, show diffs, and commit only on explicit approval. IaC tooling is optional, not prescribed.
 
 ## Provision and networking
@@ -29,7 +29,7 @@ access.
 
 ## Bootstrap and production verification
 
-Inspect the mounted disk over `gcloud compute ssh`. Copy or reconcile root `openlore.yml` to the persistent config path. Transfer `.local/lore.json` and `.local/filesystem` only if the remote lore file is absent and published/data state is empty. Create `config`, `published`, `data`, and `ssh` securely. Stop when mutable remote state exists; never overwrite or merge it.
+Inspect the mounted disk over `gcloud compute ssh`. Copy or reconcile root `openlore.yml` to the persistent config path. Transfer `.local/lore.json` and `content/` only if the remote lore file is absent and published/data state is empty. Create `config`, `published`, `data`, and `ssh` securely. Stop when mutable remote state exists; never overwrite or merge it.
 
 Verify valid HTTPS, MCP initialization, authenticated OpenLore SSH, write/read of a unique probe, persistence after container and VM restart (including auth and host key), `gcloud compute ssh` administrative access, and intended firewall/forwarding rules. When TCP 22 forwarding exists, verify `ssh <domain>` works without `-p` and that `2222` is not public.
 
