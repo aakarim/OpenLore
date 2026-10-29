@@ -49,10 +49,11 @@ type SourceSnapshot struct {
 	Record   CommitRecord `json:"record"`
 }
 type sourceState struct {
-	Store     string                    `json:"store"`
-	Owner     string                    `json:"owner"`
-	Snapshots []SourceSnapshot          `json:"snapshots"`
-	Pending   map[string]SourceSnapshot `json:"pending"`
+	Store         string                       `json:"store"`
+	Owner         string                       `json:"owner"`
+	Snapshots     []SourceSnapshot             `json:"snapshots"`
+	Pending       map[string]SourceSnapshot    `json:"pending"`
+	Installations map[string]skillInstallation `json:"skill_installations,omitempty"`
 }
 
 func OpenDocstore(dataDir string) (*Docstore, error) {

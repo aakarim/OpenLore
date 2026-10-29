@@ -8,6 +8,7 @@ import (
 	"sort"
 	"syscall"
 
+	"github.com/aakarim/go-openlore/pkg/openlore/skillsremote"
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
 
@@ -72,6 +73,20 @@ func (a *aliasFS) canonical(p string) (string, *pathAlias) {
 func (a *aliasFS) CanonicalPath(p string) string {
 	canonical, _ := a.canonical(p)
 	return canonical
+}
+
+func (a *aliasFS) SkillsRemoteClient() *skillsremote.Client {
+	if provider, ok := a.FileSystem.(interface{ SkillsRemoteClient() *skillsremote.Client }); ok {
+		return provider.SkillsRemoteClient()
+	}
+	return nil
+}
+
+func (a *aliasFS) SkillInstallationInfo(dir string) []map[string]any {
+	if provider, ok := a.FileSystem.(interface{ SkillInstallationInfo(string) []map[string]any }); ok {
+		return provider.SkillInstallationInfo(a.CanonicalPath(dir))
+	}
+	return nil
 }
 
 func (a *aliasFS) UpdateRemoteSkill(ctx context.Context, skillDir string) (string, string, error) {

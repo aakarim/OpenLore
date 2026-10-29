@@ -156,7 +156,7 @@ type sourceView struct {
 
 // visibleSource preserves original source-relative filenames for the API but
 // filters both current and historical manifests through one captured policy.
-// The returned predicate is nil only for an import's owner (unrestricted).
+// A nil predicate allows the complete source (owned imports or public skills).
 func (s *Server) visibleSource(id Identity, state sourceState) (sourceView, func(string) bool, bool) {
 	s = s.readView()
 	id = s.liveReadIdentity(id)
@@ -164,6 +164,17 @@ func (s *Server) visibleSource(id Identity, state sourceState) (sourceView, func
 	scope := newScopedReadFS(nil, s.readableRoots(id), s.allDocsetRoots())
 	var native *config.DocsetSpec
 	var projections []config.DocsetSpec
+	if strings.HasPrefix(state.Store, "skills/") {
+		// Public upstream bytes are shared, but source discovery still follows
+		// collection access. Never expose the private installation registry.
+		for dir := range state.Installations {
+			if name, _, ok := s.mostSpecificDocset(dir); ok {
+				if _, allowed := s.effectiveGrantNames(id, name); allowed {
+					return view, nil, true
+				}
+			}
+		}
+	}
 	if strings.HasPrefix(state.Store, "openlore/") {
 		name := strings.TrimPrefix(state.Store, "openlore/")
 		if ds, ok := s.currentAuth().Docsets[name]; ok && ds.Projection == nil {

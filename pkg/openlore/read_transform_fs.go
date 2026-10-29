@@ -4,19 +4,41 @@ import (
 	"context"
 	"syscall"
 
+	"github.com/aakarim/go-openlore/pkg/openlore/skillsremote"
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
 
 type readTransformFS struct {
 	vfs.FileSystem
-	transforms        []ContentTransform
-	updateRemoteSkill func(context.Context, string) (string, string, error)
+	transforms            []ContentTransform
+	updateRemoteSkill     func(context.Context, string) (string, string, error)
+	skillsRemote          *skillsremote.Client
+	skillInstallationInfo func(string) []map[string]any
 }
 
 type writableReadTransformFS struct {
 	vfs.WritableFS
-	transforms        []ContentTransform
-	updateRemoteSkill func(context.Context, string) (string, string, error)
+	transforms            []ContentTransform
+	updateRemoteSkill     func(context.Context, string) (string, string, error)
+	skillsRemote          *skillsremote.Client
+	skillInstallationInfo func(string) []map[string]any
+}
+
+func (f *readTransformFS) SkillsRemoteClient() *skillsremote.Client         { return f.skillsRemote }
+func (f *writableReadTransformFS) SkillsRemoteClient() *skillsremote.Client { return f.skillsRemote }
+
+func (f *readTransformFS) SkillInstallationInfo(dir string) []map[string]any {
+	if f.skillInstallationInfo == nil {
+		return nil
+	}
+	if _, err := f.FileSystem.ReadFile(dir + "/SKILL.md"); err != nil {
+		return nil
+	}
+	return f.skillInstallationInfo(dir)
+}
+
+func (f *writableReadTransformFS) SkillInstallationInfo(dir string) []map[string]any {
+	return (&readTransformFS{FileSystem: f.WritableFS, skillInstallationInfo: f.skillInstallationInfo}).SkillInstallationInfo(dir)
 }
 
 func (f *readTransformFS) UpdateRemoteSkill(ctx context.Context, skillDir string) (string, string, error) {

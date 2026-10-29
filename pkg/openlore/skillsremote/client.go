@@ -47,6 +47,14 @@ type Refs struct {
 	DefaultBranch  string
 	Branches, Tags map[string]string
 }
+
+// ArchiveStore retains unmodified, safely extracted source trees by exact
+// commit. It must return fresh byte slices: importers normalize their copy.
+type ArchiveStore interface {
+	LoadSkillArchive(context.Context, string, string, string) (map[string][]byte, bool, error)
+	SaveSkillArchive(context.Context, string, string, string, map[string][]byte) error
+}
+
 type Client struct {
 	HTTP                     *http.Client
 	GitHubBase, CodeloadBase string
@@ -55,6 +63,7 @@ type Client struct {
 	MaxCompressedBytes       int64
 	MaxArchiveBytes          int64
 	MaxArchiveEntries        int
+	Store                    ArchiveStore
 }
 
 // NewPublicHTTPClient returns an HTTP client whose redirects and connections
@@ -205,7 +214,7 @@ func (c *Client) defaults() {
 		c.MaxArchiveEntries = c.MaxFiles * 10
 	}
 }
-func (c *Client) Resolve(ctx context.Context, repo string) (Refs, error) {
+func (c Client) Resolve(ctx context.Context, repo string) (Refs, error) {
 	c.defaults()
 	repoURL, err := agentskills.CanonicalRepoURL(repo)
 	if err != nil {
@@ -304,11 +313,27 @@ func (r Refs) Resolve(ref string) (sha, kind, resolvedRef string, err error) {
 	return "", "", ref, fmt.Errorf("ref %q not found", ref)
 }
 
-func (c *Client) Fetch(ctx context.Context, repo, sha, subtree string) (map[string][]byte, error) {
+func (c Client) Fetch(ctx context.Context, repo, sha, subtree string) (map[string][]byte, error) {
 	c.defaults()
 	archiveURLs, err := c.archiveURLs(repo, sha)
 	if err != nil {
 		return nil, err
+	}
+	if c.Store != nil {
+		files, found, err := c.Store.LoadSkillArchive(ctx, repo, sha, subtree)
+		if err != nil {
+			return nil, err
+		}
+		if found {
+			var size int64
+			for _, b := range files {
+				size += int64(len(b))
+			}
+			if len(files) > c.MaxFiles || size > c.MaxBytes {
+				return nil, fmt.Errorf("stored remote archive exceeds download limits")
+			}
+			return files, nil
+		}
 	}
 	var lastErr error
 	for _, archiveURL := range archiveURLs {
@@ -332,6 +357,11 @@ func (c *Client) Fetch(ctx context.Context, repo, sha, subtree string) (map[stri
 		}
 		files, extractErr := c.extractArchive(compressed, subtree)
 		if extractErr == nil {
+			if c.Store != nil {
+				if err := c.Store.SaveSkillArchive(ctx, repo, sha, subtree, files); err != nil {
+					return nil, err
+				}
+			}
 			return files, nil
 		}
 		lastErr = fmt.Errorf("%s: %w", archiveURL, extractErr)
