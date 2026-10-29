@@ -8,6 +8,7 @@
 groups:
   - name: Introduction
     pages:
+      - { path: index.md, label: Start here }
       - { path: introduction.md, label: What is OpenLore }
       - { path: changelog.md, label: Changelog }
 
