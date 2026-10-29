@@ -30,10 +30,22 @@ jobs:
       - name: Verify release source
         run: |
           test "$(cat assets/config/VERSION)" = "${GITHUB_REF_NAME#v}"
+          test "$(jq -r .version dashboard/package.json)" = "${GITHUB_REF_NAME#v}"
+          test "$(jq -r .version dashboard/package-lock.json)" = "${GITHUB_REF_NAME#v}"
+          test "$(jq -r '.packages[""].version' dashboard/package-lock.json)" = "${GITHUB_REF_NAME#v}"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           mkdir -p .release
           echo "$GITHUB_SHA" > .release/source-sha.txt
           echo "Release source: $GITHUB_SHA"
+
+      - name: Prepare release notes from the dated changelog
+        run: |
+          awk -v version="$GITHUB_REF_NAME" '
+            index($0, "## " version " — ") == 1 { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+          ' docs/changelog.md > .release/release-notes.md
+          test -s .release/release-notes.md
 
       - name: Build dashboard assets
         run: nix develop --command make dashboard-build
@@ -57,7 +69,7 @@ jobs:
         uses: goreleaser/goreleaser-action@v7
         with:
           version: "~> v2"
-          args: release --clean
+          args: release --clean --release-notes .release/release-notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

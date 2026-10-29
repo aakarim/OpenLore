@@ -1,10 +1,10 @@
 # Changelog
 
-**Current release: [v0.7.5](https://github.com/aakarim/OpenLore/releases/tag/v0.7.5) — Dashboard setup, folder icons, and reliability fixes.**
+**Current release: [v0.8.0](https://github.com/aakarim/OpenLore/releases/tag/v0.8.0) — Knowledge Import: shared, versioned agent memory and repository knowledge.**
 
 ## Which version do these docs describe?
 
-The documentation on `main` tracks development, with **v0.7.5** as the current
+The documentation on `main` tracks development, with **v0.8.0** as the current
 release baseline. It can include changes not yet released; those changes belong
 under **Unreleased** below. Version-specific behavior should be labelled with the
 release that introduced it, rather than assumed to work on older installations.
@@ -15,12 +15,12 @@ Check your installed binary:
 openlore version
 ```
 
-For v0.7.5, the output is `openlore 0.7.5`. If you connect to a remote server, ask
+For v0.8.0, the output is `openlore 0.8.0`. If you connect to a remote server, ask
 its operator for the server version too: your local binary may be a different
 version.
 
 For a fixed documentation snapshot, use the
-[v0.7.5 docs](https://github.com/aakarim/OpenLore/tree/v0.7.5/docs).
+[v0.8.0 docs](https://github.com/aakarim/OpenLore/tree/v0.8.0/docs).
 For an older installation, choose its release tag in GitHub's branch/tag selector
 instead of reading `main`. Release notes below highlight changes that may explain
 differences between the docs and your installation.
@@ -30,6 +30,113 @@ limitations, and verification statements describe their respective releases, not
 necessarily the current version. Dates are the GitHub publication dates in UTC.
 
 ## Unreleased
+
+## v0.8.0 — 2026-10-29
+
+[Release notes and downloads](https://github.com/aakarim/OpenLore/releases/tag/v0.8.0)
+
+### Knowledge Import
+
+Bring your agent memory and repo knowledge into OpenLore. Context that lives on
+one person's machine can become shared, versioned knowledge for the team, without
+moving the original files or giving the server access to your private Git
+credentials. You choose which imported stores agents can read.
+
+**Knowledge Import is the first phase of the Knowledge Gateway**, not the whole
+gateway roadmap. This release delivers client-driven import from Claude Code,
+local folders, and Git repositories, a versioned docstore, and read-only
+projections. Automatic sync, arbitrary source connectors, importing as editable
+documents, and link verification remain future work. Learn how it fits together
+in the [knowledge gateway guide](https://openlore.sh/docs/concepts/knowledge-gateway/).
+
+### New: the `lore` client
+
+The release archives and Homebrew cask now ship two binaries: the `openlore`
+server and the `lore` client. Run `lore` from your knowledge repository (the
+folder containing `openlore.yml`). Enable the server's HTTP API, then:
+
+```shell
+lore login https://lore.example.com
+
+# Choose and preview this project's Claude Code instructions and memory
+lore agent import claude --project
+
+# Or add a folder or Git repository
+lore source add ~/notes --name notes --include '**/*.md'
+lore source add https://github.com/acme/payments --name payments \
+  --branch main --include 'docs/**' --include '*.md'
+
+# Preview changes, then push a versioned snapshot
+lore status
+lore sync
+```
+
+`lore login` supports browser passkeys or a minted token. `lore source list`
+shows your sources and `lore source rm <name>` removes a source definition
+without deleting server history. `lore agent connect claude|codex` registers the
+server with your coding agent.
+
+### Serve imported knowledge to agents
+
+Add a projection to the `docsets` object in `lore.json` and grant its readers:
+
+```json
+{
+  "docsets": {
+    "payments-docs": {
+      "projection": {
+        "store": "git/github.com/acme/payments",
+        "subpath": "docs"
+      },
+      "access": { "allow": { "engineers": "ro" } }
+    }
+  }
+}
+```
+
+Run `lore config reload` in an OpenLore session with `lore:config:edit` to mount
+the read-only docset at `/payments-docs`. Agents can read and search it over SSH,
+MCP, or HTTP. A projection under an identity's home can stay private to that
+identity. The agent-shell command `lore sources` and the dashboard Sources view
+show projected stores and their latest snapshots.
+
+### Supporting capabilities
+
+- **Live configuration reload:** docsets, projections, mount paths, aliases,
+  grants, and folder rules update without restarting the server, including for
+  existing sessions on subsequent reads. Invalid reloads leave the running
+  configuration unchanged; an already-started read may finish against the old
+  configuration. Transport, authentication-provider and other startup settings
+  still require a restart.
+- **Versioned docstore:** sync uploads only new content-addressed blobs and
+  retains snapshot history. Native writes to disk docsets are also snapshotted.
+- **Skills integration:** server-fetched public HTTPS skill sources use the
+  docstore, with per-installation applied and rejected versions. Invalid
+  upstream versions leave the last valid installed skill available. Client Git
+  stores remain separate from server-owned skill source stores.
+- **Dashboard:** resizable desktop file tree, file refresh/retry controls, and
+  a file-tab context menu.
+- **Observability:** opt-in OpenTelemetry tracing and correlation.
+
+### Reliability and documentation
+
+- Fixed `sed` basic regular expressions and invalid address handling ([#201](https://github.com/aakarim/OpenLore/pull/201)).
+- Fixed unsupported moves being reported as read-only sessions ([#203](https://github.com/aakarim/OpenLore/pull/203)).
+- Fixed file usage rankings consuming unbounded memory ([#206](https://github.com/aakarim/OpenLore/pull/206)).
+- Fixed hard-to-read analytics text tables ([#209](https://github.com/aakarim/OpenLore/pull/209)).
+- Fixed missing usage token counts using current knowledge facts ([#215](https://github.com/aakarim/OpenLore/pull/215)).
+- Fixed write-denial messages not explaining the failed gate ([#216](https://github.com/aakarim/OpenLore/pull/216)).
+- Fixed installed iOS PWA navigation leaving the dashboard scope ([#217](https://github.com/aakarim/OpenLore/pull/217)).
+- Fixed skills refusals and collection marker preservation ([#218](https://github.com/aakarim/OpenLore/pull/218)).
+- Fixed per-command `--help` requests not reaching command help ([#222](https://github.com/aakarim/OpenLore/pull/222)).
+- Fixed imported-skill installation reconciliation ([#228](https://github.com/aakarim/OpenLore/pull/228)).
+- Fixed `jq` subtraction filters being interpreted as flags ([#227](https://github.com/aakarim/OpenLore/pull/227)).
+- Fixed docstore guest access, cross-source blob authorization, and upload-size enforcement; client snapshots now require verified source-scoped uploads or committed history ([#229](https://github.com/aakarim/OpenLore/pull/229)).
+- Virtual filesystem errors no longer expose host filesystem paths.
+- Added import guides and the `lore` CLI reference, a LangChain start guide,
+  cloud agent setup guides, HTTPS and production guidance, and clearer
+  documentation for public access, inbox publishing and multi-line heredocs.
+- Made repository setup discoverable from the documentation index and usage guide ([#230](https://github.com/aakarim/OpenLore/pull/230)).
 
 - **Breaking:** the MCP `shell` tool is now `lore_bash`. Claude Code's
   auto-mode classifier judges a call by the tool name and the command, and a
@@ -47,6 +154,49 @@ necessarily the current version. Dates are the GitHub publication dates in UTC.
   Karpathy's LLM wiki pattern on a server: existing docsets as the read-only
   raw layer, a `wiki` docset as an OKF bundle for the index and log, a schema
   page every agent reads, and ingest, query and lint through any agent.
+
+### Install and upgrade
+
+```shell
+brew install --cask aakarim/tap/lore
+# If already installed:
+brew upgrade --cask aakarim/tap/lore
+openlore version
+lore
+```
+
+For other platforms, download the matching archive from this release. Existing
+server configurations need no migration. To use imports, enable the HTTP API,
+run `lore sync`, and explicitly configure projections. MCP clients must refresh
+tool discovery and update rules that name the old `shell` tool.
+
+### Security boundaries and limitations
+
+- Client-synced stores are not exposed to agents until projected. The first
+  identity to sync a Git repository owns its store.
+- Projected docsets are read-only on every transport. Edit the original and
+  run `lore sync` again; sync is manual, not a background service.
+- The Claude profile excludes settings files, `.env*`, key/certificate files,
+  and filenames containing credential, secret, token, password or api_key.
+  This is filename filtering, not secret-content scanning. Review the preview
+  before uploading. Session transcripts are opt-in and their contents are not
+  filtered. Folder and Git sources need their own include/exclude choices.
+- Snapshot limits: 8 MiB per file, 128 MiB per snapshot, and 10,000 files.
+- Docstore access requires a named identity, not a public/guest token. Physical
+  blob deduplication does not grant access across sources. Existing committed
+  history remains usable; legacy pending uploads without proof need reupload.
+- Removing a source or projection does not erase retained server snapshots.
+
+### Artifacts and verification
+
+Five archives contain both binaries: `openlore_linux_amd64.tar.gz`,
+`openlore_linux_arm64.tar.gz`, `openlore_darwin_amd64.tar.gz`,
+`openlore_darwin_arm64.tar.gz`, and `openlore_windows_amd64.zip`.
+Use the release's `checksums.txt` to verify downloaded archives and
+`source-sha.txt` to identify the exact source commit. Container images are
+published as `ghcr.io/aakarim/openlore:0.8.0` and `:v0.8.0`.
+
+**Full changelog:** https://github.com/aakarim/OpenLore/compare/v0.7.5...v0.8.0
 
 ## v0.7.5 — 2026-10-17
 
