@@ -261,6 +261,10 @@ func jqTokenize(filter string) []jqToken {
 		switch {
 		case ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r':
 			i++
+		case ch == '#':
+			for i < len(filter) && filter[i] != '\n' {
+				i++
+			}
 		case ch == '.':
 			if i+1 < len(filter) && filter[i+1] == '.' {
 				tokens = append(tokens, jqToken{"dotdot", ".."})

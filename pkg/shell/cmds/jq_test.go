@@ -128,6 +128,26 @@ func TestJqRejectsTrailingTokens(t *testing.T) {
 	}
 }
 
+func TestJqComments(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		cmd  string
+		want string
+	}{
+		{"trailing comment", `echo '{"a":5}' | jq '.a # field annotation'`, "5"},
+		{"leading comment", "jq -n '# annotation\n5 - 1'", "4"},
+		{"continued filter", "jq -n '5 # ignore - 100 ]\n- 1'", "4"},
+		{"hash in string", `jq -nr '"# field annotation"'`, "# field annotation"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			out, errOut, code := execCmd(t, testFS(), tt.cmd)
+			if code != 0 || errOut != "" || strings.TrimSpace(out) != tt.want {
+				t.Fatalf("code=%d stdout=%q stderr=%q, want stdout %q", code, out, errOut, tt.want)
+			}
+		})
+	}
+}
+
 func TestJqAlternativeOperator(t *testing.T) {
 	fs := testFS()
 	fs.AddFile("/docs/present.json", `{"a":1}`)
