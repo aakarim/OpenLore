@@ -56,10 +56,11 @@ type Server struct {
 	// as knowledge-backend that does its own scoping): callers get full access.
 	// When true, an access-control policy was loaded and identity scoping is
 	// enforced (docsets filtered, anonymous is read-only).
-	auth         *config.AuthConfig
-	authMu       sync.RWMutex
-	runtimeAuth  atomic.Pointer[config.AuthConfig]
-	authEnforced bool
+	auth               *config.AuthConfig
+	authMu             sync.RWMutex
+	runtimeConfig      atomic.Pointer[liveConfig]
+	initialProjections map[string]vfs.FileSystem
+	authEnforced       bool
 	// grants is the registry of grant types (ro/rw + plugin-contributed like
 	// publish). A grant name in lore.json with no registered type fails startup.
 	grants             *grantRegistry
@@ -112,9 +113,9 @@ type Server struct {
 
 	// metaExtenders are the `lore meta` extenders contributed by plugins,
 	// installed per session in buildSessionShell.
-	metaExtenders []meta.Extender
-	metaFilters   []meta.Filter
-	validators    []validation.Validator
+	metaExtenders       []meta.Extender
+	metaFilterProviders []MetaFilterProvider
+	validators          []validation.Validator
 
 	// postCommitMW is the post-commit middleware contributed by plugins, run at
 	// the applier after a durable commit (feed emit, post_write hooks) in
@@ -271,6 +272,7 @@ func newServerWithRoot(rootDir string, rootFS vfs.FileSystem, lowerFS fs.FS, opt
 	var agentSkills *agentSkillsPlugin
 	if cfg.Plugins.Skills.Enabled {
 		agentSkills = newAgentSkills(s.auth.Docsets, s.merge, s.canonicalPath, logger, cfg.Plugins.Skills)
+		agentSkills.liveDocsets = func() map[string]config.DocsetSpec { return s.currentAuth().Docsets }
 		agentSkills.gateway = s.docstore
 		agentSkills.remote.Store = s.docstore
 		s.agentSkills = agentSkills
@@ -286,11 +288,16 @@ func newServerWithRoot(rootDir string, rootFS vfs.FileSystem, lowerFS fs.FS, opt
 		return nil, err
 	}
 	s.rules = rulesPlugin
+	rulesPlugin.liveEngine = func() *rules.Engine {
+		if live := s.runtimeConfig.Load(); live != nil {
+			return live.engine
+		}
+		return rulesPlugin.engine
+	}
 	// OKF metadata remains owned by the existing adapter; admission and
 	// validation are provided exclusively by the rules engine above.
-	if anyDocsetHasOKF(s.auth.Docsets) {
-		s.metaExtenders = append(s.metaExtenders, newOKF(s.auth.Docsets, logger).MetaExtenders()...)
-	}
+	okf := &okfPlugin{liveDocsets: func() map[string]config.DocsetSpec { return s.currentAuth().Docsets }}
+	s.metaExtenders = append(s.metaExtenders, okf.MetaExtenders()...)
 	if shellPlugin != nil {
 		if err := s.registerPlugin(shellPlugin); err != nil {
 			return nil, err
@@ -304,6 +311,7 @@ func newServerWithRoot(rootDir string, rootFS vfs.FileSystem, lowerFS fs.FS, opt
 		s.merge.SetRoot(rootFS)
 	} else if rootDir != "" {
 		dirFS := NewDirFS(rootDir, cfg.Files).WithDocsetRoots(docsetRoots)
+		dirFS.liveDocsetRoots = s.allDocsetRoots
 		s.merge.SetRoot(dirFS)
 	} else if cfg.WritableDir != "" {
 		info, err := os.Stat(cfg.WritableDir)
@@ -311,6 +319,7 @@ func newServerWithRoot(rootDir string, rootFS vfs.FileSystem, lowerFS fs.FS, opt
 			return nil, fmt.Errorf("writable_dir %q is not a directory", cfg.WritableDir)
 		}
 		upper := NewDirFS(cfg.WritableDir, cfg.Files).WithDocsetRoots(docsetRoots)
+		upper.liveDocsetRoots = s.allDocsetRoots
 		if lowerFS != nil {
 			s.merge.SetRoot(NewOverlayFS(upper, NewFSAdapter(lowerFS, cfg.Files)))
 		} else {
@@ -333,20 +342,13 @@ func newServerWithRoot(rootDir string, rootFS vfs.FileSystem, lowerFS fs.FS, opt
 		if !filepath.IsAbs(analyticsCfg.Dir) {
 			analyticsCfg.Dir = filepath.Join(dataDir, analyticsCfg.Dir)
 		}
-		excluded, err := analyticsInternalRoots(s.merge, dataDir, analyticsCfg.Dir)
+		knowledgeScopes, err := s.knowledgeScopes(s.currentAuth())
 		if err != nil {
 			return nil, fmt.Errorf("resolving analytics content exclusions: %w", err)
 		}
 		service, analyticsErr := analytics.New(analyticsCfg, analytics.Deps{FS: s.merge})
 		if analyticsErr != nil {
 			return nil, fmt.Errorf("configuring analytics: %w", analyticsErr)
-		}
-		var knowledgeScopes []analytics.KnowledgeScope
-		contentBoundary := analyticsContentBoundary(cfg.Files)
-		for name, docset := range s.currentAuth().Docsets {
-			for _, mapping := range docset.Paths {
-				knowledgeScopes = append(knowledgeScopes, analytics.KnowledgeScope{Name: name, Root: displayPath(mapping), Exclude: excluded, ContentBoundary: contentBoundary})
-			}
 		}
 		service.SetKnowledgeScopes(knowledgeScopes)
 		s.analytics = service
@@ -411,6 +413,11 @@ func newServerWithRoot(rootDir string, rootFS vfs.FileSystem, lowerFS fs.FS, opt
 		s.writeLog.SetCommitState(rulesPlugin.CommitState)
 		s.writeLog.SetPreApply(func(identity *Identity, attribution Attribution, changes vfs.ChangeSet) error {
 			for _, change := range changes.Leaves() {
+				// Admission has already resolved aliases. Never authorize a new
+				// destination while persisting the old canonical target.
+				if s.canonicalPath(change.Target) != change.Target {
+					return fmt.Errorf("%w: canonical target changed for %s; retry the operation", os.ErrPermission, change.Target)
+				}
 				if identity != nil {
 					if err := s.identityWriteError(*identity, change.Action, change.Target); err != nil {
 						return err
@@ -532,8 +539,8 @@ func newServerWithRoot(rootDir string, rootFS vfs.FileSystem, lowerFS fs.FS, opt
 }
 
 func (s *Server) currentAuth() *config.AuthConfig {
-	if auth := s.runtimeAuth.Load(); auth != nil {
-		return auth
+	if live := s.runtimeConfig.Load(); live != nil {
+		return live.auth
 	}
 	return s.auth
 }
@@ -936,10 +943,12 @@ func (s *Server) canonicalChangeSet(cs vfs.ChangeSet) vfs.ChangeSet {
 func (s *Server) registerPlugin(p any) error {
 	if fp, ok := p.(MetaFilterProvider); ok {
 		claimed := map[string]bool{}
-		for _, existing := range s.metaFilters {
-			claimed[existing.Name] = true
-			for _, alias := range existing.Aliases {
-				claimed[alias] = true
+		for _, provider := range s.metaFilterProviders {
+			for _, existing := range provider.MetaFilters() {
+				claimed[existing.Name] = true
+				for _, alias := range existing.Aliases {
+					claimed[alias] = true
+				}
 			}
 		}
 		for _, f := range fp.MetaFilters() {
@@ -975,7 +984,7 @@ func (s *Server) registerPlugin(p any) error {
 		s.metaExtenders = append(s.metaExtenders, mp.MetaExtenders()...)
 	}
 	if fp, ok := p.(MetaFilterProvider); ok {
-		s.metaFilters = append(s.metaFilters, fp.MetaFilters()...)
+		s.metaFilterProviders = append(s.metaFilterProviders, fp)
 	}
 	if vp, ok := p.(ValidatorProvider); ok {
 		s.validators = append(s.validators, vp.Validators()...)
@@ -1049,9 +1058,10 @@ func (s *Server) buildSessionFS(id Identity) vfs.FileSystem {
 	// Expose this identity's aliases outermost so callers can retain the alias
 	// spelling while every internal operation, including CAS tracking, sees the
 	// canonical path. Ungranted aliases are never added to the session tree.
-	if aliases := s.aliasesForIdentity(id); len(aliases) > 0 {
-		sessionFS = newAliasFS(sessionFS, aliases)
-	}
+	sessionFS = newLiveAliasFS(sessionFS, func() []pathAlias {
+		view := s.readView()
+		return view.aliasesForIdentity(view.liveReadIdentity(id))
+	})
 	return sessionFS
 }
 
@@ -1070,7 +1080,7 @@ func (s *Server) buildCanonicalSessionFS(id Identity) vfs.FileSystem {
 	// unenforced/trusted mode the session sees the whole merge FS (all mounts).
 	sessionFS := vfs.FileSystem(s.merge)
 	if s.authEnforced {
-		sessionFS = newScopedReadFS(sessionFS, s.readableRoots(id), s.allDocsetRoots())
+		sessionFS = &liveReadFS{WritableFS: s.merge, server: s, identity: id}
 	}
 	// Read (before-read) gate: run the read middleware chain in front of every
 	// Stat/ReadDir/ReadFile so a plugin can (e.g.) refresh the substrate or
@@ -1098,8 +1108,7 @@ func (s *Server) buildCanonicalSessionFS(id Identity) vfs.FileSystem {
 	if s.authEnforced {
 		var authz writeAuthorizer
 		if canWrite || s.config.Readonly || !scopeGrantsWrite(id.Scopes) {
-			// Writes deliberately resolve current policy on every operation. The
-			// session snapshot remains authoritative for its stable read view.
+			// Writes deliberately resolve current policy on every operation.
 			writeID := id
 			writeID.policySnapshot = nil
 			authz = func(action vfs.ChangeAction, p string) error {
@@ -1308,15 +1317,20 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 		})
 	}
 
-	// Per-session docset views for `lore docsets` and publish inboxes for
-	// `publish`. Computed once here, where the access authority lives.
-	sh.SetDocsets(s.sessionDocsets(id))
+	// Existing shells discover new docsets and inboxes after a reload.
+	sh.SetDocsetLister(func() []cmds.DocsetInfo {
+		view := s.readView()
+		return view.sessionDocsets(view.liveReadIdentity(id))
+	})
 	sh.SetSourceLister(func() ([]cmds.SourceInfo, error) { return s.sourceRows(id) })
 	sh.SetSkillsManagementEnabled(s.config.Plugins.Skills.Enabled)
 	sh.SetConfigPlugins(s.plugins)
 	sh.SetSkillsRemoteConfig(s.config.Plugins.Skills.RemoteTimeout, s.config.Plugins.Skills.RemoteMaxBytes)
-	sh.SetMetaFilters(s.sessionMetaFilters(id))
-	sh.SetPublishTargets(s.sessionPublishTargets(id))
+	sh.SetMetaFilterLister(func() []meta.Filter { return s.sessionMetaFilters(id) })
+	sh.SetPublishTargetLister(func() []cmds.PublishTarget {
+		view := s.readView()
+		return view.sessionPublishTargets(view.liveReadIdentity(id))
+	})
 	sh.SetSSHTarget(s.config.SSHTarget())
 	sh.SetMetaExtenders(s.metaExtenders)
 	sh.SetValidators(s.validators)
@@ -1326,7 +1340,7 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 		sh.SetConfigReloadBackend(s)
 	}
 	if s.history != nil {
-		history := scopedHistory{store: s.history, roots: historyRoots(s.sessionDocsets(id))}
+		history := scopedHistory{store: s.history, liveQuery: func() HistoryQuery { return s.historyQuery(id) }}
 		if canAdmin && s.writeLog != nil {
 			historyDir := filepath.Join(s.config.DataDir, "history")
 			if s.config.DataDir == "" {
@@ -1438,8 +1452,14 @@ func directMarker(fsys vfs.FileSystem, p string) bool {
 }
 
 func (s *Server) sessionMetaFilters(id Identity) []meta.Filter {
+	var filters []meta.Filter
+	for _, provider := range s.metaFilterProviders {
+		filters = append(filters, provider.MetaFilters()...)
+	}
+	s = s.readView()
+	id = s.liveReadIdentity(id)
 	var out []meta.Filter
-	for _, f := range s.metaFilters {
+	for _, f := range filters {
 		nf := f
 		nf.Roots = nil
 		seen := map[string]bool{}
@@ -1891,7 +1911,9 @@ func (s *Server) ListenAndServe() error {
 					if !ok {
 						id = s.anonymousIdentity()
 					}
-					page, err := s.history.Query(context.Background(), HistoryQuery{FileKey: filePath, Roots: historyRoots(s.sessionDocsets(id))})
+					query := s.historyQuery(id)
+					query.FileKey = filePath
+					page, err := s.history.Query(context.Background(), query)
 					if err != nil {
 						return nil, err
 					}

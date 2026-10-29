@@ -22,20 +22,16 @@ type projectionFS struct {
 }
 
 func (s *Server) mountProjections() error {
-	for name, ds := range s.auth.Docsets {
-		if ds.Projection == nil {
-			continue
+	mounts, err := s.projectionMounts(s.auth)
+	if err != nil {
+		return err
+	}
+	s.initialProjections = mounts
+	s.merge.projections = func() map[string]vfs.FileSystem {
+		if live := s.runtimeConfig.Load(); live != nil {
+			return live.projections
 		}
-		root := primaryDisplayPath(ds)
-		if root == "" {
-			root = "/" + name
-		}
-		for _, system := range []string{"/jobs", "/requests"} {
-			if pathWithinRoot(system, root) {
-				return fmt.Errorf("projection %q conflicts with a system mount", name)
-			}
-		}
-		s.merge.Mount(strings.TrimPrefix(root, "/"), &projectionFS{store: s.docstore, spec: *ds.Projection})
+		return mounts
 	}
 	return nil
 }
@@ -159,10 +155,15 @@ type sourceView struct {
 }
 
 // visibleSource preserves original source-relative filenames for the API but
-// never leaks files excluded by every projection the reader can access.
-func (s *Server) visibleSource(id Identity, state sourceState) (sourceView, []config.ProjectionSpec, bool) {
+// filters both current and historical manifests through one captured policy.
+// A nil predicate allows the complete source (owned imports or public skills).
+func (s *Server) visibleSource(id Identity, state sourceState) (sourceView, func(string) bool, bool) {
+	s = s.readView()
+	id = s.liveReadIdentity(id)
 	view := sourceView{Store: state.Store, Owner: state.Owner, Latest: latestSnapshot(state), Projections: []string{}}
-	projections := []config.ProjectionSpec{}
+	scope := newScopedReadFS(nil, s.readableRoots(id), s.allDocsetRoots())
+	var native *config.DocsetSpec
+	var projections []config.DocsetSpec
 	if strings.HasPrefix(state.Store, "skills/") {
 		// Public upstream bytes are shared, but source discovery still follows
 		// collection access. Never expose the private installation registry.
@@ -176,9 +177,11 @@ func (s *Server) visibleSource(id Identity, state sourceState) (sourceView, []co
 	}
 	if strings.HasPrefix(state.Store, "openlore/") {
 		name := strings.TrimPrefix(state.Store, "openlore/")
-		if _, ok := s.effectiveGrantNames(id, name); ok {
-			view.Projections = append(view.Projections, name)
-			return view, nil, true
+		if ds, ok := s.currentAuth().Docsets[name]; ok && ds.Projection == nil {
+			if _, ok := s.effectiveGrantNames(id, name); ok {
+				view.Projections = append(view.Projections, name)
+				native = &ds
+			}
 		}
 	}
 	for name, ds := range s.currentAuth().Docsets {
@@ -187,23 +190,31 @@ func (s *Server) visibleSource(id Identity, state sourceState) (sourceView, []co
 		}
 		if _, ok := s.effectiveGrantNames(id, name); ok {
 			view.Projections = append(view.Projections, name)
-			projections = append(projections, *ds.Projection)
+			projections = append(projections, ds)
 		}
 	}
 	sort.Strings(view.Projections)
-	if state.Owner == id.IdentityName {
+	if state.Owner == id.IdentityName && !strings.HasPrefix(state.Store, "openlore/") {
 		return view, nil, true
 	}
-	if len(projections) == 0 {
+	if native == nil && len(projections) == 0 {
 		return view, nil, false
 	}
-	view.Latest = filterSourceSnapshot(view.Latest, projections)
-	return view, projections, true
-}
-func filterSourceSnapshot(snap SourceSnapshot, projections []config.ProjectionSpec) SourceSnapshot {
-	files := map[string]SourceFile{}
-	for name, f := range snap.Files {
-		for _, p := range projections {
+	selected := func(name string) bool {
+		if native != nil {
+			for _, mapping := range native.Paths {
+				root := displayPath(mapping)
+				target := "/" + name
+				if len(native.Paths) == 1 {
+					target = path.Join(root, name)
+				}
+				if pathWithinRoot(root, target) && scope.within(target) {
+					return true
+				}
+			}
+		}
+		for _, ds := range projections {
+			p := ds.Projection
 			rel := name
 			if p.Subpath != "" {
 				if !strings.HasPrefix(name, p.Subpath+"/") {
@@ -212,9 +223,21 @@ func filterSourceSnapshot(snap SourceSnapshot, projections []config.ProjectionSp
 				rel = strings.TrimPrefix(name, p.Subpath+"/")
 			}
 			if config.SourcePathSelected(p.Include, p.Exclude, rel) {
-				files[name] = f
-				break
+				if scope.within(path.Join(primaryDisplayPath(ds), rel)) {
+					return true
+				}
 			}
+		}
+		return false
+	}
+	view.Latest = filterSourceSnapshot(view.Latest, selected)
+	return view, selected, true
+}
+func filterSourceSnapshot(snap SourceSnapshot, selected func(string) bool) SourceSnapshot {
+	files := map[string]SourceFile{}
+	for name, f := range snap.Files {
+		if selected(name) {
+			files[name] = f
 		}
 	}
 	snap.Files = files

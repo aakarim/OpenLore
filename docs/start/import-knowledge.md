@@ -107,7 +107,7 @@ Synced content is held in the docstore until a [docset](../concepts/docsets.md) 
 }
 ```
 
-Restart the server. The docset mounts read-only at `/notes`, and everyone who holds the `engineers` [role](../concepts/auth.md) can read it. Leave out `access` and project the store under your home instead to keep it to yourself; [Import your Claude memory](../how-to/import-claude-memory.md) shows that layout.
+Run `lore config reload` in an OpenLore session with `lore:config:edit`; no server restart is needed. The docset mounts read-only at `/notes`, including in existing sessions, and everyone who holds the `engineers` [role](../concepts/auth.md) can read it. Leave out `access` and project the store under your home instead to keep it to yourself; [Import your Claude memory](../how-to/import-claude-memory.md) shows that layout.
 
 ---
 

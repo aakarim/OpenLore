@@ -80,6 +80,53 @@ func skillBytes(name string) []byte {
 	return []byte("---\nname: " + name + "\ndescription: useful\n---\n")
 }
 
+func TestReloadRefreshesSkillsDiscovery(t *testing.T) {
+	root := t.TempDir()
+	auth := serverAuth(map[string]config.DocsetSpec{"docs": docset("/docs", nil)}, nil)
+	authFile := filepath.Join(t.TempDir(), "lore.json")
+	writeAuthFixture(t, authFile, auth)
+	s, err := NewServer(root, config.WithEmbeddedConfig([]byte("plugins:\n  skills:\n    enabled: true\n"), ""), WithReadonly(false), config.WithAuthFile(authFile), config.WithDataDir(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Shutdown(context.Background()) })
+	sh := s.buildSessionShell(testIdentity("alice"))
+	for _, name := range []string{"docs", "other", "added"} {
+		folder := filepath.Join(root, name, "valid")
+		if err := os.MkdirAll(folder, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(folder, "SKILL.md"), skillBytes("valid"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if out, stderr, code := run(sh, "skills enable /docs"); code != 0 {
+		t.Fatalf("enable: %s %s", out, stderr)
+	}
+	if out, stderr, code := run(sh, "lore meta --filter skills"); code != 0 || !strings.Contains(out, "/docs/valid/SKILL.md") {
+		t.Fatalf("initial discovery: %s %s", out, stderr)
+	}
+	ds := auth.Docsets["docs"]
+	ds.Paths = []config.PathMapping{{Source: "/other"}}
+	auth.Docsets["docs"] = ds
+	auth.Docsets["added"] = config.DocsetSpec{Paths: []config.PathMapping{{Source: "/added"}}, Access: config.DocsetAccess{Allow: map[string]string{"writer": "rw"}}}
+	writeAuthFixture(t, authFile, auth)
+	if err := s.Reload(cmds.JobAttribution{Principal: "alice"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range []string{"/other", "/added"} {
+		if out, stderr, code := run(sh, "skills enable "+target); code != 0 {
+			t.Fatalf("enable %s: %s %s", target, out, stderr)
+		}
+	}
+	for name, session := range map[string]*shell.Shell{"existing": sh, "new": s.buildSessionShell(testIdentity("alice"))} {
+		out, stderr, code := run(session, "lore meta --filter skills")
+		if code != 0 || !strings.Contains(out, "/other/valid/SKILL.md") || !strings.Contains(out, "/added/valid/SKILL.md") || strings.Contains(out, "/docs/") {
+			t.Errorf("%s discovery: %s %s", name, out, stderr)
+		}
+	}
+}
+
 func TestAgentSkillsValidateMergeRoot(t *testing.T) {
 	for _, mounted := range []bool{false, true} {
 		t.Run(fmt.Sprintf("named-mount=%v", mounted), func(t *testing.T) {

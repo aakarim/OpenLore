@@ -54,6 +54,8 @@ A store is not a docset. Client-synced content is not listed, read or searched b
 
 A projection is a docset whose contents come from a store. You declare it in `lore.json` with `"projection"` in place of `"path"`, and you can narrow it to a subpath or an include and exclude filter. A projected docset mounts, takes [grants](auth.md) and appears in the virtual filesystem like any other docset, and it is read-only on every transport.
 
+After editing `lore.json`, run `lore config reload` in an OpenLore session with `lore:config:edit`. Additions, removals, mount paths, aliases, filters, grants, and docset or top-level rules take effect without restarting the server. Existing sessions use the new filesystem and access policy on subsequent reads; an already-started read may finish against the previous configuration. Invalid reloads leave the running configuration unchanged. Edits through `/opt/openlore/lore.json` are validated before being saved; invalid host-side edits are left on disk for the operator to correct.
+
 Who can read a projection is decided by the docset's `access` block, the same way as for every other docset. A docset with no `access` block is reachable only as part of someone's home, so a store projected under `/user/<identity>/` is private to that person, and a store projected with `access.allow` roles is readable by everyone who holds one of them. One store can back several projections: the whole repository for maintainers and its `docs/` folder for everyone.
 
 ### How content gets in

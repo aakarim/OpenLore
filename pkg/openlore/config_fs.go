@@ -142,6 +142,9 @@ func (f *configViewFS) WriteFileAtomic(name string, data []byte, opts vfs.WriteO
 	}
 	f.server.authMu.Lock()
 	defer f.server.authMu.Unlock()
+	if !f.authorized() {
+		return "", os.ErrPermission
+	}
 	current, err := os.ReadFile(f.server.config.AuthFile)
 	if err != nil {
 		return "", withoutHostPath(err)
@@ -157,7 +160,7 @@ func (f *configViewFS) WriteFileAtomic(name string, data []byte, opts vfs.WriteO
 		parseErr = config.ValidateAuthConfig(&parsed)
 	}
 	if parseErr == nil {
-		parseErr = f.server.validateLiveAuthCandidate(&parsed)
+		_, parseErr = f.server.prepareLiveConfig(&parsed)
 	}
 	if parseErr != nil {
 		if f.server.audit != nil {
@@ -169,6 +172,7 @@ func (f *configViewFS) WriteFileAtomic(name string, data []byte, opts vfs.WriteO
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return "", withoutHostPath(err)
 	}
+	defer os.Remove(tmp)
 	if err := os.Rename(tmp, f.server.config.AuthFile); err != nil {
 		return "", withoutHostPath(err)
 	}

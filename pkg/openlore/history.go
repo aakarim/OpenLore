@@ -39,12 +39,14 @@ type HistoryRecord struct {
 // opaque to callers so another HistoryStore implementation can use database
 // keys rather than the JSONL offset used by the local store.
 type HistoryQuery struct {
-	FileKey   string
-	Roots     []string
-	Principal string
-	Actor     string
-	Limit     int
-	Cursor    string
+	FileKey string
+	Roots   []string
+	// Boundaries includes ungranted docsets, which carve out readable roots.
+	Boundaries []string
+	Principal  string
+	Actor      string
+	Limit      int
+	Cursor     string
 }
 
 type HistoryPage struct {
@@ -291,7 +293,8 @@ func appendHistoryRecords(path string, records []HistoryRecord) error {
 func (s *JSONLHistoryStore) Query(_ context.Context, query HistoryQuery) (HistoryPage, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if query.FileKey != "" && !historyReadable(query.Roots, query.FileKey) {
+	scope := newScopedReadFS(nil, query.Roots, query.Boundaries)
+	if query.FileKey != "" && !scope.within(query.FileKey) {
 		return HistoryPage{}, nil
 	}
 	path := filepath.Join(s.dir, "events.jsonl")
@@ -318,7 +321,7 @@ func (s *JSONLHistoryStore) Query(_ context.Context, query HistoryQuery) (Histor
 		if query.FileKey != "" && record.FileKey != vfs.CleanPath(query.FileKey) {
 			continue
 		}
-		if !historyReadable(query.Roots, record.FileKey) || query.Principal != "" && record.Attribution.Principal != query.Principal || query.Actor != "" && record.Attribution.Actor != query.Actor {
+		if !scope.within(record.FileKey) || query.Principal != "" && record.Attribution.Principal != query.Principal || query.Actor != "" && record.Attribution.Actor != query.Actor {
 			continue
 		}
 		matches = append(matches, record)
@@ -401,18 +404,15 @@ func historyRoots(docsets []cmds.DocsetInfo) []string {
 	return roots
 }
 
-func historyReadable(roots []string, target string) bool {
-	for _, root := range roots {
-		if pathWithinRoot(root, target) {
-			return true
-		}
-	}
-	return false
+func (s *Server) historyQuery(id Identity) HistoryQuery {
+	view := s.readView()
+	return HistoryQuery{Roots: historyRoots(view.sessionDocsets(view.liveReadIdentity(id))), Boundaries: view.allDocsetRoots()}
 }
 
 type scopedHistory struct {
 	store     HistoryStore
 	roots     []string
+	liveQuery func() HistoryQuery
 	gc        func(context.Context) (HistoryGCStats, error)
 	gcTimeout time.Duration
 }
@@ -436,7 +436,11 @@ func (h scopedHistory) GC() ([]byte, error) {
 
 func (h scopedHistory) Query(principal, actor string) ([]byte, error) {
 	var out []byte
-	query := HistoryQuery{Roots: h.roots, Principal: principal, Actor: actor}
+	query := HistoryQuery{Roots: h.roots}
+	if h.liveQuery != nil {
+		query = h.liveQuery()
+	}
+	query.Principal, query.Actor = principal, actor
 	for {
 		page, err := h.store.Query(context.Background(), query)
 		if err != nil {

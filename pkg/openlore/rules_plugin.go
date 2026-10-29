@@ -214,9 +214,17 @@ func ruleRoots(docset config.DocsetSpec) []string {
 }
 
 type rulesPlugin struct {
-	engine    *rules.Engine
-	fs        vfs.FileSystem
-	tokenizer tokenizer.Tokenizer
+	engine     *rules.Engine
+	liveEngine func() *rules.Engine
+	fs         vfs.FileSystem
+	tokenizer  tokenizer.Tokenizer
+}
+
+func (p *rulesPlugin) currentEngine() *rules.Engine {
+	if p.liveEngine != nil {
+		return p.liveEngine()
+	}
+	return p.engine
 }
 
 func newRulesPlugin(auth *config.AuthConfig, defaults rules.Defaults, fsys vfs.FileSystem, logger *slog.Logger) (*rulesPlugin, error) {
@@ -259,17 +267,18 @@ func newRulesPluginWithTokenizer(auth *config.AuthConfig, defaults rules.Default
 func (p *rulesPlugin) WriteMiddleware() []WriteMiddleware {
 	return []WriteMiddleware{func(next WriteHandler) WriteHandler {
 		return func(ctx context.Context, op WriteOp) (WriteResult, error) {
+			engine := p.currentEngine()
 			for _, leaf := range op.Leaves() {
 				if rules.IsDirConfigPath(leaf.Target) {
 					if leaf.Action == vfs.ChangeActionWrite && leaf.Write != nil {
 						dir := path.Dir(path.Dir(leaf.Target))
-						if err := p.engine.CheckConfigFile(ctx, dir, leaf.Write.Bytes); err != nil {
+						if err := engine.CheckConfigFile(ctx, dir, leaf.Write.Bytes); err != nil {
 							return WriteResult{}, p.rejectionError(err)
 						}
 					}
 					continue
 				}
-				if err := p.engine.AdmitLeaf(ctx, leaf, op.Attribution.String(), p.existing(leaf.Target)); err != nil {
+				if err := engine.AdmitLeaf(ctx, leaf, op.Attribution.String(), p.existing(leaf.Target)); err != nil {
 					return WriteResult{}, p.rejectionError(err)
 				}
 			}
@@ -287,6 +296,7 @@ func (p *rulesPlugin) rejectionError(err error) error {
 // closes the gap between concurrent admission and commit, and deliberately
 // rejects batches whose folder-config mutation would require a projected view.
 func (p *rulesPlugin) PreApply(attribution Attribution, changes vfs.ChangeSet) error {
+	engine := p.currentEngine()
 	leaves := changes.Leaves()
 	configChanges := 0
 	for _, leaf := range leaves {
@@ -300,13 +310,13 @@ func (p *rulesPlugin) PreApply(attribution Attribution, changes vfs.ChangeSet) e
 	for _, leaf := range leaves {
 		if rules.IsDirConfigPath(leaf.Target) {
 			if leaf.Action == vfs.ChangeActionWrite && leaf.Write != nil {
-				if err := p.engine.CheckConfigFile(context.Background(), path.Dir(path.Dir(leaf.Target)), leaf.Write.Bytes); err != nil {
+				if err := engine.CheckConfigFile(context.Background(), path.Dir(path.Dir(leaf.Target)), leaf.Write.Bytes); err != nil {
 					return p.rejectionError(err)
 				}
 			}
 			continue
 		}
-		if err := p.engine.PreApplyLeaf(context.Background(), leaf, attribution.String(), p.existing(leaf.Target)); err != nil {
+		if err := engine.PreApplyLeaf(context.Background(), leaf, attribution.String(), p.existing(leaf.Target)); err != nil {
 			return p.rejectionError(err)
 		}
 	}
@@ -327,11 +337,12 @@ func (p *rulesPlugin) existing(target string) func() ([]byte, bool, error) {
 }
 
 func (p *rulesPlugin) invalidateChanges(changes []vfs.Change) {
+	engine := p.currentEngine()
 	for _, leaf := range changes {
 		if rules.IsDirConfigPath(leaf.Target) {
-			p.engine.Invalidate(path.Dir(path.Dir(leaf.Target)))
+			engine.Invalidate(path.Dir(path.Dir(leaf.Target)))
 		} else if leaf.Action == vfs.ChangeActionRemoveAll {
-			p.engine.Invalidate(leaf.Target)
+			engine.Invalidate(leaf.Target)
 		}
 	}
 }
@@ -348,11 +359,12 @@ func (p *rulesPlugin) PostCommitMiddleware() []PostCommitMiddleware {
 // CommitState updates package-local state synchronously after content commits
 // and before the submitter receives success.
 func (p *rulesPlugin) CommitState(ctx context.Context, info CommitInfo) error {
+	engine := p.currentEngine()
 	leaves := info.ChangeSet.Leaves()
 	movedRemoves := map[int]bool{}
 	for _, move := range info.ChangeSet.Moves {
 		remove, write := leaves[move.From], leaves[move.To]
-		if err := p.engine.OnMove(ctx, remove.Target, write.Target); err != nil {
+		if err := engine.OnMove(ctx, remove.Target, write.Target); err != nil {
 			return err
 		}
 		movedRemoves[move.From] = true
@@ -360,11 +372,11 @@ func (p *rulesPlugin) CommitState(ctx context.Context, info CommitInfo) error {
 	for i, leaf := range leaves {
 		switch {
 		case leaf.Action == vfs.ChangeActionWrite && leaf.Write != nil && !rules.IsDirConfigPath(leaf.Target):
-			if err := p.engine.OnWrite(ctx, leaf.Target, leaf.Write.Bytes, info.Attribution.String()); err != nil {
+			if err := engine.OnWrite(ctx, leaf.Target, leaf.Write.Bytes, info.Attribution.String()); err != nil {
 				return err
 			}
 		case (leaf.Action == vfs.ChangeActionRemove || leaf.Action == vfs.ChangeActionRemoveAll) && !movedRemoves[i]:
-			if err := p.engine.OnRemove(ctx, leaf.Target, info.Attribution.String()); err != nil {
+			if err := engine.OnRemove(ctx, leaf.Target, info.Attribution.String()); err != nil {
 				return err
 			}
 		}
@@ -372,7 +384,9 @@ func (p *rulesPlugin) CommitState(ctx context.Context, info CommitInfo) error {
 	return nil
 }
 func (p *rulesPlugin) Validators() []validation.Validator {
-	return []validation.Validator{p.engine.Validator()}
+	return []validation.Validator{func(bundle validation.Bundle) []validation.Diagnostic {
+		return p.currentEngine().Validator()(bundle)
+	}}
 }
 func (p *rulesPlugin) Info() PluginInfo { return PluginInfo{Name: "rules", Version: "0.1.0"} }
 

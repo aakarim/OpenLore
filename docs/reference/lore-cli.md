@@ -215,6 +215,8 @@ Stores the server URL, identity and OAuth credentials for each knowledge reposit
 
 A docset in `lore.json` projects a store when it has `"projection"` instead of `"path"`. Its `access` block decides who can read it, as for any docset, and `paths` can name one absolute mount path (default `/<docset>`). A projection mounted beneath an identity's home docset is readable by that identity with no `access` block.
 
+Apply changes with `lore config reload` in an OpenLore session holding `lore:config:edit`. Projection additions, changes and removals update existing sessions without a server restart.
+
 | Key | Type | Description |
 |---|---|---|
 | `store` | string | Store path from `lore source list` |

@@ -203,7 +203,11 @@ func (p *agentSkillsPlugin) reconcileInstallations(cs *vfs.ChangeSet) error {
 
 func (p *agentSkillsPlugin) discoverInstallations(roots []string, targets map[string]bool) error {
 	visited := map[string]bool{}
-	for _, ds := range p.docsets {
+	docsets := p.docsets
+	if p.liveDocsets != nil {
+		docsets = p.liveDocsets()
+	}
+	for _, ds := range docsets {
 		if ds.Projection != nil {
 			for _, mapping := range ds.Paths {
 				visited[p.canonical(displayPath(mapping))] = true

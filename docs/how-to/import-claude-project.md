@@ -122,7 +122,7 @@ Synced content is invisible until a docset projects it. Add one projection per s
 Run `lore source list` and find the two stores for the payments Claude import. In lore.json, add a docset named payments-claude that projects the instructions store and a docset named payments-memory that projects the memory store with only **/*.md included. Grant payments-team read-only access to both and platform read-only access to payments-memory. Keep every other docset unchanged.
 ```
 
-Restart the server. The docsets mount read-only at `/payments-claude` and `/payments-memory`, and everyone who holds `payments-team` reads both; `platform` reads only the memory. Add a role to `access.allow` to widen the audience and remove it to narrow it; a projection never accepts writes, whatever grant you give.
+Run `lore config reload` in an OpenLore session with `lore:config:edit`; no server restart is needed. The docsets mount read-only at `/payments-claude` and `/payments-memory`, including in existing sessions, and everyone who holds `payments-team` reads both; `platform` reads only the memory. Add a role to `access.allow` to widen the audience and remove it to narrow it, then reload again; a projection never accepts writes, whatever grant you give.
 
 ---
 

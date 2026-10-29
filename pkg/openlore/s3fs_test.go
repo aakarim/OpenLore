@@ -6,17 +6,22 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/aakarim/go-openlore/internal/analytics"
+	"github.com/aakarim/go-openlore/internal/config"
+	"github.com/aakarim/go-openlore/pkg/shell/cmds"
 	"github.com/aakarim/go-openlore/pkg/vfs"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -89,6 +94,166 @@ func TestS3Filesystem(t *testing.T) {
 
 	t.Run("remote-commit-journal", func(t *testing.T) {
 		testS3CommitJournal(t, client, bucket)
+	})
+
+	t.Run("queued-canonical-path-change", func(t *testing.T) {
+		for _, changed := range []bool{false, true} {
+			t.Run(fmt.Sprintf("changed=%v", changed), func(t *testing.T) {
+				hegel.Test(t, func(t *hegel.T) {
+					roots := hegel.Draw(t, hegel.SampledFrom([][2]string{
+						{"/docs", "/docs-next"}, {"/docs-next", "/docs"}, {"/user/é %25", "/channel/new"},
+					}))
+					rel := hegel.Draw(t, hegel.SampledFrom([]string{"note.bin", "sub/leaf.bin", "é %25/nested/leaf.bin"}))
+					exists := hegel.Draw(t, hegel.Booleans())
+					viaAlias := hegel.Draw(t, hegel.Booleans())
+					before := hegel.Draw(t, hegel.Binary(0, 64))
+					after := append(bytes.Clone(before), hegel.Draw(t, hegel.Binary(1, 32))...)
+					destinationBefore := append([]byte("destination:"), after...)
+					oldPath, newPath := path.Join(roots[0], rel), path.Join(roots[1], rel)
+					prefix := analytics.NewID()
+					fsys, err := NewS3FS(client, bucket, prefix)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := fsys.SetWriteable(); err != nil {
+						t.Fatal(err)
+					}
+					if exists {
+						if _, err := fsys.WriteFileAtomic(oldPath, before, vfs.WriteOpts{}); err != nil {
+							t.Fatal(err)
+						}
+					}
+					if _, err := fsys.WriteFileAtomic(newPath, destinationBefore, vfs.WriteOpts{}); err != nil {
+						t.Fatal(err)
+					}
+					dir, err := os.MkdirTemp("", "s3-canonical-reload-")
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer os.RemoveAll(dir)
+					auth := serverAuth(map[string]config.DocsetSpec{"docs": {
+						Paths: []config.PathMapping{{Source: roots[0]}}, Aliases: []string{"/shortcut"},
+					}}, nil)
+					authFile := filepath.Join(dir, "lore.json")
+					encoded, err := json.Marshal(auth)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(authFile, encoded, 0o600); err != nil {
+						t.Fatal(err)
+					}
+					server, err := NewServerWithRootFS(fsys, WithReadonly(false), WithLogger(logger), config.WithDataDir(filepath.Join(dir, "data")), config.WithAuthFile(authFile))
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer server.Shutdown(ctx)
+					admitted, release := make(chan struct{}), make(chan struct{})
+					var gate, unblock sync.Once
+					server.writeMW = append(server.writeMW, func(next WriteHandler) WriteHandler {
+						return func(ctx context.Context, op WriteOp) (WriteResult, error) {
+							// Resolve the requested path before reload, then submit
+							// the admitted write to the ordered applier afterward.
+							gate.Do(func() { close(admitted); <-release })
+							return next(ctx, op)
+						}
+					})
+					writer := server.buildSessionFS(testIdentity("alice")).(vfs.WritableFS)
+					requested := oldPath
+					if viaAlias {
+						requested = path.Join("/shortcut", rel)
+					}
+					result, done := make(chan error, 1), make(chan struct{})
+					defer func() {
+						unblock.Do(func() { close(release) })
+						select {
+						case <-done:
+						case <-time.After(10 * time.Second):
+							t.Error("pending write did not finish")
+						}
+					}()
+					go func() {
+						defer close(done)
+						_, err := writer.WriteFileAtomic(requested, after, vfs.WriteOpts{})
+						result <- err
+					}()
+					select {
+					case <-admitted:
+					case <-time.After(10 * time.Second):
+						t.Fatal("write did not reach admission barrier")
+					}
+					ds := auth.Docsets["docs"]
+					if changed {
+						ds.Paths = []config.PathMapping{{Source: roots[1]}}
+						ds.Aliases = append(ds.Aliases, roots[0])
+					} else {
+						// An unrelated alias update must not reject valid work.
+						ds.Aliases = append(ds.Aliases, "/extra")
+					}
+					auth.Docsets["docs"] = ds
+					encoded, err = json.Marshal(auth)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(authFile, encoded, 0o600); err != nil {
+						t.Fatal(err)
+					}
+					if err := server.Reload(cmds.JobAttribution{Principal: "alice"}); err != nil {
+						t.Fatal(err)
+					}
+					unblock.Do(func() { close(release) })
+					select {
+					case err := <-result:
+						if changed && !errors.Is(err, os.ErrPermission) || !changed && err != nil {
+							t.Fatalf("changed=%v: pending write returned %v", changed, err)
+						}
+					case <-time.After(10 * time.Second):
+						t.Fatal("pending write did not return")
+					}
+					// A new backend instance reads durable S3 state, not a
+					// session cache. Rejection may neither write the old path
+					// nor silently redirect the bytes to the new destination.
+					reopened, err := NewS3FS(client, bucket, prefix)
+					if err != nil {
+						t.Fatal(err)
+					}
+					got, err := reopened.ReadFile(oldPath)
+					if changed && !exists {
+						if !errors.Is(err, os.ErrNotExist) {
+							t.Fatalf("rejected create persisted at %s: %x %v", oldPath, got, err)
+						}
+					} else {
+						want := after
+						if changed {
+							want = before
+						}
+						if err != nil || !bytes.Equal(got, want) {
+							t.Fatalf("old S3 path %s: got=%x want=%x err=%v", oldPath, got, want, err)
+						}
+					}
+					if got, err := reopened.ReadFile(newPath); err != nil || !bytes.Equal(got, destinationBefore) {
+						t.Fatalf("new S3 destination changed: %x %v", got, err)
+					}
+					page, err := server.history.Query(ctx, HistoryQuery{Roots: roots[:]})
+					wantRecords := 1
+					if changed {
+						wantRecords = 0
+					}
+					if err != nil || len(page.Records) != wantRecords || !changed && (page.Records[0].FileKey != oldPath || page.Records[0].ContentHash != hashContent(after)) {
+						t.Fatalf("rejected/accepted write history: %+v %v", page, err)
+					}
+					if changed {
+						// Resubmission through the existing session must resolve
+						// the new canonical root and succeed, not ban all writes.
+						if _, err := writer.WriteFileAtomic(requested, after, vfs.WriteOpts{}); err != nil {
+							t.Fatal("retry through updated alias:", err)
+						}
+						if got, err := reopened.ReadFile(newPath); err != nil || !bytes.Equal(got, after) {
+							t.Fatalf("retry missed new S3 destination: %x %v", got, err)
+						}
+					}
+				}, hegel.WithTestCases(s3TestCases()))
+			})
+		}
 	})
 
 	t.Run("file-journal-fault-boundaries", func(t *testing.T) {
