@@ -53,6 +53,7 @@ type sourceState struct {
 	Owner         string                       `json:"owner"`
 	Snapshots     []SourceSnapshot             `json:"snapshots"`
 	Pending       map[string]SourceSnapshot    `json:"pending"`
+	Uploaded      map[string]int64             `json:"uploaded,omitempty"`
 	Installations map[string]skillInstallation `json:"skill_installations,omitempty"`
 }
 
@@ -140,11 +141,16 @@ func validateSnapshot(req SnapshotRequest) error {
 		return fmt.Errorf("files required (maximum 10000)")
 	}
 	var size int64
+	sizes := map[string]int64{}
 	for p, f := range req.Files {
 		decoded, err := hex.DecodeString(f.SHA256)
 		if !validSourcePath(p) || len(decoded) != 32 || err != nil || f.SHA256 != strings.ToLower(f.SHA256) || f.Size < 0 || f.Size > maxSFTPStagedFileBytes || f.Mode & ^uint32(0777) != 0 {
 			return fmt.Errorf("invalid file %q (8 MiB maximum; regular files only)", p)
 		}
+		if before, ok := sizes[f.SHA256]; ok && before != f.Size {
+			return fmt.Errorf("conflicting sizes for blob %s", f.SHA256)
+		}
+		sizes[f.SHA256] = f.Size
 		for parent := path.Dir(p); parent != "."; parent = path.Dir(parent) {
 			if _, ok := req.Files[parent]; ok {
 				return fmt.Errorf("file/directory collision: %s", parent)
@@ -162,6 +168,23 @@ func latestSnapshot(s sourceState) SourceSnapshot {
 		return SourceSnapshot{}
 	}
 	return s.Snapshots[len(s.Snapshots)-1]
+}
+
+// Physical CAS presence is not read authority. Only a verified upload to this
+// source, or its already committed history, authorizes reuse. Pending manifests
+// alone prove nothing. Existing committed history remains usable on upgrade.
+// Build the index once per request, not once per requested file under the lock.
+func authorizedSourceBlobs(s sourceState) map[string]int64 {
+	authorized := make(map[string]int64, len(s.Uploaded))
+	for hash, size := range s.Uploaded {
+		authorized[hash] = size
+	}
+	for _, snap := range s.Snapshots {
+		for _, f := range snap.Files {
+			authorized[f.SHA256] = f.Size
+		}
+	}
+	return authorized
 }
 
 func (d *Docstore) prepare(ctx context.Context, store, owner string, req SnapshotRequest, dry bool) (SourceSnapshot, []string, error) {
@@ -190,14 +213,19 @@ func (d *Docstore) prepare(ctx context.Context, store, owner string, req Snapsho
 	}
 	missing := []string{}
 	seen := map[string]bool{}
+	authorized := authorizedSourceBlobs(s)
 	for _, f := range req.Files {
+		if seen[f.SHA256] {
+			continue
+		}
+		seen[f.SHA256] = true
 		ok, err := d.blobs.Has(ctx, f.SHA256)
 		if err != nil {
 			return SourceSnapshot{}, nil, err
 		}
-		if !ok && !seen[f.SHA256] {
+		size, allowed := authorized[f.SHA256]
+		if !ok || !allowed || size != f.Size {
 			missing = append(missing, f.SHA256)
-			seen[f.SHA256] = true
 		}
 	}
 	sort.Strings(missing)
@@ -214,6 +242,27 @@ func (d *Docstore) prepare(ctx context.Context, store, owner string, req Snapsho
 	s.Pending[id] = snap
 	return snap, missing, d.save(s)
 }
+
+// commitUploaded is the client publication boundary. The internal commit path
+// is also used by trusted native writes and skill retrieval, which insert their
+// bytes directly rather than going through client upload admission.
+func (d *Docstore) commitUploaded(ctx context.Context, store, owner, id string) (SourceSnapshot, error) {
+	s, err := d.state(store)
+	if err != nil {
+		return SourceSnapshot{}, err
+	}
+	if s.Owner != owner {
+		return SourceSnapshot{}, os.ErrPermission
+	}
+	authorized := authorizedSourceBlobs(s)
+	for _, f := range s.Pending[id].Files {
+		if size, ok := authorized[f.SHA256]; !ok || size != f.Size {
+			return SourceSnapshot{}, fmt.Errorf("blob upload required for %s", f.SHA256)
+		}
+	}
+	return d.commit(ctx, store, owner, id)
+}
+
 func (d *Docstore) commit(ctx context.Context, store, owner, id string) (SourceSnapshot, error) {
 	s, err := d.state(store)
 	if err != nil {
@@ -282,7 +331,7 @@ func (s *Server) docstoreHandler(prefix string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := s.identityFromContext(r.Context())
 		owner := id.IdentityName
-		if owner == "" || owner == "anonymous" {
+		if owner == "" || owner == "anonymous" || owner == "guest" {
 			writeAPIError(w, 403, "named identity required")
 			return
 		}
@@ -315,25 +364,50 @@ func (s *Server) docstoreHandler(prefix string) http.Handler {
 				writeAPIError(w, 500, err.Error())
 				return
 			}
-			allowed := false
+			requested := false
+			var authorized []sourceState
 			for _, state := range states {
+				allowed := false
 				if state.Owner == owner {
 					for _, snap := range state.Pending {
 						for _, f := range snap.Files {
 							if f.SHA256 == hash {
-								allowed = true
+								requested = true
+								if f.Size == int64(len(body)) {
+									allowed = true
+								}
 							}
 						}
 					}
 				}
+				if allowed {
+					authorized = append(authorized, state)
+				}
 			}
-			if !allowed {
+			if !requested {
 				writeAPIError(w, 403, "blob not requested by an owned pending snapshot")
+				return
+			}
+			if len(authorized) == 0 {
+				writeAPIError(w, 400, "blob size does not match an owned pending snapshot")
 				return
 			}
 			if err := d.blobs.Put(r.Context(), hash, bytes.NewReader(body)); err != nil {
 				writeAPIError(w, 400, err.Error())
 				return
+			}
+			// Save proof only after hash AND length verification, even when Put
+			// physically deduplicates. A successful response makes retries after
+			// restart safe; a failed save can simply be retried with the bytes.
+			for _, state := range authorized {
+				if state.Uploaded == nil {
+					state.Uploaded = map[string]int64{}
+				}
+				state.Uploaded[hash] = int64(len(body))
+				if err := d.save(state); err != nil {
+					writeAPIError(w, 500, err.Error())
+					return
+				}
 			}
 			writeJSON(w, 200, map[string]bool{"ok": true})
 			return
@@ -436,7 +510,7 @@ func (s *Server) docstoreHandler(prefix string) http.Handler {
 			return
 		}
 		if strings.HasSuffix(tail, "/commit") {
-			snap, err := d.commit(r.Context(), store, owner, strings.TrimSuffix(strings.TrimPrefix(tail, "/"), "/commit"))
+			snap, err := d.commitUploaded(r.Context(), store, owner, strings.TrimSuffix(strings.TrimPrefix(tail, "/"), "/commit"))
 			if err != nil {
 				writeAPIError(w, 409, err.Error())
 				return
