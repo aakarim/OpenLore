@@ -123,7 +123,17 @@ func (p *analyticsPlugin) PostCommitMiddleware() []PostCommitMiddleware {
 func (p *analyticsPlugin) observeWrites(next PostCommitHandler) PostCommitHandler {
 	return func(ctx context.Context, info CommitInfo) error {
 		writer := classifyAttribution(info.Attribution)
-		for _, leaf := range info.ChangeSet.Leaves() {
+		leaves := info.ChangeSet.Leaves()
+		moves, sources := map[int]string{}, map[int]bool{}
+		for _, move := range info.ChangeSet.Moves {
+			moves[move.To] = vfs.CleanPath(leaves[move.From].Target)
+			sources[move.From] = true
+		}
+		for i, leaf := range leaves {
+			if sources[i] {
+				p.service.EnqueueFacts(leaf.Target)
+				continue
+			}
 			if leaf.Action != vfs.ChangeActionWrite && leaf.Action != vfs.ChangeActionRemove && leaf.Action != vfs.ChangeActionRemoveAll {
 				continue
 			}
@@ -141,12 +151,15 @@ func (p *analyticsPlugin) observeWrites(next PostCommitHandler) PostCommitHandle
 			}
 			fields := map[string]any{"path": vfs.CleanPath(leaf.Target), "docset": p.docsetForPath(leaf.Target), "action": action, "writer": string(writer), "actor_kind": string(writer), "commit_id": info.ID, "commit_hash": info.Hash}
 			if leaf.Write != nil {
-				fields["content_hash"] = leafAfterHash(info.Leaves, leaf.Target)
-				if fields["content_hash"] == "" {
-					fields["content_hash"] = hashContent(leaf.Write.Bytes)
+				fields["content_hash"] = hashContent(leaf.Write.Bytes)
+				if leaf.Write.Generated {
+					fields["generated"] = true
 				}
 			} else {
 				fields["content_hash"] = ""
+			}
+			if from, ok := moves[i]; ok {
+				fields["action"], fields["from"] = "move", from
 			}
 			event := analytics.Event{ID: analytics.NewID(), Time: time.Now().UTC(), Type: "doc.write", Principal: info.Attribution.Principal, Actor: info.Attribution.Actor, Transport: info.Attribution.Extra["transport"], SessionID: info.Attribution.Extra["session_id"], ClientSessionID: info.Attribution.Extra["client_session_id"], RemoteAddr: info.Attribution.Extra["remote_addr"], InvocationID: info.Attribution.Extra["invocation_id"], ParentID: info.Attribution.Extra["parent_id"], Fields: fields}
 			p.service.Record(ctx, event)
@@ -154,14 +167,6 @@ func (p *analyticsPlugin) observeWrites(next PostCommitHandler) PostCommitHandle
 		}
 		return next(ctx, info)
 	}
-}
-func leafAfterHash(leaves []LeafRecord, target string) string {
-	for _, leaf := range leaves {
-		if vfs.CleanPath(leaf.Target) == vfs.CleanPath(target) {
-			return leaf.AfterHash
-		}
-	}
-	return ""
 }
 func (p *analyticsPlugin) docsetForPath(target string) string {
 	if p.server != nil && p.server.auth != nil {

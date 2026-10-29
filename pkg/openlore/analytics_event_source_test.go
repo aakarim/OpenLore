@@ -58,6 +58,37 @@ func analyticsScopeServer() (*Server, Identity, Identity) {
 	return server, alice, bob
 }
 
+func TestDashboardMoveEventsRequireBothEndpointsInScope(t *testing.T) {
+	server, alice, _ := analyticsScopeServer()
+	events := sliceAnalyticsSource{
+		{ID: "alias", Type: "doc.write", Fields: map[string]any{"action": "move", "from": "/knowledge/old.md", "path": "/docs/new.md"}},
+		{ID: "private-source", Type: "doc.write", Fields: map[string]any{"action": "move", "from": "/docs/private/secret.md", "path": "/docs/new.md"}},
+		{ID: "private-destination", Type: "doc.write", Fields: map[string]any{"action": "move", "from": "/docs/old.md", "path": "/docs/private/secret.md"}},
+		{ID: "cross-prefix", Type: "doc.write", Fields: map[string]any{"action": "move", "from": "/sibling/old.md", "path": "/docs/new.md"}},
+		// Scalar inventory is independently visible, without revealing the
+		// private endpoint or carrying its usage into the readable path.
+		{ID: "inventory", Type: "doc.scalars", Fields: map[string]any{"action": "move", "path": "/docs/new.md"}},
+	}
+	for _, prefix := range []string{"/docs", "/"} {
+		t.Run(prefix, func(t *testing.T) {
+			source := &dashboardEventSource{server: server, identity: alice, prefix: prefix, source: events}
+			got := map[string]bool{}
+			if err := source.Scan(context.Background(), analytics.EventFilter{}, func(event analytics.Event) error {
+				got[event.ID] = true
+				if event.ID == "alias" && event.Fields["from"] != "/docs/old.md" {
+					t.Fatalf("uncanonicalized move source: %#v", event)
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if !got["alias"] || !got["inventory"] || got["private-source"] || got["private-destination"] || got["cross-prefix"] != (prefix == "/") {
+				t.Fatalf("visible events for %s = %v", prefix, got)
+			}
+		})
+	}
+}
+
 func TestDashboardEventSourceScopesPathsSearchesAndCorrelations(t *testing.T) {
 	server, alice, bob := analyticsScopeServer()
 	now := time.Now().UTC()

@@ -429,6 +429,9 @@ func newServerWithRoot(rootDir string, rootFS vfs.FileSystem, lowerFS fs.FS, opt
 					return os.ErrPermission
 				}
 			}
+			if err := validateFolderIndexes(s.merge, changes); err != nil {
+				return err
+			}
 			if err := rulesPlugin.PreApply(attribution, changes); err != nil {
 				return err
 			}
@@ -1025,7 +1028,9 @@ func (s *Server) writeChain() WriteHandler {
 		}
 		return WriteResult{Hash: h}, err
 	}
-	return chainWrite(terminal, s.writeMW...)
+	// Expand opted-in indexes before every policy decision, then authorize the
+	// generated leaves too. The log commits the resulting batch atomically.
+	return s.folderIndexAdmission(chainWrite(terminal, s.writeMW...))
 }
 
 // readChain composes the read (before-read) middleware around a no-op terminal

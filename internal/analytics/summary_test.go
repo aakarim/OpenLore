@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net/http/httptest"
 	"reflect"
 	"slices"
 	"strings"
@@ -196,5 +197,163 @@ func TestUsageSummaryRejectsTokenTotalOverflow(t *testing.T) {
 	}
 	if summary.EstimatedTokens != int64(characters) || summary.EstimatedReads != 1 || summary.UnestimatedReads != 1 {
 		t.Fatalf("overflow coverage = %#v", summary)
+	}
+}
+
+func TestIsAuthoredWrite(t *testing.T) {
+	for _, eventType := range []string{"doc.write", "doc.scalars"} {
+		for _, tc := range []struct {
+			name   string
+			fields map[string]any
+			want   bool
+		}{
+			{"legacy", nil, true},
+			{"create", map[string]any{"action": "create"}, true},
+			{"update", map[string]any{"action": "update", "generated": false}, true},
+			{"delete", map[string]any{"action": "delete"}, true},
+			{"move", map[string]any{"action": "move"}, false},
+			{"move_source", map[string]any{"action": "move_source"}, false},
+			{"generated", map[string]any{"action": "update", "generated": true}, false},
+		} {
+			t.Run(eventType+"/"+tc.name, func(t *testing.T) {
+				if got := IsAuthoredWrite(Event{Type: eventType, Fields: tc.fields}); got != tc.want {
+					t.Fatalf("IsAuthoredWrite = %v, want %v", got, tc.want)
+				}
+			})
+		}
+	}
+	if IsAuthoredWrite(Event{Type: "doc.read"}) {
+		t.Fatal("read classified as authored write")
+	}
+}
+
+// The second day contains only moves and generated maintenance, including a
+// cross-docset move and a same-docset move whose inventory deltas cancel out.
+func authoredMaintenanceEvents() summarySource {
+	day := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+	var events summarySource
+	add := func(commit, path, docset, writer, action string, generated bool, when time.Time, bytes, lines, tokens float64) {
+		fields := map[string]any{"commit_id": commit, "path": path, "docset": docset, "writer": writer, "action": action,
+			"delta": map[string]any{"bytes": bytes, "lines": lines, "tokens": tokens}}
+		if generated {
+			fields["generated"] = true
+		}
+		events = append(events, Event{ID: commit + path + "scalar", Time: when, Type: "doc.scalars", Fields: fields})
+		if action != "move_source" {
+			events = append(events, Event{ID: commit + path + "write", Time: when, Type: "doc.write", Fields: fields})
+		}
+	}
+	add("create", "/a.md", "docs", "human", "create", false, day, 100, 10, 25)
+	add("update", "/a.md", "docs", "agent", "update", false, day, -20, -2, -5)
+	add("delete", "/legacy.md", "docs", "unknown", "delete", false, day, -10, -1, -2)
+	maintenance := day.Add(24 * time.Hour)
+	add("cross", "/a.md", "docs", "human", "move_source", false, maintenance, -70, -7, -18)
+	add("cross", "/archive/a.md", "archive", "human", "move", false, maintenance, 70, 7, 18)
+	add("same", "/b.md", "docs", "agent", "move_source", false, maintenance, -30, -3, -8)
+	add("same", "/c.md", "docs", "agent", "move", false, maintenance, 30, 3, 8)
+	add("index", "/index.md", "docs", "agent", "update", true, maintenance, 12, 2, 3)
+	return events
+}
+
+func TestUsageSummaryExcludesMoveAndGeneratedMaintenanceIncludingReplay(t *testing.T) {
+	source := authoredMaintenanceEvents()
+	// Replayed scalars can have new IDs but retain their commit/path identity.
+	for _, event := range append(summarySource(nil), source...) {
+		event.ID += "-replay"
+		source = append(source, event)
+	}
+	summary, err := UsageSummary(context.Background(), source, Params{}, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Writes != 3 || summary.HumanWrites != 1 || summary.AgentWrites != 1 || summary.UnknownWrites != 1 {
+		t.Fatalf("authored totals = %+v", summary)
+	}
+	want := []SummaryActivity{{Date: "2026-09-15", Human: 1, Agent: 1, Unknown: 1, Writes: 3}}
+	if !reflect.DeepEqual(summary.Activity, want) {
+		t.Fatalf("authored activity = %+v, want %+v", summary.Activity, want)
+	}
+}
+
+func TestBuiltinAuthorshipAndInventoryIncludeReplayAndPartialRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	source := authoredMaintenanceEvents()
+	for _, name := range []string{"size-over-time", "write-ratio"} {
+		t.Run(name, func(t *testing.T) {
+			var aggregation Aggregation
+			for _, candidate := range BuiltinAggregations() {
+				if candidate.Name == name {
+					aggregation = candidate
+				}
+			}
+			want := [][]any{{"", 1, 1, 1, float64(1) / 3, float64(100), float64(-20), float64(-10)}}
+			if name == "size-over-time" {
+				want = [][]any{
+					{"2026-09-15T00:00:00Z", "docs", float64(3), float64(70), float64(7), float64(18)},
+					{"2026-09-16T00:00:00Z", "archive", float64(0), float64(70), float64(7), float64(18)},
+					{"2026-09-16T00:00:00Z", "docs", float64(0), float64(-58), float64(-5), float64(-15)},
+				}
+			}
+			replayed := append(summarySource(nil), source...)
+			for _, event := range source {
+				event.ID += "-replay"
+				replayed = append(replayed, event)
+			}
+			table, err := aggregation.Compute(ctx, replayed, nil, Params{})
+			if err != nil || !reflect.DeepEqual(table.Rows, want) {
+				t.Fatalf("single scan rows=%#v want=%#v err=%v", table.Rows, want, err)
+			}
+			// Daily partials must preserve Count=false through serialization,
+			// and merging a replay must not duplicate inventory or authorship.
+			merged := aggregation.Incremental.New(Params{})
+			for _, day := range []string{"2026-09-15", "2026-09-16", "2026-09-16"} {
+				partial := aggregation.Incremental.New(Params{})
+				for _, event := range source {
+					if event.Type == "doc.scalars" && event.Time.Format("2006-01-02") == day {
+						partial.Add(event)
+					}
+				}
+				encoded, err := json.Marshal(partial)
+				if err != nil {
+					t.Fatal(err)
+				}
+				decoded := aggregation.Incremental.New(Params{})
+				if err := json.Unmarshal(encoded, decoded); err != nil {
+					t.Fatal(err)
+				}
+				merged.Merge(decoded)
+			}
+			table, err = aggregation.Incremental.Table(ctx, merged, nil, Params{})
+			if err != nil || !reflect.DeepEqual(table.Rows, want) {
+				t.Fatalf("merged rows=%#v want=%#v err=%v", table.Rows, want, err)
+			}
+		})
+	}
+}
+
+func TestPrometheusExcludesMoveAndGeneratedAuthorActivity(t *testing.T) {
+	a := NewAggregator(AggregatorOptions{})
+	for _, event := range authoredMaintenanceEvents() {
+		a.Consume(context.Background(), event)
+		if event.Type == "doc.scalars" {
+			event.ID += "-replay"
+			a.Consume(context.Background(), event)
+		}
+	}
+	response := httptest.NewRecorder()
+	a.ServeHTTP(response, httptest.NewRequest("GET", "/metrics", nil))
+	body := response.Body.String()
+	for writer, bytes := range map[string]string{"human": "100", "agent": "-20", "unknown": "-10"} {
+		for _, metric := range []string{
+			fmt.Sprintf(`openlore_doc_writes_total{docset="docs",writer=%q} 1`, writer),
+			fmt.Sprintf(`openlore_doc_write_scalar_total{docset="docs",writer=%q,scalar="bytes"} %s`, writer, bytes),
+		} {
+			if !strings.Contains(body, metric+"\n") {
+				t.Errorf("missing metric %s:\n%s", metric, body)
+			}
+		}
+	}
+	if len(a.writes) != 3 || len(a.scalars) != 9 || strings.Contains(body, `docset="archive"`) {
+		t.Fatalf("maintenance produced author metric series:\n%s", body)
 	}
 }

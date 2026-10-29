@@ -656,6 +656,60 @@ func TestWriteEventPreservesInvocationAndSessionCorrelation(t *testing.T) {
 	}
 }
 
+func TestWriteEventsDistinguishMovesAndGeneratedMaintenance(t *testing.T) {
+	service, err := analytics.New(config.AnalyticsConfig{
+		Dir: filepath.Join(t.TempDir(), "analytics"),
+		Log: config.AnalyticsLogConfig{Compress: "none"},
+	}, analytics.Deps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.Start(context.Background())
+	p := &analyticsPlugin{service: service}
+	info := CommitInfo{
+		ID:          "move-index",
+		Attribution: Attribution{Principal: "alice", Extra: map[string]string{"invocation_id": "move-command"}},
+		ChangeSet: vfs.ChangeSet{
+			Changes: []vfs.Change{
+				{Target: "/docs/index.md", Action: vfs.ChangeActionRemove},
+				{Target: "/other/index.md", Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: []byte("original")}},
+				{Target: "/other/index.md", Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: []byte("refreshed"), Generated: true}},
+			},
+			Moves: []vfs.Move{{From: 0, To: 1}},
+		},
+	}
+	if err := p.observeWrites(func(context.Context, CommitInfo) error { return nil })(context.Background(), info); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := service.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var events []analytics.Event
+	if err := service.EventSource().Scan(context.Background(), analytics.EventFilter{Types: []string{"doc.write"}}, func(e analytics.Event) error {
+		events = append(events, e)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("events = %#v; want one move and one refresh", events)
+	}
+	move, refresh := events[0], events[1]
+	if move.Fields["action"] != "move" || move.Fields["from"] != "/docs/index.md" || move.Fields["content_hash"] != hashContent([]byte("original")) || move.Fields["generated"] == true {
+		t.Fatalf("move = %#v", move)
+	}
+	if refresh.Fields["generated"] != true || refresh.Fields["content_hash"] != hashContent([]byte("refreshed")) || refresh.Fields["from"] != nil {
+		t.Fatalf("refresh = %#v", refresh)
+	}
+	for _, event := range events {
+		if event.Fields["path"] != "/other/index.md" || event.Fields["commit_id"] != info.ID || event.InvocationID != "move-command" || analytics.IsAuthoredWrite(event) {
+			t.Fatalf("maintenance attribution = %#v", event)
+		}
+	}
+}
+
 func TestPrometheusExportPreservesJSONServerMetrics(t *testing.T) {
 	service, err := analytics.New(config.AnalyticsConfig{
 		Dir: filepath.Join(t.TempDir(), "analytics"),

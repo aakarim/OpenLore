@@ -393,6 +393,7 @@ type scalarWrite struct {
 	Bucket string             `json:"bucket"`
 	Docset string             `json:"docset"`
 	Writer string             `json:"writer"`
+	Count  bool               `json:"count"` // authored write; Delta always tracks inventory
 	Delta  map[string]float64 `json:"delta,omitempty"`
 }
 
@@ -406,7 +407,7 @@ func (w *scalarWritesPartial) Add(e Event) {
 	if _, exists := w.Writes[id]; exists {
 		return
 	}
-	write := scalarWrite{Bucket: e.Time.UTC().Truncate(24 * time.Hour).Format(time.RFC3339), Docset: fieldString(e, "docset"), Writer: fieldString(e, "writer")}
+	write := scalarWrite{Bucket: e.Time.UTC().Truncate(24 * time.Hour).Format(time.RFC3339), Docset: fieldString(e, "docset"), Writer: fieldString(e, "writer"), Count: IsAuthoredWrite(e)}
 	if delta, ok := e.Fields["delta"].(map[string]any); ok {
 		for _, k := range []string{"bytes", "lines", "tokens"} {
 			if v, ok := delta[k].(float64); ok {
@@ -442,7 +443,9 @@ var sizeOverTime = Incremental{
 				r = map[string]float64{}
 				roll[key] = r
 			}
-			r["writes"]++
+			if write.Count {
+				r["writes"]++
+			}
 			for k, v := range write.Delta {
 				r[k] += v
 			}
@@ -469,6 +472,9 @@ var writeRatio = Incremental{
 		var human, agent, unknown int
 		var hb, ab, ub float64
 		for _, write := range partial.(*scalarWritesPartial).Writes {
+			if !write.Count {
+				continue
+			}
 			bytes := write.Delta["bytes"]
 			switch Writer(write.Writer) {
 			case WriterHuman:

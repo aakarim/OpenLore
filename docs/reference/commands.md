@@ -88,6 +88,7 @@ Directories retain a trailing `/`, hidden entries appear only after an explicit
 | `uniq` | Filter duplicate lines (`-c`, `-d`, `-i`, `-u`) |
 | `cut` | Select fields or characters (`-d DEL`, `-f FIELDS`, `-c CHARS`, `-s`) |
 | `sed` | Stream editor (`-n`, `-e`, `s/pat/repl/flags`, `-i`); replacement text supports `\n` (newline), `\t` (tab), `\\` (backslash), escaped delimiters, and backslash-newline continuations |
+| `replace [-n] [--all] <file> <old> <new>` | Literal edit; use instead of `sed` for paths and other exact text. Requires exactly one match, or one or more with `--all`. `-n` prints a unified diff without writing |
 | `awk` | Pattern scanning (`-F SEP`, `-v VAR=VAL`); supports regex and expression patterns, variables, arrays, `if`/`for`/`while`, `next`, and common built-ins such as `sub`, `gsub`, `split`, and `substr`. Unsupported constructs (`nextfile`, `exit`, `getline`, output redirection, range patterns, user functions) print an error and exit 2 |
 | `tr` | Translate characters (`-d`, `-s`, `-c`) |
 | `rev` / `tac` | Reverse characters per line / reverse line order |
@@ -148,8 +149,10 @@ them.
 | `tee` | Write stdin to a file while returning it |
 | `patch` | Apply a unified diff atomically |
 | `sed -i` | Edit a file atomically |
+| `replace` | Replace literal bytes with match-count checks; no regex or escape processing |
+| `lore meta set` / `lore meta unset` | Edit a top-level YAML frontmatter field, preserving body bytes |
 | `mkdir` | Create a directory (`-p` for parents) |
-| `mv` | Move a file |
+| `mv` | Move a file, retain provenance, and warn about remaining references |
 | `rm` | Remove a file or tree (`-r`) |
 | `publish` | Contribute stdin into a docset inbox; does not make the docset public or change who can read it |
 | `spawn` | Run configured external work asynchronously when explicitly trusted |
@@ -188,6 +191,66 @@ lore meta /docs/backend | jq -r 'select(.type == "Metric") | .path'
 ```
 
 Add `--filter skills` to list Agent Skills collections without scanning unrelated documents.
+
+The ordinary scan prints a with/without-frontmatter summary on stderr; stdout
+remains NDJSON. Find omitted documents, including malformed frontmatter, with:
+
+```shell
+lore meta /user/alice --missing
+lore meta /user/alice --missing type,tags
+lore meta --help
+```
+
+The second form also includes files missing either named top-level key. A
+present null or empty value counts as present; this is discovery, not validation.
+Put the scan path before bare `--missing`, or use `--missing=type,tags <path>`.
+`--missing` cannot be combined with a plugin filter.
+
+Edit frontmatter structurally instead of using a regular expression:
+
+```shell
+lore meta set /user/alice/note.md 'title=Call cheat sheet'
+lore meta set /user/alice/note.md 'tags=[fundraising, calls]'
+lore meta unset /user/alice/note.md obsolete
+replace /user/alice/index.md '(../../call-cheat-sheet.md)' '(../call-cheat-sheet.md)'
+```
+
+Keys are literal top-level names; set values are YAML (`key=` sets an empty
+string). Missing frontmatter is created. Invalid YAML is rejected, body bytes
+are unchanged, and the usual folder rules and compare-and-swap checks apply.
+`replace` exits non-zero for no match or ambiguous matches. Quote arguments to
+keep the shell from interpreting their punctuation; `replace` itself performs
+no escape processing. Use `-n` for a dry-run diff and `--all` for repeated text.
+
+### `lore history <path>`
+
+Show a path's history as newest-first NDJSON, including the original writes
+before a move. Output uses the same fields as `history`; a move has
+`action: "move"`, `from` naming the source, `target` naming the destination,
+and the unchanged content hash. Alias paths are canonicalised. Following a
+move stops at the caller's read-permission boundary. This command requires a
+server with durable history enabled; old unlinked moves cannot be inferred.
+
+```shell
+mv /user/alice/a.md /user/alice/archive/a.md
+lore history /user/alice/archive/a.md
+```
+
+### `lore links --to <path>`
+
+List readable Markdown files that still reference a path, once each under their
+canonical absolute paths. Standard Markdown links and paths in inline code
+spans count; fenced examples, external URLs, frontmatter, and `/data/history`
+do not. Relative references resolve from the referring file's directory. The
+target need not exist. Search covers the caller's readable docsets, not just cwd.
+
+```shell
+lore links --to /user/alice/a.md
+```
+
+After a successful move, `mv` prints the remaining referencing files on stderr.
+It does not rewrite references automatically or change a successful exit status
+because references remain. A deferred move is reported as pending, not completed.
 
 ### `lore package list` and `lore package doc <path>`
 
@@ -252,7 +315,13 @@ Print the commit journal as NDJSON, newest first, with one object per write to a
 history --actor claude-code@claude.ai | jq -r .target | sort | uniq -c | sort -rn
 ```
 
-Each object has `commit_id`, `time`, `attribution`, `target`, `action` and `hash`. `attribution` is the principal, or `principal/actor` for a write made through an OAuth client. The journal is kept only when `readonly` is `false`; `analytics.history.retention` bounds how far back it reaches.
+Each object has `commit_id`, `time`, `attribution`, `target`, `action` and `hash`.
+Moves additionally carry `from`; their `target` is the destination. `attribution`
+is the principal, or `principal/actor` for a write made through an OAuth client.
+The journal is kept only when `readonly` is `false`;
+`analytics.history.retention` bounds retained commit-journal segments and blobs.
+The metadata index used by `history` is stored separately. Use
+`lore history <path>` to follow a file's provenance across moves.
 
 ## Skills management
 

@@ -30,6 +30,7 @@ const (
 var commandActions = map[string]Action{
 	"write":   ActionWrite,
 	"patch":   ActionWrite,
+	"replace": ActionWrite,
 	"tee":     ActionWrite,
 	"mkdir":   ActionWrite,
 	"mv":      ActionWrite,
@@ -61,6 +62,9 @@ func RegisterAction(name string, a Action) {
 func InvocationAction(name string, args []string) Action {
 	if name == "lore" && len(args) >= 2 && args[0] == "config" && args[1] == "reload" {
 		return ActionAdmin
+	}
+	if name == "lore" && len(args) >= 2 && args[0] == "meta" && (args[1] == "set" || args[1] == "unset") {
+		return ActionWrite
 	}
 	if name == "sed" && hasInPlaceFlag(args) {
 		return ActionWrite

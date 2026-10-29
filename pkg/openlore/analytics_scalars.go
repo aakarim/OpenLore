@@ -123,9 +123,17 @@ func (p *ScalarProcessor) processRecord(ctx context.Context, record CommitRecord
 	p.commits[record.ID] = struct{}{}
 	writer := p.writer.Classify(ctx, record.Attribution)
 	changes := map[string][]byte{}
-	for _, leaf := range record.ChangeSet.Leaves() {
+	generated := map[string]bool{}
+	leaves := record.ChangeSet.Leaves()
+	moves, sources := map[string]string{}, map[string]bool{}
+	for _, move := range record.ChangeSet.Moves {
+		moves[leaves[move.To].Target] = leaves[move.From].Target
+		sources[leaves[move.From].Target] = true
+	}
+	for _, leaf := range leaves {
 		if leaf.Write != nil {
 			changes[leaf.Target] = leaf.Write.Bytes
+			generated[leaf.Target] = leaf.Write.Generated
 		}
 	}
 	for _, leaf := range record.Leaves {
@@ -190,6 +198,13 @@ func (p *ScalarProcessor) processRecord(ctx context.Context, record CommitRecord
 			// Preserve the useful byte delta when the pre-image itself is absent.
 			delta["bytes"] = float64(leaf.AfterSize - leaf.BeforeSize)
 		}
+		// Inventory still needs both sides of a relocation, but neither side
+		// represents newly authored content. Retain this distinction on replay.
+		if _, ok := moves[leaf.Target]; ok {
+			action = "move"
+		} else if sources[leaf.Target] {
+			action = "move_source"
+		}
 		var invocationID, parentID string
 		if correlation != nil {
 			invocationID, parentID = correlation.InvocationID, correlation.ID
@@ -199,7 +214,11 @@ func (p *ScalarProcessor) processRecord(ctx context.Context, record CommitRecord
 			if p.docset != nil {
 				docset = p.docset(leaf.Target)
 			}
-			out = append(out, analytics.Event{ID: analytics.NewID(), Time: record.Time, Type: "doc.scalars", Principal: record.Attribution.Principal, Actor: record.Attribution.Actor, InvocationID: invocationID, ParentID: parentID, Fields: map[string]any{"path": leaf.Target, "docset": docset, "action": action, "writer": string(writer), "actor_kind": string(writer), "commit_id": record.ID, "content_hash": contentHash, "before": before, "after": after, "delta": delta, "tokenizer": tokenizer, "first_seen": firstSeen}})
+			fields := map[string]any{"path": leaf.Target, "docset": docset, "action": action, "writer": string(writer), "actor_kind": string(writer), "commit_id": record.ID, "content_hash": contentHash, "before": before, "after": after, "delta": delta, "tokenizer": tokenizer, "first_seen": firstSeen}
+			if leaf.Generated || generated[leaf.Target] {
+				fields["generated"] = true
+			}
+			out = append(out, analytics.Event{ID: analytics.NewID(), Time: record.Time, Type: "doc.scalars", Principal: record.Attribution.Principal, Actor: record.Attribution.Actor, InvocationID: invocationID, ParentID: parentID, Fields: fields})
 		}
 	}
 	return out

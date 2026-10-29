@@ -296,7 +296,7 @@ func historyRecordsWithCommitID(commitID string, at time.Time, attribution Attri
 			Action: string(leaf.Action), ContentHash: hash,
 		})
 	}
-	return records
+	return moveHistoryRecords(records, committed.Committed)
 }
 
 func indexedHistoryRecords(commitID string, at time.Time, attribution Attribution, committed vfs.CommitResult, leaves []LeafRecord) []HistoryRecord {
@@ -310,7 +310,62 @@ func indexedHistoryRecords(commitID string, at time.Time, attribution Attributio
 			Action: string(leaf.Action), ContentHash: leaf.AfterHash,
 		})
 	}
-	return records
+	return moveHistoryRecords(records, committed.Committed)
+}
+
+// Keep the durable mutation journal's write/remove leaves, but present an
+// explicitly paired move as one provenance event instead of two unrelated edits.
+func moveHistoryRecords(records []HistoryRecord, cs vfs.ChangeSet) []HistoryRecord {
+	if len(cs.Moves) == 0 {
+		return records
+	}
+	leaves := cs.Leaves()
+	// Pre-image capture expands tree removals, so record indices need not
+	// equal leaf indices. Match occurrences, not just paths: a moved index may
+	// have a second, generated write to its destination in the same batch.
+	recordIndex := func(leafIndex int) int {
+		leaf := leaves[leafIndex]
+		ordinal := 0
+		for _, prior := range leaves[:leafIndex] {
+			if prior.Target == leaf.Target && prior.Action == leaf.Action {
+				ordinal++
+			}
+		}
+		for i, record := range records {
+			if record.FileKey == vfs.CleanPath(leaf.Target) && record.Action == string(leaf.Action) {
+				if ordinal == 0 {
+					return i
+				}
+				ordinal--
+			}
+		}
+		return -1 // Pre-image capture can fail partway through a batch.
+	}
+	sources := make(map[int]bool, len(cs.Moves))
+	moved := make(map[int]HistoryRecord, len(cs.Moves))
+	for _, move := range cs.Moves {
+		if to := recordIndex(move.To); to >= 0 {
+			record := records[to]
+			record.Action = "move"
+			record.From = vfs.CleanPath(leaves[move.From].Target)
+			hash := sha256.Sum256(leaves[move.To].Write.Bytes)
+			record.ContentHash = hex.EncodeToString(hash[:])
+			moved[to] = record
+		}
+		if from := recordIndex(move.From); from >= 0 {
+			sources[from] = true
+		}
+	}
+	result := make([]HistoryRecord, 0, len(records)-len(sources))
+	for i, record := range records {
+		if replacement, ok := moved[i]; ok {
+			record = replacement
+		}
+		if !sources[i] {
+			result = append(result, record)
+		}
+	}
+	return result
 }
 
 // Close stops accepting new submits, lets the applier drain all queued entries
