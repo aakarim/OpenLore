@@ -173,18 +173,18 @@ func latestSnapshot(s sourceState) SourceSnapshot {
 // Physical CAS presence is not read authority. Only a verified upload to this
 // source, or its already committed history, authorizes reuse. Pending manifests
 // alone prove nothing. Existing committed history remains usable on upgrade.
-func sourceAuthorizesBlob(s sourceState, f SourceFile) bool {
-	if size, ok := s.Uploaded[f.SHA256]; ok && size == f.Size {
-		return true
+// Build the index once per request, not once per requested file under the lock.
+func authorizedSourceBlobs(s sourceState) map[string]int64 {
+	authorized := make(map[string]int64, len(s.Uploaded))
+	for hash, size := range s.Uploaded {
+		authorized[hash] = size
 	}
 	for _, snap := range s.Snapshots {
-		for _, old := range snap.Files {
-			if old.SHA256 == f.SHA256 && old.Size == f.Size {
-				return true
-			}
+		for _, f := range snap.Files {
+			authorized[f.SHA256] = f.Size
 		}
 	}
-	return false
+	return authorized
 }
 
 func (d *Docstore) prepare(ctx context.Context, store, owner string, req SnapshotRequest, dry bool) (SourceSnapshot, []string, error) {
@@ -213,14 +213,19 @@ func (d *Docstore) prepare(ctx context.Context, store, owner string, req Snapsho
 	}
 	missing := []string{}
 	seen := map[string]bool{}
+	authorized := authorizedSourceBlobs(s)
 	for _, f := range req.Files {
+		if seen[f.SHA256] {
+			continue
+		}
+		seen[f.SHA256] = true
 		ok, err := d.blobs.Has(ctx, f.SHA256)
 		if err != nil {
 			return SourceSnapshot{}, nil, err
 		}
-		if (!ok || !sourceAuthorizesBlob(s, f)) && !seen[f.SHA256] {
+		size, allowed := authorized[f.SHA256]
+		if !ok || !allowed || size != f.Size {
 			missing = append(missing, f.SHA256)
-			seen[f.SHA256] = true
 		}
 	}
 	sort.Strings(missing)
@@ -249,8 +254,9 @@ func (d *Docstore) commitUploaded(ctx context.Context, store, owner, id string) 
 	if s.Owner != owner {
 		return SourceSnapshot{}, os.ErrPermission
 	}
+	authorized := authorizedSourceBlobs(s)
 	for _, f := range s.Pending[id].Files {
-		if !sourceAuthorizesBlob(s, f) {
+		if size, ok := authorized[f.SHA256]; !ok || size != f.Size {
 			return SourceSnapshot{}, fmt.Errorf("blob upload required for %s", f.SHA256)
 		}
 	}

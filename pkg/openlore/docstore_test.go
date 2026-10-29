@@ -395,11 +395,24 @@ func TestDocstoreBlobAuthorityProperties(t *testing.T) {
 		if got := docstoreRequest(t, s, otherToken, "GET", target+"?file=secret.txt", nil, 200); !bytes.Equal(got, body) {
 			t.Fatalf("uploaded content changed: got %x want %x", got, body)
 		}
-		// Same-source historical references may be reused at another path.
+		// Model a pre-upgrade source: committed history exists, but the
+		// persisted state has no upload proofs. Reuse must rely on history.
+		state, err := s.docstore.state(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		state.Uploaded = nil
+		if err := s.docstore.save(state); err != nil {
+			t.Fatal(err)
+		}
+		s.docstore, err = OpenDocstore(s.config.DataDir)
+		if err != nil {
+			t.Fatal(err)
+		}
 		req = SnapshotRequest{Parent: p.Snapshot, Files: map[string]SourceFile{"renamed.txt": file}}
 		p = docstorePrepare(t, s, otherToken, target, req, 200)
 		if len(p.Missing) != 0 {
-			t.Fatalf("same-source reuse required upload: %v", p.Missing)
+			t.Fatalf("history-only reuse required upload: %v", p.Missing)
 		}
 		docstoreRequest(t, s, otherToken, "POST", target+"/snapshots/"+p.Snapshot+"/commit", nil, 200)
 		stats, err := s.docstore.blobs.Stats(t.Context())
