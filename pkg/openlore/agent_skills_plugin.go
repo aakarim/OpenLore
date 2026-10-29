@@ -34,6 +34,9 @@ type agentSkillsPlugin struct {
 	failures     map[string]remoteState
 	syncLocks    map[string]*sync.Mutex
 	submit       func(context.Context, vfs.ChangeSet) error
+	ordered      func(context.Context, func() error) error
+	// Protected by docstoreMu; rebuilt from persisted installations at startup.
+	installations map[string]map[string]bool // canonical directory -> source stores
 }
 
 type remoteState struct {
@@ -338,6 +341,10 @@ func (p *agentSkillsPlugin) syncSkill(ctx context.Context, skillDir string, forc
 			}
 		}
 		if cached {
+			if err := p.backfillSnapshot(ctx, skillDir, baseHash); err != nil {
+				p.setRemoteFailure(skillDir, fingerprint, err.Error())
+				return
+			}
 			p.setRemoteFailure(skillDir, fingerprint, "")
 			return
 		}
@@ -349,6 +356,14 @@ func (p *agentSkillsPlugin) syncSkill(ctx context.Context, skillDir string, forc
 	}
 	if err := skillsremote.ValidateFiles(files); err != nil {
 		p.setRemoteFailure(skillDir, fingerprint, err.Error())
+		return
+	}
+	if sha == r.Commit && r.Kind == kind {
+		if err := p.backfillSnapshot(ctx, skillDir, baseHash); err != nil {
+			p.setRemoteFailure(skillDir, fingerprint, err.Error())
+			return
+		}
+		p.setRemoteFailure(skillDir, fingerprint, "")
 		return
 	}
 	upstream, ok := files["SKILL.md"]

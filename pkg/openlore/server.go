@@ -431,6 +431,7 @@ func newServerWithRoot(rootDir string, rootFS vfs.FileSystem, lowerFS fs.FS, opt
 			return nil
 		})
 		if agentSkills != nil {
+			agentSkills.ordered = s.writeLog.Do
 			agentSkills.submit = func(ctx context.Context, cs vfs.ChangeSet) error {
 				_, err := s.CommitChangeSet(ctx, Attribution{Principal: "agent_skills_remote", internal: true}, cs)
 				return err
