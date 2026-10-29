@@ -113,9 +113,9 @@ type Server struct {
 
 	// metaExtenders are the `lore meta` extenders contributed by plugins,
 	// installed per session in buildSessionShell.
-	metaExtenders []meta.Extender
-	metaFilters   []meta.Filter
-	validators    []validation.Validator
+	metaExtenders       []meta.Extender
+	metaFilterProviders []MetaFilterProvider
+	validators          []validation.Validator
 
 	// postCommitMW is the post-commit middleware contributed by plugins, run at
 	// the applier after a durable commit (feed emit, post_write hooks) in
@@ -406,6 +406,11 @@ func newServerWithRoot(rootDir string, rootFS vfs.FileSystem, lowerFS fs.FS, opt
 		s.writeLog.SetCommitState(rulesPlugin.CommitState)
 		s.writeLog.SetPreApply(func(identity *Identity, attribution Attribution, changes vfs.ChangeSet) error {
 			for _, change := range changes.Leaves() {
+				// Admission has already resolved aliases. Never authorize a new
+				// destination while persisting the old canonical target.
+				if s.canonicalPath(change.Target) != change.Target {
+					return fmt.Errorf("%w: canonical target changed for %s; retry the operation", os.ErrPermission, change.Target)
+				}
 				if identity != nil {
 					if err := s.identityWriteError(*identity, change.Action, change.Target); err != nil {
 						return err
@@ -930,10 +935,12 @@ func (s *Server) canonicalChangeSet(cs vfs.ChangeSet) vfs.ChangeSet {
 func (s *Server) registerPlugin(p any) error {
 	if fp, ok := p.(MetaFilterProvider); ok {
 		claimed := map[string]bool{}
-		for _, existing := range s.metaFilters {
-			claimed[existing.Name] = true
-			for _, alias := range existing.Aliases {
-				claimed[alias] = true
+		for _, provider := range s.metaFilterProviders {
+			for _, existing := range provider.MetaFilters() {
+				claimed[existing.Name] = true
+				for _, alias := range existing.Aliases {
+					claimed[alias] = true
+				}
 			}
 		}
 		for _, f := range fp.MetaFilters() {
@@ -969,7 +976,7 @@ func (s *Server) registerPlugin(p any) error {
 		s.metaExtenders = append(s.metaExtenders, mp.MetaExtenders()...)
 	}
 	if fp, ok := p.(MetaFilterProvider); ok {
-		s.metaFilters = append(s.metaFilters, fp.MetaFilters()...)
+		s.metaFilterProviders = append(s.metaFilterProviders, fp)
 	}
 	if vp, ok := p.(ValidatorProvider); ok {
 		s.validators = append(s.validators, vp.Validators()...)
@@ -1307,7 +1314,7 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 	sh.SetSkillsManagementEnabled(s.config.Plugins.Skills.Enabled)
 	sh.SetConfigPlugins(s.plugins)
 	sh.SetSkillsRemoteConfig(s.config.Plugins.Skills.RemoteTimeout, s.config.Plugins.Skills.RemoteMaxBytes)
-	sh.SetMetaFilters(s.sessionMetaFilters(id))
+	sh.SetMetaFilterLister(func() []meta.Filter { return s.sessionMetaFilters(id) })
 	sh.SetPublishTargetLister(func() []cmds.PublishTarget {
 		view := s.readView()
 		return view.sessionPublishTargets(view.liveReadIdentity(id))
@@ -1321,7 +1328,7 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 		sh.SetConfigReloadBackend(s)
 	}
 	if s.history != nil {
-		history := scopedHistory{store: s.history, liveRoots: func() []string { return historyRoots(sh.Docsets()) }}
+		history := scopedHistory{store: s.history, liveQuery: func() HistoryQuery { return s.historyQuery(id) }}
 		if canAdmin && s.writeLog != nil {
 			historyDir := filepath.Join(s.config.DataDir, "history")
 			if s.config.DataDir == "" {
@@ -1433,8 +1440,14 @@ func directMarker(fsys vfs.FileSystem, p string) bool {
 }
 
 func (s *Server) sessionMetaFilters(id Identity) []meta.Filter {
+	var filters []meta.Filter
+	for _, provider := range s.metaFilterProviders {
+		filters = append(filters, provider.MetaFilters()...)
+	}
+	s = s.readView()
+	id = s.liveReadIdentity(id)
 	var out []meta.Filter
-	for _, f := range s.metaFilters {
+	for _, f := range filters {
 		nf := f
 		nf.Roots = nil
 		seen := map[string]bool{}
@@ -1886,7 +1899,9 @@ func (s *Server) ListenAndServe() error {
 					if !ok {
 						id = s.anonymousIdentity()
 					}
-					page, err := s.history.Query(context.Background(), HistoryQuery{FileKey: filePath, Roots: historyRoots(s.sessionDocsets(id))})
+					query := s.historyQuery(id)
+					query.FileKey = filePath
+					page, err := s.history.Query(context.Background(), query)
 					if err != nil {
 						return nil, err
 					}

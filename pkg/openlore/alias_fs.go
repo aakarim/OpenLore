@@ -238,7 +238,7 @@ func (a *aliasFS) aliasChildren(parent string) []string {
 	parent = vfs.CleanPath(parent)
 	children := map[string]bool{}
 	for _, alias := range a.currentAliases() {
-		if parent != "/" && !pathWithinRoot(parent, alias.Alias) {
+		if alias.Alias == parent || parent != "/" && !pathWithinRoot(parent, alias.Alias) {
 			continue
 		}
 		rel := alias.Alias[1:]

@@ -56,8 +56,9 @@ type Shell struct {
 	pipelinePosition        int
 	// metaExtenders are the plugin-contributed extenders applied by `lore meta`,
 	// installed by the host per session. nil for a standalone shell.
-	metaExtenders []meta.Extender
-	metaFilters   []meta.Filter
+	metaExtenders    []meta.Extender
+	metaFilters      []meta.Filter
+	metaFilterLister func() []meta.Filter
 	// validators are plugin-contributed checks applied by `lore validate`.
 	validators           []validation.Validator
 	skillsManagement     bool
@@ -224,9 +225,15 @@ func (s *Shell) SetMetaExtenders(e []meta.Extender) { s.metaExtenders = e }
 
 // MetaExtenders reports the per-session `lore meta` extenders. Implements
 // CmdContext.
-func (s *Shell) MetaExtenders() []meta.Extender { return s.metaExtenders }
-func (s *Shell) SetMetaFilters(f []meta.Filter) { s.metaFilters = f }
-func (s *Shell) MetaFilters() []meta.Filter     { return s.metaFilters }
+func (s *Shell) MetaExtenders() []meta.Extender              { return s.metaExtenders }
+func (s *Shell) SetMetaFilters(f []meta.Filter)              { s.metaFilters = f }
+func (s *Shell) SetMetaFilterLister(fn func() []meta.Filter) { s.metaFilterLister = fn }
+func (s *Shell) MetaFilters() []meta.Filter {
+	if s.metaFilterLister != nil {
+		return s.metaFilterLister()
+	}
+	return s.metaFilters
+}
 
 // SetValidators installs plugin-contributed checks for `lore validate`.
 func (s *Shell) SetValidators(validators []validation.Validator) { s.validators = validators }

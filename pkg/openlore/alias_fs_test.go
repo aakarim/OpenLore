@@ -16,6 +16,27 @@ import (
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
 
+func TestLiveAliasAddedDuringReadDir(t *testing.T) {
+	var aliases []pathAlias
+	base := newReadChainFS(NewFSAdapter(fstest.MapFS{
+		"alias/old.md":  {Data: []byte("old")},
+		"target/new.md": {Data: []byte("new")},
+	}), Attribution{}, func(_ context.Context, op ReadOp) error {
+		// Publish an exact alias after path resolution, while ReadDir is
+		// still in progress. The alias itself is not a child of /alias.
+		aliases = []pathAlias{{Alias: "/alias", Target: "/target"}}
+		return nil
+	})
+	fsys := newLiveAliasFS(base, func() []pathAlias { return aliases })
+	if _, err := fsys.ReadDir("/alias"); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := fsys.ReadDir("/alias")
+	if err != nil || len(entries) != 1 || entries[0].FileName != "new.md" {
+		t.Fatalf("listing after alias publication: %+v %v", entries, err)
+	}
+}
+
 func TestAliasFS_ReadsListsAndWritesCanonicalStorage(t *testing.T) {
 	root := t.TempDir()
 	canonicalDir := filepath.Join(root, "agent", "jared")

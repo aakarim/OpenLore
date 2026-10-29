@@ -364,7 +364,7 @@ func (s *Server) docstoreHandler(prefix string) http.Handler {
 			}
 			out := []sourceView{}
 			for _, st := range states {
-				view, projections, visible := s.visibleSource(id, st)
+				view, selected, visible := s.visibleSource(id, st)
 				if !visible {
 					continue
 				}
@@ -388,9 +388,9 @@ func (s *Server) docstoreHandler(prefix string) http.Handler {
 					}
 					if snapshots {
 						history := append([]SourceSnapshot{}, st.Snapshots...)
-						if projections != nil {
+						if selected != nil {
 							for i := range history {
-								history[i] = filterSourceSnapshot(history[i], projections)
+								history[i] = filterSourceSnapshot(history[i], selected)
 							}
 						}
 						writeJSON(w, 200, history)

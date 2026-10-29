@@ -445,7 +445,7 @@ func TestConcurrentProjectionReloadDoesNotMixContentAndGrants(t *testing.T) {
 }
 
 func TestReloadRechecksInFlightWrites(t *testing.T) {
-	for _, change := range []string{"grant", "rules", "projection"} {
+	for _, change := range []string{"grant", "rules", "projection", "canonical target"} {
 		t.Run(change, func(t *testing.T) {
 			auth := serverAuth(map[string]config.DocsetSpec{"docs": docset("/docs", nil)}, nil)
 			s, root := bootRulesServer(t, auth, nil)
@@ -472,6 +472,12 @@ func TestReloadRechecksInFlightWrites(t *testing.T) {
 				ds.Rules = map[string]rules.RuleSpec{"short": {Use: "size/lines", Match: []string{"**/*.md"}, With: map[string]any{"max": 1}}}
 			case "projection":
 				ds.Projection = &config.ProjectionSpec{Store: "folder/importer/source"}
+			case "canonical target":
+				ds.Paths = []config.PathMapping{{Source: "/other"}}
+				ds.Aliases = []string{"/docs"}
+				if err := os.Mkdir(filepath.Join(root, "other"), 0o700); err != nil {
+					t.Fatal(err)
+				}
 			}
 			auth.Docsets["docs"] = ds
 			writeAuthFixture(t, s.config.AuthFile, auth)
@@ -487,5 +493,72 @@ func TestReloadRechecksInFlightWrites(t *testing.T) {
 				t.Fatalf("substrate changed: %v", err)
 			}
 		})
+	}
+}
+
+func TestReloadCarvesPrivateMetadataOutOfExistingSessions(t *testing.T) {
+	auth := serverAuth(map[string]config.DocsetSpec{"docs": docset("/docs", nil)}, nil)
+	s, root := bootRulesServer(t, auth, nil)
+	id := testIdentity("alice")
+	sh := s.buildSessionShell(id)
+	w := s.buildSessionFS(id).(vfs.WritableFS)
+	if err := w.Mkdir("/docs/private"); err != nil {
+		t.Fatal(err)
+	}
+	for name, text := range map[string]string{"public.md": "public", "private/secret.md": "secret"} {
+		if _, err := w.WriteFileAtomic("/docs/"+name, []byte(text), vfs.WriteOpts{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	request := func(endpoint string) *httptest.ResponseRecorder {
+		t.Helper()
+		r := httptest.NewRequest("GET", "/api/docstore/openlore/docs"+endpoint, nil)
+		r = r.WithContext(contextWithIdentity(r.Context(), id))
+		w := httptest.NewRecorder()
+		s.docstoreHandler("/api/docstore/").ServeHTTP(w, r)
+		return w
+	}
+	if resp := request("?file=private/secret.md"); resp.Code != 200 || resp.Body.String() != "secret" {
+		t.Fatalf("initial native source read: %d %s", resp.Code, resp.Body)
+	}
+	if out, stderr, code := run(sh, "history"); code != 0 || !strings.Contains(out, "private/secret.md") {
+		t.Fatalf("initial history: %q %s", out, stderr)
+	}
+	// A newly configured private boundary must also hide files captured in
+	// snapshots and history before that boundary existed.
+	auth.Docsets["private"] = docset("/docs/private", nil)
+	writeAuthFixture(t, s.config.AuthFile, auth)
+	if err := s.Reload(cmds.JobAttribution{Principal: "alice"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.ReadFile("/docs/private/secret.md"); !os.IsNotExist(err) {
+		t.Fatalf("private read after reload: %v", err)
+	}
+	if resp := request("?file=private/secret.md"); resp.Code != 404 {
+		t.Errorf("revoked native source read: %d %s", resp.Code, resp.Body)
+	}
+	for _, endpoint := range []string{"", "/snapshots"} {
+		resp := request(endpoint)
+		if resp.Code != 200 || !strings.Contains(resp.Body.String(), "public.md") || strings.Contains(resp.Body.String(), "secret.md") || strings.Contains(resp.Body.String(), hashContent([]byte("secret"))) {
+			t.Errorf("native metadata %s: %d %s", endpoint, resp.Code, resp.Body)
+		}
+	}
+	if out, stderr, code := run(sh, "history"); code != 0 || !strings.Contains(out, "public.md") || strings.Contains(out, "secret.md") || strings.Contains(out, hashContent([]byte("secret"))) {
+		t.Errorf("revoked history: %q %s", out, stderr)
+	}
+	// A deeper explicit grant remains visible inside the private carve-out.
+	if err := os.MkdirAll(filepath.Join(root, "docs/private/shared"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	auth.Docsets["shared"] = config.DocsetSpec{Paths: []config.PathMapping{{Source: "/docs/private/shared"}}, Access: config.DocsetAccess{Allow: map[string]string{"writer": "rw"}}}
+	writeAuthFixture(t, s.config.AuthFile, auth)
+	if err := s.Reload(cmds.JobAttribution{Principal: "alice"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.WriteFileAtomic("/docs/private/shared/allowed.md", []byte("allowed"), vfs.WriteOpts{}); err != nil {
+		t.Fatal(err)
+	}
+	if out, stderr, code := run(sh, "history"); code != 0 || !strings.Contains(out, "allowed.md") || strings.Contains(out, "secret.md") {
+		t.Fatalf("nested history regrant: %q %s", out, stderr)
 	}
 }
