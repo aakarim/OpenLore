@@ -89,7 +89,7 @@ func CmdHelp(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 	fmt.Fprintln(w, "  unexpand [-t N|-a]                        Convert spaces to tabs")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "DATA")
-	fmt.Fprintln(w, "  jq [-r|-c|-e|-s] <filter> [file]         JSON processor")
+	fmt.Fprintln(w, "  jq [-r|-c|-e|-s|-n] <filter> [file]      JSON processor (-n: null input)")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "UTILITIES")
 	fmt.Fprintln(w, "  xargs [-I REPL|-d DEL|-n N|-0] <cmd>     Build commands from stdin")

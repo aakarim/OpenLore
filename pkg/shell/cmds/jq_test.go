@@ -72,6 +72,62 @@ func TestJqAdd(t *testing.T) {
 	}
 }
 
+func TestJqSubtraction(t *testing.T) {
+	tests := []struct {
+		name string
+		cmd  string
+		want string
+	}{
+		{"fields", `echo '{"a":5,"b":1}' | jq '.a - .b'`, "4"},
+		{"constant", `echo '[3]' | jq '.[0] - 1'`, "2"},
+		{"no spaces", `echo '{"a":5}' | jq '.a-1'`, "4"},
+		{"parentheses", `echo '[2,8]' | jq '(.[1] - .[0]) + 3'`, "9"},
+		{"array pipeline", `echo '[[1,5],[2,9]]' | jq '[.[] | .[1] - .[0]] | add'`, "11"},
+		{"map pipeline", `echo '[[1,5],[2,9]]' | jq 'map(.[1] - .[0]) | add'`, "11"},
+		{"negative operand", `echo '{"a":5}' | jq '.a - -1 | . + 2'`, "8"},
+		{"negative index", `echo '[2,8]' | jq '.[-1] - .[0]'`, "6"},
+		{"negative slice", `echo '[2,5,8]' | jq '.[-2:-1] | add'`, "5"},
+		{"keyword field", `echo '{"then":5}' | jq '.then-1'`, "4"},
+		{"conditional negative", `echo 'true' | jq 'if true then -1 else -2 end'`, "-1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, errOut, code := execCmd(t, testFS(), tt.cmd)
+			if code != 0 || errOut != "" || strings.TrimSpace(out) != tt.want {
+				t.Fatalf("code=%d stdout=%q stderr=%q, want stdout %q", code, out, errOut, tt.want)
+			}
+		})
+	}
+}
+
+func TestJqNullInput(t *testing.T) {
+	for _, tt := range []struct {
+		cmd  string
+		want string
+	}{
+		{`jq -n '5 - -1 | . + 2'`, "8"},
+		{`jq -n '-1 | . - 2'`, "-3"},
+		{`echo 'not JSON' | jq -n '.'`, "null"},
+		{`jq -nc '[1, -1]'`, "[1,-1]"},
+		{`jq -ns '.'`, "null"},
+		{`jq -n '.' /missing.json`, "null"},
+	} {
+		t.Run(tt.cmd, func(t *testing.T) {
+			out, errOut, code := execCmd(t, testFS(), tt.cmd)
+			if code != 0 || errOut != "" || strings.TrimSpace(out) != tt.want {
+				t.Fatalf("code=%d stdout=%q stderr=%q, want stdout %q", code, out, errOut, tt.want)
+			}
+		})
+	}
+}
+
+func TestJqRejectsTrailingTokens(t *testing.T) {
+	out, errOut, code := execCmd(t, testFS(), `echo '5' | jq '. 1'`)
+	if code == 0 || out != "" || !strings.Contains(errOut, "compile error") {
+		t.Fatalf("code=%d stdout=%q stderr=%q, want compile error without partial output", code, out, errOut)
+	}
+}
+
 func TestJqAlternativeOperator(t *testing.T) {
 	fs := testFS()
 	fs.AddFile("/docs/present.json", `{"a":1}`)
