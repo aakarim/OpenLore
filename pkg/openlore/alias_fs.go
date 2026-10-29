@@ -317,7 +317,7 @@ func (a *writableAliasFS) AdmitChangeSet(cs vfs.ChangeSet) error {
 			cs.Changes[i].RemoveAll = &remove
 		}
 	}
-	if len(cs.Changes) == 0 {
+	if cs.Target != "" {
 		cs.Target, _ = a.canonical(cs.Target)
 	}
 	if cs.RemoveAll != nil {

@@ -6,12 +6,14 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"testing/fstest"
 
 	"github.com/aakarim/go-openlore/internal/analytics"
 	"github.com/aakarim/go-openlore/internal/config"
+	"github.com/aakarim/go-openlore/pkg/openlore/skillsremote"
 	"github.com/aakarim/go-openlore/pkg/shell"
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
@@ -34,6 +36,77 @@ func TestLiveAliasAddedDuringReadDir(t *testing.T) {
 	entries, err := fsys.ReadDir("/alias")
 	if err != nil || len(entries) != 1 || entries[0].FileName != "new.md" {
 		t.Fatalf("listing after alias publication: %+v %v", entries, err)
+	}
+}
+
+func TestAliasFS_ForwardsSkillProviders(t *testing.T) {
+	for _, writable := range []bool{false, true} {
+		for _, providers := range []bool{false, true} {
+			name := "readonly"
+			if writable {
+				name = "writable"
+			}
+			if providers {
+				name += "/providers"
+			} else {
+				name += "/absent"
+			}
+			t.Run(name, func(t *testing.T) {
+				root := t.TempDir()
+				skillDir := filepath.Join(root, "agent", "jared", "skills", "example")
+				if err := os.MkdirAll(skillDir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("skill"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				dir := NewDirFS(root, config.FilesConfig{})
+				var base vfs.FileSystem = struct{ vfs.FileSystem }{dir}
+				var wantClient *skillsremote.Client
+				var wantInfo []map[string]any
+				if writable {
+					base = dir
+				}
+				if providers {
+					wantClient = &skillsremote.Client{GitHubBase: "https://github.example.test"}
+					wantInfo = []map[string]any{{"repo": "owner/repo", "commit": "abc123"}}
+					installationInfo := func(p string) []map[string]any {
+						if p == "/agent/jared/skills/example" {
+							return wantInfo
+						}
+						return nil
+					}
+					if writable {
+						base = &writableReadTransformFS{WritableFS: dir, skillsRemote: wantClient, skillInstallationInfo: installationInfo}
+					} else {
+						base = &readTransformFS{FileSystem: base, skillsRemote: wantClient, skillInstallationInfo: installationInfo}
+					}
+				}
+				fsys := newAliasFS(base, []pathAlias{{Alias: "/jared", Target: "/agent/jared"}})
+				if _, ok := fsys.(vfs.WritableFS); ok != writable {
+					t.Fatalf("WritableFS = %v, want %v", ok, writable)
+				}
+				clientProvider, ok := fsys.(interface{ SkillsRemoteClient() *skillsremote.Client })
+				if !ok {
+					t.Fatal("alias wrapper hides SkillsRemoteClient")
+				}
+				if got := clientProvider.SkillsRemoteClient(); got != wantClient {
+					t.Fatalf("SkillsRemoteClient() = %p, want %p", got, wantClient)
+				}
+				infoProvider, ok := fsys.(interface{ SkillInstallationInfo(string) []map[string]any })
+				if !ok {
+					t.Fatal("alias wrapper hides SkillInstallationInfo")
+				}
+				for _, p := range []string{"/agent/jared/skills/example", "/jared/skills/example", "/jared/skills/./example/"} {
+					if got := infoProvider.SkillInstallationInfo(p); !reflect.DeepEqual(got, wantInfo) {
+						t.Errorf("SkillInstallationInfo(%q) = %#v, want %#v", p, got, wantInfo)
+					}
+				}
+				if got := infoProvider.SkillInstallationInfo("/jared/skills/missing"); got != nil {
+					t.Errorf("missing skill installation info = %#v, want nil", got)
+				}
+			})
+		}
 	}
 }
 
