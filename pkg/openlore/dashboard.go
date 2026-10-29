@@ -126,6 +126,7 @@ func (s *Server) dashboardRoutes(frontend fs.FS) HTTPRouteRegistrar {
 			"access": s.dashboardAccess, "usage": s.dashboardUsage,
 			"analytics-status": s.dashboardAnalyticsStatus,
 			"setup":            s.dashboardSetup,
+			"sources":          s.dashboardSources,
 		} {
 			mux.Handle("GET /dashboard/api/"+route, s.dashboardAuth(handler))
 		}
@@ -140,15 +141,18 @@ func (s *Server) dashboardRoutes(frontend fs.FS) HTTPRouteRegistrar {
 			dashboardError(w, http.StatusNotFound, "not found")
 		})
 		if frontend != nil {
-			mux.Handle("GET /dashboard/{$}", dashboardShell(frontend))
+			mux.Handle("GET /dashboard/{$}", s.dashboardShell(frontend))
 			mux.Handle("GET /dashboard/assets/", http.StripPrefix("/dashboard/", http.FileServer(http.FS(frontend))))
 		}
 	}
 }
 
 func (s *Server) dashboardLoreHandler(frontend fs.FS) http.Handler {
-	shell := dashboardShell(frontend)
+	shell := s.dashboardShell(frontend)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if passkeys.ServePWAAsset(w, r, s.dashboardLorePath()) {
+			return
+		}
 		if r.URL.Query().Get("raw") == "1" {
 			if r.Method != http.MethodGet && r.Method != http.MethodHead {
 				w.Header().Set("Allow", "GET, HEAD")
@@ -166,7 +170,7 @@ func (s *Server) dashboardLoreHandler(frontend fs.FS) http.Handler {
 	})
 }
 
-func dashboardShell(frontend fs.FS) http.Handler {
+func (s *Server) dashboardShell(frontend fs.FS) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			w.Header().Set("Allow", "GET, HEAD")
@@ -178,6 +182,7 @@ func dashboardShell(frontend fs.FS) http.Handler {
 			http.NotFound(w, r)
 			return
 		}
+		index = bytes.Replace(index, []byte("</head>"), []byte(passkeys.PWAHead(s.dashboardLorePath())+"</head>"), 1)
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Referrer-Policy", "no-referrer")
@@ -204,7 +209,21 @@ func dashboardErrorJSON(w http.ResponseWriter, status int, body map[string]any) 
 
 func (s *Server) dashboardSession(w http.ResponseWriter, r *http.Request) {
 	id := s.identityFromContext(r.Context())
-	dashboardJSON(w, map[string]any{"identity": id.IdentityName, "lore_path": s.dashboardLorePath(), "access": s.hasCurrentCapability(id, CapabilityAccessView)})
+	dashboardJSON(w, map[string]any{"identity": id.IdentityName, "lore_path": s.dashboardLorePath(), "access": s.hasCurrentCapability(id, CapabilityAccessView), "sources": true})
+}
+
+// Browser sessions get exactly the same filtered, read-only source view as
+// bearer clients, without depending on the optional shell API being enabled.
+func (s *Server) dashboardSources(w http.ResponseWriter, r *http.Request) {
+	r = r.Clone(r.Context())
+	u := *r.URL
+	r.URL = &u
+	const prefix = "/dashboard/api/sources/"
+	r.URL.Path = prefix + r.URL.Query().Get("store")
+	if r.URL.Query().Get("history") == "true" {
+		r.URL.Path += "/snapshots"
+	}
+	s.docstoreHandler(prefix).ServeHTTP(w, r)
 }
 
 func (s *Server) dashboardPath(r *http.Request) (Identity, vfs.FileSystem, string) {
@@ -667,7 +686,9 @@ func (s *Server) dashboardHistory(w http.ResponseWriter, r *http.Request) {
 	entries := make([]passkeys.FileHistoryEntry, 0)
 	result := map[string]any{"available": s.history != nil, "entries": entries}
 	if s.history != nil {
-		page, err := s.history.Query(r.Context(), HistoryQuery{FileKey: target, Roots: historyRoots(s.sessionDocsets(id)), Limit: 100, Cursor: r.URL.Query().Get("cursor")})
+		query := s.historyQuery(id)
+		query.FileKey, query.Limit, query.Cursor = target, 100, r.URL.Query().Get("cursor")
+		page, err := s.history.Query(r.Context(), query)
 		if err != nil {
 			dashboardError(w, http.StatusServiceUnavailable, "timeline unavailable")
 			return

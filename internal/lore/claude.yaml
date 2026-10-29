@@ -1,0 +1,49 @@
+name: claude
+project_key: non_alphanumeric_to_dash
+groups:
+  - name: instructions
+    label: Project instructions
+    scope: project
+    base: "{project}"
+    store: "claude/{identity}/{project_key}/instructions"
+    detect: [CLAUDE.md, .claude/CLAUDE.md, .claude/rules/**, CLAUDE.local.md, AGENTS.md]
+  - name: memory
+    label: Project auto memory
+    scope: project
+    base: "~/.claude/projects/{project_key}/memory"
+    store: "claude/{identity}/{project_key}/memory"
+    detect: ["**"]
+  - name: transcripts
+    label: Session transcripts
+    scope: project
+    opt_in: true
+    base: "~/.claude/projects/{project_key}"
+    store: "claude/{identity}/{project_key}/transcripts"
+    detect: ["**/*.jsonl"]
+  - name: personal
+    label: Personal instructions
+    scope: personal
+    base: "~/.claude"
+    store: "claude/{identity}/personal"
+    detect: [CLAUDE.md, rules/**]
+always_exclude:
+  - "**/settings*.json"
+  - "**/agent-memory*/**"
+  - "**/agent-memory*"
+  - "**/.env*"
+  - "**/*credential*"
+  - "**/*secret*"
+  - "**/*token*"
+  - "**/*password*"
+  - "**/*api_key*"
+  - "**/*api-key*"
+  - "**/*apikey*"
+  - "**/*.pem"
+  - "**/*.key"
+  - "**/*.p12"
+  - "**/*.pfx"
+  - "**/.netrc"
+  - "**/.npmrc"
+  - "**/id_rsa*"
+  - "**/id_ed25519*"
+  - "**/.ssh/**"

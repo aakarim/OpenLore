@@ -126,9 +126,10 @@ func (s *Server) validateGrantsFor(auth *config.AuthConfig) error {
 }
 
 func (s *Server) currentPolicy(id Identity) (AuthorizationPolicy, error) {
-	s.authMu.RLock()
-	defer s.authMu.RUnlock()
 	store := s.authorizationStore
+	if _, file := store.(fileAuthorizationStore); file {
+		store = fileAuthorizationStore{auth: s.currentAuth()}
+	}
 	if store == nil {
 		return AuthorizationPolicy{}, fmt.Errorf("authorization store unavailable")
 	}
@@ -220,6 +221,17 @@ func (s *Server) effectiveGrantNames(id Identity, name string) ([]string, bool) 
 	}
 	if policy.IdentityName != "guest" && policy.HomeDocset == name {
 		names["rw"] = true
+	}
+	// A projection mounted strictly beneath the caller's home is readable by
+	// them without an access block: it is their own source under their own
+	// root. Writes stay denied because projections have no writable substrate.
+	if ds.Projection != nil && policy.IdentityName != "guest" && policy.HomeDocset != "" {
+		if home, ok := s.currentAuth().Docsets[policy.HomeDocset]; ok {
+			homeRoot, root := primaryDisplayPath(home), primaryDisplayPath(ds)
+			if homeRoot != "" && root != "" && root != homeRoot && pathWithinRoot(homeRoot, root) {
+				names["ro"] = true
+			}
+		}
 	}
 	out := make([]string, 0, len(names))
 	for grant := range names {
@@ -471,51 +483,62 @@ func (s *Server) allDocsetRoots() []string {
 // write, the identity holds a grant on the docset containing p, that docset is
 // not per-docset readonly, and the grant permits the action on that path.
 func (s *Server) identityCanWrite(id Identity, action vfs.ChangeAction, p string) bool {
+	return s.identityWriteError(id, action, p) == nil
+}
+
+func (s *Server) identityWriteError(id Identity, action vfs.ChangeAction, p string) error {
 	id.policySnapshot = nil
 	if s.config.Readonly {
-		return false // global write lock closed
+		return fmt.Errorf("%w: server is read-only (readonly: true)", vfs.ErrReadOnly)
 	}
 	if !scopeGrantsWrite(id.Scopes) {
-		return false // token scope ceiling: only full authority may write
+		return fmt.Errorf("%w: token scope does not allow writes; use a full-scope token", vfs.ErrReadOnly)
 	}
 	p = s.canonicalPath(p)
 	if isDirConfigPath(p) && !s.identityHasDirConfigRole(id, p) {
-		return false
+		return fmt.Errorf("%w: %s requires a role listed in the docset's config.edit policy", fs.ErrPermission, p)
 	}
 	if action == vfs.ChangeActionRemoveAll {
 		if !s.canEditDirConfigsInTree(id, p) {
-			return false
+			return fmt.Errorf("%w: cannot delete %s without config.edit authority for its folder configs", fs.ErrPermission, p)
 		}
 		for _, candidate := range s.currentAuth().Docsets {
 			for _, pm := range candidate.Paths {
 				root := displayPath(pm)
 				if p != root && pathWithinRoot(p, root) {
-					return false // recursive delete would cross a nested docset boundary
+					return fmt.Errorf("%w: cannot delete %s across a nested docset boundary", vfs.ErrReadOnly, p)
 				}
 			}
 		}
 	}
 	ds, grants, ok := s.grantsForPath(id, p)
 	if !ok {
-		return false
+		return mutationDeniedError(s.merge, action, p)
+	}
+	if ds.Projection != nil {
+		return fmt.Errorf("source %s is a read-only source copy: %w", ds.Projection.Store, vfs.ErrReadOnly)
 	}
 	if ds.Readonly != nil && *ds.Readonly {
-		return false // per-docset lock can only further restrict
+		return fmt.Errorf("%w: docset containing %s is read-only (readonly: true)", vfs.ErrReadOnly, p)
 	}
 	if action == vfs.ChangeActionSetXattr || action == vfs.ChangeActionRemoveXattr || action == vfs.ChangeActionPreserveAndRecreateXattrs {
 		for _, grant := range grants {
 			if grant.Name() == "rw" {
-				return true
+				return nil
 			}
 		}
-		return false
+		return fmt.Errorf("%w: %s on %s requires an rw grant (run 'lore docsets')", vfs.ErrReadOnly, action, p)
 	}
 	for _, grant := range grants {
 		if grant.CanWrite(ds, action, p) {
-			return true
+			return nil
 		}
 	}
-	return false
+	names := make([]string, 0, len(grants))
+	for _, grant := range grants {
+		names = append(names, grant.Name())
+	}
+	return fmt.Errorf("%w: grants (%s) do not permit %s on %s (run 'lore docsets')", vfs.ErrReadOnly, strings.Join(names, ", "), action, p)
 }
 
 func (s *Server) canEditDirConfigsInTree(id Identity, target string) bool {

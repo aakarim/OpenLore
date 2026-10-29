@@ -82,6 +82,7 @@ There's no vector database, ingestion pipeline or SDK. Your knowledge stays as o
 - [OpenAI dots](/docs/start/agents/openai-dots.md)
 - [Grok Bot](/docs/start/agents/grok-bot.md)
 - [Claude Duet](/docs/start/agents/claude-duet.md)
+- [LangChain](/docs/start/agents/langchain.md)
 - [Any agent over SSH](docs/start/agents/start-ssh.md)
 - [Let an agent publish into an inbox](docs/how-to/publish-to-inbox.md)
 - [Deploy to Render](docs/how-to/deploy/render.md)
@@ -154,7 +155,7 @@ transport. A connection is handled entirely against a virtual filesystem:
    passkey, or OAuth login to an identity.
 2. **Compose a view** — mount only the docsets and paths granted to that identity.
 3. **Explore** — run shell commands implemented as pure Go functions over that
-   view, or use the equivalent MCP `shell` tool.
+   view, or use the equivalent MCP `lore_bash` tool.
 4. **Contribute safely** — if writing is enabled, authorise and validate a
    whole-file change before committing it atomically.
 
@@ -308,6 +309,7 @@ The same pages, in the same groups, are published at
 | [OpenAI dots](docs/start/agents/openai-dots.md) | Connect OpenAI dots over MCP |
 | [Grok Bot](docs/start/agents/grok-bot.md) | Connect Grok Bot over MCP |
 | [Claude Duet](docs/start/agents/claude-duet.md) | Connect Claude Duet over MCP |
+| [LangChain](docs/start/agents/langchain.md) | Connect a LangChain agent over MCP and give it an identity |
 | [Any agent over SSH](docs/start/agents/start-ssh.md) | Connect a coding agent or CI job over SSH and give it an identity |
 
 ### Concepts

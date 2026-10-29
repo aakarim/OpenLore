@@ -105,6 +105,7 @@ func (l *writeLog) run() {
 			e.reply <- applyResult{err: e.task()}
 			continue
 		}
+		historyRetentionMu.RLock()
 		var committed vfs.CommitResult
 		commitID := analytics.NewID()
 		var leaves []LeafRecord
@@ -160,6 +161,7 @@ func (l *writeLog) run() {
 				}
 			}
 		}
+		historyRetentionMu.RUnlock()
 		e.reply <- applyResult{hash: committed.Hash, err: err}
 		if !committed.HasCommitted() {
 			continue

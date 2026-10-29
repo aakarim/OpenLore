@@ -25,7 +25,7 @@ type sizeRuleState struct {
 }
 
 func (p *rulesPlugin) sizeRules(ctx context.Context, target string) ([]sizeRuleState, error) {
-	compiled, err := p.engine.Effective(ctx, target)
+	compiled, err := p.currentEngine().Effective(ctx, target)
 	if err != nil {
 		return nil, err
 	}

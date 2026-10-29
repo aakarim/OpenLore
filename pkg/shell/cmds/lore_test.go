@@ -51,6 +51,17 @@ func TestLore_UnknownSubcommandExitsOne(t *testing.T) {
 	}
 }
 
+func TestLoreConfigPluginsIsReadOnlyAndListsRegisteredVersions(t *testing.T) {
+	sh := shell.NewShell(testFS())
+	sh.SetAllowedActions(nil)
+	sh.SetConfigPlugins(map[string]string{"rules": "0.1.0", "inbox": "1.0.0"})
+	var out, errOut bytes.Buffer
+	code := sh.ExecPipeline("lore config plugins", &out, &errOut, nil)
+	if code != 0 || out.String() != "PLUGIN\tVERSION\ninbox\t1.0.0\nrules\t0.1.0\n" || errOut.Len() != 0 {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, out.String(), errOut.String())
+	}
+}
+
 func TestLoreDocsets_Table(t *testing.T) {
 	docsets := []cmds.DocsetInfo{
 		{Name: "public", Paths: []string{"/docs/public"}, Grant: "ro"},

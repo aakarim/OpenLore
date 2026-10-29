@@ -10,11 +10,11 @@ import (
 
 // writeAuthorizer decides whether a session may perform a mutation action on a
 // display path. It is the per-operation authority: the server binds it to the
-// principal's current RBAC policy (Server.identityCanWrite), so two agents that
+// principal's current RBAC policy (Server.identityWriteError), so two agents that
 // can see the same docsets are still authorized independently per write, and a
 // grant like `publish` can permit create/edit only within an inbox while denying
-// deletes.
-type writeAuthorizer func(action vfs.ChangeAction, p string) bool
+// deletes. A nil error allows the operation; otherwise the error names the gate.
+type writeAuthorizer func(action vfs.ChangeAction, p string) error
 
 // scopedWriteFS gates a session's writes through a writeAuthorizer. Reads pass
 // straight through to the wrapped filesystem; a mutation only reaches the
@@ -33,7 +33,7 @@ type scopedWriteFS struct {
 func newScopedWriteFS(base vfs.FileSystem, authz writeAuthorizer) *scopedWriteFS {
 	w, _ := base.(vfs.WritableFS)
 	if authz == nil {
-		authz = func(vfs.ChangeAction, string) bool { return false }
+		authz = func(action vfs.ChangeAction, p string) error { return mutationDeniedError(base, action, p) }
 	}
 	return &scopedWriteFS{FileSystem: base, inner: w, authorize: authz}
 }
@@ -43,8 +43,11 @@ func (s *scopedWriteFS) ReadFileBounded(p string, maxBytes int64) ([]byte, error
 }
 
 func (s *scopedWriteFS) WriteFileAtomic(p string, data []byte, opts vfs.WriteOpts) (string, error) {
-	if s.inner == nil || !s.authorize(vfs.ChangeActionWrite, p) {
-		return "", mutationDeniedError(s.FileSystem, vfs.ChangeActionWrite, p)
+	if s.inner == nil {
+		return "", fmt.Errorf("%w: no writable backend for %s", vfs.ErrReadOnly, p)
+	}
+	if err := s.authorize(vfs.ChangeActionWrite, p); err != nil {
+		return "", err
 	}
 	return s.inner.WriteFileAtomic(p, data, opts)
 }
@@ -57,8 +60,8 @@ func (s *scopedWriteFS) AdmitChangeSet(cs vfs.ChangeSet) error {
 		return vfs.ErrReadOnly
 	}
 	for _, change := range cs.Leaves() {
-		if !s.authorize(change.Action, change.Target) {
-			return fmt.Errorf("write scope denies %s on %s: %w", change.Action, change.Target, os.ErrPermission)
+		if err := s.authorize(change.Action, change.Target); err != nil {
+			return fmt.Errorf("write scope denies %s on %s: %w: %w", change.Action, change.Target, os.ErrPermission, err)
 		}
 	}
 	a, ok := s.inner.(vfs.ChangeSetAdmitter)
@@ -71,45 +74,57 @@ func (s *scopedWriteFS) AdmitChangeSet(cs vfs.ChangeSet) error {
 // CanWrite reports whether a whole-file write to p is authorized in this session
 // (vfs.WriteScopeFS). It enables fail-fast checks (e.g. `spawn`) without writing.
 func (s *scopedWriteFS) CanWrite(p string) bool {
-	return s.inner != nil && s.authorize(vfs.ChangeActionWrite, p)
+	return s.inner != nil && s.authorize(vfs.ChangeActionWrite, p) == nil
 }
 
 func (s *scopedWriteFS) Mkdir(p string) error {
-	if s.inner == nil || !s.authorize(vfs.ChangeActionMkdir, p) {
-		return mutationDeniedError(s.FileSystem, vfs.ChangeActionMkdir, p)
+	if s.inner == nil {
+		return fmt.Errorf("%w: no writable backend for %s", vfs.ErrReadOnly, p)
+	}
+	if err := s.authorize(vfs.ChangeActionMkdir, p); err != nil {
+		return err
 	}
 	return s.inner.Mkdir(p)
 }
 
 func (s *scopedWriteFS) MkdirAll(p string) error {
-	if s.inner == nil || !s.authorize(vfs.ChangeActionMkdirAll, p) {
-		return mutationDeniedError(s.FileSystem, vfs.ChangeActionMkdirAll, p)
+	if s.inner == nil {
+		return fmt.Errorf("%w: no writable backend for %s", vfs.ErrReadOnly, p)
+	}
+	if err := s.authorize(vfs.ChangeActionMkdirAll, p); err != nil {
+		return err
 	}
 	return s.inner.MkdirAll(p)
 }
 
 func (s *scopedWriteFS) Remove(p string) error {
-	if s.inner == nil || !s.authorize(vfs.ChangeActionRemove, p) {
-		return mutationDeniedError(s.FileSystem, vfs.ChangeActionRemove, p)
+	if s.inner == nil {
+		return fmt.Errorf("%w: no writable backend for %s", vfs.ErrReadOnly, p)
+	}
+	if err := s.authorize(vfs.ChangeActionRemove, p); err != nil {
+		return err
 	}
 	return s.inner.Remove(p)
 }
 
 func (s *scopedWriteFS) RemoveAll(p string, opts vfs.RemoveOpts) error {
-	if s.inner == nil || !s.authorize(vfs.ChangeActionRemoveAll, p) {
-		return mutationDeniedError(s.FileSystem, vfs.ChangeActionRemoveAll, p)
+	if s.inner == nil {
+		return fmt.Errorf("%w: no writable backend for %s", vfs.ErrReadOnly, p)
+	}
+	if err := s.authorize(vfs.ChangeActionRemoveAll, p); err != nil {
+		return err
 	}
 	return s.inner.RemoveAll(p, opts)
 }
 
 func mutationDeniedError(fsys vfs.FileSystem, action vfs.ChangeAction, target string) error {
 	if isDirConfigPath(target) {
-		return os.ErrPermission
+		return fmt.Errorf("%w: %s requires config.edit authority", os.ErrPermission, target)
 	}
 	if action == vfs.ChangeActionRemoveAll && treeContainsDirConfig(fsys, target) {
-		return os.ErrPermission
+		return fmt.Errorf("%w: cannot delete %s without config.edit authority for its folder configs", os.ErrPermission, target)
 	}
-	return vfs.ErrReadOnly
+	return fmt.Errorf("%w: write scope denies %s on %s; no grant permits this operation (run 'lore docsets')", vfs.ErrReadOnly, action, target)
 }
 
 func treeContainsDirConfig(fsys vfs.FileSystem, target string) bool {
@@ -137,7 +152,7 @@ func (s *scopedWriteFS) ListXattrs(p string) ([]string, error) {
 	return x.ListXattrs(p)
 }
 func (s *scopedWriteFS) SetXattr(p, name string, value []byte, flags vfs.XattrFlags) error {
-	if s.inner == nil || !s.authorize(vfs.ChangeActionSetXattr, p) {
+	if s.inner == nil || s.authorize(vfs.ChangeActionSetXattr, p) != nil {
 		return syscall.EPERM
 	}
 	x, ok := s.inner.(vfs.XattrWriter)
@@ -147,7 +162,7 @@ func (s *scopedWriteFS) SetXattr(p, name string, value []byte, flags vfs.XattrFl
 	return x.SetXattr(p, name, value, flags)
 }
 func (s *scopedWriteFS) RemoveXattr(p, name string) error {
-	if s.inner == nil || !s.authorize(vfs.ChangeActionRemoveXattr, p) {
+	if s.inner == nil || s.authorize(vfs.ChangeActionRemoveXattr, p) != nil {
 		return syscall.EPERM
 	}
 	x, ok := s.inner.(vfs.XattrWriter)
@@ -157,7 +172,7 @@ func (s *scopedWriteFS) RemoveXattr(p, name string) error {
 	return x.RemoveXattr(p, name)
 }
 func (s *scopedWriteFS) PreserveAndRecreateXattrs(p string, attrs map[string][]byte) error {
-	if s.inner == nil || !s.authorize(vfs.ChangeActionPreserveAndRecreateXattrs, p) {
+	if s.inner == nil || s.authorize(vfs.ChangeActionPreserveAndRecreateXattrs, p) != nil {
 		return syscall.EPERM
 	}
 	x, ok := s.inner.(vfs.XattrMaintenance)
@@ -167,7 +182,7 @@ func (s *scopedWriteFS) PreserveAndRecreateXattrs(p string, attrs map[string][]b
 	return x.PreserveAndRecreateXattrs(p, attrs)
 }
 func (s *scopedWriteFS) MigrateXattrs(p string, m vfs.XattrMigration) error {
-	if s.inner == nil || !s.authorize(vfs.ChangeActionMigrateXattrs, p) {
+	if s.inner == nil || s.authorize(vfs.ChangeActionMigrateXattrs, p) != nil {
 		return syscall.EPERM
 	}
 	x, ok := s.inner.(vfs.XattrMaintenance)

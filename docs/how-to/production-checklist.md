@@ -6,6 +6,11 @@ public HTTPS address, a credential on every request, and config, policy and
 documents that survive a restart. Work through the list once; each item links
 to the page that explains it.
 
+This checklist assumes a private team corpus. If some documents are
+intentionally public, follow [Serving public and internal docs from one corpus](../concepts/auth.md#serving-public-and-internal-docs-from-one-corpus)
+for the anonymous-access settings and verify that guests cannot read internal
+docsets. The HTTPS and persistence requirements still apply.
+
 A server on your own laptop needs none of this. It serves one person, and an
 agent on the same machine reaches `http://localhost:8080` without a
 certificate. The checklist is for the server your whole team, and their
@@ -73,8 +78,8 @@ registers one; changing it later means registering again.
 
 ## 4. Require a credential on `/mcp`
 
-A server on the open internet must not answer anonymous MCP or JSON API
-requests. Set `mcp.require_auth: true`; with the `tokens` block above in
+A private team server on the open internet must not answer anonymous MCP or
+JSON API requests. Set `mcp.require_auth: true`; with the `tokens` block above in
 place, an unauthenticated request gets `401 Unauthorized` and a
 `WWW-Authenticate` header pointing at `/.well-known/oauth-protected-resource`,
 which is how OAuth-capable agents discover where to sign in. In `lore.json`,
@@ -107,14 +112,15 @@ their own credential, such as Meta Muse, get a long-lived token minted with
 
 Agents that speak MCP do not need SSH. If shell-based agents will connect from
 outside, expose port `2222` through a TCP load balancer on public port `22`,
-set `allow_keyless: false`, and publish the host key so clients can verify
-it before the first connection. See
+set `allow_keyless: false` unless intentionally serving guest-readable docs,
+and publish the host key so clients can verify it before the first connection. See
 [Expose SSH through a load balancer](../start/deploy.md#expose-ssh-through-a-load-balancer).
 
 ## 7. Check it
 
 Run these from your own machine against the public address. The first two
-should name your `https://` origin; the third must be a `401`:
+should name your `https://` origin; for the private-server posture above, the
+third must be a `401`:
 
 ```shell
 curl -s https://lore.example.com/.well-known/oauth-protected-resource

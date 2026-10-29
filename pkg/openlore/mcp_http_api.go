@@ -78,7 +78,7 @@ func (a *MCPHTTPAPI) handleShell(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	a.callTool(w, r.Context(), "shell", map[string]any{"command": req.Command})
+	a.callTool(w, r.Context(), "lore_bash", map[string]any{"command": req.Command})
 }
 
 func (a *MCPHTTPAPI) handleListCommands(w http.ResponseWriter, r *http.Request) {

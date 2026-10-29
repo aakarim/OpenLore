@@ -29,7 +29,8 @@ func (s *Server) updateAuth(attribution Attribution, eventType string, mutate fu
 	if err := config.ValidateAuthConfig(&next); err != nil {
 		return err
 	}
-	if err := s.validateLiveAuthCandidate(&next); err != nil {
+	live, err := s.prepareLiveConfig(&next)
+	if err != nil {
 		return err
 	}
 	if s.config.AuthFile == "" {
@@ -46,13 +47,9 @@ func (s *Server) updateAuth(attribution Attribution, eventType string, mutate fu
 	if err := os.WriteFile(tmp, append(b, '\n'), 0o600); err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, s.config.AuthFile); err != nil {
+	defer os.Remove(tmp)
+	if err := s.installLiveConfig(live, func() error { return os.Rename(tmp, s.config.AuthFile) }); err != nil {
 		return err
-	}
-	s.runtimeAuth.Store(&next)
-	s.authorizationStore = fileAuthorizationStore{auth: &next}
-	if s.passkeys != nil {
-		s.passkeys.SetAuthConfig(&next)
 	}
 	var details map[string]any
 	var afterErr error
@@ -84,21 +81,20 @@ func (s *Server) reloadAuth(attribution Attribution) error {
 		}
 		return err
 	}
-	if err := s.validateLiveAuthCandidate(next); err != nil {
+	live, err := s.prepareLiveConfig(next)
+	if err != nil {
 		if s.audit != nil {
 			_ = s.audit.Record(context.Background(), AuditEvent{Type: "config.reject", Attribution: attribution, Details: map[string]any{"error": err.Error()}})
 		}
 		return err
 	}
-	s.runtimeAuth.Store(next)
-	s.authorizationStore = fileAuthorizationStore{auth: next}
+	if err := s.installLiveConfig(live, nil); err != nil {
+		return err
+	}
 	if s.analytics != nil && s.logger != nil {
 		for _, warning := range analyticsCapabilityWarnings(next) {
 			s.logger.Warn("analytics authorization", "warning", warning)
 		}
-	}
-	if s.passkeys != nil {
-		s.passkeys.SetAuthConfig(next)
 	}
 	if s.audit != nil {
 		_ = s.audit.Record(context.Background(), AuditEvent{Type: "config.reload", Attribution: attribution})
@@ -114,12 +110,6 @@ func (s *Server) validateLiveAuthCandidate(next *config.AuthConfig) error {
 	current := s.currentAuth()
 	if !reflect.DeepEqual(current.AllowKeyless, next.AllowKeyless) || current.UnknownIdentity != next.UnknownIdentity || current.DefaultCwd != next.DefaultCwd {
 		return fmt.Errorf("allow_keyless, unknown_identity, and default_cwd require a server restart")
-	}
-	if !reflect.DeepEqual(current.Docsets, next.Docsets) {
-		return fmt.Errorf("docset configuration requires a server restart")
-	}
-	if !reflect.DeepEqual(current.Rules, next.Rules) {
-		return fmt.Errorf("top-level rule configuration requires a server restart")
 	}
 	return s.validateGrantsFor(next)
 }

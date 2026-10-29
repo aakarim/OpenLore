@@ -88,7 +88,7 @@ func (f *skillsFS) AdmitChangeSet(cs vfs.ChangeSet) error {
 	return nil
 }
 
-func runSkills(t *testing.T, f *skillsFS, cwd, command string, enabled bool, grant string) (map[string]any, string, int) {
+func runSkills(t *testing.T, f vfs.FileSystem, cwd, command string, enabled bool, grant string) (map[string]any, string, int) {
 	t.Helper()
 	sh := shell.NewShell(f)
 	sh.SetCwd(cwd)
@@ -126,10 +126,59 @@ func TestSkillsDisabledResultHasRequiredFields(t *testing.T) {
 	if code == 0 || r["status"] != "unsupported" || r["path"] != "/docs/skills" || r["operation"] != "status" {
 		t.Fatalf("result=%v code=%d", r, code)
 	}
+	if message, _ := r["message"].(string); !strings.Contains(message, "plugins.skills.enabled") {
+		t.Fatalf("missing plugin remediation: %v", r)
+	}
 	for _, k := range []string{"collections", "errors", "warnings"} {
 		if _, ok := r[k]; !ok {
 			t.Fatalf("missing %s: %v", k, r)
 		}
+	}
+}
+
+func TestSkillsMarkerFailuresAreNotSuccessfulValidation(t *testing.T) {
+	for _, command := range []string{"skills status", "skills enable", "skills validate", "skills import owner/repo"} {
+		t.Run(command, func(t *testing.T) {
+			f := newSkillsFS()
+			// Hide xattrs as a transport or backend without marker support would.
+			r, _, code := runSkills(t, f.mapFS, "/docs/skills", command, true, "rw")
+			message, _ := r["message"].(string)
+			if code == 0 || r["status"] != "unsupported" || !strings.Contains(message, "collection markers") {
+				t.Fatalf("result=%v code=%d", r, code)
+			}
+		})
+	}
+	f := newSkillsFS()
+	f.AddDir("/docs/skills/nested")
+	f.conflict["/docs/skills/nested"] = true
+	r, out, code := runSkills(t, f, "/docs/skills", "skills validate", true, "rw")
+	if code == 0 || r["status"] != "conflict" || !strings.Contains(out, `"path":"/docs/skills/nested"`) {
+		t.Fatalf("nested marker error hidden: result=%v code=%d", r, code)
+	}
+}
+
+func TestSkillsDisableDiscoveryFailurePreservesCollection(t *testing.T) {
+	f := newSkillsFS()
+	f.attrs["/docs/skills"] = map[string][]byte{cmds.SkillsMarker: {}}
+	f.AddDir("/docs/skills/broken")
+	f.conflict["/docs/skills/broken"] = true
+	f.AddDir("/docs/skills/independent")
+	f.attrs["/docs/skills/independent"] = map[string][]byte{cmds.SkillsMarker: {}}
+	r, out, code := runSkills(t, f, "/docs/skills", "skills disable", true, "rw")
+	if code != 1 || r["status"] != "conflict" || !strings.Contains(out, `"path":"/docs/skills/broken"`) {
+		t.Fatalf("result=%v code=%d", r, code)
+	}
+	r, _, code = runSkills(t, f, "/docs/skills", "skills status", true, "rw")
+	if code != 0 || r["status"] != "enabled" {
+		t.Fatalf("failed disable changed collection: result=%v code=%d", r, code)
+	}
+	r, _, code = runSkills(t, f, "/docs/skills", "skills disable /docs/skills/broken --recreate-xattrs", true, "rw")
+	if code != 0 {
+		t.Fatalf("repair failed: result=%v code=%d", r, code)
+	}
+	r, out, code = runSkills(t, f, "/docs/skills", "skills disable", true, "rw")
+	if code != 0 || r["status"] != "disabled" || r["collections"] != float64(1) || !strings.Contains(out, `"path":"/docs/skills/independent","status":"enabled"`) {
+		t.Fatalf("disable after repair: result=%v code=%d output=%s", r, code, out)
 	}
 }
 

@@ -22,6 +22,7 @@ const maxSFTPStagedFileBytes = int64(defaultMaxWriteBytes)
 type SFTPHandler struct {
 	fs             vfs.FileSystem
 	writesDisabled bool
+	denied         func(string) error
 }
 
 // NewSFTPHandler creates a new SFTP handler backed by the given filesystem.
@@ -50,6 +51,11 @@ func (h *SFTPHandler) Filewrite(r *sftp.Request) (io.WriterAt, error) {
 	if r.Method != "Put" {
 		return nil, sftp.ErrSSHFxOpUnsupported
 	}
+	if h.denied != nil {
+		if err := h.denied(r.Filepath); err != vfs.ErrReadOnly && errors.Is(err, vfs.ErrReadOnly) {
+			return nil, fmt.Errorf("%v: %w", err, os.ErrPermission)
+		}
+	}
 	if h.writesDisabled {
 		return nil, os.ErrPermission
 	}
@@ -58,6 +64,9 @@ func (h *SFTPHandler) Filewrite(r *sftp.Request) (io.WriterAt, error) {
 		return nil, os.ErrPermission
 	}
 	if scope, ok := h.fs.(vfs.WriteScopeFS); ok && !scope.CanWrite(r.Filepath) {
+		if h.denied != nil {
+			return nil, fmt.Errorf("%v: %w", h.denied(r.Filepath), os.ErrPermission)
+		}
 		return nil, os.ErrPermission
 	}
 
@@ -108,6 +117,13 @@ func (h *SFTPHandler) Filewrite(r *sftp.Request) (io.WriterAt, error) {
 // through Filewrite, but OpenLore does not expose general SFTP filesystem
 // mutation semantics such as rename, chmod, or recursive deletion.
 func (h *SFTPHandler) Filecmd(r *sftp.Request) error {
+	if h.denied != nil {
+		for _, path := range []string{r.Filepath, r.Target} {
+			if err := h.denied(path); err != vfs.ErrReadOnly && errors.Is(err, vfs.ErrReadOnly) {
+				return fmt.Errorf("%v: %w", err, os.ErrPermission)
+			}
+		}
+	}
 	return sftp.ErrSSHFxPermissionDenied
 }
 
@@ -231,7 +247,7 @@ func (w *sftpAtomicWriter) Close() error {
 	}
 	_, err := w.fs.WriteFileAtomic(w.path, w.data, opts)
 	if errors.Is(err, vfs.ErrReadOnly) {
-		return os.ErrPermission
+		return fmt.Errorf("%v: %w", err, os.ErrPermission)
 	}
 	return err
 }

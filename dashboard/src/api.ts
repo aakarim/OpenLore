@@ -8,6 +8,8 @@ import type {
   Materialized,
   Session,
   Setup,
+  Source,
+  SourceSnapshot,
   TreeResponse,
   Usage,
 } from "./types";
@@ -24,7 +26,11 @@ export class APIError extends Error {
   }
 }
 
-async function request<T>(path: string, signal?: AbortSignal): Promise<T> {
+async function request<T>(
+  path: string,
+  signal?: AbortSignal,
+  text = false,
+): Promise<T> {
   const response = await fetch(`/dashboard/api/${path}`, {
     credentials: "same-origin",
     signal,
@@ -47,7 +53,7 @@ async function request<T>(path: string, signal?: AbortSignal): Promise<T> {
       body.next_steps,
     );
   }
-  return response.json() as Promise<T>;
+  return (text ? response.text() : response.json()) as Promise<T>;
 }
 async function absoluteRequest<T>(
   path: string,
@@ -88,6 +94,14 @@ export const api = {
   access: (path: string, signal?: AbortSignal) =>
     request<Access>(`access?${query({ path })}`, signal),
   setup: (signal?: AbortSignal) => request<Setup>("setup", signal),
+  sources: (signal?: AbortSignal) => request<Source[]>("sources", signal),
+  sourceHistory: (store: string, signal?: AbortSignal) =>
+    request<SourceSnapshot[]>(
+      `sources?${query({ store, history: "true" })}`,
+      signal,
+    ),
+  sourceFile: (store: string, file: string, signal?: AbortSignal) =>
+    request<string>(`sources?${query({ store, file })}`, signal, true),
   aggregation: (
     name: string,
     path: string,

@@ -19,12 +19,13 @@ func CmdJq(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.
 	compact := false
 	exitStatus := false
 	slurp := false
+	nullInput := false
 	var filter string
 	var files []string
 
 	for i := 0; i < len(args); i++ {
 		a := args[i]
-		if strings.HasPrefix(a, "-") && len(a) > 1 && a[1] != '-' {
+		if strings.HasPrefix(a, "-") && len(a) > 1 && a[1] != '-' && (a[1] < '0' || a[1] > '9') {
 			for _, ch := range a[1:] {
 				switch ch {
 				case 'r':
@@ -35,6 +36,8 @@ func CmdJq(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.
 					exitStatus = true
 				case 's':
 					slurp = true
+				case 'n':
+					nullInput = true
 				}
 			}
 		} else if filter == "" {
@@ -49,7 +52,10 @@ func CmdJq(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.
 	}
 
 	var inputData []byte
-	if len(files) > 0 {
+	if nullInput {
+		// Evaluate once with null, without reading files or stdin.
+		inputData = []byte("null")
+	} else if len(files) > 0 {
 		p := ctx.Resolve(files[0])
 		var err error
 		inputData, err = ctx.FS().ReadFile(p)
@@ -70,7 +76,7 @@ func CmdJq(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.
 	}
 
 	var inputs []interface{}
-	if slurp {
+	if slurp && !nullInput {
 		// Parse all JSON values and wrap in array
 		dec := json.NewDecoder(strings.NewReader(inputStr))
 		for dec.More() {
@@ -219,7 +225,10 @@ func jqParse(filter string) (*jqNode, error) {
 		return &jqNode{typ: jqIdentity}, nil
 	}
 	tokens := jqTokenize(filter)
-	node, _, err := jqParseExpr(tokens, 0)
+	node, pos, err := jqParseExpr(tokens, 0)
+	if err == nil && pos < len(tokens) {
+		return nil, fmt.Errorf("unexpected token %q", tokens[pos].value)
+	}
 	return node, err
 }
 
@@ -233,9 +242,29 @@ func jqTokenize(filter string) []jqToken {
 	i := 0
 	for i < len(filter) {
 		ch := filter[i]
+		// A minus after a value is subtraction, not the sign of a number.
+		negativeNumber := ch == '-' && i+1 < len(filter) && filter[i+1] >= '0' && filter[i+1] <= '9'
+		if negativeNumber && len(tokens) > 0 {
+			prev := tokens[len(tokens)-1]
+			switch prev.typ {
+			case "dot", "dotdot", "number", "string", "rbracket", "rbrace", "rparen", "question":
+				negativeNumber = false
+			case "ident":
+				switch prev.value {
+				case "then", "else", "elif", "if", "and", "or", "try", "catch":
+					negativeNumber = len(tokens) < 2 || tokens[len(tokens)-2].typ != "dot"
+				default:
+					negativeNumber = false
+				}
+			}
+		}
 		switch {
 		case ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r':
 			i++
+		case ch == '#':
+			for i < len(filter) && filter[i] != '\n' {
+				i++
+			}
 		case ch == '.':
 			if i+1 < len(filter) && filter[i+1] == '.' {
 				tokens = append(tokens, jqToken{"dotdot", ".."})
@@ -295,7 +324,7 @@ func jqTokenize(filter string) []jqToken {
 			}
 			tokens = append(tokens, jqToken{"string", filter[i:j]})
 			i = j
-		case ch == '-' || (ch >= '0' && ch <= '9'):
+		case negativeNumber || (ch >= '0' && ch <= '9'):
 			j := i
 			if ch == '-' {
 				j++

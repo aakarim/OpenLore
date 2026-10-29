@@ -16,6 +16,7 @@ import {
 } from "./Analytics";
 import { APIError, api } from "./api";
 import { FileReader, MobileDetails, Sheet } from "./FileReader";
+import { FileTabs } from "./FileTabs";
 import { FuzzyFinder, finderShortcut, isFinderShortcut } from "./FuzzyFinder";
 import { useAsync } from "./hooks";
 import {
@@ -31,6 +32,7 @@ import {
   SettingsIcon,
 } from "./icons";
 import { SetupTree, SetupView, useSetup } from "./Setup";
+import { SourcesTree, SourcesView } from "./Sources";
 import { ThemeToggle } from "./ThemeToggle";
 import {
   defaults,
@@ -42,7 +44,7 @@ import {
 import { Tree } from "./Tree";
 import type { AnalyticsTab, Session } from "./types";
 
-type View = "analytics" | "files" | "setup";
+type View = "analytics" | "files" | "setup" | "sources";
 type Route = { view: View; path: string; tab: AnalyticsTab };
 type SheetName =
   "folders" | "open" | "details" | "analytics" | "settings" | "status" | null;
@@ -76,7 +78,12 @@ function readRoute(session: Session): Route {
   }
   const view = query.get("view");
   return {
-    view: view === "analytics" || view === "setup" ? view : "files",
+    view:
+      view === "analytics" ||
+      view === "setup" ||
+      (view === "sources" && session.sources)
+        ? view
+        : "files",
     path: query.get("path") || "/",
     tab,
   };
@@ -217,6 +224,12 @@ function Workspace({ session }: { session: Session }) {
     if (route.view === "setup") setSetupVisited(true);
   }, [route.view]);
   const setup = useSetup(setupVisited);
+  const sources = useAsync(
+    (signal) => api.sources(signal),
+    [],
+    route.view === "sources",
+    true,
+  );
   const setPreference = (patch: Partial<Preferences>) =>
     setPrefs((p) => ({ ...p, ...patch }));
 
@@ -264,7 +277,8 @@ function Workspace({ session }: { session: Session }) {
       });
       setPrefsKey(key);
       setRoute(next);
-      if (next.view !== "setup") setScope(next.path);
+      if (next.view === "analytics" || next.view === "files")
+        setScope(next.path);
       if (next.view === "files") setFileLocation(next.path);
       setActiveFile(file);
       setRouteError(error);
@@ -299,7 +313,7 @@ function Workspace({ session }: { session: Session }) {
       setSheet(null);
       // Setup paths are config files, not knowledge; they never move the
       // analytics scope, the files location, or the expanded tree.
-      if (view === "setup") return;
+      if (view === "setup" || view === "sources") return;
       if (view === "analytics") setScope(path);
       else setFileLocation(path);
       setPrefs((p) => ({
@@ -340,7 +354,7 @@ function Workspace({ session }: { session: Session }) {
       setRoute(next);
       setRouteError("");
       setSheet(null);
-      if (next.view === "setup") return;
+      if (next.view === "setup" || next.view === "sources") return;
       if (next.view === "analytics") {
         setScope(next.path);
         return;
@@ -379,10 +393,10 @@ function Workspace({ session }: { session: Session }) {
       setToast("Clipboard unavailable. Select and copy the path instead.");
     }
   };
-  const closeFile = (path: string) => {
-    const remaining = prefs.openPaths.filter((p) => p !== path);
+  const closeFiles = (paths: string[]) => {
+    const remaining = prefs.openPaths.filter((p) => !paths.includes(p));
     setPreference({ openPaths: remaining });
-    if (activeFile === path) {
+    if (paths.includes(activeFile)) {
       setActiveFile(remaining.at(-1) || "");
       navigate("files", remaining.at(-1) || "/");
     }
@@ -412,7 +426,7 @@ function Workspace({ session }: { session: Session }) {
     setPreference({ treeWidth: Math.max(180, Math.min(maxTreeWidth, width)) });
   return (
     <div
-      className={`app ${view}${collapsed ? " tree-collapsed" : ""}${resizing ? " tree-resizing" : ""}`}
+      className={`app ${view}${session.sources ? " has-sources" : ""}${collapsed ? " tree-collapsed" : ""}${resizing ? " tree-resizing" : ""}`}
       style={{ "--tree-width": `${treeWidth}px` } as CSSProperties}
     >
       <header className="topbar">
@@ -454,6 +468,16 @@ function Workspace({ session }: { session: Session }) {
           >
             Setup
           </button>
+          {session.sources && (
+            <button
+              aria-current={view === "sources"}
+              onClick={() =>
+                navigate("sources", view === "sources" ? path : "/")
+              }
+            >
+              Sources
+            </button>
+          )}
         </nav>
         <span className="identity">{session.identity}</span>
         <button
@@ -470,7 +494,13 @@ function Workspace({ session }: { session: Session }) {
         <ThemeToggle />
       </header>
       {!collapsed &&
-        (view === "setup" ? (
+        (view === "sources" ? (
+          <SourcesTree
+            sources={sources}
+            selected={path}
+            onSelect={(p) => navigate("sources", p)}
+          />
+        ) : view === "setup" ? (
           <SetupTree
             setup={setup}
             selected={path}
@@ -521,15 +551,23 @@ function Workspace({ session }: { session: Session }) {
               return;
             event.preventDefault();
             const width =
-              event.key === "Home" ? 180
-                : event.key === "End" ? maxTreeWidth
+              event.key === "Home"
+                ? 180
+                : event.key === "End"
+                  ? maxTreeWidth
                   : treeWidth + (event.key === "ArrowRight" ? 10 : -10);
             resizeTree(width);
           }}
         />
       )}
       <main className="workspace">
-        {view === "setup" ? (
+        {view === "sources" ? (
+          <SourcesView
+            sources={sources}
+            store={path}
+            onSelect={(p) => navigate("sources", p)}
+          />
+        ) : view === "setup" ? (
           <SetupView
             setup={setup}
             path={path}
@@ -635,25 +673,12 @@ function Workspace({ session }: { session: Session }) {
           </>
         ) : (
           <>
-            <div className="file-tabs" role="tablist" aria-label="Open files">
-              {prefs.openPaths.map((p) => (
-                <div className={p === activeFile ? "active" : ""} key={p}>
-                  <button
-                    role="tab"
-                    aria-selected={p === activeFile}
-                    onClick={() => openFile(p)}
-                  >
-                    {name(p)}
-                  </button>
-                  <button
-                    aria-label={`Close ${name(p)}`}
-                    onClick={() => closeFile(p)}
-                  >
-                    <CloseIcon />
-                  </button>
-                </div>
-              ))}
-            </div>
+            <FileTabs
+              paths={prefs.openPaths}
+              active={activeFile}
+              onOpen={openFile}
+              onClose={closeFiles}
+            />
             {activeFile ? (
               <FileReader
                 key={activeFile}
@@ -700,7 +725,12 @@ function Workspace({ session }: { session: Session }) {
       </main>
       <nav className="mobile-nav" aria-label="Mobile workspace">
         <button aria-haspopup="dialog" onClick={() => setSheet("folders")}>
-          {view === "setup" ? (
+          {view === "sources" ? (
+            <>
+              <FolderIcon />
+              <span>Sources</span>
+            </>
+          ) : view === "setup" ? (
             <>
               <SettingsIcon /> <span>Configuration</span>
             </>
@@ -715,7 +745,7 @@ function Workspace({ session }: { session: Session }) {
             <FileIcon /> <span>Open files · {prefs.openPaths.length}</span>
           </button>
         )}
-        {view !== "setup" && (
+        {(view === "analytics" || view === "files") && (
           <button
             aria-haspopup="dialog"
             disabled={view === "files" && !activeFile}
@@ -736,11 +766,23 @@ function Workspace({ session }: { session: Session }) {
       </nav>
       {sheet === "folders" && (
         <Sheet
-          title={view === "setup" ? "Configuration" : "Folders"}
+          title={
+            view === "setup"
+              ? "Configuration"
+              : view === "sources"
+                ? "Sources"
+                : "Folders"
+          }
           onClose={() => setSheet(null)}
         >
           <div className="sheet-tree">
-            {view === "setup" ? (
+            {view === "sources" ? (
+              <SourcesTree
+                sources={sources}
+                selected={path}
+                onSelect={(p) => navigate("sources", p)}
+              />
+            ) : view === "setup" ? (
               <SetupTree
                 setup={setup}
                 selected={path}
@@ -767,7 +809,7 @@ function Workspace({ session }: { session: Session }) {
                   </button>
                   <button
                     aria-label={`Close ${name(p)}`}
-                    onClick={() => closeFile(p)}
+                    onClick={() => closeFiles([p])}
                   >
                     <CloseIcon />
                   </button>

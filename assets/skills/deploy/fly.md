@@ -21,7 +21,7 @@ OpenLore SSH, durable state, and Fly administrative shell access.
    - `data_dir: /var/lib/openlore/data`
    - `host_key_path: /var/lib/openlore/ssh/openlore_ed25519`
    - OpenLore SSH on internal `2222` and HTTP on the configured application port.
-5. Keep bootstrap state only in gitignored `.local/lore.json` and `.local/filesystem`. Ensure `.local/` is ignored.
+5. Keep bootstrap state only in gitignored `.local/lore.json` and `content/`. Ensure both are ignored. Deploy the committed `home/` directory beside `openlore.yml`; the server validates `home/*/sources.yaml` at startup.
 
 ## Provision and deploy
 
@@ -34,7 +34,7 @@ OpenLore SSH, durable state, and Fly administrative shell access.
 
 ## Bootstrap without data loss
 
-Before transfer, inspect the mounted volume through `fly ssh console`. Deploy root `openlore.yml` to `/var/lib/openlore/config/openlore.yml`. Transfer `.local/lore.json` and `.local/filesystem` only if the remote lore file does not exist **and** the remote published/data state is empty. Create the standard directories with restrictive permissions and copy bootstrap filesystem content into the intended persistent paths. If mutable remote state exists, stop and preserve it; never merge over or overwrite remote `lore.json` or filesystem data.
+Before transfer, inspect the mounted volume through `fly ssh console`. Deploy root `openlore.yml` to `/var/lib/openlore/config/openlore.yml`. Transfer `.local/lore.json` and `content/` only if the remote lore file does not exist **and** the remote published/data state is empty. Create the standard directories with restrictive permissions and copy bootstrap filesystem content into the intended persistent paths. If mutable remote state exists, stop and preserve it; never merge over or overwrite remote `lore.json` or filesystem data.
 
 ## Required production verification
 

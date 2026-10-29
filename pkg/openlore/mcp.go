@@ -105,14 +105,14 @@ func NewMCPServer(fs vfs.FileSystem, opts ...MCPOption) *mcp.Server {
 	)
 	server.AddReceivingMiddleware(mcpTracingMiddleware)
 
-	shellDesc := "Execute a command in OpenLore's restricted knowledge-repository shell. This is not Bash and cannot run arbitrary executables. Supports ls, cat, grep, find, tree, head, tail, wc, stat, sort, uniq, cut, sed, awk, jq, xargs, pipes, loops, and more; use list_commands for the available surface."
+	shellDesc := "Run a command in OpenLore's restricted, Bash-like knowledge-repository shell. It cannot run arbitrary executables and never touches the local machine. Supports ls, cat, grep, find, tree, head, tail, wc, stat, sort, uniq, cut, sed, awk, jq, xargs, pipes, loops, heredocs, and more; use list_commands for the available surface. For multi-line writes, include a heredoc in the command string: cat <<'EOF' > /path followed by a newline, the body, and EOF alone on the final line. Write permissions still apply."
 	if cfg.shellDescription != "" {
 		shellDesc = cfg.shellDescription
 	}
 	destructive := !cfg.readOnly
 	openWorld := false
 	mcp.AddTool(server, &mcp.Tool{
-		Name:        "shell",
+		Name:        "lore_bash",
 		Description: shellDesc,
 		Annotations: &mcp.ToolAnnotations{
 			Title:           "OpenLore Shell",
@@ -171,7 +171,7 @@ func mcpTracingMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
 		defer span.End()
 		if params, ok := req.GetParams().(*mcp.CallToolParamsRaw); ok && params != nil {
 			name := params.Name
-			if name != "shell" && name != "list_commands" {
+			if name != "lore_bash" && name != "list_commands" {
 				name = "unknown"
 			}
 			span.SetAttributes(attribute.String("gen_ai.operation.name", "execute_tool"), attribute.String("gen_ai.tool.name", name))

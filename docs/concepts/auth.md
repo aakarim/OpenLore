@@ -62,6 +62,71 @@ If the resolved posture requires a token (`allow_keyless: false` inherited, or
 fail closed with 401 and the server logs a warning at startup. Configure
 `tokens`, or set `require_auth: false` to serve anonymous HTTP callers.
 
+## Serving public and internal docs from one corpus
+
+One server can serve public guides and private internal notes from the same
+corpus. The split is each docset's `access` block, not a second server or a
+second copy of the documents. Grant the built-in `guest` role `ro` on the
+public docset and omit it from the internal docset.
+
+For example, in `lore.json`:
+
+```json
+{
+  "allow_keyless": true,
+  "unknown_identity": "allow",
+  "default_cwd": "/docs/public",
+  "roles": { "staff": {} },
+  "docsets": {
+    "public": {
+      "paths": ["/docs/public"],
+      "access": { "allow": { "guest": "ro", "staff": "ro" } }
+    },
+    "internal": {
+      "paths": ["/docs/internal"],
+      "access": { "allow": { "staff": "ro" } }
+    }
+  },
+  "identities": [
+    { "name": "staff-reader", "roles": ["staff"] }
+  ]
+}
+```
+
+Create the two source directories under the served root and put only
+public-facing documents in `/docs/public`. Do not also mount the internal
+source folder through a guest-readable docset or alias. The `guest` role is
+built in; do not declare it under `roles` or assign it to a named identity.
+
+Point the server at this policy in `openlore.yml`. To allow anonymous MCP and
+JSON API reads as well as keyless SSH, use:
+
+```yaml
+auth_file: ./lore.json
+readonly: true
+mcp:
+  enabled: true
+  require_auth: false
+```
+
+Restart the server after changing these files. A keyless SSH caller or an
+HTTP caller without a token can read `/docs/public`, but cannot list, search,
+or read `/docs/internal`. Authenticate as `staff-reader` to read both: add its
+SSH public key or configure [passkeys and OAuth](#passkeys-and-oauth-clients).
+The dashboard still requires sign-in; allowing anonymous MCP/API reads does
+not make dashboard data endpoints anonymous.
+
+Verify with `lore docsets`, `ls /docs`, and reads of known files in each
+docset, first as a guest and then as the authenticated staff identity. The
+guest must see only `public` and must be refused the internal file, even when
+given its exact path; staff must be able to read both.
+
+**`publish` is unrelated to public access.** It is a contributor inbox-write
+grant, not a visibility switch. Neither granting `publish` nor running the
+`publish` command makes a private docset public. Public read access comes
+from `guest: ro` plus the anonymous authentication posture above; see
+[Writing and publishing](writing.md#publish-to-an-inbox) for inbox writes.
+
 ## SSH
 
 The SSH server resolves a connection in order: a public key that matches an
@@ -157,9 +222,14 @@ them, and how the most specific docset governs a path. This section covers the
 Docsets grant exact role names:
 
 - `ro` reads the docset.
-- `publish` reads the docset and writes only inside its configured inbox.
+- `publish` is contributor write access: it reads the docset and creates or
+  edits files only inside its configured inbox, never deletes. It does not
+  change who else can read the docset or make it public.
 - `rw` reads and writes throughout the docset.
 - Plugins may contribute additional grant types.
+
+For public read access, use [a guest `ro` grant](#serving-public-and-internal-docs-from-one-corpus),
+not `publish`.
 
 Multiple roles contribute grants independently. Any matching docset deny wins.
 Capability allows form a union across roles, while any capability deny wins.

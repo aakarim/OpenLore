@@ -46,7 +46,7 @@ Add this to `~/.claude/settings.json` for every project, or to `.claude/settings
 }
 ```
 
-`mcp__openlore` covers every tool the server exposes. Use `mcp__openlore__shell` to allow only the shell. Wildcards such as `mcp__openlore__*` do not match. With the rule in place, Claude Code skips both the prompt and the classifier for OpenLore calls. You can also set it for one session: `claude --allowedTools mcp__openlore`.
+`mcp__openlore` covers every tool the server exposes. Use `mcp__openlore__lore_bash` to allow only the shell tool. Wildcards such as `mcp__openlore__*` do not match. With the rule in place, Claude Code skips both the prompt and the classifier for OpenLore calls. You can also set it for one session: `claude --allowedTools mcp__openlore`.
 
 > **Note:** A project `.claude/settings.json` only applies after you have accepted the folder-trust prompt that Claude Code shows the first time it starts in that directory. Until then the rule is ignored and calls are still reviewed. `~/.claude/settings.json` always applies.
 
@@ -56,7 +56,7 @@ Now start Claude Code and ask it something about your docs.
 > What does the knowledge repository say about our retry policy?
 ```
 
-Claude runs `grep -r 'retry' /` through the `shell` tool and answers from the result.
+Claude runs `grep -r 'retry' /` through the `lore_bash` tool and answers from the result.
 
 > **Note:** Claude gets a restricted shell over a virtual filesystem, not a shell on your machine. It can `cat`, `grep`, `find` and pipe, and nothing else.
 
@@ -129,8 +129,21 @@ Learn more about [authenticated OAuth clients](../../reference/authenticated-oau
 
 ---
 
+### 6. Bring Claude's memory with you
+
+Claude Code already keeps a `CLAUDE.md`, rules and auto memory for each project you work in. The `lore` client syncs them into the server so other agents, and teammates, read the same context:
+
+```shell
+lore agent import claude
+```
+
+Run it from a project directory to pick the project's instructions and memory; [Import a Claude project](../../how-to/import-claude-project.md) walks through sharing them with a team, and [Import your Claude memory](../../how-to/import-claude-memory.md) keeps your personal `~/.claude` files inside your home where nobody else reads them.
+
+---
+
 ## Next steps
 
+- [Import a Claude project](../../how-to/import-claude-project.md) so the team shares what Claude Code has learned about a codebase.
 - [Connect any agent over SSH](start-ssh.md) so a CI job or another coding agent shares the same server.
 - [Let an agent publish into an inbox](../../how-to/publish-to-inbox.md) so Claude can contribute notes without editing anything else.
 - Learn how [writing and publishing](../../concepts/writing.md) keep every write atomic and attributed.

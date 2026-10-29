@@ -36,6 +36,7 @@ type Shell struct {
 	allowedActions      map[cmds.Action]bool
 	actionAuthorizer    func(cmds.Action) bool
 	actionDeniedMessage string
+	writeDenialReason   func(resolvedPath string) error
 	// conflictPolicyFn resolves the write-conflict policy for a resolved path.
 	// nil means "use the default" (vfs.PolicyHash). The server sets this to a
 	// per-docset resolver; standalone shells get the default.
@@ -44,7 +45,9 @@ type Shell struct {
 	// from the identity's lore. Read by `lore docsets` and `publish`
 	// respectively. nil for a standalone shell.
 	docsets                 []cmds.DocsetInfo
+	docsetLister            func() []cmds.DocsetInfo
 	publishTargets          []cmds.PublishTarget
+	publishTargetLister     func() []cmds.PublishTarget
 	unsupportedUsageHandler func(UnsupportedUsage)
 	commandObserver         func(CommandExecution)
 	executionContext        context.Context
@@ -53,8 +56,9 @@ type Shell struct {
 	pipelinePosition        int
 	// metaExtenders are the plugin-contributed extenders applied by `lore meta`,
 	// installed by the host per session. nil for a standalone shell.
-	metaExtenders []meta.Extender
-	metaFilters   []meta.Filter
+	metaExtenders    []meta.Extender
+	metaFilters      []meta.Filter
+	metaFilterLister func() []meta.Filter
 	// validators are plugin-contributed checks applied by `lore validate`.
 	validators           []validation.Validator
 	skillsManagement     bool
@@ -63,6 +67,8 @@ type Shell struct {
 	sshTarget            string
 	attribution          cmds.JobAttribution
 	configReload         cmds.ConfigReloadBackend
+	configPlugins        map[string]string
+	sourceLister         func() ([]cmds.SourceInfo, error)
 	history              cmds.HistoryBackend
 	jobs                 cmds.JobBackend
 	size                 cmds.SizeBackend
@@ -147,6 +153,12 @@ func (s *Shell) SetActionAuthorizer(fn func(cmds.Action) bool) { s.actionAuthori
 // behavior.
 func (s *Shell) SetActionDeniedMessage(message string) { s.actionDeniedMessage = message }
 
+// SetWriteDenialReason explains a redirect blocked by the shell's capability
+// gate without attempting a mutation. It does not grant write authority.
+func (s *Shell) SetWriteDenialReason(fn func(resolvedPath string) error) {
+	s.writeDenialReason = fn
+}
+
 // SetConflictPolicyFn installs a resolver that maps a resolved path to its
 // write-conflict policy. Passing nil restores the default (vfs.PolicyHash).
 func (s *Shell) SetConflictPolicyFn(fn func(resolvedPath string) vfs.WriteConflictPolicy) {
@@ -165,14 +177,40 @@ func (s *Shell) WriteConflictPolicy(resolvedPath string) vfs.WriteConflictPolicy
 // SetDocsets installs the per-session docset views surfaced by `lore docsets`.
 func (s *Shell) SetDocsets(d []cmds.DocsetInfo) { s.docsets = d }
 
+// SetDocsetLister resolves the current docsets when a command needs them.
+func (s *Shell) SetDocsetLister(list func() []cmds.DocsetInfo) { s.docsetLister = list }
+
 // Docsets reports the per-session docset views. Implements CmdContext.
-func (s *Shell) Docsets() []cmds.DocsetInfo { return s.docsets }
+func (s *Shell) Docsets() []cmds.DocsetInfo {
+	if s.docsetLister != nil {
+		return s.docsetLister()
+	}
+	return s.docsets
+}
+
+func (s *Shell) SetSourceLister(list func() ([]cmds.SourceInfo, error)) { s.sourceLister = list }
+func (s *Shell) Sources() ([]cmds.SourceInfo, error) {
+	if s.sourceLister == nil {
+		return nil, nil
+	}
+	return s.sourceLister()
+}
 
 // SetPublishTargets installs the per-session publish inboxes used by `publish`.
 func (s *Shell) SetPublishTargets(t []cmds.PublishTarget) { s.publishTargets = t }
 
+// SetPublishTargetLister resolves inboxes against current configuration.
+func (s *Shell) SetPublishTargetLister(list func() []cmds.PublishTarget) {
+	s.publishTargetLister = list
+}
+
 // PublishTargets reports the per-session publish inboxes. Implements CmdContext.
-func (s *Shell) PublishTargets() []cmds.PublishTarget { return s.publishTargets }
+func (s *Shell) PublishTargets() []cmds.PublishTarget {
+	if s.publishTargetLister != nil {
+		return s.publishTargetLister()
+	}
+	return s.publishTargets
+}
 
 // SetSSHTarget installs the ssh arguments that reach this host, substituted
 // into skills that carry the {{ ssh_target }} placeholder.
@@ -187,9 +225,15 @@ func (s *Shell) SetMetaExtenders(e []meta.Extender) { s.metaExtenders = e }
 
 // MetaExtenders reports the per-session `lore meta` extenders. Implements
 // CmdContext.
-func (s *Shell) MetaExtenders() []meta.Extender { return s.metaExtenders }
-func (s *Shell) SetMetaFilters(f []meta.Filter) { s.metaFilters = f }
-func (s *Shell) MetaFilters() []meta.Filter     { return s.metaFilters }
+func (s *Shell) MetaExtenders() []meta.Extender              { return s.metaExtenders }
+func (s *Shell) SetMetaFilters(f []meta.Filter)              { s.metaFilters = f }
+func (s *Shell) SetMetaFilterLister(fn func() []meta.Filter) { s.metaFilterLister = fn }
+func (s *Shell) MetaFilters() []meta.Filter {
+	if s.metaFilterLister != nil {
+		return s.metaFilterLister()
+	}
+	return s.metaFilters
+}
 
 // SetValidators installs plugin-contributed checks for `lore validate`.
 func (s *Shell) SetValidators(validators []validation.Validator) { s.validators = validators }
@@ -207,6 +251,8 @@ func (s *Shell) SetCommandAttribution(a cmds.JobAttribution)       { s.attributi
 func (s *Shell) CommandAttribution() cmds.JobAttribution           { return s.attribution }
 func (s *Shell) SetConfigReloadBackend(b cmds.ConfigReloadBackend) { s.configReload = b }
 func (s *Shell) ConfigReloadBackend() cmds.ConfigReloadBackend     { return s.configReload }
+func (s *Shell) SetConfigPlugins(plugins map[string]string)        { s.configPlugins = plugins }
+func (s *Shell) ConfigPlugins() map[string]string                  { return s.configPlugins }
 func (s *Shell) SetHistoryBackend(b cmds.HistoryBackend)           { s.history = b }
 func (s *Shell) HistoryBackend() cmds.HistoryBackend               { return s.history }
 func (s *Shell) SetJobBackend(b cmds.JobBackend)                   { s.jobs = b }
@@ -542,6 +588,12 @@ func (s *Shell) execCallObserved(call *parser.CallExpr, w io.Writer, errW io.Wri
 			if s.actionDeniedMessage != "" {
 				fmt.Fprintf(errW, "redirect: %s: %s\n", target, s.actionDeniedMessage)
 				return 1
+			}
+			if s.writeDenialReason != nil {
+				if err := s.writeDenialReason(s.Resolve(target)); err != nil {
+					fmt.Fprintf(errW, "redirect: %s: %s\n", target, err)
+					return 1
+				}
 			}
 			fmt.Fprintf(errW, "redirect: %s: read-only filesystem\n", target)
 			return 1

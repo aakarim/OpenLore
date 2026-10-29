@@ -66,7 +66,7 @@ output.
 
 Then ask something your docs answer, such as "use the openlore plugin to find
 what the knowledge repository says about our retry policy". It should search
-with `grep -r` through the `shell` tool and answer from the result.
+with `grep -r` through the `lore_bash` tool and answer from the result.
 
 ## Tell your Bot when to use it
 
@@ -115,7 +115,7 @@ and delegates.
 
 ## What your Bot can do
 
-Your Bots reach OpenLore through the `shell` tool, which runs OpenLore's
+Your Bots reach OpenLore through the `lore_bash` tool, which runs OpenLore's
 restricted shell over the virtual filesystem, not the terminal on the Bot's
 cloud computer or a shell on yours: `ls`, `cat`, `grep`, `find`, `head`,
 `tail` and pipes work, and nothing can execute on the host. Writes are only

@@ -15,6 +15,8 @@ groups:
   - name: Start
     pages:
       - { path: start/quickstart.md, label: Quickstart }
+      - { path: start/create-knowledge-repository.md, label: Create a knowledge repository }
+      - { path: start/import-knowledge.md, label: Import knowledge }
       - subgroup: Agents
         pages:
           - { path: start/agents/start-claude-code.md, label: Claude Code }
@@ -25,6 +27,7 @@ groups:
           - { path: start/agents/openai-dots.md, label: OpenAI dots }
           - { path: start/agents/grok-bot.md, label: Grok Bot }
           - { path: start/agents/claude-duet.md, label: Claude Duet }
+          - { path: start/agents/langchain.md, label: LangChain }
           - { path: start/agents/start-ssh.md, label: Any agent over SSH }
       - { path: start/deploy.md, label: Deploy }
 
@@ -40,11 +43,15 @@ groups:
       - { path: concepts/folder-rules.md, label: Folder rules }
       - { path: concepts/plugins.md, label: Plugins & formats }
       - { path: concepts/dashboard.md, label: Dashboard & metrics }
+      - { path: concepts/knowledge-gateway.md, label: Knowledge gateway }
 
   - name: How to
     pages:
       - { path: how-to/usage.md, label: Ways to use OpenLore }
       - { path: how-to/configure-the-server.md, label: Configure the server }
+      - { path: how-to/import-claude-project.md, label: Import a Claude project }
+      - { path: how-to/import-claude-memory.md, label: Import your Claude memory }
+      - { path: how-to/import-git-repository.md, label: Import a Git repository }
       - { path: how-to/production-checklist.md, label: Production checklist }
       - { path: how-to/publish-to-inbox.md, label: Let an agent publish into an inbox }
       - { path: how-to/editors.md, label: Browse and edit from an editor }
@@ -66,7 +73,8 @@ groups:
 
   - name: Reference
     pages:
-      - { path: reference/commands.md, label: Commands & CLI }
+      - { path: reference/commands.md, label: openlore CLI reference }
+      - { path: reference/lore-cli.md, label: lore CLI reference }
       - { path: reference/openlore-yml.md, label: openlore.yml }
       - { path: reference/rules-stdlib.md, label: Rules standard library }
       - { path: reference/inbox.md, label: HTTP inbox API }

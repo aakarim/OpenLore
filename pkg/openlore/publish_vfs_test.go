@@ -1,6 +1,7 @@
 package openlore
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -29,9 +30,12 @@ func TestPublish_GoesThroughScopedVFS(t *testing.T) {
 	}
 
 	// Session can see both docsets but may only write /jared.
-	authz := func(_ vfs.ChangeAction, p string) bool {
+	authz := func(_ vfs.ChangeAction, p string) error {
 		clean := vfs.CleanPath(p)
-		return clean == "/jared" || strings.HasPrefix(clean, "/jared/")
+		if clean == "/jared" || strings.HasPrefix(clean, "/jared/") {
+			return nil
+		}
+		return fmt.Errorf("%w: outside /jared grant", vfs.ErrReadOnly)
 	}
 	fs := newScopedWriteFS(base, authz)
 	sh := shell.NewShell(fs)
@@ -78,9 +82,12 @@ func TestPublish_RoutesIntoInbox(t *testing.T) {
 	}
 
 	// Publish grant semantics: create/edit only inside /alfie/inbox, no deletes.
-	authz := func(_ vfs.ChangeAction, p string) bool {
+	authz := func(_ vfs.ChangeAction, p string) error {
 		clean := vfs.CleanPath(p)
-		return clean == "/alfie/inbox" || strings.HasPrefix(clean, "/alfie/inbox/")
+		if clean == "/alfie/inbox" || strings.HasPrefix(clean, "/alfie/inbox/") {
+			return nil
+		}
+		return fmt.Errorf("%w: outside /alfie/inbox grant", vfs.ErrReadOnly)
 	}
 	fs := newScopedWriteFS(base, authz)
 	sh := shell.NewShell(fs)

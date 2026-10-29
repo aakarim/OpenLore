@@ -454,7 +454,7 @@ func TestRejectedMetadataPluginDoesNotInstallAnalytics(t *testing.T) {
 	}
 	rejectedConsumer := &phase4Consumer{}
 	acceptedConsumer := &phase4Consumer{}
-	server := &Server{analytics: service, metaFilters: []meta.Filter{{Name: "taken"}}}
+	server := &Server{analytics: service, metaFilterProviders: []MetaFilterProvider{filterPlugin{{Name: "taken"}}}}
 	if err := server.registerPlugin(&phase4FilterPlugin{consumer: rejectedConsumer, filters: []meta.Filter{{Name: "taken"}}}); err == nil {
 		t.Fatal("metadata filter collision was accepted")
 	}

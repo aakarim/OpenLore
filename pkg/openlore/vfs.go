@@ -10,6 +10,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -35,7 +36,8 @@ type DirFS struct {
 	// docset boundaries for Mkdir: a folder may only be created strictly below
 	// one of them. Empty means the whole DirFS is treated as a single docset
 	// (any non-root path is allowed).
-	docsetRoots []string
+	docsetRoots     []string
+	liveDocsetRoots func() []string
 
 	// stateMu guards the writeable flag and drains in-flight writes. Writers
 	// take RLock for the duration of a mutation; SetReadonly takes the
@@ -80,6 +82,13 @@ func (d *DirFS) WithDocsetRoots(roots []string) *DirFS {
 	return d
 }
 
+func (d *DirFS) currentDocsetRoots() []string {
+	if d.liveDocsetRoots != nil {
+		return d.liveDocsetRoots()
+	}
+	return d.docsetRoots
+}
+
 // SetWriteable transitions the substrate to writable. Idempotent. It also
 // sweeps any staging tree left behind by a delete interrupted by a crash.
 func (d *DirFS) SetWriteable() error {
@@ -112,8 +121,8 @@ func (d *DirFS) PreflightChange(change vfs.Change) error {
 	p := change.Target
 	clean := vfs.CleanPath(p)
 	dirConfig := isDirConfigPath(p)
-	if isTrashPath(clean) || (hasReservedPath(p) && !dirConfig) || hasTraversal(p) || (isIgnored(p, d.files) && !dirConfig) {
-		return fmt.Errorf("access denied: %s", p)
+	if err := d.mutationPathError(p, dirConfig); err != nil {
+		return err
 	}
 	switch change.Action {
 	case vfs.ChangeActionWrite:
@@ -127,8 +136,10 @@ func (d *DirFS) PreflightChange(change vfs.Change) error {
 		if !change.Write.Opts.ContentPolicyValidated && int64(len(change.Write.Bytes)) > max {
 			return fmt.Errorf("write rejected: %d bytes exceeds limit of %d", len(change.Write.Bytes), max)
 		}
-		if !dirConfig && !change.Write.Opts.ContentPolicyValidated && !isAllowed(path.Base(p), d.files) {
-			return fmt.Errorf("access denied: %s", p)
+		if !dirConfig && !change.Write.Opts.ContentPolicyValidated {
+			if err := filePatternError(path.Base(p), d.files); err != nil {
+				return fmt.Errorf("write rejected: %s: %w", p, err)
+			}
 		}
 	case vfs.ChangeActionMkdir, vfs.ChangeActionMkdirAll:
 		if clean == "/" || !d.insideDocset(clean) {
@@ -155,14 +166,13 @@ func (d *DirFS) WriteFileAtomic(p string, content []byte, opts vfs.WriteOpts) (s
 	if !opts.ContentPolicyValidated && int64(len(content)) > max {
 		return "", fmt.Errorf("write rejected: %d bytes exceeds limit of %d", len(content), max)
 	}
-	if isTrashPath(vfs.CleanPath(p)) || (hasReservedPath(p) && !dirConfig) || hasTraversal(p) {
-		return "", fmt.Errorf("access denied: %s", p)
+	if err := d.mutationPathError(p, dirConfig); err != nil {
+		return "", err
 	}
-	if !dirConfig && !opts.ContentPolicyValidated && !isAllowed(path.Base(p), d.files) {
-		return "", fmt.Errorf("access denied: %s", p)
-	}
-	if !dirConfig && isIgnored(p, d.files) {
-		return "", fmt.Errorf("access denied: %s", p)
+	if !dirConfig && !opts.ContentPolicyValidated {
+		if err := filePatternError(path.Base(p), d.files); err != nil {
+			return "", fmt.Errorf("write rejected: %s: %w", p, err)
+		}
 	}
 
 	// Hold RLock for the whole mutation: it permits concurrent writers but
@@ -215,8 +225,8 @@ func (d *DirFS) Mkdir(p string) error {
 	if clean == "/" {
 		return fmt.Errorf("cannot create docset root: %s", p)
 	}
-	if isTrashPath(clean) || hasReservedPath(p) || hasTraversal(p) || isIgnored(p, d.files) {
-		return fmt.Errorf("access denied: %s", p)
+	if err := d.mutationPathError(p, false); err != nil {
+		return err
 	}
 	if !d.insideDocset(clean) {
 		return fmt.Errorf("cannot create folder outside a docset: %s", p)
@@ -247,17 +257,18 @@ func (d *DirFS) Mkdir(p string) error {
 // docset root. With no docset roots configured, the whole DirFS is one docset,
 // so any non-root path qualifies.
 func (d *DirFS) insideDocset(clean string) bool {
-	if len(d.docsetRoots) == 0 {
+	roots := d.currentDocsetRoots()
+	if len(roots) == 0 {
 		return clean != "/"
 	}
 	// A nested docset root remains protected even when another docset (such as
 	// "/") contains it.
-	for _, root := range d.docsetRoots {
+	for _, root := range roots {
 		if clean == root {
 			return false
 		}
 	}
-	for _, root := range d.docsetRoots {
+	for _, root := range roots {
 		if root == "/" {
 			if clean != "/" {
 				return true
@@ -305,18 +316,34 @@ func hasTraversal(p string) bool {
 	return false
 }
 
+// mutationPathError is shared by batch preflight and direct writes so the
+// same file-policy rejection explains its gate on either submission path.
+func (d *DirFS) mutationPathError(p string, dirConfig bool) error {
+	switch {
+	case isTrashPath(vfs.CleanPath(p)) || (hasReservedPath(p) && !dirConfig):
+		return fmt.Errorf("write rejected: %s: reserved path", p)
+	case hasTraversal(p):
+		return fmt.Errorf("write rejected: %s: parent traversal is not allowed", p)
+	case !dirConfig && isIgnored(p, d.files):
+		return fmt.Errorf("write rejected: %s: path matches server's ignore patterns (%s)", p, strings.Join(d.files.Ignore, ", "))
+	default:
+		return nil
+	}
+}
+
 // docsetRootFor returns the docset root that clean sits strictly below, and
 // whether one exists. With no docset roots configured the whole DirFS is one
 // docset rooted at "/" (which always exists).
 func (d *DirFS) docsetRootFor(clean string) (string, bool) {
-	if len(d.docsetRoots) == 0 {
+	roots := d.currentDocsetRoots()
+	if len(roots) == 0 {
 		if clean != "/" {
 			return "/", true
 		}
 		return "", false
 	}
 	best := ""
-	for _, root := range d.docsetRoots {
+	for _, root := range roots {
 		if root == "/" {
 			if clean != "/" && best == "" {
 				best = "/"
@@ -334,8 +361,8 @@ func (d *DirFS) docsetRootFor(clean string) (string, bool) {
 // already established that the virtual directory is valid and visible.
 func (d *DirFS) materializeDir(p string) error {
 	clean := vfs.CleanPath(p)
-	if isTrashPath(clean) || hasReservedPath(p) || hasTraversal(p) || isIgnored(clean, d.files) {
-		return fmt.Errorf("access denied: %s", p)
+	if err := d.mutationPathError(p, false); err != nil {
+		return err
 	}
 	d.stateMu.RLock()
 	defer d.stateMu.RUnlock()
@@ -356,8 +383,8 @@ func (d *DirFS) MkdirAll(p string) error {
 	if clean == "/" {
 		return fmt.Errorf("cannot create docset root: %s", p)
 	}
-	if isTrashPath(clean) || hasReservedPath(p) || hasTraversal(p) || isIgnored(p, d.files) {
-		return fmt.Errorf("access denied: %s", p)
+	if err := d.mutationPathError(p, false); err != nil {
+		return err
 	}
 	if _, ok := d.docsetRootFor(clean); !ok {
 		return fmt.Errorf("cannot create folder outside a docset: %s", p)
@@ -385,8 +412,8 @@ func (d *DirFS) Remove(p string) error {
 	if clean == "/" {
 		return fmt.Errorf("cannot delete docset root: %s", p)
 	}
-	if isTrashPath(clean) || (hasReservedPath(p) && !dirConfig) || hasTraversal(p) || (isIgnored(p, d.files) && !dirConfig) {
-		return fmt.Errorf("access denied: %s", p)
+	if err := d.mutationPathError(p, dirConfig); err != nil {
+		return err
 	}
 	if !d.insideDocset(clean) {
 		return fmt.Errorf("cannot delete outside a docset: %s", p)
@@ -405,8 +432,10 @@ func (d *DirFS) Remove(p string) error {
 	if err != nil {
 		return withoutHostPath(err)
 	}
-	if !dirConfig && !info.IsDir() && !isAllowed(info.Name(), d.files) {
-		return fmt.Errorf("access denied: %s", p)
+	if !dirConfig && !info.IsDir() {
+		if err := filePatternError(info.Name(), d.files); err != nil {
+			return fmt.Errorf("delete rejected: %s: %w", p, err)
+		}
 	}
 	if err := os.Remove(full); err != nil {
 		return withoutHostPath(err)
@@ -424,8 +453,8 @@ func (d *DirFS) RemoveAll(p string, opts vfs.RemoveOpts) error {
 	if clean == "/" {
 		return fmt.Errorf("cannot delete docset root: %s", p)
 	}
-	if isTrashPath(clean) || hasReservedPath(p) || hasTraversal(p) || isIgnored(p, d.files) {
-		return fmt.Errorf("access denied: %s", p)
+	if err := d.mutationPathError(p, false); err != nil {
+		return err
 	}
 	if !d.insideDocset(clean) {
 		return fmt.Errorf("cannot delete outside a docset: %s", p)
@@ -807,6 +836,8 @@ func (d *DirFS) ReadFileBounded(p string, maxBytes int64) ([]byte, error) {
 type MergeFS struct {
 	root   vfs.FileSystem
 	mounts map[string]vfs.FileSystem
+	// Projection maps are immutable and published with the live policy.
+	projections func() map[string]vfs.FileSystem
 	// system marks mount names that are control-plane (e.g. "requests") rather
 	// than lore docsets. System mounts are always readable regardless of an
 	// identity's RBAC policy (see Server.readableRoots / SystemMountPaths).
@@ -819,6 +850,21 @@ func NewMergeFS() *MergeFS {
 		mounts: make(map[string]vfs.FileSystem),
 		system: make(map[string]bool),
 	}
+}
+
+func (m *MergeFS) contentMounts() map[string]vfs.FileSystem {
+	if m.projections == nil {
+		return m.mounts
+	}
+	projections := m.projections()
+	mounts := make(map[string]vfs.FileSystem, len(m.mounts)+len(projections))
+	for name, fsys := range m.mounts {
+		mounts[name] = fsys
+	}
+	for name, fsys := range projections {
+		mounts[name] = fsys
+	}
+	return mounts
 }
 
 // SetRoot sets the root filesystem that serves content at "/".
@@ -954,7 +1000,12 @@ func (m *MergeFS) GetXattr(p, name string) ([]byte, error) {
 		return nil, err
 	}
 	if backend == nil {
-		return nil, syscall.ENOTSUP
+		// The merge root is structural when there is no root backend. It has
+		// no markers, but must not prevent discovery in the named mounts.
+		if m.root == nil {
+			return nil, syscall.ENODATA
+		}
+		sub, backend = "/", m.root
 	}
 	x, ok := backend.(vfs.XattrReader)
 	if !ok {
@@ -968,7 +1019,10 @@ func (m *MergeFS) ListXattrs(p string) ([]string, error) {
 		return nil, err
 	}
 	if backend == nil {
-		return nil, syscall.ENOTSUP
+		if m.root == nil {
+			return nil, nil
+		}
+		sub, backend = "/", m.root
 	}
 	x, ok := backend.(vfs.XattrReader)
 	if !ok {
@@ -1117,16 +1171,18 @@ func (m *MergeFS) resolve(p string) (string, vfs.FileSystem, error) {
 		return "", nil, nil // root listing
 	}
 
-	// Check named mounts first
-	parts := strings.SplitN(p, "/", 2)
-	mountName := parts[0]
-
-	if fsys, ok := m.mounts[mountName]; ok {
-		subPath := "/"
-		if len(parts) > 1 {
-			subPath = "/" + parts[1]
+	// Check named mounts first. A mount name may span several segments
+	// (e.g. "user/alice/claude" for a projection nested beneath a home); the
+	// longest mount that is p itself or an ancestor of p wins.
+	best := ""
+	mounts := m.contentMounts()
+	for name := range mounts {
+		if (p == name || strings.HasPrefix(p, name+"/")) && len(name) > len(best) {
+			best = name
 		}
-		return subPath, fsys, nil
+	}
+	if best != "" {
+		return "/" + strings.TrimPrefix(p, best), mounts[best], nil
 	}
 
 	// Fall back to root filesystem
@@ -1152,30 +1208,54 @@ func (m *MergeFS) HostDir(p string) (string, bool) {
 
 func (m *MergeFS) Stat(p string) (*vfs.FileInfo, error) {
 	subPath, fsys, err := m.resolve(p)
-	if err != nil {
-		return nil, err
-	}
-
-	// Root directory
-	if fsys == nil {
+	if err == nil && fsys == nil {
+		// Root directory
 		return &vfs.FileInfo{
 			FileName: "/",
 			FilePath: "/",
 			Dir:      true,
 		}, nil
 	}
+	var info *vfs.FileInfo
+	if err == nil {
+		info, err = fsys.Stat(subPath)
+	}
+	if err != nil && len(m.nestedMounts(p)) > 0 {
+		// A directory that only exists to hold nested mounts.
+		clean := vfs.CleanPath(p)
+		return &vfs.FileInfo{FileName: path.Base(clean), FilePath: clean, Dir: true}, nil
+	}
+	return info, err
+}
 
-	return fsys.Stat(subPath)
+// nestedMounts returns the names of the immediate children of directory p
+// that lead to (or are) a named mount strictly beneath p.
+func (m *MergeFS) nestedMounts(p string) []string {
+	prefix := strings.TrimPrefix(vfs.CleanPath(p), "/")
+	if prefix != "" {
+		prefix += "/"
+	}
+	seen := map[string]bool{}
+	var out []string
+	for name := range m.contentMounts() {
+		if !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		child := strings.SplitN(strings.TrimPrefix(name, prefix), "/", 2)[0]
+		if child == "" || seen[child] {
+			continue
+		}
+		seen[child] = true
+		out = append(out, child)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func (m *MergeFS) ReadDir(p string) ([]vfs.FileInfo, error) {
 	subPath, fsys, err := m.resolve(p)
-	if err != nil {
-		return nil, err
-	}
-
-	// Root: merge root FS entries with mount points
-	if fsys == nil {
+	if err == nil && fsys == nil {
+		// Root: merge root FS entries with mount points
 		var entries []vfs.FileInfo
 		if m.root != nil {
 			rootEntries, err := m.root.ReadDir("/")
@@ -1183,17 +1263,37 @@ func (m *MergeFS) ReadDir(p string) ([]vfs.FileInfo, error) {
 				entries = append(entries, rootEntries...)
 			}
 		}
-		for name := range m.mounts {
-			entries = append(entries, vfs.FileInfo{
-				FileName: name,
-				FilePath: "/" + name,
-				Dir:      true,
-			})
-		}
-		return entries, nil
+		return m.withNestedMounts(p, entries), nil
 	}
+	var entries []vfs.FileInfo
+	if err == nil {
+		entries, err = fsys.ReadDir(subPath)
+	}
+	if len(m.nestedMounts(p)) == 0 {
+		return entries, err
+	}
+	if err != nil {
+		// A directory that only exists to hold nested mounts.
+		entries = nil
+	}
+	return m.withNestedMounts(p, entries), nil
+}
 
-	return fsys.ReadDir(subPath)
+// withNestedMounts adds a directory entry for every mount nested directly
+// beneath p that the backing filesystem did not already list.
+func (m *MergeFS) withNestedMounts(p string, entries []vfs.FileInfo) []vfs.FileInfo {
+	clean := vfs.CleanPath(p)
+	seen := map[string]bool{}
+	for _, e := range entries {
+		seen[e.FileName] = true
+	}
+	for _, child := range m.nestedMounts(p) {
+		if seen[child] {
+			continue
+		}
+		entries = append(entries, vfs.FileInfo{FileName: child, FilePath: path.Join(clean, child), Dir: true})
+	}
+	return entries
 }
 
 func (m *MergeFS) ReadFile(p string) ([]byte, error) {
@@ -1342,6 +1442,18 @@ func isAllowed(name string, files config.FilesConfig) bool {
 	}
 
 	return false
+}
+
+func filePatternError(name string, files config.FilesConfig) error {
+	if isAllowed(name, files) {
+		return nil
+	}
+	for _, pattern := range files.Denied {
+		if matched, _ := path.Match(pattern, name); matched {
+			return fmt.Errorf("filename %q matches server's denied pattern %q", name, pattern)
+		}
+	}
+	return fmt.Errorf("filename %q does not match server's allowed patterns (%s)", name, strings.Join(files.Allowed, ", "))
 }
 
 // isIgnored checks if a path matches any ignore patterns.

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"path"
 	"regexp"
 	"sort"
@@ -148,6 +149,7 @@ type skillResult struct {
 	Source          string `json:"source,omitempty"`
 	OldCommit       string `json:"old_commit,omitempty"`
 	NewCommit       string `json:"new_commit,omitempty"`
+	Message         string `json:"message,omitempty"`
 }
 
 type remoteSkillUpdater interface {
@@ -156,6 +158,10 @@ type remoteSkillUpdater interface {
 
 type remoteSkillClientProvider interface {
 	SkillsRemoteClient() *skillsremote.Client
+}
+
+type skillInstallationProvider interface {
+	SkillInstallationInfo(string) []map[string]any
 }
 
 type skillFinding struct {
@@ -208,6 +214,7 @@ func manageSkills(ctx CmdContext, args []string, w io.Writer) int {
 	r := skillResult{Path: target, Operation: op}
 	if !ctx.SkillsManagementEnabled() {
 		r.Status = "unsupported"
+		r.Message = "Skills plugin not enabled on this server; set plugins.skills.enabled: true in openlore.yml (inspect with 'lore config plugins')"
 		return finish(w, r, 1)
 	}
 	root, doc, accessible := governingDocset(ctx.Docsets(), target)
@@ -216,6 +223,7 @@ func manageSkills(ctx CmdContext, args []string, w io.Writer) int {
 	}
 	if !accessible || (target != "/" && !existingDirectory(ctx.FS(), target)) || (target == "/" && op != "validate") {
 		r.Status = "rejected"
+		r.Message = "path must be an existing directory inside an accessible docset; run 'lore docsets'"
 		return finish(w, r, 1)
 	}
 	switch op {
@@ -226,6 +234,7 @@ func manageSkills(ctx CmdContext, args []string, w io.Writer) int {
 	}
 	if !doc.Writable || !hasNamedRW(doc) {
 		r.Status = "rejected"
+		r.Message = "collection changes require a named rw grant on a writable docset; run 'lore docsets'"
 		return finish(w, r, 1)
 	}
 	return skillsMutate(ctx.FS(), ctx.Docsets(), target, root, op, recreate, r, w)
@@ -243,22 +252,26 @@ func skillsUpdate(ctx CmdContext, args []string, w io.Writer) int {
 	r := skillResult{Path: target, Operation: "update"}
 	if !ctx.SkillsManagementEnabled() {
 		r.Status = "unsupported"
+		r.Message = "Skills plugin not enabled on this server; set plugins.skills.enabled: true in openlore.yml (inspect with 'lore config plugins')"
 		return finish(w, r, 1)
 	}
 	_, doc, accessible := governingDocset(ctx.Docsets(), target)
 	if !accessible || !doc.Writable || !hasNamedRW(doc) {
 		r.Status = "rejected"
+		r.Message = "remote updates require a named rw grant on an accessible writable docset; run 'lore docsets'"
 		return finish(w, r, 1)
 	}
 	updater, ok := ctx.FS().(remoteSkillUpdater)
 	if !ok {
 		r.Status = "unsupported"
+		r.Message = "remote skill updates are unavailable on this filesystem; ask the server administrator to enable remote update support"
 		return finish(w, r, 1)
 	}
 	oldCommit, newCommit, err := updater.UpdateRemoteSkill(context.Background(), target)
 	r.OldCommit, r.NewCommit = oldCommit, newCommit
 	if err != nil {
 		r.Status = "degraded"
+		r.Message = "remote update failed; check the skill's remote link with 'skills status' and verify upstream availability"
 		return finish(w, r, 1)
 	}
 	r.Status = "updated"
@@ -298,6 +311,21 @@ func canonical(ctx CmdContext, p string) string {
 
 func finish(w io.Writer, r skillResult, code int) int {
 	r.Type = "result"
+	if code != 0 && r.Message == "" {
+		switch r.Status {
+		case "unsupported":
+			r.Message = "filesystem does not support this Skills operation; ask the server administrator to use a backend with collection marker and atomic write support"
+		case "conflict":
+			r.Message = "collection markers are corrupt or conflicting; inspect 'skills status' and use --recreate-xattrs with enable or disable to repair them"
+		case "degraded":
+			r.Message = "Skills operation could not complete; check collection access and remote availability before retrying"
+		default:
+			r.Message = "Skills operation rejected; run 'skills help' for syntax and inspect any validation findings"
+		}
+	}
+	if code != 0 && r.Errors == 0 {
+		r.Errors = 1
+	}
 	emitSkill(w, r)
 	return code
 }
@@ -339,6 +367,11 @@ func skillsStatus(f vfs.FileSystem, target, root string, r skillResult, w io.Wri
 		if e != nil {
 			return nil
 		}
+		if provider, ok := f.(skillInstallationProvider); ok {
+			for _, record := range provider.SkillInstallationInfo(path.Dir(skillFile)) {
+				emitSkill(w, record)
+			}
+		}
 		remote, linked, _ := agentskills.ReadRemote(b)
 		if !linked {
 			return nil
@@ -353,6 +386,12 @@ func skillsStatus(f vfs.FileSystem, target, root string, r skillResult, w io.Wri
 		return nil
 	})
 	r.Status, r.Collections, r.Errors, r.Source = status, 1, c.Errors, source
+	if err != nil {
+		return mutationError(w, r, err)
+	}
+	if unknown {
+		r.Message = "collection uses an unsupported marker version; ask the server administrator to upgrade OpenLore"
+	}
 	if status == "unsupported" || status == "degraded" || status == "conflict" {
 		return finish(w, r, 1)
 	}
@@ -371,29 +410,36 @@ func skillsRemoveRemote(ctx CmdContext, args []string, w io.Writer) int {
 	r := skillResult{Path: target, Operation: "remove-remote"}
 	if !ctx.SkillsManagementEnabled() {
 		r.Status = "unsupported"
+		r.Message = "Skills plugin not enabled on this server; set plugins.skills.enabled: true in openlore.yml (inspect with 'lore config plugins')"
 		return finish(w, r, 1)
 	}
 	skillFile := path.Join(target, "SKILL.md")
 	b, err := ctx.FS().ReadFile(skillFile)
 	if err != nil {
 		r.Status = "rejected"
+		r.Message = "cannot read SKILL.md in this folder; check its path and access with 'lore docsets'"
 		return finish(w, r, 1)
 	}
 	if _, linked, err := agentskills.ReadRemote(b); err != nil || !linked {
 		r.Status = "rejected"
+		r.Message = "SKILL.md has no valid remote link; inspect 'skills status' before removing the link"
 		return finish(w, r, 1)
 	}
 	clean, err := agentskills.StripRemote(b)
 	if err != nil {
 		r.Status = "rejected"
+		r.Message = "could not remove remote metadata; correct the SKILL.md frontmatter before retrying"
 		return finish(w, r, 1)
 	}
 	wfs, ok := ctx.FS().(vfs.WritableFS)
 	if !ok {
 		r.Status = "unsupported"
+		r.Message = "filesystem does not support writing skill files; use a writable docset (run 'lore docsets')"
 		return finish(w, r, 1)
 	}
-	if _, err = wfs.WriteFileAtomic(skillFile, clean, overwriteOpts(ctx, skillFile, b, true)); err != nil {
+	// A failed refresh may inject presentation-only remote-status text. Use
+	// the durable hash tracked by the read, not a hash of that annotation.
+	if _, err = wfs.WriteFileAtomic(skillFile, clean, overwritePreconditions(ctx, skillFile)); err != nil {
 		return mutationError(w, r, err)
 	}
 	r.Status = "unlinked"
@@ -407,11 +453,13 @@ func skillsImport(ctx CmdContext, args []string, w io.Writer) int {
 	}
 	if !ctx.SkillsManagementEnabled() {
 		r.Status = "unsupported"
+		r.Message = "Skills plugin not enabled on this server; set plugins.skills.enabled: true in openlore.yml (inspect with 'lore config plugins')"
 		return finish(w, r, 1)
 	}
 	spec, err := skillsremote.ParseSpec(args[0])
 	if err != nil {
 		r.Status = "rejected"
+		r.Message = "invalid remote skill specification; run 'skills help' for supported repository and ref syntax"
 		return finish(w, r, 1)
 	}
 	parent := ctx.Cwd()
@@ -422,11 +470,17 @@ func skillsImport(ctx CmdContext, args []string, w io.Writer) int {
 	root, doc, ok := governingDocset(ctx.Docsets(), parent)
 	if !ok || !doc.Writable || !hasNamedRW(doc) {
 		r.Status = "rejected"
+		r.Message = "imports require a named rw grant on an accessible writable docset; run 'lore docsets'"
 		return finish(w, r, 1)
 	}
-	_, enabled, _, _, _ := markerStatus(ctx.FS(), parent, root)
+	r.Path = parent
+	_, enabled, _, _, markerErr := markerStatus(ctx.FS(), parent, root)
+	if markerErr != nil {
+		return mutationError(w, r, markerErr)
+	}
 	if !enabled {
 		r.Status = "rejected"
+		r.Message = "destination is not an enabled Skills collection; run 'skills enable' on the destination before importing"
 		return finish(w, r, 1)
 	}
 	timeout := ctx.SkillsRemoteTimeout()
@@ -444,20 +498,24 @@ func skillsImport(ctx CmdContext, args []string, w io.Writer) int {
 	refs, err := client.Resolve(context.Background(), spec.Repo)
 	if err != nil {
 		r.Status = "degraded"
+		r.Message = "cannot resolve upstream repository; verify it is publicly accessible over HTTPS and retry"
 		return finish(w, r, 1)
 	}
 	sha, kind, ref, err := refs.Resolve(spec.Ref)
 	if err != nil {
 		r.Status = "rejected"
+		r.Message = "requested remote ref is unavailable; choose an existing branch, tag, or commit"
 		return finish(w, r, 1)
 	}
 	files, err := client.Fetch(context.Background(), spec.Repo, sha, spec.Path)
 	if err != nil {
 		r.Status = "rejected"
+		r.Message = "cannot fetch remote skill files; verify the repository path, ref, and download limits"
 		return finish(w, r, 1)
 	}
 	if err = skillsremote.ValidateFiles(files); err != nil {
 		r.Status = "rejected"
+		r.Message = "remote archive contains disallowed files; correct the upstream skill archive before importing"
 		return finish(w, r, 1)
 	}
 	if spec.Path == "" {
@@ -480,16 +538,19 @@ func skillsImport(ctx CmdContext, args []string, w io.Writer) int {
 				}
 				r.Status = "rejected"
 				r.Errors = len(candidates)
+				r.Message = "repository does not identify a single skill; select a candidate path and rerun 'skills import' (see 'skills help')"
 				return finish(w, r, 1)
 			}
 			spec.Path = candidates[0]
 			files, err = client.Fetch(context.Background(), spec.Repo, sha, spec.Path)
 			if err != nil {
 				r.Status = "rejected"
+				r.Message = "cannot fetch the selected skill; verify its upstream path and download limits"
 				return finish(w, r, 1)
 			}
 			if err = skillsremote.ValidateFiles(files); err != nil {
 				r.Status = "rejected"
+				r.Message = "selected skill contains disallowed files; correct the upstream skill archive before importing"
 				return finish(w, r, 1)
 			}
 		}
@@ -498,32 +559,38 @@ func skillsImport(ctx CmdContext, args []string, w io.Writer) int {
 	name, skill, err := agentskills.Normalize("", skill)
 	if err != nil {
 		r.Status = "rejected"
+		r.Message = "remote SKILL.md cannot be normalized; correct its name and frontmatter upstream"
 		return finish(w, r, 1)
 	}
 	remote := agentskills.Remote{Repo: spec.Repo, Path: spec.Path, Ref: ref, Commit: sha, Kind: kind}
 	skill, err = agentskills.GraftRemote(skill, remote)
 	if err != nil {
 		r.Status = "rejected"
+		r.Message = "cannot attach remote metadata; correct the upstream SKILL.md frontmatter"
 		return finish(w, r, 1)
 	}
 	validation, err := agentskills.Validate(name, skill)
 	if err != nil || validation.Disabled {
 		r.Status = "rejected"
+		r.Message = "remote skill is invalid or disabled; correct its upstream SKILL.md before importing"
 		return finish(w, r, 1)
 	}
 	dest := path.Join(parent, name)
 	if path.Dir(dest) != parent || path.Base(dest) != name {
 		r.Status = "rejected"
+		r.Message = "skill name is not a safe destination folder; correct the upstream skill name"
 		return finish(w, r, 1)
 	}
 	r.Path = dest
 	if _, err := ctx.FS().Stat(dest); err == nil {
 		r.Status = "rejected"
+		r.Message = "destination already exists; select another collection or manage the existing skill with 'skills update'"
 		return finish(w, r, 1)
 	}
 	admitter, ok := ctx.FS().(vfs.ChangeSetAdmitter)
 	if !ok {
 		r.Status = "unsupported"
+		r.Message = "filesystem cannot import skills atomically; ask the server administrator for a backend with ChangeSet support"
 		return finish(w, r, 1)
 	}
 	changes := []vfs.Change{{Target: dest, Action: vfs.ChangeActionMkdir}}
@@ -551,6 +618,7 @@ func skillsImport(ctx CmdContext, args []string, w io.Writer) int {
 	batch = append(batch, vfs.Change{Target: path.Join(dest, "SKILL.md"), Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: skill, Opts: vfs.WriteOpts{IfNoneMatch: true}}})
 	if err = admitter.AdmitChangeSet(vfs.ChangeSet{Changes: batch}); err != nil {
 		r.Status = "degraded"
+		r.Message = "atomic import was refused; check destination write permissions and server validation rules before retrying"
 		return finish(w, r, 1)
 	}
 	r.Status = "imported"
@@ -559,7 +627,10 @@ func skillsImport(ctx CmdContext, args []string, w io.Writer) int {
 }
 
 func skillsValidate(f vfs.FileSystem, ds []DocsetInfo, scope string, r skillResult, w io.Writer) int {
-	collections := discoverCollections(f, ds, scope)
+	collections, err := discoverCollections(f, ds, scope)
+	if err != nil {
+		return mutationError(w, r, err)
+	}
 	if len(collections) == 0 {
 		emitSkill(w, skillFinding{Type: "finding", Collection: scope, Path: ".", Line: 1, Column: 1, Severity: "warning", Rule: "agent-skills/no-collections", Message: "no enabled Skills collections"})
 		r.Status, r.Warnings = "no_collections", 1
@@ -598,6 +669,7 @@ func skillsMutate(f vfs.FileSystem, ds []DocsetInfo, target, root, op string, re
 			xm, ok := f.(vfs.XattrMaintenance)
 			if !ok {
 				r.Status = "unsupported"
+				r.Message = "filesystem cannot repair collection markers; ask the server administrator for xattr maintenance support"
 				return finish(w, r, 1)
 			}
 			attrs := map[string][]byte{}
@@ -620,10 +692,15 @@ func skillsMutate(f vfs.FileSystem, ds []DocsetInfo, target, root, op string, re
 	}
 	if recreate {
 		r.Status = "rejected"
+		r.Message = "--recreate-xattrs is only allowed for corrupt markers; retry without this flag"
 		return finish(w, r, 1)
 	}
 	if op == "enable" {
-		collections := append([]string{target}, descendantMarkers(f, ds, target)...)
+		nested, err := descendantMarkers(f, ds, target)
+		if err != nil {
+			return mutationError(w, r, err)
+		}
+		collections := append([]string{target}, nested...)
 		collections = uniqueSorted(collections)
 		findings, counts := validateOwnedTrees(f, collections, nestedDocsetRoots(ds, target))
 		for _, x := range findings {
@@ -641,6 +718,7 @@ func skillsMutate(f vfs.FileSystem, ds []DocsetInfo, target, root, op string, re
 		r.Collections = len(collections)
 		if r.Errors > 0 {
 			r.Status = "rejected"
+			r.Message = "collection contains invalid skills; correct the reported validation findings before enabling"
 			return finish(w, r, 1)
 		}
 		if direct {
@@ -650,6 +728,7 @@ func skillsMutate(f vfs.FileSystem, ds []DocsetInfo, target, root, op string, re
 		xw, ok := f.(vfs.XattrWriter)
 		if !ok {
 			r.Status = "unsupported"
+			r.Message = "filesystem cannot write collection markers; ask the server administrator to enable xattr writes"
 			return finish(w, r, 1)
 		}
 		if err := xw.SetXattr(target, SkillsMarker, []byte{}, 0); err != nil {
@@ -663,9 +742,24 @@ func skillsMutate(f vfs.FileSystem, ds []DocsetInfo, target, root, op string, re
 		r.Source = source
 		return finish(w, r, 0)
 	}
+	// Inspect all state needed for the result before removing the marker.
+	// A corrupt descendant must not turn a failed disable into a partial write.
+	nested, err := descendantMarkers(f, ds, target)
+	if err != nil {
+		return mutationError(w, r, err)
+	}
+	var inherited bool
+	var inheritedSource string
+	if target != root {
+		_, inherited, inheritedSource, _, err = markerStatus(f, path.Dir(target), root)
+		if err != nil {
+			return mutationError(w, r, err)
+		}
+	}
 	xw, ok := f.(vfs.XattrWriter)
 	if !ok {
 		r.Status = "unsupported"
+		r.Message = "filesystem cannot remove collection markers; ask the server administrator to enable xattr writes"
 		return finish(w, r, 1)
 	}
 	if err := xw.RemoveXattr(target, SkillsMarker); err != nil {
@@ -677,13 +771,11 @@ func skillsMutate(f vfs.FileSystem, ds []DocsetInfo, target, root, op string, re
 		}
 		return mutationError(w, r, err)
 	}
-	_, inherited, inheritedSource, _, err := markerStatus(f, target, root)
-	if err != nil {
-		return mutationError(w, r, err)
-	}
-	nested := descendantMarkers(f, ds, target)
-	r.Collections = len(nested)
 	for _, c := range nested {
+		if c == target {
+			continue
+		}
+		r.Collections++
 		emitSkill(w, skillCollection{Type: "collection", Path: c, Status: "enabled", Errors: 0})
 	}
 	if inherited {
@@ -704,10 +796,23 @@ func mutationError(w io.Writer, r skillResult, err error) int {
 		return finish(w, r, 0)
 	}
 	r.Status = errnoStatus(err)
+	if errors.Is(err, syscall.ENOTSUP) {
+		r.Message = "collection markers are unavailable on this filesystem; ask the server administrator to enable xattr support for this backend/transport"
+	} else if errors.Is(err, syscall.EPROTONOSUPPORT) {
+		r.Message = "collection uses an unsupported marker version; ask the server administrator to upgrade OpenLore"
+	} else if errors.Is(err, fs.ErrPermission) {
+		r.Message = "access denied to the collection; check docset grants with 'lore docsets' and ask the owner for access"
+	}
+	// Only expose paths attached by Skills itself, never host paths from a
+	// backend error. The requested scope may be healthy while a child is not.
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) && pathErr.Op == "skills" {
+		emitSkill(w, skillFinding{Type: "finding", Collection: r.Path, Path: pathErr.Path, Severity: "error", Rule: "agent-skills/collection-markers", Message: "cannot inspect collection markers at " + pathErr.Path})
+	}
 	return finish(w, r, 1)
 }
 func errnoStatus(err error) string {
-	if errors.Is(err, syscall.ENOTSUP) {
+	if errors.Is(err, syscall.ENOTSUP) || errors.Is(err, syscall.EPROTONOSUPPORT) {
 		return "unsupported"
 	}
 	if errors.Is(err, syscall.EIO) {
@@ -725,12 +830,12 @@ func boolInt(v bool) int {
 func markerStatus(f vfs.FileSystem, p, root string) (direct, effective bool, source string, unknown bool, err error) {
 	x, ok := f.(vfs.XattrReader)
 	if !ok {
-		return false, false, "", false, syscall.ENOTSUP
+		return false, false, "", false, &fs.PathError{Op: "skills", Path: p, Err: syscall.ENOTSUP}
 	}
 	for cur := p; ; cur = path.Dir(cur) {
 		names, e := x.ListXattrs(cur)
 		if e != nil {
-			return false, false, "", false, e
+			return false, false, "", false, &fs.PathError{Op: "skills", Path: cur, Err: e}
 		}
 		for _, n := range names {
 			if strings.HasPrefix(n, skillsMarkerPrefix) && n != SkillsMarker {
@@ -740,12 +845,12 @@ func markerStatus(f vfs.FileSystem, p, root string) (direct, effective bool, sou
 		b, e := x.GetXattr(cur, SkillsMarker)
 		if e == nil {
 			if len(b) != 0 {
-				return false, false, "", unknown, syscall.EIO
+				return false, false, "", unknown, &fs.PathError{Op: "skills", Path: cur, Err: syscall.EIO}
 			}
 			return cur == p, true, cur, unknown, nil
 		}
 		if !errors.Is(e, syscall.ENODATA) {
-			return false, false, "", unknown, e
+			return false, false, "", unknown, &fs.PathError{Op: "skills", Path: cur, Err: e}
 		}
 		if cur == root {
 			break
@@ -792,33 +897,43 @@ func directMarker(f vfs.FileSystem, p string) bool {
 	b, e := x.GetXattr(p, SkillsMarker)
 	return e == nil && len(b) == 0
 }
-func descendantMarkers(f vfs.FileSystem, ds []DocsetInfo, root string) []string {
+func descendantMarkers(f vfs.FileSystem, ds []DocsetInfo, root string) ([]string, error) {
 	return discoverDirect(f, root, nestedDocsetRoots(ds, root))
 }
-func discoverDirect(f vfs.FileSystem, root string, bounds map[string]bool) []string {
+func discoverDirect(f vfs.FileSystem, root string, bounds map[string]bool) ([]string, error) {
 	var out []string
-	var walk func(string)
-	walk = func(d string) {
+	var walk func(string) error
+	walk = func(d string) error {
 		if d != root && bounds[d] {
-			return
+			return nil
 		}
-		if directMarker(f, d) {
+		direct, _, _, unknown, err := markerStatus(f, d, d)
+		if err != nil {
+			return err
+		}
+		if unknown {
+			return &fs.PathError{Op: "skills", Path: d, Err: syscall.EPROTONOSUPPORT}
+		}
+		if direct {
 			out = append(out, d)
 		}
 		es, e := f.ReadDir(d)
 		if e != nil {
-			return
+			return &fs.PathError{Op: "skills", Path: d, Err: e}
 		}
 		for _, x := range es {
-			if x.IsDir() {
-				walk(path.Join(d, x.Name()))
+			if x.IsDir() && x.Name() != ".lore" {
+				if err := walk(path.Join(d, x.Name())); err != nil {
+					return err
+				}
 			}
 		}
+		return nil
 	}
-	walk(root)
-	return uniqueSorted(out)
+	err := walk(root)
+	return uniqueSorted(out), err
 }
-func discoverCollections(f vfs.FileSystem, ds []DocsetInfo, scope string) []string {
+func discoverCollections(f vfs.FileSystem, ds []DocsetInfo, scope string) ([]string, error) {
 	set := map[string]bool{}
 	for _, d := range ds {
 		for _, root := range d.Paths {
@@ -831,11 +946,21 @@ func discoverCollections(f vfs.FileSystem, ds []DocsetInfo, scope string) []stri
 					continue
 				}
 			}
-			_, eff, src, _, e := markerStatus(f, start, root)
-			if e == nil && eff {
+			_, eff, src, unknown, e := markerStatus(f, start, root)
+			if e != nil {
+				return nil, e
+			}
+			if unknown {
+				return nil, &fs.PathError{Op: "skills", Path: start, Err: syscall.EPROTONOSUPPORT}
+			}
+			if eff {
 				set[src] = true
 			}
-			for _, c := range discoverDirect(f, start, nestedDocsetRoots(ds, start)) {
+			direct, err := discoverDirect(f, start, nestedDocsetRoots(ds, start))
+			if err != nil {
+				return nil, err
+			}
+			for _, c := range direct {
 				set[c] = true
 			}
 		}
@@ -844,7 +969,7 @@ func discoverCollections(f vfs.FileSystem, ds []DocsetInfo, scope string) []stri
 	for c := range set {
 		out = append(out, c)
 	}
-	return uniqueSorted(out)
+	return uniqueSorted(out), nil
 }
 func uniqueSorted(in []string) []string {
 	m := map[string]bool{}

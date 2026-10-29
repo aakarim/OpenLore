@@ -131,9 +131,10 @@ and the `tokens` and `passkeys` origins as above.
 
 ### Check it
 
-Whichever route you took, the OAuth discovery document should name your
-`https://` origin as the resource, and an unauthenticated MCP request should
-point clients at it:
+Whichever route you took, when OAuth is configured the discovery document
+should name your `https://` origin as the resource. With
+`mcp.require_auth: true`, an unauthenticated MCP request should point clients
+at it:
 
 ```shell
 curl -s https://docs.example.com/.well-known/oauth-protected-resource
@@ -145,6 +146,11 @@ The first prints JSON whose `resource` is `https://docs.example.com`; the
 second is `401 Unauthorized` with a `WWW-Authenticate` header that carries the
 same `https://` URL. If either still says `http://`, `tokens.issuer` or
 `external_url` is wrong.
+
+For [intentionally public docsets](../concepts/auth.md#serving-public-and-internal-docs-from-one-corpus)
+with anonymous HTTP access enabled, a `401` is not expected. Instead, verify
+that guests can read public documents but cannot list, search, or read internal
+ones; TLS does not replace docset access policy.
 
 ## Analytics
 

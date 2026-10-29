@@ -105,10 +105,6 @@ func rmResult(w, errW io.Writer, t string, err error) int {
 		fmt.Fprintf(errW, "rm: %s: tree changed concurrently — re-run\n", t)
 		return 1
 	}
-	if errors.Is(err, vfs.ErrReadOnly) {
-		fmt.Fprintf(errW, "rm: %s: read-only filesystem\n", t)
-		return 1
-	}
 	fmt.Fprintf(errW, "rm: %s: %s\n", t, err)
 	return 1
 }

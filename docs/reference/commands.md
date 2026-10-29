@@ -1,4 +1,53 @@
-# Command Reference
+# openlore CLI reference
+
+`openlore` is the server binary: it serves a knowledge repository, administers identities, roles and tokens, and provides the shell that agents use. The separate `lore` client that syncs external sources has its own [lore CLI reference](lore-cli.md).
+
+## Server binary
+
+Start a server or run an administrative subcommand:
+
+```text
+Usage: openlore [command] [flags] [directory]
+
+Commands:
+  version           Print version
+  export -o <dir>   Export embedded docs to a directory
+  mcp [dir]         Run an MCP server over stdio
+  mcpb [-o file]    Package the binary as an MCPB desktop extension
+  identity add      Add an identity or public key to lore.json
+  identity role     Add or remove an identity's role membership
+  role              Manage roles, docset grants, denies, and capabilities
+  oauth keys rotate Rotate the ES256 token signing key
+  token mint        Mint an access token for an identity
+  token verify      Verify an access token and print its claims
+  inbox token       Create, list, or revoke HTTP inbox upload credentials
+
+Flags:
+  -p, --port           SSH server port (default 2222)
+  --http-port          HTTP port (default 8080, 0 to disable)
+  --mcp-path           MCP-over-HTTP path (default /mcp)
+  --metrics-port       Prometheus metrics port (default 3000, 0 to disable)
+  --host-key           Host key path (default .ssh/openlore_ed25519)
+  --motd               Inline MOTD
+  --motd-file          MOTD file
+  --auth               Path to lore.json
+  -c, --config         Config path (default ./openlore.yml)
+  --allowed            Comma-separated allowed file patterns
+  --ignore             Comma-separated ignored patterns
+  --tls-cert           HTTP TLS certificate
+  --tls-key            HTTP TLS key
+  --ca-keys            Trusted CA public keys for SSH certificate auth
+  --host-cert          CA-signed SSH host certificate
+  --skills-dir         Runtime skills directory
+  --readonly           Global write lock (default true; use --readonly=false to enable writes)
+  --debug              Enable debug-level server logging
+```
+
+Run `openlore --help` or a subcommand with `--help` for its current flags.
+
+---
+
+## Agent shell
 
 OpenLore implements a bash-like command language over its virtual filesystem.
 Run `help` in a session for the command list available on that server.
@@ -102,8 +151,11 @@ them.
 | `mkdir` | Create a directory (`-p` for parents) |
 | `mv` | Move a file |
 | `rm` | Remove a file or tree (`-r`) |
-| `publish` | Publish stdin into a docset inbox |
+| `publish` | Contribute stdin into a docset inbox; does not make the docset public or change who can read it |
 | `spawn` | Run configured external work asynchronously when explicitly trusted |
+
+The `publish` grant is contributor inbox-write access, not public read access.
+To serve documents publicly, [grant `guest` `ro` on their docset](../concepts/auth.md#serving-public-and-internal-docs-from-one-corpus).
 
 ## Introspection
 
@@ -116,6 +168,16 @@ List the docsets you can access with their grants, paths and attributes.
 ```shell
 lore docsets
 ```
+
+### `lore sources`
+
+List the docstore stores you can read, the docsets that project them and their latest snapshots. See the [knowledge gateway](../concepts/knowledge-gateway.md).
+
+```shell
+lore sources
+```
+
+> **Note:** This runs in the agent shell. The `lore source list` command of the [lore client](lore-cli.md) lists the sources defined in your knowledge repository.
 
 ### `lore meta [path]`
 
@@ -167,7 +229,7 @@ to run from a directory above docsets that declare bundle rules
 
 Example `lore size baseline` output:
 
-```
+```text
 /docs/backend/decisions/adr-001.md  (size/lines via adr-length @ /docs/backend/.lore/config.yaml, growth 1.1)
   2026-08-30T09:12:04Z  create      agent:claude@acme.com   412 lines  12 KiB  3900 tokens (estimate/v1)
   2026-09-02T14:01:37Z  reset       adil                    812 lines  21 KiB  6400 tokens (estimate/v1)  "ADR grew after review"
@@ -178,7 +240,7 @@ A file with no history prints `no baseline recorded`. A reset prints the
 previous and new baseline and the resulting cap, and is also recorded in the
 server audit log as `rules.baseline.reset`:
 
-```
+```text
 baseline reset: previous 412, new 812, new cap 893 lines
 ```
 
@@ -197,18 +259,32 @@ Each object has `commit_id`, `time`, `attribution`, `target`, `action` and `hash
 These commands require `plugins.skills.enabled: true`. Mutating commands also
 require a named `rw` grant on the destination docset.
 
+Run `lore config plugins` to inspect registered plugin names and versions (the
+Skills plugin is listed as `agent_skills`). This read-only view does not require
+configuration-edit permission. Failed Skills operations return non-zero and
+include an actionable `message` in their NDJSON result. In particular, failure
+to read collection markers is an error, not a successful `no_collections`
+validation; an accessible scope with no enabled collections still warns.
+
 | Command | Description |
 |---|---|
-| `skills status [folder]` | Report collection state and linked remote skills as NDJSON |
+| `skills status [folder]` | Report collection state, linked remotes, gateway snapshot links, detach ancestry and rejected updates as NDJSON |
 | `skills enable [folder]` | Enable recursive Skills collection behaviour |
 | `skills disable [folder]` | Disable collection behaviour without deleting skills |
 | `skills validate [scope]` | Validate accessible Skills collections |
 | `skills import <github-spec> [parent-dir]` | Import and link a public GitHub skill |
 | `skills update [skill-folder]` | Force an imported skill to check and apply its remote |
-| `skills remove-remote [skill-folder]` | Keep imported files but stop tracking GitHub |
+| `skills remove-remote [skill-folder]` | Keep imported files and derived-from ancestry, stop tracking upstream and allow local edits |
 
 Run bare `skills` for GitHub spec syntax, automatic branch tracking, pinning,
 and collection recovery.
+
+Imports and refreshes retain unmodified public upstream files in the
+[knowledge gateway](../concepts/knowledge-gateway.md#imported-skills), separate
+from each installation's normalized local copy. Installations advance
+independently; a rejected update keeps serving the last valid copy. Startup
+migrates existing links locally without fetching or changing installed files.
+Detaching or deleting an installation does not delete source history.
 
 Discover installed skills with the `skills` metadata filter, then read the
 chosen `SKILL.md`:
@@ -219,7 +295,7 @@ lore meta --filter skills | jq -r 'select((.name + " " + .description) | test("p
 
 Example `lore docsets` output:
 
-```
+```text
 DOCSET    GRANTS      ATTRIBUTES   PATH             TARGET
 public    ro          -            /docs/public     -
 backend   publish,rw  inbox        /docs/backend    -
@@ -228,6 +304,8 @@ home      rw          alias        /backend         /home/backend
 ```
 
 `GRANTS` contains `ro`, `publish`, `rw`, or plugin-defined grants.
+Here `publish` means read access plus create/edit access inside the docset's
+inbox, never delete; it does not expose the docset to other readers.
 `ATTRIBUTES` may include `home`, `inbox`, and `alias`; aliases point to their
 canonical path in `TARGET`. `ls -l` and `stat` show an alias as a link
 (`backend -> /home/backend`), and `find` does not descend into it unless you
@@ -256,44 +334,3 @@ A normal session cannot invoke `cp`, `chmod`, `wget`, `curl`, `bash -c`, or
 `exec`. The shell is an interpreter, not a real bash process. The write surface
 is limited to the whole-file operations listed above; there are no streaming,
 partial, or offset writes.
-
-## OpenLore CLI
-
-```
-Usage: openlore [command] [flags] [directory]
-
-Commands:
-  version           Print version
-  export -o <dir>   Export embedded docs to a directory
-  mcp [dir]         Run an MCP server over stdio
-  mcpb [-o file]    Package the binary as an MCPB desktop extension
-  identity add      Add an identity or public key to lore.json
-  identity role     Add or remove an identity's role membership
-  role              Manage roles, docset grants, denies, and capabilities
-  oauth keys rotate Rotate the ES256 token signing key
-  token mint        Mint an access token for an identity
-  token verify      Verify an access token and print its claims
-  inbox token       Create, list, or revoke HTTP inbox upload credentials
-
-Flags:
-  -p, --port           SSH server port (default 2222)
-  --http-port          HTTP port (default 8080, 0 to disable)
-  --mcp-path           MCP-over-HTTP path (default /mcp)
-  --metrics-port       Prometheus metrics port (default 3000, 0 to disable)
-  --host-key           Host key path (default .ssh/openlore_ed25519)
-  --motd               Inline MOTD
-  --motd-file          MOTD file
-  --auth               Path to lore.json
-  -c, --config         Config path (default ./openlore.yml)
-  --allowed            Comma-separated allowed file patterns
-  --ignore             Comma-separated ignored patterns
-  --tls-cert           HTTP TLS certificate
-  --tls-key            HTTP TLS key
-  --ca-keys            Trusted CA public keys for SSH certificate auth
-  --host-cert          CA-signed SSH host certificate
-  --skills-dir         Runtime skills directory
-  --readonly           Global write lock (default true; use --readonly=false to enable writes)
-  --debug              Enable debug-level server logging
-```
-
-Run `openlore --help` or a subcommand with `--help` for its current flags.

@@ -3,9 +3,49 @@ package cmds
 import (
 	"fmt"
 	"io"
+	"slices"
+	"strings"
 )
 
 func CmdHelp(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.Reader) int {
+	if len(args) > 1 {
+		fmt.Fprintln(errW, "usage: help [command]")
+		return 2
+	}
+	if len(args) == 1 {
+		// Filter the same capability-scoped catalogue used by bare help, so
+		// command entries and their continuation lines stay in one place.
+		var catalogue strings.Builder
+		CmdHelp(ctx, nil, &catalogue, errW, stdin)
+		// These three commands are handled directly by Shell.execArgs,
+		// rather than registered in the command catalogue.
+		known := IsKnown(args[0]) || slices.Contains([]string{"pwd", "exit", "quit"}, args[0])
+		matched, found := false, false
+		for _, line := range strings.Split(catalogue.String(), "\n") {
+			if !strings.HasPrefix(line, "    ") {
+				matched = false
+				if known && strings.HasPrefix(line, "  ") {
+					usage, _, _ := strings.Cut(strings.TrimSpace(line), "  ")
+					for _, form := range strings.Split(usage, " / ") {
+						name := strings.Fields(form)[0]
+						if slices.Contains(strings.Split(name, "/"), args[0]) {
+							matched = true
+						}
+					}
+				}
+			}
+			if matched {
+				fmt.Fprintln(w, line)
+				found = true
+			}
+		}
+		if !found {
+			fmt.Fprintf(errW, "help: no entry for %s\n", args[0])
+			return 1
+		}
+		return 0
+	}
+
 	fmt.Fprintln(w, "Available commands:")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "FILESYSTEM")
@@ -49,7 +89,7 @@ func CmdHelp(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 	fmt.Fprintln(w, "  unexpand [-t N|-a]                        Convert spaces to tabs")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "DATA")
-	fmt.Fprintln(w, "  jq [-r|-c|-e|-s] <filter> [file]         JSON processor")
+	fmt.Fprintln(w, "  jq [-r|-c|-e|-s|-n] <filter> [file]      JSON processor (-n: null input)")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "UTILITIES")
 	fmt.Fprintln(w, "  xargs [-I REPL|-d DEL|-n N|-0] <cmd>     Build commands from stdin")
@@ -72,6 +112,8 @@ func CmdHelp(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 	if ctx.ActionAllowed(ActionWrite) {
 		fmt.Fprintln(w, "WRITES")
 		fmt.Fprintln(w, "  cmd > file  /  cmd >> file               Redirect output to a file")
+		fmt.Fprintln(w, "  cat <<'EOF' > file ... EOF               Write a multi-line file (heredoc)")
+		fmt.Fprintln(w, "    Put the body on following lines and EOF alone on the final line")
 		fmt.Fprintln(w, "  tee <file>                               Pass stdin to stdout and a file")
 		fmt.Fprintln(w, "  patch <file>                             Apply a unified diff (atomic)")
 		fmt.Fprintln(w, "  sed -i 's/a/b/' <file>                   Edit a file in place")

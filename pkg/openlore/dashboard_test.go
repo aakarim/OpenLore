@@ -1184,6 +1184,45 @@ func TestDashboardContextRestoresNodeCounterForRemovedChild(t *testing.T) {
 	}
 }
 
+func TestDashboardPWAIncludesAllViews(t *testing.T) {
+	for _, lorePath := range []string{"/lore", "/knowledge"} {
+		t.Run(lorePath, func(t *testing.T) {
+			s := &Server{config: config.Config{Passkeys: config.PasskeysConfig{LorePath: lorePath}}}
+			frontend := fstest.MapFS{"index.html": {Data: []byte("<!doctype html><html><head></head><body></body></html>")}}
+			mux := http.NewServeMux()
+			s.dashboardRoutes(frontend)(mux)
+			mux.Handle(lorePath+"/", s.dashboardLoreHandler(frontend))
+			for _, target := range []string{lorePath + "/", "/dashboard/?view=analytics", "/dashboard/?view=setup"} {
+				w := dashboardRequest(mux, "GET", target, "")
+				if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `rel="manifest" href="`+lorePath+`/manifest.webmanifest"`) || !strings.Contains(w.Body.String(), `apple-mobile-web-app-capable`) {
+					t.Fatalf("%s missing install metadata: %d %s", target, w.Code, w.Body.String())
+				}
+			}
+			w := dashboardRequest(mux, "GET", lorePath+"/manifest.webmanifest", "")
+			var manifest struct {
+				Scope    string `json:"scope"`
+				StartURL string `json:"start_url"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &manifest); err != nil {
+				t.Fatalf("manifest intercepted by SPA: %v; body=%s", err, w.Body.String())
+			}
+			if manifest.Scope != "/" || manifest.StartURL != lorePath+"/" {
+				t.Fatalf("manifest excludes dashboard views or changes launch URL: %+v", manifest)
+			}
+			for target, contentType := range map[string]string{
+				"service-worker.js":    "text/javascript; charset=utf-8",
+				"app-icon.svg":         "image/svg+xml",
+				"apple-touch-icon.svg": "image/svg+xml",
+			} {
+				w := dashboardRequest(mux, "GET", lorePath+"/"+target, "")
+				if w.Code != http.StatusOK || w.Header().Get("Content-Type") != contentType {
+					t.Fatalf("%s intercepted by SPA: %d %s", target, w.Code, w.Header().Get("Content-Type"))
+				}
+			}
+		})
+	}
+}
+
 func TestDashboardShellPreservesLinksAndRejectsWriteMethods(t *testing.T) {
 	s, mux, token := newDashboardTestServer(t)
 	frontend := fstest.MapFS{"index.html": {Data: []byte("<!doctype html><main id=dashboard></main>")}, "assets/app.js": {Data: []byte("/* built frontend */")}}

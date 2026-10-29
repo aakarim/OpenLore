@@ -129,7 +129,7 @@ func CmdMv(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.
 		return 1
 	}
 	if errors.Is(err, vfs.ErrReadOnly) {
-		fmt.Fprintf(errW, "mv: %s: read-only filesystem\n", source)
+		fmt.Fprintf(errW, "mv: %s: %s\n", source, err)
 	} else {
 		fmt.Fprintf(errW, "mv: cannot remove %s: %s\n", source, err)
 	}

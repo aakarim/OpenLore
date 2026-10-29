@@ -31,6 +31,31 @@ type configReloadContext interface {
 	ConfigReloadBackend() ConfigReloadBackend
 }
 
+type SourceInfo struct{ Store, Docset, Snapshot string }
+type sourceContext interface{ Sources() ([]SourceInfo, error) }
+
+func cmdLoreSources(ctx CmdContext, args []string, w, errW io.Writer, _ io.Reader) int {
+	if len(args) != 0 {
+		fmt.Fprintln(errW, "usage: lore sources")
+		return 1
+	}
+	provider, ok := ctx.(sourceContext)
+	if !ok {
+		fmt.Fprintln(errW, "lore sources: unavailable")
+		return 1
+	}
+	sources, err := provider.Sources()
+	if err != nil {
+		fmt.Fprintln(errW, "lore sources:", err)
+		return 1
+	}
+	fmt.Fprintln(w, "STORE · DOCSET · LAST SNAPSHOT")
+	for _, source := range sources {
+		fmt.Fprintf(w, "%s · %s · %s\n", source.Store, source.Docset, source.Snapshot)
+	}
+	return 0
+}
+
 // RegisterLoreSub adds (or replaces) a core `lore` subcommand.
 func RegisterLoreSub(sub LoreSub) {
 	loreSubs[sub.Name] = sub
@@ -85,6 +110,7 @@ func printLoreUsage(w io.Writer) {
 }
 
 func init() {
+	RegisterLoreSub(LoreSub{Name: "sources", Summary: "List synced sources, projections, and last snapshots", Run: cmdLoreSources})
 	RegisterLoreSub(LoreSub{
 		Name:    "docsets",
 		Summary: "List the docsets you can access, their paths, and attributes",
@@ -96,8 +122,26 @@ func init() {
 }
 
 func cmdLoreConfig(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.Reader) int {
+	if len(args) == 1 && args[0] == "plugins" {
+		provider, ok := ctx.(interface{ ConfigPlugins() map[string]string })
+		if !ok {
+			fmt.Fprintln(errW, "lore config: plugin information is unavailable")
+			return 1
+		}
+		plugins := provider.ConfigPlugins()
+		names := make([]string, 0, len(plugins))
+		for name := range plugins {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		fmt.Fprintln(w, "PLUGIN\tVERSION")
+		for _, name := range names {
+			fmt.Fprintf(w, "%s\t%s\n", name, plugins[name])
+		}
+		return 0
+	}
 	if len(args) != 1 || args[0] != "reload" {
-		fmt.Fprintln(errW, "usage: lore config reload")
+		fmt.Fprintln(errW, "usage: lore config plugins | reload")
 		return 1
 	}
 	provider, ok := ctx.(configReloadContext)

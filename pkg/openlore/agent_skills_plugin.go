@@ -22,10 +22,12 @@ import (
 
 type agentSkillsPlugin struct {
 	docsets      map[string]config.DocsetSpec
+	liveDocsets  func() map[string]config.DocsetSpec
 	fs           vfs.FileSystem
 	canonicalize func(string) string
 	logger       *slog.Logger
 	remote       *skillsremote.Client
+	gateway      *Docstore
 	ttl          time.Duration
 	timeout      time.Duration
 	mu           sync.Mutex
@@ -33,6 +35,9 @@ type agentSkillsPlugin struct {
 	failures     map[string]remoteState
 	syncLocks    map[string]*sync.Mutex
 	submit       func(context.Context, vfs.ChangeSet) error
+	ordered      func(context.Context, func() error) error
+	// Protected by docstoreMu; rebuilt from persisted installations at startup.
+	installations map[string]map[string]bool // canonical directory -> source stores
 }
 
 type remoteState struct {
@@ -68,7 +73,11 @@ func (p *agentSkillsPlugin) canonical(pth string) string {
 func (p *agentSkillsPlugin) roots() []string {
 	seen := map[string]bool{}
 	var out []string
-	for _, ds := range p.docsets {
+	docsets := p.docsets
+	if p.liveDocsets != nil {
+		docsets = p.liveDocsets()
+	}
+	for _, ds := range docsets {
 		for _, pm := range ds.Paths {
 			r := p.canonical(displayPath(pm))
 			if !seen[r] {
@@ -324,9 +333,26 @@ func (p *agentSkillsPlugin) syncSkill(ctx context.Context, skillDir string, forc
 	if r.Ref == "" {
 		r.Ref = resolvedRef
 	}
+	attempted := r
+	attempted.Commit = sha
+	defer p.recordRejection(skillDir, attempted)
 	if sha == r.Commit && r.Kind == kind {
-		p.setRemoteFailure(skillDir, fingerprint, "")
-		return
+		cached := p.gateway == nil
+		if p.gateway != nil {
+			_, cached, err = p.gateway.LoadSkillArchive(ctx, r.Repo, sha, r.Path)
+			if err != nil {
+				p.setRemoteFailure(skillDir, fingerprint, err.Error())
+				return
+			}
+		}
+		if cached {
+			if err := p.backfillSnapshot(ctx, skillDir, baseHash); err != nil {
+				p.setRemoteFailure(skillDir, fingerprint, err.Error())
+				return
+			}
+			p.setRemoteFailure(skillDir, fingerprint, "")
+			return
+		}
 	}
 	files, err := p.remote.Fetch(ctx, r.Repo, sha, r.Path)
 	if err != nil {
@@ -335,6 +361,14 @@ func (p *agentSkillsPlugin) syncSkill(ctx context.Context, skillDir string, forc
 	}
 	if err := skillsremote.ValidateFiles(files); err != nil {
 		p.setRemoteFailure(skillDir, fingerprint, err.Error())
+		return
+	}
+	if sha == r.Commit && r.Kind == kind {
+		if err := p.backfillSnapshot(ctx, skillDir, baseHash); err != nil {
+			p.setRemoteFailure(skillDir, fingerprint, err.Error())
+			return
+		}
+		p.setRemoteFailure(skillDir, fingerprint, "")
 		return
 	}
 	upstream, ok := files["SKILL.md"]
