@@ -132,83 +132,60 @@ func (p *agentSkillsPlugin) reconcileInstallations(cs *vfs.ChangeSet) error {
 		return nil
 	}
 	targets := map[string]bool{}
+	var roots []string
 	if cs == nil {
-		visited := map[string]bool{}
-		for _, ds := range p.docsets {
-			if ds.Projection != nil {
-				for _, mapping := range ds.Paths {
-					visited[p.canonical(displayPath(mapping))] = true
+		// The only all-source scan: rebuild the derived directory index once
+		// at startup, never on the ordered content-commit path.
+		docstoreMu.Lock()
+		states, err := p.gateway.states()
+		if err == nil {
+			p.installations = map[string]map[string]bool{}
+			for _, state := range states {
+				for dir := range state.Installations {
+					if p.installations[dir] == nil {
+						p.installations[dir] = map[string]bool{}
+					}
+					p.installations[dir][state.Store] = true
+					targets[dir] = true
 				}
 			}
 		}
-		var walk func(string) error
-		walk = func(dir string) error {
-			dir = p.canonical(dir)
-			if visited[dir] {
-				return nil
-			}
-			visited[dir] = true
-			info, err := p.fs.Stat(dir)
-			if errors.Is(err, os.ErrNotExist) {
-				return nil
-			}
-			if err != nil {
-				return err
-			}
-			if !info.IsDir() {
-				return nil
-			}
-			entries, err := p.fs.ReadDir(dir)
-			if errors.Is(err, os.ErrNotExist) {
-				return nil
-			}
-			if err != nil {
-				return err
-			}
-			for _, entry := range entries {
-				if entry.IsDir() {
-					if entry.Name() == ".lore" {
-						continue
-					}
-					if err := walk(path.Join(dir, entry.Name())); err != nil {
-						return err
-					}
-				} else if entry.Name() == "SKILL.md" && p.effective(dir) {
-					targets[p.canonical(dir)] = true
-				}
-			}
-			return nil
+		docstoreMu.Unlock()
+		if err != nil {
+			return err
 		}
-		for _, root := range p.roots() {
-			if err := walk(root); err != nil {
-				return fmt.Errorf("migrating skills in %s: %w", root, err)
-			}
-		}
+		roots = p.roots()
 	} else {
 		for _, leaf := range cs.Leaves() {
 			if path.Base(leaf.Target) == "SKILL.md" && p.effective(path.Dir(leaf.Target)) {
 				targets[p.canonical(path.Dir(leaf.Target))] = true
 			}
-		}
-	}
-	docstoreMu.Lock()
-	states, err := p.gateway.states()
-	docstoreMu.Unlock()
-	if err != nil {
-		return err
-	}
-	for _, state := range states {
-		for dir := range state.Installations {
-			if cs == nil {
-				targets[dir] = true
-				continue
+			if leaf.Action == vfs.ChangeActionSetXattr && leaf.Xattr != nil && leaf.Xattr.Name == agentSkillsMarker {
+				roots = append(roots, leaf.Target)
 			}
-			for _, leaf := range cs.Leaves() {
-				if pathWithinRoot(p.canonical(leaf.Target), dir) {
-					targets[dir] = true
+			if leaf.Action == vfs.ChangeActionPreserveAndRecreateXattrs && leaf.XattrRepair != nil {
+				if _, enabled := leaf.XattrRepair.Attributes[agentSkillsMarker]; enabled {
+					roots = append(roots, leaf.Target)
 				}
 			}
+			// Only tree/file deletion or a SKILL.md mutation can invalidate an
+			// existing installation. Ordinary edits need no history lookup.
+			if leaf.Action == vfs.ChangeActionRemove || leaf.Action == vfs.ChangeActionRemoveAll || path.Base(leaf.Target) == "SKILL.md" {
+				docstoreMu.Lock()
+				for dir := range p.installations {
+					if pathWithinRoot(p.canonical(leaf.Target), path.Join(dir, "SKILL.md")) {
+						targets[dir] = true
+					}
+				}
+				docstoreMu.Unlock()
+			}
 		}
+	}
+	if len(targets) == 0 && len(roots) == 0 {
+		return nil
+	}
+	if err := p.discoverInstallations(roots, targets); err != nil {
+		return err
 	}
 	for dir := range targets {
 		b, readErr := p.fs.ReadFile(path.Join(dir, "SKILL.md"))
@@ -219,6 +196,58 @@ func (p *agentSkillsPlugin) reconcileInstallations(cs *vfs.ChangeSet) error {
 		linked = readErr == nil && parseErr == nil && linked
 		if err := p.reconcileInstallation(dir, remote, linked, readErr == nil); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func (p *agentSkillsPlugin) discoverInstallations(roots []string, targets map[string]bool) error {
+	visited := map[string]bool{}
+	for _, ds := range p.docsets {
+		if ds.Projection != nil {
+			for _, mapping := range ds.Paths {
+				visited[p.canonical(displayPath(mapping))] = true
+			}
+		}
+	}
+	var walk func(string) error
+	walk = func(dir string) error {
+		dir = p.canonical(dir)
+		if visited[dir] {
+			return nil
+		}
+		visited[dir] = true
+		info, err := p.fs.Stat(dir)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			return nil
+		}
+		entries, err := p.fs.ReadDir(dir)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			if entry.IsDir() {
+				if entry.Name() == ".lore" {
+					continue
+				}
+				if err := walk(path.Join(dir, entry.Name())); err != nil {
+					return err
+				}
+			} else if entry.Name() == "SKILL.md" && p.effective(dir) {
+				targets[dir] = true
+			}
+		}
+		return nil
+	}
+	for _, root := range roots {
+		if err := walk(root); err != nil {
+			return fmt.Errorf("registering skills in %s: %w", root, err)
 		}
 	}
 	return nil
@@ -236,13 +265,13 @@ func (p *agentSkillsPlugin) reconcileInstallation(dir string, remote agentskills
 	// Never read the VFS under this lock: a projection itself uses docstoreMu.
 	docstoreMu.Lock()
 	defer docstoreMu.Unlock()
-	states, err := p.gateway.states()
-	if err != nil {
-		return err
-	}
 	var derivedFrom agentskills.Remote
 	var appliedSnapshot string
-	for _, state := range states {
+	for store := range p.installations[dir] {
+		state, err := p.gateway.state(store)
+		if err != nil {
+			return err
+		}
 		old, found := state.Installations[dir]
 		if found && !old.Removed {
 			derivedFrom = old.DerivedFrom
@@ -285,7 +314,46 @@ func (p *agentSkillsPlugin) reconcileInstallation(dir string, remote agentskills
 	if state.Owner == "" {
 		state.Owner = "agent_skills_remote"
 	}
-	return p.gateway.save(state)
+	if err := p.gateway.save(state); err != nil {
+		return err
+	}
+	if p.installations == nil {
+		p.installations = map[string]map[string]bool{}
+	}
+	if p.installations[dir] == nil {
+		p.installations[dir] = map[string]bool{}
+	}
+	p.installations[dir][currentStore] = true
+	return nil
+}
+
+// Run metadata-only refreshes on the content applier. Checking durable bytes
+// there prevents a cached no-op from restoring a concurrently detached link.
+func (p *agentSkillsPlugin) backfillSnapshot(ctx context.Context, dir, expectedHash string) error {
+	if p.gateway == nil {
+		return nil
+	}
+	update := func() error {
+		b, err := p.fs.ReadFile(path.Join(dir, "SKILL.md"))
+		if err != nil {
+			return err
+		}
+		if hashBytes(b) != expectedHash {
+			return fmt.Errorf("SKILL.md changed during remote sync; update refused")
+		}
+		remote, linked, err := agentskills.ReadRemote(b)
+		if err != nil {
+			return err
+		}
+		if !linked {
+			return fmt.Errorf("skill remote changed during update")
+		}
+		return p.reconcileInstallation(dir, remote, true, true)
+	}
+	if p.ordered != nil {
+		return p.ordered(ctx, update)
+	}
+	return update()
 }
 
 func (p *agentSkillsPlugin) recordRejection(dir string, remote agentskills.Remote) {
@@ -334,12 +402,12 @@ func (p *agentSkillsPlugin) installationInfo(dir string) []map[string]any {
 	dir = p.canonical(dir)
 	docstoreMu.Lock()
 	defer docstoreMu.Unlock()
-	states, err := p.gateway.states()
-	if err != nil {
-		return nil
-	}
 	var records []map[string]any
-	for _, state := range states {
+	for store := range p.installations[dir] {
+		state, err := p.gateway.state(store)
+		if err != nil {
+			return nil
+		}
 		if install, ok := state.Installations[dir]; ok {
 			records = append(records, map[string]any{"type": "installation", "path": dir, "store": state.Store, "installation": install})
 		}

@@ -479,6 +479,172 @@ func TestAgentSkillsCanonicalizationFailureIsReported(t *testing.T) {
 	}
 }
 
+func TestAgentSkillsGatewayRegistration(t *testing.T) {
+	for _, mode := range []string{"startup", "enable", "repair"} {
+		t.Run(mode, func(t *testing.T) {
+			root, data := t.TempDir(), t.TempDir()
+			sha := strings.Repeat("b", 40)
+			remote := agentskills.Remote{Repo: "https://github.com/owner/repo", Path: "valid", Ref: "main", Commit: sha, Kind: "tracking"}
+			original := map[string][]byte{}
+			for _, name := range []string{"one", "two", "pinned"} {
+				folder := filepath.Join(root, "docs", name, "valid")
+				if err := os.MkdirAll(folder, 0700); err != nil {
+					t.Fatal(err)
+				}
+				r := remote
+				if name == "pinned" {
+					r.Ref, r.Kind = sha, "pinned"
+				}
+				b, err := agentskills.GraftRemote(append(skillBytes("valid"), []byte("installed bytes must not change\n")...), r)
+				if err != nil {
+					t.Fatal(err)
+				}
+				original[name] = b
+				if err := os.WriteFile(filepath.Join(folder, "SKILL.md"), b, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			disk := NewDirFS(root, config.FilesConfig{})
+			if err := disk.SetWriteable(); err != nil {
+				t.Fatal(err)
+			}
+			if mode == "startup" {
+				if err := disk.SetXattr("/docs", agentSkillsMarker, nil, 0); err != nil {
+					t.Fatal(err)
+				}
+			}
+			ds := docset("/docs", nil)
+			ds.Aliases = []string{"/knowledge"}
+			auth := filepath.Join(t.TempDir(), "lore.json")
+			writeAuthFixture(t, auth, serverAuth(map[string]config.DocsetSpec{"docs": ds}, nil))
+			s, err := NewServer(root, WithReadonly(false), config.WithAuthFile(auth), config.WithDataDir(data), config.WithEmbeddedConfig([]byte("plugins:\n  skills:\n    enabled: true\n"), ""))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = s.Shutdown(context.Background()) })
+			client, _ := remoteSyncClient(t, map[string]string{"SKILL.md": string(skillBytes("valid")) + "raw upstream\n"})
+			client.Store = s.docstore
+			s.agentSkills.remote = client
+			exec := func(command, want string) string {
+				t.Helper()
+				var out, errOut bytes.Buffer
+				if code := s.buildSessionShell(testIdentity("alice")).ExecPipeline(command, &out, &errOut, nil); code != 0 || !strings.Contains(out.String(), want) {
+					t.Fatalf("%s: code=%d out=%s err=%s; want %q", command, code, &out, &errOut, want)
+				}
+				return out.String()
+			}
+			if mode == "repair" {
+				self := filepath.Join(root, "docs", ".lore", "xattrs", "self")
+				if err := os.MkdirAll(filepath.Dir(self), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(self, []byte("corrupt"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				exec("skills enable /knowledge --recreate-xattrs", `"status":"enabled"`)
+			} else if mode == "enable" {
+				exec("skills enable /knowledge", `"status":"enabled"`)
+			}
+			// Enable/repair must register a pinned link before a read can fetch,
+			// and before detachment removes its only upstream metadata.
+			exec("skills status /knowledge/pinned", `"derived_from"`)
+			exec("skills remove-remote /knowledge/pinned/valid", `"status":"unlinked"`)
+			status := exec("skills status /knowledge/pinned", `"detached":true`)
+			if !strings.Contains(status, sha) {
+				t.Fatal("pinned detach lost ancestry")
+			}
+			for _, name := range []string{"one", "two"} {
+				exec("skills update /knowledge/"+name+"/valid", `"status":"current"`)
+				status := exec("skills status /docs/"+name, `"type":"installation"`)
+				if !strings.Contains(status, `"snapshot":`) {
+					t.Fatalf("no-op refresh omitted snapshot link: %s", status)
+				}
+				b, err := os.ReadFile(filepath.Join(root, "docs", name, "valid", "SKILL.md"))
+				if err != nil || !bytes.Equal(b, original[name]) {
+					t.Fatalf("no-op rewrote installation %s: %s %v", name, b, err)
+				}
+			}
+			// Import must also reach the gateway through the alias wrapper.
+			exec("skills import owner/repo/valid@main /knowledge", `"status":"imported"`)
+			exec("skills status /knowledge/valid", `"snapshot":`)
+			// An unrelated source manifest must not be parsed by installation
+			// updates or status. Corruption makes a hidden all-source scan fail.
+			unrelated := filepath.Join(data, "docstore", hashContent([]byte("folder/alice/unrelated"))+".json")
+			if err := os.WriteFile(unrelated, []byte("not JSON"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			exec("echo ordinary > /docs/note.md", "")
+			exec("skills remove-remote /knowledge/two/valid", `"status":"unlinked"`)
+			exec("skills status /docs/two", `"detached":true`)
+			if err := os.Remove(unrelated); err != nil {
+				t.Fatal(err)
+			}
+			if mode == "startup" {
+				for _, action := range []string{"detach", "retarget"} {
+					t.Run(action+" during refresh", func(t *testing.T) {
+						dir := "/docs/one/valid"
+						if action == "retarget" {
+							dir = "/docs/valid"
+						}
+						stored, err := os.ReadFile(filepath.Join(root, dir, "SKILL.md"))
+						if err != nil {
+							t.Fatal(err)
+						}
+						entered, release := make(chan struct{}), make(chan struct{})
+						var once sync.Once
+						defer once.Do(func() { close(release) })
+						transport := client.HTTP.Transport
+						client.HTTP = &http.Client{Transport: staticRoundTripper(func(r *http.Request) (*http.Response, error) {
+							if strings.HasSuffix(r.URL.Path, "/info/refs") {
+								close(entered)
+								<-release
+							}
+							return transport.RoundTrip(r)
+						})}
+						fsys := s.buildSessionFS(testIdentity("alice"))
+						finished := make(chan struct{})
+						go func() {
+							defer close(finished)
+							_, _, _ = fsys.(interface {
+								UpdateRemoteSkill(context.Context, string) (string, string, error)
+							}).UpdateRemoteSkill(t.Context(), dir)
+						}()
+						<-entered
+						changed, err := agentskills.StripRemote(stored)
+						if action == "retarget" {
+							next := remote
+							next.Ref, next.Commit, next.Kind = "dev", "", ""
+							changed, err = agentskills.GraftRemote(stored, next)
+						}
+						if err != nil {
+							t.Fatal(err)
+						}
+						hash := hashBytes(stored)
+						if _, err := fsys.(vfs.WritableFS).WriteFileAtomic(dir+"/SKILL.md", changed, vfs.WriteOpts{IfMatch: &hash}); err != nil {
+							t.Fatal(err)
+						}
+						once.Do(func() { close(release) })
+						<-finished
+						client.HTTP = &http.Client{Transport: transport}
+						b, err := os.ReadFile(filepath.Join(root, dir, "SKILL.md"))
+						if err != nil || !bytes.Equal(b, changed) {
+							t.Fatalf("refresh undid concurrent %s: %s %v", action, b, err)
+						}
+						info := fsys.(interface{ SkillInstallationInfo(string) []map[string]any }).SkillInstallationInfo(dir)
+						if len(info) != 1 {
+							t.Fatalf("installation records: %+v", info)
+						}
+						installation := info[0]["installation"].(skillInstallation)
+						if action == "detach" && !installation.Detached || action == "retarget" && (installation.Remote.Ref != "dev" || installation.Remote.Commit != "") {
+							t.Fatalf("refresh restored obsolete metadata after %s: %+v", action, installation)
+						}
+					})
+				}
+			}
+		})
+	}
+}
+
 func TestAgentSkillsGatewayLifecycle(t *testing.T) {
 	root, data := t.TempDir(), t.TempDir()
 	a, b, c, bad := strings.Repeat("a", 40), strings.Repeat("b", 40), strings.Repeat("c", 40), strings.Repeat("d", 40)

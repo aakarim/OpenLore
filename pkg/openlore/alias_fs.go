@@ -8,6 +8,7 @@ import (
 	"sort"
 	"syscall"
 
+	"github.com/aakarim/go-openlore/pkg/openlore/skillsremote"
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
 
@@ -53,6 +54,27 @@ func (a *aliasFS) canonical(p string) (string, *pathAlias) {
 func (a *aliasFS) CanonicalPath(p string) string {
 	canonical, _ := a.canonical(p)
 	return canonical
+}
+
+func (a *aliasFS) SkillsRemoteClient() *skillsremote.Client {
+	provider, ok := a.FileSystem.(interface {
+		SkillsRemoteClient() *skillsremote.Client
+	})
+	if !ok {
+		return nil
+	}
+	return provider.SkillsRemoteClient()
+}
+
+func (a *aliasFS) SkillInstallationInfo(skillDir string) []map[string]any {
+	provider, ok := a.FileSystem.(interface {
+		SkillInstallationInfo(string) []map[string]any
+	})
+	if !ok {
+		return nil
+	}
+	canonical, _ := a.canonical(skillDir)
+	return provider.SkillInstallationInfo(canonical)
 }
 
 func (a *aliasFS) UpdateRemoteSkill(ctx context.Context, skillDir string) (string, string, error) {
@@ -283,7 +305,9 @@ func (a *writableAliasFS) AdmitChangeSet(cs vfs.ChangeSet) error {
 			cs.Changes[i].RemoveAll = &remove
 		}
 	}
-	cs.Target, _ = a.canonical(cs.Target)
+	if cs.Target != "" {
+		cs.Target, _ = a.canonical(cs.Target)
+	}
 	if cs.RemoveAll != nil {
 		remove := *cs.RemoveAll
 		remove.Opts = a.canonicalRemoveOpts(remove.Opts)
