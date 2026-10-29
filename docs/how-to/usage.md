@@ -4,6 +4,57 @@ Set up each way of serving, packaging and connecting to OpenLore. Every mode
 serves the same virtual filesystem; [Transports](../concepts/transports.md) explains how the
 transports relate, what they return and how long shell state lasts.
 
+## Set up against an existing repo
+
+To set OpenLore up for your repository, start your coding agent there and give
+it the setup instructions from the public server:
+
+```shell
+ssh openlore.sh setup | amp
+```
+
+The command prints instructions; your agent does the setup locally with you.
+It interviews you, inspects the repository, and creates a separate
+`<team>-lore` deployment project. It builds and verifies a local server before
+deployment; you do not need to choose a transport or hand-write `openlore.yml`
+first. If you use another coding agent, give it the output of
+`ssh openlore.sh setup` instead.
+
+The generated repository tracks `openlore.yml`, a thin `Containerfile` based on
+a stable OpenLore release, and provider artifacts under `deploy/`. Initial
+policy and filesystem state live in gitignored `.local/` until the first
+verified deployment initialises its persistent volume. The deployment copies
+tracked `openlore.yml` separately into the volume (or projects it through a
+facility such as a Kubernetes ConfigMap); it is not baked into the container
+image.
+
+After local verification, use `onboarding` to add initial identities and folders
+as needed, then `deploy` to provision and verify the shared server. See
+[Deploy a shared server](../start/deploy.md) for deployment requirements.
+
+### Instruction commands
+
+Run `ssh openlore.sh skills` for the current list. These commands emit guidance
+to stdout rather than appearing as files. Pipe lifecycle instructions into
+your coding agent, or save agent-access instructions in the appropriate file.
+
+| Command | What it emits | When to run it |
+| --- | --- | --- |
+| `setup` | Instructions to create and locally verify a deployment project | First, from your existing repository |
+| `onboarding` | Instructions to add initial identities, roles, homes and folders | Before the first deployment |
+| `deploy` | Instructions to select a provider, deploy and verify a shared server | After local verification |
+| `deploy-fly`, `deploy-railway`, `deploy-aws`, `deploy-gcp`, `deploy-azure`, `deploy-digitalocean` | Provider-specific deployment instructions | When you already know the deployment target |
+| `upgrade` | Instructions to prepare a pinned base-image version change | To upgrade an existing deployment through its normal CD path |
+| `teach` | Guidance on setting up, connecting to or learning about OpenLore | When you need help choosing a workflow |
+| `agents` | An `AGENTS.md` snippet for the server | To teach agents how to access it |
+| `openlore-skill` | An installable Agent Skills `SKILL.md` | To give a compatible agent a reusable access skill |
+| `agents-shellm` | A headlong/shellm access `SKILL.md` | To connect headlong/shellm to the server |
+| `agents-shellm-housekeeping` | A headlong/shellm housekeeping `SKILL.md` | To maintain a knowledge repository |
+| `passkeys` | Browser passkey registration instructions | To enable browser access for a person |
+
+For access instructions, run the command against the server agents will use,
+not necessarily `openlore.sh`. See [Connect an agent](#connect-an-agent) below.
+
 ## Serve a directory over SSH, web, and MCP
 
 ```shell
@@ -56,21 +107,6 @@ ssh <server> agents-shellm > .skills/openlore/SKILL.md
 ```
 
 See [shellm.md](shellm.md) for Docker caveats and trajectory sharing.
-
-Pipe an instruction command from a public OpenLore server into your coding
-agent, for example:
-
-```shell
-ssh openlore.sh setup | amp
-```
-
-The generated `<team>-lore` repository tracks `openlore.yml`, a thin
-`Containerfile` based on a stable OpenLore release, and provider artifacts under
-`deploy/`. Initial policy and filesystem state live in gitignored `.local/`
-until the first verified deployment initialises its persistent volume. The
-deployment copies tracked `openlore.yml` separately into the volume (or projects
-it through a facility such as a Kubernetes ConfigMap); it is not baked into the
-container image.
 
 ## Embed docs in a binary
 
