@@ -268,16 +268,23 @@ validation; an accessible scope with no enabled collections still warns.
 
 | Command | Description |
 |---|---|
-| `skills status [folder]` | Report collection state and linked remote skills as NDJSON |
+| `skills status [folder]` | Report collection state, linked remotes, gateway snapshot links, detach ancestry and rejected updates as NDJSON |
 | `skills enable [folder]` | Enable recursive Skills collection behaviour |
 | `skills disable [folder]` | Disable collection behaviour without deleting skills |
 | `skills validate [scope]` | Validate accessible Skills collections |
 | `skills import <github-spec> [parent-dir]` | Import and link a public GitHub skill |
 | `skills update [skill-folder]` | Force an imported skill to check and apply its remote |
-| `skills remove-remote [skill-folder]` | Keep imported files but stop tracking GitHub |
+| `skills remove-remote [skill-folder]` | Keep imported files and derived-from ancestry, stop tracking upstream and allow local edits |
 
 Run bare `skills` for GitHub spec syntax, automatic branch tracking, pinning,
 and collection recovery.
+
+Imports and refreshes retain unmodified public upstream files in the
+[knowledge gateway](../concepts/knowledge-gateway.md#imported-skills), separate
+from each installation's normalized local copy. Installations advance
+independently; a rejected update keeps serving the last valid copy. Startup
+migrates existing links locally without fetching or changing installed files.
+Detaching or deleting an installation does not delete source history.
 
 Discover installed skills with the `skills` metadata filter, then read the
 chosen `SKILL.md`:

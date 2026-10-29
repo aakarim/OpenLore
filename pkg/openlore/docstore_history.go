@@ -25,6 +25,9 @@ type docstoreJournal struct {
 func (j docstoreJournal) Append(ctx context.Context, record CommitRecord) error {
 	ids, err := j.server.snapshotNativeCommit(ctx, record)
 	record.DocstoreSnapshots = ids
+	if j.server.agentSkills != nil {
+		err = errors.Join(err, j.server.agentSkills.reconcileInstallations(&record.ChangeSet))
+	}
 	// Never lose the base commit record when snapshot storage fails.
 	return errors.Join(err, j.journal.Append(ctx, record))
 }

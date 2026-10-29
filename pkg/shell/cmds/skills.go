@@ -160,6 +160,10 @@ type remoteSkillClientProvider interface {
 	SkillsRemoteClient() *skillsremote.Client
 }
 
+type skillInstallationProvider interface {
+	SkillInstallationInfo(string) []map[string]any
+}
+
 type skillFinding struct {
 	Type       string `json:"type"`
 	Collection string `json:"collection"`
@@ -363,6 +367,11 @@ func skillsStatus(f vfs.FileSystem, target, root string, r skillResult, w io.Wri
 		if e != nil {
 			return nil
 		}
+		if provider, ok := f.(skillInstallationProvider); ok {
+			for _, record := range provider.SkillInstallationInfo(path.Dir(skillFile)) {
+				emitSkill(w, record)
+			}
+		}
 		remote, linked, _ := agentskills.ReadRemote(b)
 		if !linked {
 			return nil
@@ -428,7 +437,9 @@ func skillsRemoveRemote(ctx CmdContext, args []string, w io.Writer) int {
 		r.Message = "filesystem does not support writing skill files; use a writable docset (run 'lore docsets')"
 		return finish(w, r, 1)
 	}
-	if _, err = wfs.WriteFileAtomic(skillFile, clean, overwriteOpts(ctx, skillFile, b, true)); err != nil {
+	// A failed refresh may inject presentation-only remote-status text. Use
+	// the durable hash tracked by the read, not a hash of that annotation.
+	if _, err = wfs.WriteFileAtomic(skillFile, clean, overwritePreconditions(ctx, skillFile)); err != nil {
 		return mutationError(w, r, err)
 	}
 	r.Status = "unlinked"

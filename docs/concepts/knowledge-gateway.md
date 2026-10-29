@@ -14,7 +14,7 @@ Learn more about [docsets](docsets.md).
 
 ## How it works
 
-Two things sit at the centre: the **docstore**, where every external copy lives, and **docsets**, the directories agents read. A projection connects one to the other, and a store with no projection is kept but never served. Follow the arrows into the docstore to see how content arrives, and out of it to see what agents get.
+Two things sit at the centre: the **docstore**, where every external copy lives, and **docsets**, the directories agents read. A projection connects a synced source to a docset. Imported skills use the same docstore but install local files into a collection instead of mounting a projection. Follow the arrows into the docstore to see how synced content arrives, and out of it to see what agents get.
 
 ```mermaid
 flowchart TB
@@ -46,8 +46,9 @@ The docstore is where the server keeps every document that did not start life in
 | `claude/<identity>/personal` | One person's personal Claude Code instructions and memory |
 | `folder/<identity>/<name>` | One person's synced folder |
 | `openlore/<docset>` | A snapshot of each native write to a docset |
+| `skills/<host>/<org>/<repo>/<subpath-hash>` | Server-fetched public skill source trees, versioned by exact upstream commit |
 
-A store is not a docset. Nothing in the docstore is listed, read or searched by agents until a projection names it; until then it is history that only its uploader can inspect.
+A store is not a docset. Client-synced content is not listed, read or searched by agents until a projection names it; until then it is history that only its uploader can inspect. Skill source history is visible to readers of a collection where that source has been installed, without exposing other installations' paths or metadata.
 
 ### Projections and docsets
 
@@ -65,6 +66,18 @@ Native writes take the other road in. When an agent writes to a disk docset, the
 
 Learn more in the [lore CLI reference](../reference/lore-cli.md).
 
+### Imported skills
+
+With the Skills plugin enabled, `skills import` fetches public HTTPS repositories on the server and retains the safely extracted source files unchanged in the docstore. It then normalizes and validates the selected skill before installing a local copy in an enabled collection. Server-owned skill stores are separate from client-owned `git/` stores, so an import cannot take ownership of someone's synced repository.
+
+Each installation tracks its own ref and applied commit/snapshot. Different branches and installations can share stored content, but a refresh resolves the requested ref to an exact commit; it never installs whichever snapshot was fetched most recently. Branch imports still check for updates when `SKILL.md` is read, throttled by the existing freshness TTL. Tags and commit SHAs remain pinned, and `skills update` forces a refresh.
+
+Invalid upstream skill versions remain in source history with per-installation rejection details, while agents continue receiving the last valid installed copy. `skills status` emits installation records containing the source store, applied snapshot when available, and rejected commits and snapshots. Source history is also listed by `lore sources` and the docstore API; its latest snapshot is the latest fetched source, not necessarily the version applied to every installation.
+
+Linked files remain protected from local edits. `skills remove-remote` detaches the existing files in place, retaining their repository, source path and applied commit as derived-from ancestry in the installation record. Later edits have native docset history; ancestry does not claim that edited files still match upstream. Neither detaching nor deleting an installation deletes shared source history.
+
+At startup, existing linked skills are registered locally without contacting upstream or changing their files. Their recorded commit is retained, but no raw upstream snapshot is invented from normalized local files. Normal refreshes populate source snapshots afterward; pinned reads remain network-free.
+
 ### Agents
 
 Agents read a projected docset as a directory in the same virtual filesystem as everything else, over SSH, MCP or HTTP. The `lore sources` command in the agent shell lists which docsets came from outside and which snapshot they show.
@@ -77,9 +90,9 @@ Learn more about [transports](transports.md).
 
 Syncing is a command you run. The copy is as fresh as the last `lore sync`, which keeps the client free of background processes and makes every update attributable to the identity that ran it.
 
-The client does the fetching. Git clones and Claude Code files are read on your machine with your credentials, so the server never needs access to GitHub or to your home directory.
+The client fetches synced sources. Git clones and Claude Code files are read on your machine with your credentials, so syncing never requires server access to your credentials or home directory. Skill imports are the exception: the server fetches public HTTPS repositories using the existing download limits and public-network protections, without private Git credentials.
 
-Visibility is opt-in. Nothing in the docstore is served until a projection names it, which means one extra step before agents see new content and no chance of a synced folder leaking by default.
+Visibility is opt-in. Client-synced content is not served until a projection names it, which means one extra step before agents see new content and no chance of a synced folder leaking by default. Skills are installed explicitly into collections and follow those collections' docset grants.
 
 Native writes are snapshotted after they land. A write to a disk docset is recorded in `openlore/<docset>` once the filesystem write is durable, so a failure to record provenance is logged and does not undo the write.
 
