@@ -2,6 +2,7 @@ package openlore
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -13,7 +14,9 @@ import (
 	"mime"
 	"mime/multipart"
 	"net/http"
+	"path"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,9 +35,11 @@ import (
 // "inbox") without granting them write access to the rest of the docset and
 // without any ability to delete.
 type InboxPlugin struct {
-	now      func() time.Time
-	replayMu sync.Mutex
-	replays  map[string]map[string]time.Time
+	now         func() time.Time
+	replayMu    sync.Mutex
+	replays     map[string]map[string]time.Time
+	recipientsM sync.RWMutex
+	recipients  map[string]struct{}
 }
 
 const inboxReplayPerToken = 1000
@@ -51,9 +56,83 @@ func (*InboxPlugin) GrantTypes() []GrantType { return []GrantType{publishGrant{}
 // Info implements PluginInfoProvider.
 func (*InboxPlugin) Info() PluginInfo { return PluginInfo{Name: "inbox", Version: "1.0.0"} }
 
+var mentionPattern = regexp.MustCompile(`(?:^|[^A-Za-z0-9._%+\-])@([a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?)`)
+
+// WriteMiddleware expands collaboration messages into inbox notification
+// writes before the ordered log sees them. The source and notifications are
+// therefore one ordered ChangeSet rather than best-effort post-commit work.
+// Only channel posts and thread replies are messages; documentation containing
+// an @handle must never produce notifications.
+func (p *InboxPlugin) WriteMiddleware() []WriteMiddleware {
+	return []WriteMiddleware{func(next WriteHandler) WriteHandler {
+		return func(ctx context.Context, op WriteOp) (WriteResult, error) {
+			leaves := op.Leaves()
+			changes := make([]vfs.Change, 0, len(leaves))
+			changed := false
+			for _, leaf := range leaves {
+				changes = append(changes, leaf)
+				if leaf.Action != vfs.ChangeActionWrite || leaf.Write == nil || !isMentionSource(leaf.Target) {
+					continue
+				}
+				for _, recipient := range p.mentionedRecipients(string(leaf.Write.Bytes), op.Actor.ID) {
+					hash := sha256.Sum256([]byte(leaf.Target + "\x00" + recipient))
+					filename := fmt.Sprintf("%x-%s", hash[:8], path.Base(leaf.Target))
+					target := vfs.CleanPath("/inboxes/" + recipient + "/" + filename)
+					body := fmt.Sprintf("---\nfrom: %s\nsource: %s\n---\nMentioned by @%s in `%s`.\n", op.Actor.ID, leaf.Target, op.Actor.ID, leaf.Target)
+					changes = append(changes, vfs.Change{
+						Target: target,
+						Action: vfs.ChangeActionWrite,
+						Write:  &vfs.WriteChange{Bytes: []byte(body), Opts: vfs.WriteOpts{ContentPolicyValidated: true}},
+					})
+					changed = true
+				}
+			}
+			if !changed {
+				return next(ctx, op)
+			}
+			return next(ctx, NewWriteOp(op.Actor, vfs.ChangeSet{Changes: changes}))
+		}
+	}}
+}
+
+func isMentionSource(target string) bool {
+	clean := vfs.CleanPath(target)
+	parts := strings.Split(strings.Trim(clean, "/"), "/")
+	if len(parts) >= 5 && parts[0] == "channels" && parts[2] == "posts" && strings.HasSuffix(parts[len(parts)-1], ".md") {
+		return true
+	}
+	return len(parts) >= 5 && parts[0] == "threads" && parts[3] == "replies" && strings.HasSuffix(parts[len(parts)-1], ".md")
+}
+
+func (p *InboxPlugin) mentionedRecipients(body, author string) []string {
+	p.recipientsM.RLock()
+	defer p.recipientsM.RUnlock()
+	var out []string
+	seen := map[string]struct{}{}
+	for _, match := range mentionPattern.FindAllStringSubmatch(body, -1) {
+		name := match[1]
+		if name == author {
+			continue
+		}
+		if _, ok := p.recipients[name]; !ok {
+			continue
+		}
+		if _, duplicate := seen[name]; duplicate {
+			continue
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+		if len(out) == 32 {
+			break
+		}
+	}
+	return out
+}
+
 var (
-	_ GrantTypeProvider  = (*InboxPlugin)(nil)
-	_ PluginInfoProvider = (*InboxPlugin)(nil)
+	_ GrantTypeProvider       = (*InboxPlugin)(nil)
+	_ PluginInfoProvider      = (*InboxPlugin)(nil)
+	_ WriteMiddlewareProvider = (*InboxPlugin)(nil)
 )
 
 // publishGrant is the "publish" grant type: read anywhere in the docset, no
@@ -104,6 +183,12 @@ func inboxPath(ds config.DocsetSpec) string {
 }
 
 func (p *InboxPlugin) PrepareHTTPRoutes(s *Server) (HTTPRouteRegistrar, error) {
+	p.recipientsM.Lock()
+	p.recipients = make(map[string]struct{}, len(s.auth.Identities))
+	for _, identity := range s.auth.Identities {
+		p.recipients[identity.Name] = struct{}{}
+	}
+	p.recipientsM.Unlock()
 	store, err := NewInboxTokenStore(s.config.DataDir)
 	if err != nil {
 		return nil, fmt.Errorf("initializing inbox token store: %w", err)
