@@ -22,7 +22,7 @@ func TestHelp(t *testing.T) {
 	if !strings.Contains(out, "cat <<'EOF' > file") || !strings.Contains(out, "heredoc") {
 		t.Error("help should document multi-line heredoc writes")
 	}
-	for _, command := range []string{"mkdir", "mv", "rm"} {
+	for _, command := range []string{"mkdir", "mv", "rm", "replace"} {
 		if !strings.Contains(out, command) {
 			t.Errorf("help should list %s", command)
 		}

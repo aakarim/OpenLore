@@ -135,3 +135,58 @@ func TestScan_AppliesExtenders(t *testing.T) {
 		}
 	}
 }
+
+func TestScanWithReport_DiscoveryAndRawKeys(t *testing.T) {
+	fsys := metaTreeFS()
+	fsys["/docs/broken.md"] = "---\ntags: [broken\n---\nbody"
+	fsys["/docs/empty.md"] = "---\n---\nbody"
+	fsys["/docs/null.md"] = "---\ntype: null\ntags: []\n---\nbody"
+	fsys["/docs/unclosed.md"] = "---\ntype: Note\n"
+	calls := 0
+	report, err := meta.ScanWithReport(fsys, "/docs", []string{"type", "tags", "tags"},
+		func(_ string, _ []byte, fm map[string]any) map[string]any {
+			calls++
+			// Synthesized fields must not hide missing frontmatter keys.
+			return map[string]any{"tags": []string{"generated"}}
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.WithFrontmatter != 5 || report.WithoutFrontmatter != 3 || calls != 5 {
+		t.Fatalf("counts/extender calls: %+v, calls=%d", report, calls)
+	}
+	wantPaths := []string{"broken.md", "empty.md", "metric.md", "plain.md", "sub/nested.md", "unclosed.md"}
+	if len(report.Missing) != len(wantPaths) {
+		t.Fatalf("missing = %+v", report.Missing)
+	}
+	for i, want := range wantPaths {
+		if report.Missing[i].Path != want {
+			t.Errorf("missing[%d].Path = %q, want %q", i, report.Missing[i].Path, want)
+		}
+	}
+	if report.Missing[0].Reason != "invalid_frontmatter" || report.Missing[3].Reason != "no_frontmatter" {
+		t.Fatalf("frontmatter diagnostics = %+v", report.Missing)
+	}
+	if got := report.Missing[1]; got.Reason != "missing_keys" || strings.Join(got.MissingKeys, ",") != "type,tags" {
+		t.Fatalf("empty frontmatter diagnostic = %+v", got)
+	}
+	if got := report.Missing[2]; strings.Join(got.MissingKeys, ",") != "tags" {
+		t.Fatalf("raw frontmatter keys must not include extender fields: %+v", got)
+	}
+}
+
+func TestScanWithReport_NoKeysAndExactFile(t *testing.T) {
+	for _, root := range []string{"/docs", "/docs/plain.md"} {
+		report, err := meta.ScanWithReport(metaTreeFS(), root, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(report.Missing) != 1 || report.Missing[0].Path != "plain.md" || report.Missing[0].Reason != "no_frontmatter" {
+			t.Fatalf("root %s: missing = %+v", root, report.Missing)
+		}
+	}
+	report, err := meta.ScanWithReport(metaTreeFS(), "/docs/sub", []string{"tags"})
+	if err != nil || len(report.Missing) != 1 || report.Missing[0].Path != "nested.md" {
+		t.Fatalf("scoped missing report = %+v, err=%v", report, err)
+	}
+}

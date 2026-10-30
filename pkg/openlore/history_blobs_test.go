@@ -1002,6 +1002,103 @@ func TestScalarProcessorDerivesExactBeforeAfterDelta(t *testing.T) {
 	}
 }
 
+func TestScalarReplayMoveThenAuthoredSourceReuse(t *testing.T) {
+	record := CommitRecord{
+		ID: "move-reuse", Time: time.Now().UTC(), Attribution: Attribution{Principal: "alice"},
+		ChangeSet: vfs.ChangeSet{
+			Changes: []vfs.Change{
+				{Target: "/docs/a.md", Action: vfs.ChangeActionRemove},
+				{Target: "/docs/b.md", Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: []byte("old")}},
+				{Target: "/docs/a.md", Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: []byte("authored")}},
+			},
+			Moves: []vfs.Move{{From: 0, To: 1}},
+		},
+		Leaves: []LeafRecord{
+			{Target: "/docs/a.md", Action: vfs.ChangeActionRemove, BeforeHash: hashContent([]byte("old")), BeforeSize: 3, AfterHash: hashContent([]byte("authored")), AfterSize: 8},
+			{Target: "/docs/b.md", Action: vfs.ChangeActionWrite, AfterHash: hashContent([]byte("old")), AfterSize: 3},
+			{Target: "/docs/a.md", Action: vfs.ChangeActionWrite, AfterHash: hashContent([]byte("authored")), AfterSize: 8},
+		},
+	}
+	processor := scalarProcessorForRecords(t, []CommitRecord{record})
+	processor.writer = IdentityStoreClassifier(nil)
+	events := processor.Drain(t.Context())
+	if len(events) != 2 {
+		t.Fatalf("events = %#v; want one inventory delta per path", events)
+	}
+	for _, event := range events {
+		wantAuthored := event.Fields["path"] == "/docs/a.md"
+		if analytics.IsAuthoredWrite(event) != wantAuthored || event.Fields["from"] != nil {
+			t.Errorf("authored=%t: %#v", wantAuthored, event)
+		}
+		if wantAuthored && event.Fields["delta"].(map[string]any)["bytes"] != float64(5) {
+			t.Errorf("source reuse inventory = %#v", event)
+		}
+	}
+	summary, err := analytics.UsageSummary(t.Context(), sliceAnalyticsSource(events), analytics.Params{}, 4)
+	if err != nil || summary.Writes != 1 || summary.HumanWrites != 1 {
+		t.Fatalf("replayed public summary = %+v, err=%v", summary, err)
+	}
+	for _, aggregation := range analytics.BuiltinAggregations() {
+		if aggregation.Name != "size-over-time" && aggregation.Name != "write-ratio" {
+			continue
+		}
+		table, err := aggregation.Compute(t.Context(), sliceAnalyticsSource(events), nil, analytics.Params{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if aggregation.Name == "size-over-time" {
+			if len(table.Rows) != 1 || table.Rows[0][2] != float64(1) || table.Rows[0][3] != float64(8) {
+				t.Fatalf("authored growth = %+v", table)
+			}
+		} else if len(table.Rows) != 1 || table.Rows[0][1] != 1 || table.Rows[0][2] != 0 || table.Rows[0][3] != 0 {
+			t.Fatalf("authored ratio = %+v", table)
+		}
+	}
+}
+
+func TestScalarReplayRetainsMoveInventoryWithoutAuthorship(t *testing.T) {
+	record := CommitRecord{
+		ID: "move-refresh",
+		ChangeSet: vfs.ChangeSet{
+			Changes: []vfs.Change{
+				{Target: "/docs/index.md", Action: vfs.ChangeActionRemove},
+				{Target: "/other/index.md", Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: []byte("original")}},
+				{Target: "/other/index.md", Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: []byte("refreshed"), Generated: true}},
+			},
+			Moves: []vfs.Move{{From: 0, To: 1}},
+		},
+		Leaves: []LeafRecord{
+			{Target: "/docs/index.md", Action: vfs.ChangeActionRemove, BeforeHash: hashContent([]byte("original")), BeforeSize: 8},
+			{Target: "/other/index.md", Action: vfs.ChangeActionWrite, BeforeHash: hashContent([]byte("old")), BeforeSize: 3, AfterHash: hashContent([]byte("refreshed")), AfterSize: 9},
+			{Target: "/other/index.md", Action: vfs.ChangeActionWrite, Generated: true, AfterHash: hashContent([]byte("refreshed")), AfterSize: 9},
+		},
+	}
+	// This helper writes and reopens the journal: the maintenance distinction
+	// must survive restart, not just exist on live observer notifications.
+	events := scalarProcessorForRecords(t, []CommitRecord{record}).Drain(context.Background())
+	if len(events) != 2 {
+		t.Fatalf("events = %#v; want one inventory delta per path", events)
+	}
+	for _, event := range events {
+		if analytics.IsAuthoredWrite(event) || event.Fields["from"] != nil {
+			t.Fatalf("inventory leaked relocation or authorship: %#v", event)
+		}
+		delta := event.Fields["delta"].(map[string]any)["bytes"]
+		switch event.Fields["path"] {
+		case "/docs/index.md":
+			if event.Fields["action"] != "move_source" || delta != float64(-8) {
+				t.Fatalf("source inventory = %#v", event)
+			}
+		case "/other/index.md":
+			if event.Fields["action"] != "move" || event.Fields["generated"] != true || delta != float64(6) || event.Fields["content_hash"] != hashContent([]byte("refreshed")) {
+				t.Fatalf("destination inventory = %#v", event)
+			}
+		default:
+			t.Fatalf("unexpected path: %#v", event)
+		}
+	}
+}
+
 type testScalarProvider struct{}
 
 func (testScalarProvider) Name() string { return "custom" }

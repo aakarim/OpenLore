@@ -17,6 +17,57 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
+func TestSQLiteAnalyticsUpgradeInvalidatesOnlyDerivedViewsOnce(t *testing.T) {
+	path := t.TempDir() + "/analytics.db"
+	store, err := OpenSQLiteAggregationStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate the previous on-disk cache format, without discarding the
+	// retained source events or content facts used to rebuild the views.
+	_, err = store.db.Exec(`PRAGMA user_version=0;
+INSERT INTO dashboard_days VALUES('usage:scope',1,'{}',0);
+INSERT INTO dashboard_views VALUES('scope','{}',1,'');
+INSERT INTO materializations VALUES('key','size-over-time','{}');
+INSERT INTO analytics_events VALUES('event',1,'doc.read','alice','{}');
+INSERT INTO files(path,size,mtime_ns,content_hash,computed_at) VALUES('/docs/a.md',3,1,'hash',1);`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = OpenSQLiteAggregationStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for table, want := range map[string]int{"dashboard_days": 0, "dashboard_views": 0, "materializations": 0, "analytics_events": 1, "files": 1} {
+		var count int
+		if err := store.db.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count); err != nil || count != want {
+			t.Fatalf("upgraded %s: count=%d want=%d err=%v", table, count, want, err)
+		}
+	}
+	if _, err := store.db.Exec(`INSERT INTO dashboard_days VALUES('usage:scope',1,'{}',0);
+INSERT INTO dashboard_views VALUES('scope','{}',1,'');
+INSERT INTO materializations VALUES('key','size-over-time','{}');`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = OpenSQLiteAggregationStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	for _, table := range []string{"dashboard_days", "dashboard_views", "materializations"} {
+		var count int
+		if err := store.db.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count); err != nil || count != 1 {
+			t.Fatalf("reopen discarded current %s: count=%d err=%v", table, count, err)
+		}
+	}
+}
+
 func TestSQLiteLegacyOwnershipMigration(t *testing.T) {
 	for _, scanState := range []string{"ready", "updating", "failed"} {
 		t.Run(scanState, func(t *testing.T) {

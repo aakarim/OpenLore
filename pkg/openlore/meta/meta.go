@@ -42,6 +42,26 @@ type Record struct {
 	Fields map[string]any
 }
 
+// Missing describes a document omitted from metadata discovery, or lacking
+// one or more requested top-level frontmatter keys. Keys contributed by
+// extenders do not count as frontmatter. A present key with a null value counts
+// as present; this is discovery, not schema validation.
+type Missing struct {
+	Path        string   `json:"path"`
+	Reason      string   `json:"reason"`
+	MissingKeys []string `json:"missing_keys,omitempty"`
+}
+
+// Report includes both ordinary metadata records and discovery diagnostics.
+// WithoutFrontmatter includes absent and unparseable frontmatter. Unreadable
+// files are skipped, as in Scan, and are not included in either count.
+type Report struct {
+	Records            []Record
+	Missing            []Missing
+	WithFrontmatter    int
+	WithoutFrontmatter int
+}
+
 // Scan walks *.md documents under root in fsys and returns one Record per
 // document that opens with a parseable YAML frontmatter block, sorted by path.
 // It is a generic reader, not a validator: documents without (or with an
@@ -50,8 +70,17 @@ type Record struct {
 // output of every extender (applied in order). Paths are relative to root so
 // they feed straight back into cat/grep from that directory.
 func Scan(fsys vfs.FileSystem, root string, extenders ...Extender) ([]Record, error) {
+	report, err := ScanWithReport(fsys, root, nil, extenders...)
+	return report.Records, err
+}
+
+// ScanWithReport scans once and additionally reports files with absent or
+// unparseable frontmatter, or missing any of keys. An empty keys list selects
+// only files without parseable frontmatter. All paths are relative to root and
+// both result lists are sorted by path, just like Scan.
+func ScanWithReport(fsys vfs.FileSystem, root string, keys []string, extenders ...Extender) (Report, error) {
 	root = vfs.CleanPath(root)
-	var records []Record
+	var report Report
 	err := vfs.WalkDir(fsys, root, func(p string, info *vfs.FileInfo, walkErr error) error {
 		if walkErr != nil || info == nil || info.Dir {
 			return nil
@@ -65,7 +94,25 @@ func Scan(fsys vfs.FileSystem, root string, extenders ...Extender) ([]Record, er
 		}
 		fm, _, hasFM, err := okf.ParseFrontmatter(content)
 		if !hasFM || err != nil {
-			return nil // no (or unparseable) frontmatter block: not a meta doc
+			report.WithoutFrontmatter++
+			reason := "no_frontmatter"
+			if err != nil {
+				reason = "invalid_frontmatter"
+			}
+			report.Missing = append(report.Missing, Missing{Path: relPath(root, p), Reason: reason})
+			return nil
+		}
+		report.WithFrontmatter++
+		var missingKeys []string
+		seen := map[string]bool{}
+		for _, key := range keys {
+			if _, exists := fm[key]; !exists && !seen[key] {
+				missingKeys = append(missingKeys, key)
+				seen[key] = true
+			}
+		}
+		if len(missingKeys) != 0 {
+			report.Missing = append(report.Missing, Missing{Path: relPath(root, p), Reason: "missing_keys", MissingKeys: missingKeys})
 		}
 		fields := make(map[string]any, len(fm))
 		for k, v := range fm {
@@ -76,14 +123,15 @@ func Scan(fsys vfs.FileSystem, root string, extenders ...Extender) ([]Record, er
 				fields[k] = v
 			}
 		}
-		records = append(records, Record{Path: relPath(root, p), Fields: fields})
+		report.Records = append(report.Records, Record{Path: relPath(root, p), Fields: fields})
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return Report{}, err
 	}
-	sort.Slice(records, func(i, j int) bool { return records[i].Path < records[j].Path })
-	return records, nil
+	sort.Slice(report.Records, func(i, j int) bool { return report.Records[i].Path < report.Records[j].Path })
+	sort.Slice(report.Missing, func(i, j int) bool { return report.Missing[i].Path < report.Missing[j].Path })
+	return report, nil
 }
 
 // relPath returns p expressed relative to root (POSIX, no leading slash), so a

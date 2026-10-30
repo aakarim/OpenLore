@@ -13,7 +13,7 @@ func CmdType(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 	exitCode := 0
 	for _, name := range args {
 		found := false
-		if IsKnown(name) {
+		if IsKnown(name) && ctx.ActionAllowed(ActionFor(name)) {
 			fmt.Fprintf(w, "%s is a shell builtin\n", name)
 			found = true
 		}
@@ -40,7 +40,7 @@ func CmdCommand(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdi
 		exitCode := 0
 		for _, name := range cmdArgs {
 			found := false
-			if IsKnown(name) {
+			if IsKnown(name) && ctx.ActionAllowed(ActionFor(name)) {
 				fmt.Fprintln(w, name)
 				found = true
 			}

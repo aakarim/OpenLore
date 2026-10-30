@@ -381,6 +381,43 @@ func remoteSyncClient(t *testing.T, files map[string]string) (*skillsremote.Clie
 	return &skillsremote.Client{HTTP: server.Client(), GitHubBase: server.URL, CodeloadBase: server.URL}, oldSHA
 }
 
+func TestAgentSkillsRemoteSyncMaterializesFolderIndex(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "docs", "valid"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	auth := serverAuth(map[string]config.DocsetSpec{"docs": docset("/docs", nil)}, nil)
+	authFile := filepath.Join(t.TempDir(), "lore.json")
+	writeAuthFixture(t, authFile, auth)
+	s, err := NewServer(root, WithReadonly(false), config.WithDataDir(t.TempDir()), config.WithAuthFile(authFile), config.WithEmbeddedConfig([]byte("plugins:\n  skills:\n    enabled: true\n"), ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Shutdown(context.Background()) })
+	client, oldSHA := remoteSyncClient(t, map[string]string{
+		"SKILL.md": string(skillBytes("valid")),
+		"index.md": "<!-- lore:index -->outdated<!-- /lore:index -->",
+		"guide.md": "---\ntitle: Remote guide\n---\nUseful body",
+	})
+	stored, err := agentskills.GraftRemote(skillBytes("valid"), agentskills.Remote{Repo: "owner/repo", Path: "valid", Ref: "main", Commit: oldSHA, Kind: "tracking"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "docs", "valid", "SKILL.md"), stored, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s.agentSkills.remote = client
+	s.agentSkills.syncSkill(context.Background(), "/docs/valid", true)
+	index, err := s.merge.ReadFile("/docs/valid/index.md")
+	if err != nil || !bytes.Contains(index, []byte("[Remote guide](guide.md)")) || bytes.Contains(index, []byte("outdated")) {
+		t.Fatalf("remote sync did not materialize index: %q err=%v failure=%s", index, err, s.agentSkills.failures["/docs/valid"].message)
+	}
+	current, _ := s.merge.ReadFile("/docs/valid/SKILL.md")
+	if bytes.Equal(current, stored) {
+		t.Fatal("remote skill did not advance to the fetched commit")
+	}
+}
+
 func TestAgentSkillsSyncHandlesFileDirectoryTransitions(t *testing.T) {
 	for _, tc := range []struct {
 		name, oldKind string

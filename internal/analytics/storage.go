@@ -758,6 +758,17 @@ CREATE INDEX IF NOT EXISTS analytics_events_time ON analytics_events(time_ns);`)
 	} else if !strings.Contains(alterErr.Error(), "duplicate column") {
 		err = alterErr
 	}
+	if err == nil {
+		// Version 1 separates authored writes from moves/maintenance and adds
+		// move lineage to daily partials. Old partials cannot be merged under
+		// those semantics. Rebuild only derived views; retain events and facts.
+		var version int
+		err = tx.QueryRow(`PRAGMA user_version`).Scan(&version)
+		if err == nil && version < 1 {
+			_, err = tx.Exec(`DELETE FROM dashboard_days; DELETE FROM dashboard_views;
+DELETE FROM materializations; PRAGMA user_version=1;`)
+		}
+	}
 	if err != nil {
 		_ = tx.Rollback()
 		db.Close()

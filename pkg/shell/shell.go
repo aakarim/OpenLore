@@ -26,9 +26,10 @@ import (
 
 // Shell is a restricted bash-like shell that operates over any vfs.FileSystem.
 type Shell struct {
-	fs  vfs.FileSystem
-	cwd string
-	env map[string]string
+	fs           vfs.FileSystem
+	cwd          string
+	env          map[string]string
+	inspectionFS vfs.FileSystem
 	// allowedActions is the per-session capability set (Part B). nil means
 	// "unrestricted" — every action is allowed (the default, backward
 	// compatible). When non-nil, a command (or redirect) whose capability
@@ -303,6 +304,17 @@ func (s *Shell) Context() context.Context {
 
 func (s *Shell) MetricsEnabled() bool                          { return s.metricEmitter != nil }
 func (s *Shell) SetInvocationObserver(fn func(string, string)) { s.invocationObserver = fn }
+
+// SetInspectionFS supplies an authorized read view for background discovery.
+// Such scans must not advance the CAS baseline of content shown to the user.
+func (s *Shell) SetInspectionFS(fsys vfs.FileSystem) { s.inspectionFS = fsys }
+
+func (s *Shell) InspectionFS() vfs.FileSystem {
+	if s.inspectionFS != nil {
+		return s.inspectionFS
+	}
+	return s.fs
+}
 
 // --- CmdContext interface implementation ---
 

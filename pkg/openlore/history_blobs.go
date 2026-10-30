@@ -43,6 +43,7 @@ type LeafRecord struct {
 	AfterHash     string           `json:"after_hash,omitempty"`
 	AfterSize     int64            `json:"after_size,omitempty"`
 	BeforeUnknown bool             `json:"before_unknown,omitempty"`
+	Generated     bool             `json:"generated,omitempty"`
 }
 type BlobStats struct{ Objects, Bytes int64 }
 type HistoryGCStats struct{ Objects, Bytes int64 }
@@ -172,6 +173,9 @@ func capturePreImages(ctx context.Context, fsys vfs.FileSystem, blobs BlobStore,
 			return nil
 		}
 		record := LeafRecord{Target: vfs.CleanPath(leaf.Target), Action: leaf.Action}
+		if leaf.Write != nil {
+			record.Generated = leaf.Write.Generated
+		}
 		if err == nil && !info.Dir {
 			record.BeforeExists = true
 			b, e := fsys.ReadFile(leaf.Target)
