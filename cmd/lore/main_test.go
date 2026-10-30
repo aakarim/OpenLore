@@ -18,6 +18,7 @@ import (
 	"github.com/aakarim/go-openlore/internal/lore"
 	"github.com/aakarim/go-openlore/internal/lore/api"
 	"github.com/aakarim/go-openlore/pkg/openlore"
+	"github.com/aakarim/go-openlore/pkg/shell"
 )
 
 func TestInitRepository(t *testing.T) {
@@ -45,6 +46,10 @@ func TestInitRepository(t *testing.T) {
 				t.Fatalf("init: %v; %s", err, out.String())
 			}
 			root := filepath.Join(cwd, dir)
+			root, err := filepath.EvalSymlinks(root)
+			if err != nil {
+				t.Fatal(err)
+			}
 			found, err := lore.FindRoot(root)
 			if err != nil || found != root {
 				t.Fatalf("repository root = %q, %v; want %q", found, err, root)
@@ -55,6 +60,16 @@ func TestInitRepository(t *testing.T) {
 			}
 			if cfg.ConfigVersion != "1" || cfg.Port != 2222 || cfg.HTTPPort != 8080 || cfg.MetricsPort != 3000 || !cfg.Readonly || !cfg.MCPEnabled || cfg.MCPPath != "/mcp" || !cfg.APIEnabled || cfg.APIPath != "/api" {
 				t.Fatal("generated config does not use default server settings")
+			}
+			docs := t.TempDir()
+			if err := os.WriteFile(filepath.Join(docs, "README.md"), []byte("Team knowledge\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			sh := shell.NewShell(openlore.NewDirFS(docs, cfg.Files))
+			sh.SetCwd(cfg.DefaultCwd)
+			var stdout, stderr bytes.Buffer
+			if code := sh.Exec("cat README.md", &stdout, &stderr, nil); code != 0 || stdout.String() != "Team knowledge\n" {
+				t.Fatalf("read from initial shell directory: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 			}
 			// A rerun must preserve even a hand-edited configuration.
 			file := filepath.Join(root, "openlore.yml")

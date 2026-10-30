@@ -145,6 +145,9 @@ port: 2222
 http_port: 8080
 metrics_port: 3000
 
+# Start shells at the root of the documents served by openlore ./docs.
+default_cwd: /
+
 # The server is read-only by default.
 readonly: true
 
