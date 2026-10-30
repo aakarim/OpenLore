@@ -528,7 +528,7 @@ func (l *lexer) scanHeredocOpener() token {
 	} else {
 		for l.pos < len(l.src) {
 			c := l.peek()
-			if c == ' ' || c == '\t' || c == '\n' || c == ';' || c == '|' || c == '&' || c == ')' {
+			if c == ' ' || c == '\t' || c == '\n' || c == ';' || c == '|' || c == '&' || c == ')' || c == '<' {
 				break
 			}
 			delim.WriteByte(l.advance())

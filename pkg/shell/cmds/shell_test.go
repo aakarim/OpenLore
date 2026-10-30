@@ -260,6 +260,10 @@ func TestInputRedirectionRejectedBeforeExecution(t *testing.T) {
 		"value=$(sha256sum < /docs/notes.txt); echo must-not-run",
 		`echo "$(cat </docs/notes.txt)"`,
 		`echo "${missing:-$(cat < /docs/notes.txt)}"`,
+		`for x in </docs/notes.txt; do echo "$x"; done`,
+		`echo must-not-run; for x in before < /docs/notes.txt; do echo "$x"; done`,
+		"cat <<EOF</docs/notes.txt\nbody\nEOF\necho must-not-run",
+		"cat <<-EOF</docs/notes.txt\n\tbody\n\tEOF\necho must-not-run",
 	} {
 		t.Run(command, func(t *testing.T) {
 			out, errOut, code := execCmd(t, testFS(), command)
@@ -279,6 +283,10 @@ func TestLiteralLessThanAndHeredoc(t *testing.T) {
 		`[[ a < b ]] && echo '<'`,
 		`[[ b < a ]] || echo '<'`,
 		"cat <<'EOF'\n<\nEOF",
+		`for x in '<'; do echo "$x"; done`,
+		`for x in "<"; do echo "$x"; done`,
+		`for x in \<; do echo "$x"; done`,
+		"cat <<'END<MARK'\n<\nEND<MARK",
 	} {
 		out, errOut, code := execCmd(t, testFS(), command)
 		if code != 0 || out != "<\n" || errOut != "" {

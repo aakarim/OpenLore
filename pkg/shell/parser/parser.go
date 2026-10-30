@@ -356,6 +356,9 @@ func parseFor(t *tokenizer) (Command, error) {
 			if tok.kind == tokWord && tok.val == "do" {
 				break
 			}
+			if tok.kind == tokRedirIn {
+				return nil, fmt.Errorf("input redirection '<' is not supported; use 'cat file | cmd'")
+			}
 			t.next()
 			items = append(items, t.parseWordString(tok.val))
 		}
