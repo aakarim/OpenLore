@@ -31,7 +31,7 @@ necessarily the current version. Dates are the GitHub publication dates in UTC.
 
 ## Unreleased
 
-## v0.8.0 — 2026-10-29
+## v0.8.0 — 2026-10-30
 
 [Release notes and downloads](https://github.com/aakarim/OpenLore/releases/tag/v0.8.0)
 
