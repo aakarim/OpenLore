@@ -291,6 +291,7 @@ func newMCPListCommandsHandler() mcp.ToolHandlerFor[mcpListCommandsInput, any] {
 			sb.WriteString("\n")
 		}
 		sb.WriteString("\nOpenLore restricted-shell syntax: pipes (|), && / ||, for/while/if, variables, subshells. This is not Bash and cannot run arbitrary executables.")
+		sb.WriteString("\nRedirections: >, >>, 2>, 2>>, 2>&1, and <<'EOF' heredocs. Input redirection (< file) is not supported; use cat file | cmd.")
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: sb.String()}},
 		}, nil, nil
