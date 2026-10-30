@@ -12,6 +12,9 @@ func Parse(src string) (*File, error) {
 	if err != nil {
 		return nil, err
 	}
+	if t.err != nil {
+		return nil, t.err
+	}
 	return &File{Stmts: stmts}, nil
 }
 
@@ -147,6 +150,8 @@ func parseCommand(t *tokenizer) (Command, error) {
 	tok := t.peek()
 
 	switch tok.kind {
+	case tokRedirIn:
+		return parseSimpleCommand(t)
 	case tokLParen:
 		return parseSubshell(t)
 	case tokLBrace:
@@ -208,9 +213,9 @@ func parseTestClause(t *tokenizer) (Command, error) {
 		if tok.kind == tokDblRBracket || tok.kind == tokEOF {
 			break
 		}
-		if tok.kind == tokWord {
+		if tok.kind == tokWord || tok.kind == tokRedirIn {
 			t.next()
-			words = append(words, parseWordString(tok.val))
+			words = append(words, t.parseWordString(tok.val))
 		} else {
 			// consume unexpected
 			t.next()
@@ -352,7 +357,7 @@ func parseFor(t *tokenizer) (Command, error) {
 				break
 			}
 			t.next()
-			items = append(items, parseWordString(tok.val))
+			items = append(items, t.parseWordString(tok.val))
 		}
 	}
 
@@ -402,7 +407,7 @@ func parseDecl(t *tokenizer) (Command, error) {
 			val := tok.val[idx+1:]
 			dc.Args = append(dc.Args, &Assign{
 				Name:  &Lit{Value: name},
-				Value: parseWordString(val),
+				Value: t.parseWordString(val),
 			})
 		} else {
 			dc.Args = append(dc.Args, &Assign{
@@ -445,7 +450,7 @@ func parseSimpleCommand(t *tokenizer) (Command, error) {
 			val := tok.val[idx+1:]
 			call.Assigns = append(call.Assigns, &Assign{
 				Name:  &Lit{Value: name},
-				Value: parseWordString(val),
+				Value: t.parseWordString(val),
 			})
 			continue
 		}
@@ -462,7 +467,9 @@ func parseSimpleCommand(t *tokenizer) (Command, error) {
 				return finalizeCall(call), nil
 			}
 			t.next()
-			call.Args = append(call.Args, parseWordString(tok.val))
+			call.Args = append(call.Args, t.parseWordString(tok.val))
+		case tokRedirIn:
+			return nil, fmt.Errorf("input redirection '<' is not supported; use 'cat file | cmd'")
 		case tokHeredoc:
 			t.next()
 			call.Heredocs = append(call.Heredocs, tok.hd)
@@ -478,7 +485,7 @@ func parseSimpleCommand(t *tokenizer) (Command, error) {
 				return nil, fmt.Errorf("syntax error: expected filename after %s", redirOpString(appendMode))
 			}
 			t.next()
-			call.Redirect = &Redirect{Target: parseWordString(tgt.val), Append: appendMode, Stderr: stderr}
+			call.Redirect = &Redirect{Target: t.parseWordString(tgt.val), Append: appendMode, Stderr: stderr}
 		default:
 			return finalizeCall(call), nil
 		}
@@ -522,8 +529,8 @@ func isNameChar(ch byte) bool {
 
 // parseWordString parses a raw word string into a Word AST with parts
 // for expansions, quoting, etc.
-func parseWordString(s string) *Word {
-	parts := parseWordParts(s, false)
+func (t *tokenizer) parseWordString(s string) *Word {
+	parts := t.parseWordParts(s, false)
 	if len(parts) == 0 {
 		return &Word{Parts: []WordPart{&Lit{Value: ""}}}
 	}
@@ -532,7 +539,7 @@ func parseWordString(s string) *Word {
 
 // parseWordParts parses word parts from a string.
 // inDblQuote indicates we're inside double quotes.
-func parseWordParts(s string, inDblQuote bool) []WordPart {
+func (t *tokenizer) parseWordParts(s string, inDblQuote bool) []WordPart {
 	var parts []WordPart
 	var lit strings.Builder
 	i := 0
@@ -606,7 +613,7 @@ func parseWordParts(s string, inDblQuote bool) []WordPart {
 			if i < len(s) {
 				i++ // skip closing "
 			}
-			innerParts := parseWordParts(inner, true)
+			innerParts := t.parseWordParts(inner, true)
 			parts = append(parts, &DblQuoted{Parts: innerParts})
 			continue
 		}
@@ -660,6 +667,8 @@ func parseWordParts(s string, inDblQuote bool) []WordPart {
 				var stmts []*Stmt
 				if err == nil {
 					stmts = innerFile.Stmts
+				} else if t.err == nil {
+					t.err = err
 				}
 				parts = append(parts, &CmdSubst{Stmts: stmts})
 				continue
@@ -667,7 +676,7 @@ func parseWordParts(s string, inDblQuote bool) []WordPart {
 
 			if i+1 < len(s) && s[i+1] == '{' {
 				flushLit()
-				pe := parseBraceExpansion(s, &i)
+				pe := t.parseBraceExpansion(s, &i)
 				parts = append(parts, pe)
 				continue
 			}
@@ -705,7 +714,7 @@ func parseWordParts(s string, inDblQuote bool) []WordPart {
 }
 
 // parseBraceExpansion parses ${...} parameter expansion.
-func parseBraceExpansion(s string, pos *int) *ParamExp {
+func (t *tokenizer) parseBraceExpansion(s string, pos *int) *ParamExp {
 	*pos += 2 // skip ${
 	i := *pos
 
@@ -819,7 +828,7 @@ func parseBraceExpansion(s string, pos *int) *ParamExp {
 		Param: &Lit{Value: name},
 		Exp: &Expansion{
 			Op:   op,
-			Word: parseWordString(wordStr),
+			Word: t.parseWordString(wordStr),
 		},
 	}
 }

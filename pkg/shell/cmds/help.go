@@ -162,5 +162,6 @@ func CmdHelp(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 	fmt.Fprintln(w, "  skills                                   Show Agent Skills usage and installed instructions")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Pipes are supported: grep pattern /dir | head -5 | sort -u")
+	fmt.Fprintln(w, "Input redirection (< file) is not supported; use cat file | cmd.")
 	return 0
 }

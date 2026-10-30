@@ -249,6 +249,44 @@ func TestExitStatusParamAfterParseError(t *testing.T) {
 	}
 }
 
+func TestInputRedirectionRejectedBeforeExecution(t *testing.T) {
+	for _, command := range []string{
+		"sha256sum < /docs/notes.txt",
+		"wc -l</docs/notes.txt",
+		"read x < /docs/notes.txt",
+		"< /docs/notes.txt cat",
+		"echo must-not-run; cat < /docs/notes.txt",
+		"echo must-not-run | cat < /docs/notes.txt",
+		"value=$(sha256sum < /docs/notes.txt); echo must-not-run",
+		`echo "$(cat </docs/notes.txt)"`,
+		`echo "${missing:-$(cat < /docs/notes.txt)}"`,
+	} {
+		t.Run(command, func(t *testing.T) {
+			out, errOut, code := execCmd(t, testFS(), command)
+			if code != 2 || out != "" || !strings.Contains(errOut, "parse error: input redirection '<' is not supported") || !strings.Contains(errOut, "cat file | cmd") {
+				t.Fatalf("stdout=%q stderr=%q exit=%d", out, errOut, code)
+			}
+		})
+	}
+}
+
+func TestLiteralLessThanAndHeredoc(t *testing.T) {
+	for _, command := range []string{
+		`echo '<'`,
+		`echo "<"`,
+		`echo \<`,
+		`value='<'; echo "$value"`,
+		`[[ a < b ]] && echo '<'`,
+		`[[ b < a ]] || echo '<'`,
+		"cat <<'EOF'\n<\nEOF",
+	} {
+		out, errOut, code := execCmd(t, testFS(), command)
+		if code != 0 || out != "<\n" || errOut != "" {
+			t.Errorf("%s: stdout=%q stderr=%q exit=%d", command, out, errOut, code)
+		}
+	}
+}
+
 func TestPipeWithVariableExpansion(t *testing.T) {
 	sh := shell.NewShell(testFS())
 	sh.SetEnv("PAT", "alice")

@@ -316,6 +316,7 @@ pass `-L`.
 | Feature | Example |
 |---|---|
 | Pipes | `grep pattern file \| sort \| head -5` |
+| Redirections | `>`, `>>`, `2>`, `2>>`, `2>&1`, and `<<'EOF'` heredocs are supported. Input redirection (`< file`) is rejected before execution; use `cat file \| cmd` instead |
 | AND / OR | `test -f x && echo yes \|\| echo no` |
 | Semicolons | `echo a; echo b` |
 | Subshells | `(echo a; echo b)` |
