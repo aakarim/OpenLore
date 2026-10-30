@@ -31,7 +31,7 @@ necessarily the current version. Dates are the GitHub publication dates in UTC.
 
 ## Unreleased
 
-## v0.8.0 — 2026-10-29
+## v0.8.0 — 2026-10-30
 
 [Release notes and downloads](https://github.com/aakarim/OpenLore/releases/tag/v0.8.0)
 
@@ -46,8 +46,8 @@ credentials. You choose which imported stores agents can read.
 gateway roadmap. This release delivers client-driven import from Claude Code,
 local folders, and Git repositories, a versioned docstore, and read-only
 projections. Automatic sync, arbitrary source connectors, importing as editable
-documents, and link verification remain future work. Learn how it fits together
-in the [knowledge gateway guide](https://openlore.sh/docs/concepts/knowledge-gateway/).
+documents, and gateway-wide link verification remain future work. Learn how it
+fits together in the [knowledge gateway guide](https://openlore.sh/docs/concepts/knowledge-gateway/).
 
 ### New: the `lore` client
 
@@ -70,6 +70,11 @@ lore source add https://github.com/acme/payments --name payments \
 lore status
 lore sync
 ```
+
+For a new repository, `lore init [directory]` creates default server settings
+without a login or overwriting an existing `openlore.yml`. It does not initialise
+Git or create identities and access policy; configure those before syncing to a
+shared server ([#234](https://github.com/aakarim/OpenLore/pull/234)).
 
 `lore login` supports browser passkeys or a minted token. `lore source list`
 shows your sources and `lore source rm <name>` removes a source definition
@@ -114,6 +119,15 @@ show projected stores and their latest snapshots.
   docstore, with per-installation applied and rejected versions. Invalid
   upstream versions leave the last valid installed skill available. Client Git
   stores remain separate from server-owned skill source stores.
+- **Content reorganisation:** server file moves commit atomically and retain
+  provenance through `lore history <path>`. Usage follows moves within the
+  caller's readable query scope without counting moves as authored writes.
+  Opt-in folder indexes refresh in the same governed batch. `mv` warns about
+  stale references; `lore links --to <path>` lists readable references for
+  repair, while `replace` and `lore meta set` / `unset` provide literal and
+  structured edits. `lore meta --missing` finds missing frontmatter or named
+  fields. References are not rewritten automatically
+  ([#231](https://github.com/aakarim/OpenLore/pull/231)).
 - **Dashboard:** resizable desktop file tree, file refresh/retry controls, and
   a file-tab context menu.
 - **Observability:** opt-in OpenTelemetry tracing and correlation.
@@ -132,6 +146,7 @@ show projected stores and their latest snapshots.
 - Fixed imported-skill installation reconciliation ([#228](https://github.com/aakarim/OpenLore/pull/228)).
 - Fixed `jq` subtraction filters being interpreted as flags ([#227](https://github.com/aakarim/OpenLore/pull/227)).
 - Fixed docstore guest access, cross-source blob authorization, and upload-size enforcement; client snapshots now require verified source-scoped uploads or committed history ([#229](https://github.com/aakarim/OpenLore/pull/229)).
+- Fixed unsupported `< file` input redirection being silently accepted; it now fails with guidance to use `cat file | command` ([#233](https://github.com/aakarim/OpenLore/pull/233)).
 - Virtual filesystem errors no longer expose host filesystem paths.
 - Added import guides and the `lore` CLI reference, a LangChain start guide,
   cloud agent setup guides, HTTPS and production guidance, and clearer
@@ -169,6 +184,11 @@ For other platforms, download the matching archive from this release. Existing
 server configurations need no migration. To use imports, enable the HTTP API,
 run `lore sync`, and explicitly configure projections. MCP clients must refresh
 tool discovery and update rules that name the old `shell` tool.
+
+On upgrade, SQLite-derived analytics views and daily partials rebuild once from
+retained events; recorded events and content facts are preserved. Move continuity
+requires retained move events and cannot be reconstructed for older unlinked
+moves ([#231](https://github.com/aakarim/OpenLore/pull/231)).
 
 ### Security boundaries and limitations
 
