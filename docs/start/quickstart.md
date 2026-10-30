@@ -1,6 +1,6 @@
 # Quickstart
 
-Install OpenLore, serve a folder of Markdown, and connect an agent.
+Install OpenLore, set up a knowledge repository, and connect an agent.
 
 ## Install
 
@@ -58,7 +58,26 @@ The startup banner's `Dashboard:` line shows whether your binary includes it.
 
 To run a hosted server instead, see [Deploy a shared server](deploy.md).
 
+## Set up your knowledge repository
+
+Create a folder for your team's knowledge and server settings:
+
+```shell
+lore init my-knowledge
+cd my-knowledge
+```
+
+`lore init` creates the folder and an `openlore.yml` with default server settings.
+To initialise the current folder instead, run `lore init` without a directory.
+It never overwrites an existing `openlore.yml`.
+
+Put your Markdown in a `docs/` folder inside the repository. For identities,
+access controls and tracking settings in Git, see
+[Create a knowledge repository](create-knowledge-repository.md).
+
 ## Serve a folder
+
+From your knowledge repository, start the server:
 
 ```shell
 openlore ./docs
