@@ -12,7 +12,7 @@ func CmdWhich(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin 
 	exitCode := 0
 	for _, name := range args {
 		found := false
-		if IsKnown(name) {
+		if IsKnown(name) && ctx.ActionAllowed(ActionFor(name)) {
 			fmt.Fprintf(w, "%s: shell built-in command\n", name)
 			found = true
 		}

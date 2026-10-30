@@ -23,6 +23,7 @@ const (
 	tokDblLBracket    // [[
 	tokDblRBracket    // ]]
 	tokHeredoc        // <<DELIM heredoc opener
+	tokRedirIn        // < unsupported input redirection
 	tokRedirMerge     // 2>&1 stderr→stdout merge
 	tokRedirOut       // > stdout overwrite redirection
 	tokRedirAppend    // >> stdout append redirection
@@ -127,14 +128,11 @@ func (l *lexer) next() token {
 		return token{kind: tokSemi}
 
 	case '<':
-		// Recognize <<DELIM and <<-DELIM heredoc openers. Any other use of
-		// `<` (e.g. `< file` redirection) is not supported and is treated as
-		// part of a word so it surfaces as a clear "command not found"
-		// rather than silently dropping data.
 		if l.peekAt(1) == '<' {
 			return l.scanHeredocOpener()
 		}
-		return l.scanWord()
+		l.advance()
+		return token{kind: tokRedirIn, val: "<"}
 
 	case '(':
 		// Check for (( arithmetic — just consume as no-op
@@ -281,7 +279,7 @@ func (l *lexer) scanWord() token {
 				return token{kind: tokWord, val: val}
 			}
 		}
-		if ch == ' ' || ch == '\t' || ch == '\n' || ch == ';' || ch == '|' || ch == '&' || ch == ')' || (ch == '>' && sb.Len() > 0) {
+		if ch == ' ' || ch == '\t' || ch == '\n' || ch == ';' || ch == '|' || ch == '&' || ch == ')' || ch == '<' || (ch == '>' && sb.Len() > 0) {
 			break
 		}
 		// { and } are included in words (e.g., {}, 'got: {}')
@@ -430,6 +428,7 @@ type tokenizer struct {
 	lex     *lexer
 	peeked  *token
 	prevVal string
+	err     error // nested command-substitution parse failure
 }
 
 func newTokenizer(src string) *tokenizer {
@@ -529,7 +528,7 @@ func (l *lexer) scanHeredocOpener() token {
 	} else {
 		for l.pos < len(l.src) {
 			c := l.peek()
-			if c == ' ' || c == '\t' || c == '\n' || c == ';' || c == '|' || c == '&' || c == ')' {
+			if c == ' ' || c == '\t' || c == '\n' || c == ';' || c == '|' || c == '&' || c == ')' || c == '<' {
 				break
 			}
 			delim.WriteByte(l.advance())

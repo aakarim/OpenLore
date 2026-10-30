@@ -47,6 +47,71 @@ line is exactly `EOF`. The heredoc supplies stdin to `cat`, and `>` writes the
 whole document atomically. It does not bypass write permissions or conflict
 checks; read an existing file before replacing it.
 
+### Moving documents
+
+File moves on the server commit the destination and source removal as one
+atomic, governed batch. `lore history <destination>` follows the move back to
+the original writes without changing the file's bytes or frontmatter.
+`mv` warns about stale references in readable Markdown files;
+`lore links --to <old-path>` lists them again for repair. Use `replace` for
+literal path edits and `lore meta set` / `unset` for structured frontmatter
+edits. See the [command reference](../reference/commands.md#lore-history-path).
+
+## Generated folder indexes
+
+To keep a folder's index in sync, put one marker pair in its `index.md`:
+
+```markdown
+# Fundraising
+
+Purpose, notes and curated links stay here.
+
+<!-- lore:index -->
+<!-- /lore:index -->
+```
+
+Writes through server admission fill the section with links, titles and
+descriptions from the folder's direct-child Markdown files. Entries are sorted
+by filename; missing titles fall back to filenames. Files without parseable
+frontmatter appear under **Unindexed** rather than disappearing. `index.md`
+does not list itself. All bytes before and after the marker contents are
+preserved, including frontmatter and manually curated text.
+
+Adding, editing, removing or moving a file refreshes opted-in indexes in the
+same atomic batch. Generated writes are subject to the caller's permissions,
+folder rules, approval middleware and conflict checks. If the caller cannot
+update the index, or the index changes concurrently, the whole operation fails
+rather than leaving the index stale; re-read and retry. An index without
+markers is never generated. The current format has no configurable grouping,
+sort order or recursive depth. Out-of-band filesystem edits do not refresh it.
+
+Moving an opted-in `index.md` refreshes its generated section for the destination
+folder. History distinguishes that refresh from the hash-preserving move.
+
+## Analytics when reorganising content
+
+Moves and generated index refreshes remain in the audit trail, but do not count
+as authored writes in usage summaries, human/agent write ratios or Prometheus
+write counters. Literal replacements and frontmatter edits remain ordinary
+authored writes. Size-over-time still includes both sides of a move and generated
+index changes, so content inventory remains accurate, including overwrites.
+An unchanged generated section produces no extra maintenance write.
+
+File and folder usage follows recorded moves: reads, search hits, last-read time
+and hash-specific coverage transfer to the destination, not to a new file later
+created at the old path. Both endpoints must be readable and inside the query's
+path scope. Narrow destination-only queries therefore do not inherit reads from
+outside that scope; single-file line rankings remain exact-path-only. Moves do
+not rewrite historical read events or change total read/token counts. Internal
+reference and index scans do not count as user reads.
+
+Move continuity requires the live move event in retained analytics history;
+scalar replay preserves inventory and maintenance classification but does not
+reconstruct missed moves. Older events without move/generated metadata keep
+their original interpretation. On upgrade, SQLite-derived analytics views and
+daily partials rebuild once from retained events; events and content facts are
+preserved.
+
 ## Publish to an inbox
 
 The `publish` grant is contributor write access: read a whole docset while

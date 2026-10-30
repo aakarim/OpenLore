@@ -219,6 +219,7 @@ func TestExecShellTranscriptPreservesStreams(t *testing.T) {
 		{name: "stdout only", command: "cat /docs/a.md", wantOutput: "hello\n", wantStdout: "hello\n"},
 		{name: "nonzero with stdout", command: "grep -c absent /docs/a.md", wantOutput: "0\n", wantStdout: "0\n", wantExit: 1},
 		{name: "stderr only", command: "cat /does/not/exist", wantOutput: "cat: /does/not/exist: open does/not/exist: file does not exist\n", wantStderr: "cat: /does/not/exist: open does/not/exist: file does not exist\n", wantExit: 1},
+		{name: "unsupported input redirection", command: "sha256sum < /docs/a.md", wantOutput: "parse error: input redirection '<' is not supported; use 'cat file | cmd'\n", wantStderr: "parse error: input redirection '<' is not supported; use 'cat file | cmd'\n", wantExit: 2},
 		{name: "exit code only", command: "false", wantExit: 1},
 	}
 	for _, tc := range cases {

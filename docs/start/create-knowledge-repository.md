@@ -23,16 +23,20 @@ acme-lore/
 Name it after the team and initialise Git:
 
 ```shell
-mkdir acme-lore && cd acme-lore && git init
+lore init acme-lore
+cd acme-lore
+git init
 ```
 
-Git reports an empty repository. Everything below goes into this folder.
+`lore init` creates the folder and a default `openlore.yml`; Git reports an
+empty repository. Everything below goes into this folder. For an existing
+folder without `openlore.yml`, run `lore init` inside it instead.
 
 ---
 
 ### 2. Describe the server
 
-Create `openlore.yml` with the ports, the address clients use and the HTTP API the `lore` client talks to. Every key is listed in the [`openlore.yml` reference](../reference/openlore-yml.md).
+Replace the generated `openlore.yml` with the settings below to add the address clients use, access policy and token issuance for `lore login`. Every key is listed in the [`openlore.yml` reference](../reference/openlore-yml.md).
 
 ```yaml
 version: "1"

@@ -24,11 +24,11 @@ cleanly.
    `WriteFileAtomic`: it takes the complete new contents and commits them in one
    `rename(2)`. There is no way to observe or persist a half-written file. Even
    "append" and "patch" are implemented as read-modify-write of the whole file.
-2. **One write seam.** Every content-writing verb (`>`, `>>`, `tee`, `sed -i`,
-   `patch`, `mv`, `publish`, and the async `spawn` write-back) funnels through one helper
-   (`cmds.WriteFile` / `cmds.WriteFileCAS`). Concurrency control, scoping, and
-   admission policy are enforced once, at that seam — not re-implemented per
-   command.
+2. **One write seam.** Content-writing verbs (`>`, `>>`, `tee`, `sed -i`,
+   `replace`, `lore meta set` / `unset`, `patch`, `publish`, and the async
+   `spawn` write-back) use `cmds.WriteFile` / `cmds.WriteFileCAS`. File moves
+   submit a paired batch through `ChangeSetAdmitter`. Both routes feed the
+   same scope checks, admission chain and ordered applier.
 3. **Read-only by default.** The substrate boots read-only. Writes require an
    explicit, stateful flip (`SetWriteable`). Embedded (`embed.FS`) builds can
    never be made writable — the capability is physically absent.
@@ -192,12 +192,47 @@ write: [`write`/`tee`/redirects](../../pkg/shell/cmds/write.go),
 [`publish`](../../pkg/shell/cmds/publish.go), and
 [`spawn`](../../pkg/shell/cmds/spawn.go)'s background write-back.
 
-`mv` supports files only. It writes the destination through `WriteFile`, then
-deletes the source with a snapshot precondition so a concurrent source edit is
-never removed. These are two independently scoped and admitted changes;
-if source deletion is held or denied after the destination commits, both files
-remain and the command reports that outcome. Directory moves are rejected
-because the VFS has no atomic tree-write primitive.
+`mv` supports files only. Server sessions submit one rollback-protected batch
+containing a destination write and snapshot-guarded source removal, with an
+explicit `Moves` pair linking the leaves. Scope, admission, deferral and commit
+apply to the whole batch. A stale source cannot be removed, and a rejected or
+held batch does not leave a destination copy behind. Filesystems advertising
+batch admission must support it; an unsupported atomic move fails non-zero.
+Standalone filesystem adapters without batch admission retain the legacy
+write-then-remove fallback. Directory moves are rejected because the VFS has
+no atomic tree-write primitive.
+
+The metadata history index records one `move` event linked to both paths,
+including the unchanged hash and attribution. `lore history <path>` follows
+those links backwards using only the relevant path shards, stopping at any
+read-permission boundary. `mv` reports still-referencing Markdown documents
+after a successful move; it never silently rewrites them.
+
+Opted-in [folder indexes](../concepts/writing.md#generated-folder-indexes) are
+expanded into the proposed batch before admission. Generated leaves undergo
+the same authorisation and rules as explicit writes. Their CAS preconditions,
+plus a read-only projection check at the serialised pre-apply seam, prevent
+concurrent and deferred writes from committing an out-of-date index.
+
+### Durable history
+
+The FIFO applier is in memory; **committed history is durable**. On writable
+servers it lives under `<data_dir>/history/` (commonly `/data/history/`), or
+`.openlore/history/` when no data directory is configured:
+
+- `commits.jsonl` and sealed segments hold the mutation journal, including
+  paired move leaves, pre-images and attribution used by replay consumers.
+- `events.jsonl` holds compact metadata events, not file bodies.
+- `files/` holds path-sharded event indexes. A move is indexed under both the
+  old and new paths so it can link their histories without a global scan.
+- Content-addressed history blobs are stored separately when enabled.
+
+The journal, metadata index and filesystem are separate persistence boundaries;
+an index-recording failure after a durable commit is logged, not rolled back.
+The metadata index cannot reconstruct links for old moves that were recorded
+as unrelated writes and deletions. Use `history` or `lore history`, not a
+full-tree grep over the raw data directory, to inspect provenance. The
+commit-journal retention setting does not prune the metadata index.
 
 ---
 

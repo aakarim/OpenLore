@@ -33,6 +33,7 @@ type HistoryRecord struct {
 	FileKey     string      `json:"file_key"`
 	Action      string      `json:"action"`
 	ContentHash string      `json:"content_hash,omitempty"`
+	From        string      `json:"from,omitempty"` // previous path for a move; FileKey is the destination
 }
 
 // HistoryQuery describes a bounded, newest-first metadata query. Cursor is
@@ -42,11 +43,12 @@ type HistoryQuery struct {
 	FileKey string
 	Roots   []string
 	// Boundaries includes ungranted docsets, which carve out readable roots.
-	Boundaries []string
-	Principal  string
-	Actor      string
-	Limit      int
-	Cursor     string
+	Boundaries  []string
+	Principal   string
+	Actor       string
+	Limit       int
+	Cursor      string
+	FollowMoves bool
 }
 
 type HistoryPage struct {
@@ -214,6 +216,9 @@ func (s *JSONLHistoryStore) Record(_ context.Context, records []HistoryRecord) e
 	copy(normalized, records)
 	for i := range normalized {
 		normalized[i].FileKey = vfs.CleanPath(normalized[i].FileKey)
+		if normalized[i].From != "" {
+			normalized[i].From = vfs.CleanPath(normalized[i].From)
+		}
 	}
 
 	if err := appendHistoryRecords(filepath.Join(s.dir, "events.jsonl"), normalized); err != nil {
@@ -230,6 +235,9 @@ func (s *JSONLHistoryStore) Record(_ context.Context, records []HistoryRecord) e
 		return nil
 	}
 	for _, record := range normalized {
+		if record.Action == "move" && record.From != "" {
+			pending[record.From] = append(pending[record.From], record)
+		}
 		switch vfs.ChangeAction(record.Action) {
 		case vfs.ChangeActionRemove:
 			if record.CommitID != "" {
@@ -301,33 +309,28 @@ func (s *JSONLHistoryStore) Query(_ context.Context, query HistoryQuery) (Histor
 	if query.FileKey != "" {
 		path = s.filePath(query.FileKey)
 	}
-
-	f, err := os.Open(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return HistoryPage{}, nil
-	}
+	records, err := readHistoryRecords(path)
 	if err != nil {
 		return HistoryPage{}, err
 	}
-	defer f.Close()
-
-	var matches []HistoryRecord
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		var record HistoryRecord
-		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
+	if query.FileKey != "" && query.FollowMoves {
+		records, err = s.followMoves(query, records)
+		if err != nil {
 			return HistoryPage{}, err
 		}
-		if query.FileKey != "" && record.FileKey != vfs.CleanPath(query.FileKey) {
+	}
+	var matches []HistoryRecord
+	for _, record := range records {
+		if query.FileKey != "" && !query.FollowMoves && record.FileKey != vfs.CleanPath(query.FileKey) && record.From != vfs.CleanPath(query.FileKey) {
 			continue
 		}
-		if !scope.within(record.FileKey) || query.Principal != "" && record.Attribution.Principal != query.Principal || query.Actor != "" && record.Attribution.Actor != query.Actor {
+		if !scope.within(record.FileKey) || record.From != "" && !scope.within(record.From) {
+			continue
+		}
+		if query.Principal != "" && record.Attribution.Principal != query.Principal || query.Actor != "" && record.Attribution.Actor != query.Actor {
 			continue
 		}
 		matches = append(matches, record)
-	}
-	if err := scanner.Err(); err != nil {
-		return HistoryPage{}, err
 	}
 
 	limit := query.Limit
@@ -352,6 +355,76 @@ func (s *JSONLHistoryStore) Query(_ context.Context, query HistoryQuery) (Histor
 		page.NextCursor = formatHistoryCursor(cursor)
 	}
 	return page, nil
+}
+
+func readHistoryRecords(path string) ([]HistoryRecord, error) {
+	f, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	var records []HistoryRecord
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		var record HistoryRecord
+		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	return records, scanner.Err()
+}
+
+// Follow only the shards in this file's lineage, never the global journal.
+// A move is indexed at both paths; its commit is the cutoff in the source's
+// shard, excluding subsequent reuse of that name. Iteration is bounded by the
+// decreasing commit position, even for moves back to an earlier path.
+func (s *JSONLHistoryStore) followMoves(query HistoryQuery, records []HistoryRecord) ([]HistoryRecord, error) {
+	scope := newScopedReadFS(nil, query.Roots, query.Boundaries)
+	tracked := vfs.CleanPath(query.FileKey)
+	var newest []HistoryRecord
+	for i := len(records) - 1; i >= 0; i-- {
+		record := records[i]
+		if record.FileKey != tracked && record.From != tracked {
+			continue
+		}
+		if record.Action == "move" && record.From == tracked && record.FileKey != tracked && len(newest) > 0 {
+			// An earlier occupant left this path before the collected lineage
+			// began. Only include an outgoing move as the first record, so a
+			// query of a moved-away path can still show that file's history.
+			break
+		}
+		if record.Action == "move" && record.FileKey == tracked {
+			if !scope.within(record.From) {
+				break // Do not expose the old path or unrelated overwritten history.
+			}
+			newest = append(newest, record)
+			previous, err := readHistoryRecords(s.filePath(record.From))
+			if err != nil {
+				return nil, err
+			}
+			cutoff := -1
+			for j, candidate := range previous {
+				if candidate.CommitID == record.CommitID && candidate.Time.Equal(record.Time) && candidate.FileKey == record.FileKey && candidate.From == record.From {
+					cutoff = j
+					break
+				}
+			}
+			if cutoff < 0 {
+				break // Missing source shard: retain the move, don't invent lineage.
+			}
+			records, tracked, i = previous[:cutoff], record.From, cutoff
+			continue
+		}
+		newest = append(newest, record)
+	}
+	for i, j := 0, len(newest)-1; i < j; i, j = i+1, j-1 {
+		newest[i], newest[j] = newest[j], newest[i]
+	}
+	return newest, nil
 }
 
 type historyCursor struct {
@@ -435,12 +508,19 @@ func (h scopedHistory) GC() ([]byte, error) {
 }
 
 func (h scopedHistory) Query(principal, actor string) ([]byte, error) {
+	return h.query(HistoryQuery{Roots: h.roots, Principal: principal, Actor: actor})
+}
+
+func (h scopedHistory) QueryPath(path string) ([]byte, error) {
+	return h.query(HistoryQuery{Roots: h.roots, FileKey: path, FollowMoves: true})
+}
+
+func (h scopedHistory) query(query HistoryQuery) ([]byte, error) {
 	var out []byte
-	query := HistoryQuery{Roots: h.roots}
 	if h.liveQuery != nil {
-		query = h.liveQuery()
+		scope := h.liveQuery()
+		query.Roots, query.Boundaries = scope.Roots, scope.Boundaries
 	}
-	query.Principal, query.Actor = principal, actor
 	for {
 		page, err := h.store.Query(context.Background(), query)
 		if err != nil {
@@ -454,7 +534,8 @@ func (h scopedHistory) Query(principal, actor string) ([]byte, error) {
 				Target      string `json:"target"`
 				Action      string `json:"action"`
 				Hash        string `json:"hash,omitempty"`
-			}{record.CommitID, record.Time.Format(time.RFC3339), record.Attribution.String(), record.FileKey, record.Action, record.ContentHash})
+				From        string `json:"from,omitempty"`
+			}{record.CommitID, record.Time.Format(time.RFC3339), record.Attribution.String(), record.FileKey, record.Action, record.ContentHash, record.From})
 			out = append(out, line...)
 			out = append(out, '\n')
 		}

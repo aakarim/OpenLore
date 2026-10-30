@@ -195,6 +195,11 @@ type scalarObservation struct {
 }
 
 type fileReads struct {
+	// Origin describes the usage inherited from the beginning of this partial.
+	// nil means this path, an empty string means no inheritance (a moved-away
+	// path), and another path means that file was moved here. This compact
+	// transformation composes across windows without retaining move events.
+	Origin   *string                  `json:"origin,omitempty"`
 	Reads    int                      `json:"reads"`
 	Hits     int                      `json:"hits"`
 	LastRead *time.Time               `json:"last_read,omitempty"`
@@ -227,6 +232,13 @@ func newFileUsagePartial(prefix string) *fileUsagePartial {
 }
 
 func (f *fileUsagePartial) file(path string) *fileReads {
+	// A restored checkpoint does not contain the running byte count. Add can
+	// resume a checkpoint too, without first calling Merge.
+	if f.pathBytes == 0 {
+		for path := range f.Files {
+			f.pathBytes += len(path)
+		}
+	}
 	file := f.Files[path]
 	if file == nil {
 		if f.summaryOnly && (len(f.Files) >= maxFileUsagePaths || len(path) > maxFileUsagePathBytes-f.pathBytes) {
@@ -244,8 +256,46 @@ func (f *fileUsagePartial) Add(e Event) {
 	if f.Overflow {
 		return
 	}
+	if e.Type != "doc.read" && e.Type != "doc.hit" && e.Type != "doc.scalars" && e.Type != "doc.write" {
+		return
+	}
+	if e.Type == "doc.write" && fieldString(e, "action") != "move" && (!fieldBool(e, "generated") || e.Fields["after"] == nil) {
+		return
+	}
 	filePath := vfs.CleanPath(fieldString(e, "path"))
 	if !pathWithin(f.prefix, filePath) {
+		return
+	}
+	if e.Type == "doc.write" && fieldString(e, "action") == "move" {
+		source, ok := e.Fields["from"].(string)
+		if !ok || source == "" {
+			return
+		}
+		source = vfs.CleanPath(source)
+		// Do not carry usage across query scopes, even if an unfiltered source
+		// supplies the event. ACL-aware sources must also authorize both ends.
+		if source == filePath || !pathWithin(f.prefix, source) {
+			return
+		}
+		previous := f.file(source)
+		if previous == nil || f.file(filePath) == nil {
+			return
+		}
+		moved := *previous
+		if moved.Origin == nil {
+			moved.Origin = &source
+		}
+		f.Files[filePath] = &moved
+		f.Files[source] = &fileReads{Origin: new(string)}
+		return
+	}
+	// Scalar replay can arrive after the destination has moved again or been
+	// reused. Only live doc.write establishes lineage; replay must neither
+	// transfer usage twice nor replace the scalars of a later occupant.
+	// The source's inventory removal can also precede the live move, and
+	// must not erase the scalars that the destination is about to inherit.
+	action := fieldString(e, "action")
+	if e.Type == "doc.scalars" && (action == "move" || action == "move_source") {
 		return
 	}
 	file := f.file(filePath)
@@ -281,7 +331,9 @@ func (f *fileUsagePartial) Add(e Event) {
 		} else {
 			coverage.Whole = true
 		}
-	case "doc.scalars":
+	case "doc.scalars", "doc.write":
+		// Generated writes carry final scalars at the observer's timestamp,
+		// after move lineage is established, unlike commit-time inventory.
 		if file.Scalars == nil || !e.Time.Before(file.Scalars.Time) {
 			after := scalarFields(e.Fields["after"])
 			observation := &scalarObservation{Time: e.Time, Hash: fieldString(e, "content_hash"), Lines: int(after["lines"])}
@@ -302,16 +354,36 @@ func (f *fileUsagePartial) Merge(later Partial) {
 		f.Overflow = true
 		return
 	}
-	// JSON restores exported state, not this running byte count.
-	if f.pathBytes == 0 {
-		for path := range f.Files {
-			f.pathBytes += len(path)
+	// Reserve all touched paths before composing. Tombstones count against
+	// the same budget as reads, so arbitrarily long move chains stay bounded.
+	for path := range nextPartial.Files {
+		if f.file(path) == nil {
+			return
 		}
 	}
+	// Resolve every inherited input before replacing any output: a window
+	// can contain chains, cycles, source reuse, or destination overwrites.
+	composed := make(map[string]*fileReads, len(nextPartial.Files))
 	for path, next := range nextPartial.Files {
-		file := f.file(path)
-		if file == nil {
-			return
+		origin := path
+		if next.Origin != nil {
+			origin = *next.Origin
+		}
+		file := &fileReads{Origin: next.Origin}
+		if previous := f.Files[origin]; origin != "" && previous != nil {
+			*file = *previous
+			if file.Origin == nil && origin != path {
+				file.Origin = &origin
+			}
+			// Coverage unions below must not mutate the input snapshot.
+			if !f.summaryOnly && len(previous.Coverage) > 0 {
+				file.Coverage = make(map[string]*lineCoverage, len(previous.Coverage))
+				for hash, coverage := range previous.Coverage {
+					copied := *coverage
+					copied.Ranges = append([][2]int(nil), coverage.Ranges...)
+					file.Coverage[hash] = &copied
+				}
+			}
 		}
 		file.Reads += next.Reads
 		file.Hits += next.Hits
@@ -321,19 +393,25 @@ func (f *fileUsagePartial) Merge(later Partial) {
 		if next.Scalars != nil && (file.Scalars == nil || !next.Scalars.Time.Before(file.Scalars.Time)) {
 			file.Scalars = next.Scalars
 		}
-		if f.summaryOnly {
-			continue
-		}
 		for hash, coverage := range next.Coverage {
+			if f.summaryOnly {
+				break
+			}
 			if file.Coverage == nil {
 				file.Coverage = map[string]*lineCoverage{}
 			}
 			if current := file.Coverage[hash]; current != nil {
 				current.merge(coverage)
 			} else {
-				file.Coverage[hash] = coverage
+				copied := *coverage
+				copied.Ranges = append([][2]int(nil), coverage.Ranges...)
+				file.Coverage[hash] = &copied
 			}
 		}
+		composed[path] = file
+	}
+	for path, file := range composed {
+		f.Files[path] = file
 	}
 }
 
@@ -404,7 +482,7 @@ func FileUsage(ctx context.Context, src EventSource, facts ContentFacts, prefix 
 	return partial.usage(ctx, facts)
 }
 
-var fileUsageTypes = []string{"doc.read", "doc.hit", "doc.scalars"}
+var fileUsageTypes = []string{"doc.read", "doc.hit", "doc.scalars", "doc.write"}
 
 func newPrefixFileUsage(p Params) Partial {
 	prefix := p.Extra["path"]

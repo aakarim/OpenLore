@@ -116,6 +116,7 @@ func CmdHelp(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 		fmt.Fprintln(w, "    Put the body on following lines and EOF alone on the final line")
 		fmt.Fprintln(w, "  tee <file>                               Pass stdin to stdout and a file")
 		fmt.Fprintln(w, "  patch <file>                             Apply a unified diff (atomic)")
+		fmt.Fprintln(w, "  replace [-n] [--all] <file> <old> <new>   Replace literal text; exactly one match unless --all")
 		fmt.Fprintln(w, "  sed -i 's/a/b/' <file>                   Edit a file in place")
 		fmt.Fprintln(w, "  sed -i '/pat/a\\<text>' <file>           Append after matching lines in place")
 		fmt.Fprintln(w, "  mkdir [-p] <dir>                         Create directories")
@@ -162,5 +163,6 @@ func CmdHelp(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 	fmt.Fprintln(w, "  skills                                   Show Agent Skills usage and installed instructions")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Pipes are supported: grep pattern /dir | head -5 | sort -u")
+	fmt.Fprintln(w, "Input redirection (< file) is not supported; use cat file | cmd.")
 	return 0
 }

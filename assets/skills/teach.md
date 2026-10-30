@@ -69,8 +69,15 @@ Then ask the initial question again (options A and B).
 
 ## If they choose A — set up a new Lore server
 
-The `setup` skill creates and locally verifies a deployable OpenLore project,
-one question at a time. Fetch it and follow it now:
+Explain that the first step is a knowledge repository: a local folder holding
+the server's settings and access policy. `lore init <team-slug>-lore` creates
+the folder and a default `openlore.yml`; it does not start or deploy a server.
+
+The `setup` skill asks for the team name and location, installs the official
+`lore` client if needed, then runs `lore init` to create that repository before
+customising and locally verifying a deployable OpenLore project. Do not create
+the folder or hand-write `openlore.yml` here; let `setup` collect the answers
+and run init once. Fetch it and follow it now:
 
 ```shell
 ssh openlore.sh setup

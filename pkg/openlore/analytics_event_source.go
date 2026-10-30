@@ -235,6 +235,9 @@ func (d *dashboardEventSource) canonicalEvent(event analytics.Event) analytics.E
 	if value, ok := fields["path"].(string); ok {
 		fields["path"] = d.server.canonicalPath(value)
 	}
+	if value, ok := fields["from"].(string); ok {
+		fields["from"] = d.server.canonicalPath(value)
+	}
 	if values, ok := analyticsStringSlice(fields["scope"]); ok {
 		scope := make([]string, len(values))
 		for i, value := range values {
@@ -251,6 +254,10 @@ func (d *dashboardEventSource) directAccess(event analytics.Event, prefix string
 	if rawPath, exists := event.Fields["path"]; exists {
 		path, ok := rawPath.(string)
 		access.add(ok && path != "" && d.pathReadable(path, prefix))
+	}
+	if rawFrom, exists := event.Fields["from"]; exists {
+		from, ok := rawFrom.(string)
+		access.add(ok && from != "" && d.pathReadable(from, prefix))
 	}
 	if rawScope, exists := event.Fields["scope"]; exists {
 		scope, ok := analyticsStringSlice(rawScope)

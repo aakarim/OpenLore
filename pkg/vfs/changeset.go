@@ -265,6 +265,9 @@ func cloneXattr(x *XattrChange) *XattrChange {
 type WriteChange struct {
 	Bytes []byte    `json:"bytes"`
 	Opts  WriteOpts `json:"opts"`
+	// Generated marks derived maintenance, not authored content. It is durable
+	// so analytics replay makes the same distinction as live events.
+	Generated bool `json:"generated,omitempty"`
 }
 
 // RemoveAllChange is the whole-tree removal payload of a ChangeSet: the

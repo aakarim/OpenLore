@@ -92,6 +92,104 @@ func TestLoreMetaCommand_UnknownFlagErrors(t *testing.T) {
 	}
 }
 
+func TestLoreMetaCommand_Help(t *testing.T) {
+	for _, flag := range []string{"--help", "-h"} {
+		out, errOut, code := runMeta(t, shell.NewShell(metaTreeFS()), "/docs", "lore meta "+flag)
+		if code != 0 || errOut != "" {
+			t.Fatalf("help: exit=%d stderr=%s", code, errOut)
+		}
+		for _, term := range []string{"Usage:", "--missing", "--filter", "NDJSON", "set <path>", "unset <path>"} {
+			if !strings.Contains(out, term) {
+				t.Errorf("help missing %q: %s", term, out)
+			}
+		}
+	}
+}
+
+func TestLoreMetaCommand_Missing(t *testing.T) {
+	fsys := metaTreeFS()
+	fsys.AddFile("/docs/broken.md", "---\ntags: [broken\n---\nbody")
+	fsys.AddFile("/docs/empty.md", "---\n---\nbody")
+	fsys.AddFile("/docs/null.md", "---\ntype: null\ntags: []\n---\nbody")
+	for _, tc := range []struct {
+		command string
+		paths   string
+	}{
+		{"lore meta --missing", "broken.md,plain.md"},
+		{"lore meta --missing type,tags", "broken.md,empty.md,metric.md,plain.md,sub/nested.md"},
+		{"lore meta /docs --missing type,tags", "broken.md,empty.md,metric.md,plain.md,sub/nested.md"},
+		{"lore meta --missing=type,tags /docs/sub", "nested.md"},
+		{"lore meta /docs/plain.md --missing", "plain.md"},
+	} {
+		out, errOut, code := runMeta(t, shell.NewShell(fsys), "/docs", tc.command)
+		if code != 0 {
+			t.Fatalf("%s: exit=%d stderr=%s", tc.command, code, errOut)
+		}
+		var paths []string
+		for _, rec := range parseNDJSON(t, out) {
+			paths = append(paths, rec["path"].(string))
+			if rec["reason"] == nil {
+				t.Errorf("missing reason: %v", rec)
+			}
+			if rec["path"] == "metric.md" && rec["reason"] == "missing_keys" {
+				keys, ok := rec["missing_keys"].([]any)
+				if !ok || len(keys) != 1 || keys[0] != "tags" {
+					t.Errorf("missing keys: %v", rec)
+				}
+			}
+		}
+		if strings.Join(paths, ",") != tc.paths {
+			t.Errorf("%s: paths=%v, want %s", tc.command, paths, tc.paths)
+		}
+		if !strings.Contains(errOut, "with frontmatter") || !strings.Contains(errOut, "without parseable frontmatter") {
+			t.Errorf("missing summary: %s", errOut)
+		}
+	}
+}
+
+func TestLoreMetaCommand_SummaryDoesNotChangeNDJSON(t *testing.T) {
+	out, errOut, code := runMeta(t, shell.NewShell(metaTreeFS()), "/docs", "lore meta")
+	want := "{\"path\":\"metric.md\",\"title\":\"Revenue\",\"type\":\"Metric\"}\n" +
+		"{\"path\":\"orders.md\",\"tags\":[\"sales\",\"orders\"],\"title\":\"Orders\",\"type\":\"Table\"}\n" +
+		"{\"path\":\"sub/nested.md\",\"type\":\"Note\"}\n"
+	if code != 0 || out != want {
+		t.Fatalf("default NDJSON changed: code=%d out=%s stderr=%s", code, out, errOut)
+	}
+	for _, term := range []string{"3 with frontmatter", "1 without parseable frontmatter", "--missing"} {
+		if !strings.Contains(errOut, term) {
+			t.Errorf("summary missing %q: %s", term, errOut)
+		}
+	}
+}
+
+func TestLoreMetaCommand_RejectsInvalidDiscoveryArguments(t *testing.T) {
+	for _, tc := range []struct{ args, message string }{
+		{"--missing --filter notes", "cannot be combined"},
+		{"--filter notes --missing type", "cannot be combined"},
+		{"--missing type,,tags", "non-empty"},
+		{"--missing=", "non-empty"},
+		{"--missing --missing", "only be specified once"},
+		{"/docs /other", "at most one path"},
+		{"--filter", "requires a name"},
+		{"--filter --missing", "requires a name"},
+	} {
+		out, errOut, code := runMeta(t, shell.NewShell(metaTreeFS()), "/docs", "lore meta "+tc.args)
+		if code != 1 || out != "" || !strings.Contains(errOut, tc.message) {
+			t.Errorf("%s: exit=%d stdout=%q stderr=%q", tc.args, code, out, errOut)
+		}
+	}
+}
+
+func TestLoreMetaCommand_MissingReportsEncodingFailure(t *testing.T) {
+	sh := shell.NewShell(metaTreeFS())
+	sh.SetCwd("/docs")
+	var errOut bytes.Buffer
+	code := sh.ExecPipeline("lore meta --missing", errorWriter{err: errors.New("output unavailable")}, &errOut, nil)
+	if code != 1 || !strings.Contains(errOut.String(), "output unavailable") {
+		t.Fatalf("exit=%d stderr=%s", code, errOut.String())
+	}
+}
+
 func TestLoreMetaCommand_AppliesSessionExtenders(t *testing.T) {
 	sh := shell.NewShell(metaTreeFS())
 	sh.SetMetaExtenders([]meta.Extender{

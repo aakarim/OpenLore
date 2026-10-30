@@ -61,9 +61,15 @@ func (a *Aggregator) Consume(_ context.Context, e Event) {
 		}
 		a.durations[cmd] = duration
 	case "doc.write":
+		if !IsAuthoredWrite(e) {
+			return
+		}
 		key := fieldString(e, "docset") + "\x00" + fieldString(e, "writer")
 		a.writes[key]++
 	case "doc.scalars":
+		if !IsAuthoredWrite(e) {
+			return
+		}
 		key := scalarEventKey(e)
 		if _, exists := a.scalarSeen[key]; exists {
 			return

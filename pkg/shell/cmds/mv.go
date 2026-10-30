@@ -86,6 +86,7 @@ func CmdMv(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.
 			{Target: resolvedSource, Action: vfs.ChangeActionRemoveAll, RemoveAll: &vfs.RemoveAllChange{Opts: vfs.RemoveOpts{Expected: snapshot}}},
 		}, Moves: []vfs.Move{{From: 1, To: 0}}})
 		if err == nil {
+			warnMovedReferences(ctx, resolvedSource, errW)
 			return 0
 		}
 		var pending *vfs.PendingChangeError
@@ -116,6 +117,7 @@ func CmdMv(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin io.
 	}
 	err = wfs.RemoveAll(resolvedSource, vfs.RemoveOpts{Expected: snapshot})
 	if err == nil {
+		warnMovedReferences(ctx, resolvedSource, errW)
 		return 0
 	}
 	var pending *vfs.PendingChangeError

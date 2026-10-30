@@ -35,6 +35,20 @@ type SummaryActivity struct {
 	Writes  int    `json:"writes"`
 }
 
+// IsAuthoredWrite reports whether a write represents authored content rather
+// than a move or generated index maintenance. Legacy writes without action or
+// generated fields retain their original authorship semantics.
+func IsAuthoredWrite(event Event) bool {
+	if event.Type != "doc.write" && event.Type != "doc.scalars" {
+		return false
+	}
+	if generated, _ := event.Fields["generated"].(bool); generated {
+		return false
+	}
+	action, _ := event.Fields["action"].(string)
+	return action != "move" && action != "move_source"
+}
+
 // UsageSummary scans only source and never consults shared materializations.
 // doc.write is preferred over doc.scalars for the same commit/path so one
 // committed leaf contributes exactly one write.
@@ -97,7 +111,9 @@ func scanUsage(ctx context.Context, source EventSource, since, until time.Time, 
 		day := event.Time.UTC().Format("2006-01-02")
 		switch event.Type {
 		case "doc.scalars", "doc.write":
-			u.addWrite(summaryWriteKey(event), usageWrite{Doc: event.Type == "doc.write", Date: day, Kind: eventKind(event)})
+			if IsAuthoredWrite(event) {
+				u.addWrite(summaryWriteKey(event), usageWrite{Doc: event.Type == "doc.write", Date: day, Kind: eventKind(event)})
+			}
 		case "doc.read", "doc.hit":
 			row := u.activity(day)
 			if event.Type == "doc.read" {
