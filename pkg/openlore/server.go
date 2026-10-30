@@ -443,7 +443,14 @@ func newServerWithRoot(rootDir string, rootFS vfs.FileSystem, lowerFS fs.FS, opt
 		if agentSkills != nil {
 			agentSkills.ordered = s.writeLog.Do
 			agentSkills.submit = func(ctx context.Context, cs vfs.ChangeSet) error {
-				_, err := s.CommitChangeSet(ctx, Attribution{Principal: "agent_skills_remote", internal: true}, cs)
+				// Remote sync is a fresh trusted proposal, not a replay of a
+				// held operation. Materialize its indexes before serialized
+				// validation; keep the existing internal-sync authorization.
+				cs, err := expandFolderIndexes(s.merge, s.canonicalChangeSet(cs))
+				if err != nil {
+					return err
+				}
+				_, err = s.CommitChangeSet(ctx, Attribution{Principal: "agent_skills_remote", internal: true}, cs)
 				return err
 			}
 		}
@@ -1070,11 +1077,9 @@ func (s *Server) buildSessionFS(id Identity) vfs.FileSystem {
 	return sessionFS
 }
 
-// buildCanonicalSessionFS constructs the per-session filesystem without path
-// aliases. The web browser uses this view so its folder tree presents each
-// docset only once; filesystem-oriented transports decorate it with aliases in
-// buildSessionFS.
-func (s *Server) buildCanonicalSessionFS(id Identity) vfs.FileSystem {
+// buildCanonicalRawSessionFS retains authorization and read middleware without
+// presentation transforms or the session's user-visible read/CAS tracking.
+func (s *Server) buildCanonicalRawSessionFS(id Identity) vfs.FileSystem {
 	id = s.resolveSessionIdentity(id)
 
 	// Build per-session filesystem scoped to the identity's readable roots.
@@ -1130,6 +1135,15 @@ func (s *Server) buildCanonicalSessionFS(id Identity) vfs.FileSystem {
 			sessionFS = &configViewFS{WritableFS: writable, server: s, identity: id, attribution: id.attribution()}
 		}
 	}
+	return sessionFS
+}
+
+// buildCanonicalSessionFS constructs the per-session filesystem without path
+// aliases. The web browser uses this view so its folder tree presents each
+// docset only once; filesystem-oriented transports decorate it with aliases in
+// buildSessionFS.
+func (s *Server) buildCanonicalSessionFS(id Identity) vfs.FileSystem {
+	sessionFS := s.buildCanonicalRawSessionFS(id)
 	// Session CAS: track the hash of every file read (and written) so a
 	// later blind overwrite compare-and-swaps against the version the
 	// caller last saw, without naming a hash — an overwrite fails if the
@@ -1208,6 +1222,10 @@ func (s *Server) buildSessionShell(id Identity) *shell.Shell {
 	canAdmin := s.authEnforced && id.policySnapshot != nil && scopeGrantsWrite(id.Scopes) && s.hasCapabilityForPolicy(*id.policySnapshot, "lore:config:edit")
 
 	sh := shell.NewShell(sessionFS)
+	sh.SetInspectionFS(newLiveAliasFS(s.buildCanonicalRawSessionFS(id), func() []pathAlias {
+		view := s.readView()
+		return view.aliasesForIdentity(view.liveReadIdentity(id))
+	}))
 	sh.SetInvocationObserver(func(invocationID, parentID string) {
 		attribution.Extra["invocation_id"] = invocationID
 		attribution.Extra["parent_id"] = parentID

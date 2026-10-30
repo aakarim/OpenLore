@@ -154,6 +154,10 @@ func (p *analyticsPlugin) observeWrites(next PostCommitHandler) PostCommitHandle
 				fields["content_hash"] = hashContent(leaf.Write.Bytes)
 				if leaf.Write.Generated {
 					fields["generated"] = true
+					// Observe refresh content in leaf order, after any move. The
+					// commit-time scalar inventory is coalesced by path and cannot
+					// safely establish the content of a moved occupant on replay.
+					fields["after"] = p.service.ComputeScalars(leaf.Target, leaf.Write.Bytes).Scalars
 				}
 			} else {
 				fields["content_hash"] = ""

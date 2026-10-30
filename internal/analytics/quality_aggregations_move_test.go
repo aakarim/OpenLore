@@ -173,6 +173,48 @@ func TestFileUsageMoveInventoryDoesNotEraseSourceScalars(t *testing.T) {
 	assertUsageJSON(t, file.ColdUnits, []ContentUnit{{Lines: &LineRange{Start: 2, End: 2}}})
 }
 
+func TestFileUsageMoveGeneratedRefreshInOrder(t *testing.T) {
+	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	events := summarySource{
+		{Time: start, Type: "doc.scalars", Fields: map[string]any{"path": "/docs/a.md", "content_hash": "old", "after": map[string]any{"lines": 2, "tokens": 17}}},
+		{Time: start.Add(time.Hour), Type: "doc.read", Fields: map[string]any{"path": "/docs/a.md", "content_hash": "old"}},
+		// Commit-time inventory may be replayed before the observer move. It
+		// is final-path inventory, not a safe ordered content observation.
+		{Time: start.Add(2 * time.Hour), Type: "doc.scalars", Fields: map[string]any{"path": "/docs/b.md", "action": "move", "generated": true, "content_hash": "new", "after": map[string]any{"lines": 3, "tokens": 29}}},
+		{Time: start.Add(3 * time.Hour), Type: "doc.write", Fields: map[string]any{"path": "/docs/b.md", "from": "/docs/a.md", "action": "move", "content_hash": "old"}},
+		{Time: start.Add(4 * time.Hour), Type: "doc.write", Fields: map[string]any{"path": "/docs/b.md", "action": "update", "generated": true, "content_hash": "new", "after": map[string]any{"lines": 3, "tokens": 29}}},
+		{Time: start.Add(24 * time.Hour), Type: "doc.write", Fields: map[string]any{"path": "/docs/c.md", "from": "/docs/b.md", "action": "move", "content_hash": "new"}},
+		{Time: start.Add(25 * time.Hour), Type: "doc.scalars", Fields: map[string]any{"path": "/docs/b.md", "content_hash": "reuse", "after": map[string]any{"lines": 1, "tokens": 5}}},
+		// A late replay must not replace either moved content or a new occupant.
+		{Time: start.Add(26 * time.Hour), Type: "doc.scalars", Fields: map[string]any{"path": "/docs/b.md", "action": "move", "generated": true, "content_hash": "new", "after": map[string]any{"lines": 3, "tokens": 29}}},
+	}
+	facts := NewContentFacts(testFS{"/docs/b.md": []byte("reuse"), "/docs/c.md": []byte("a\nb\nc")})
+	want, err := FileUsage(t.Context(), events, facts, "/docs", EventFilter{})
+	if err != nil || len(want) != 2 {
+		t.Fatalf("usage=%+v err=%v", want, err)
+	}
+	if want[0].ContentHash != "reuse" || want[0].Scalars["tokens"] != 5 || want[1].ContentHash != "new" || want[1].Scalars["tokens"] != 29 || want[1].Reads != 1 {
+		t.Fatalf("refresh or subsequent move lost: %+v", want)
+	}
+	assertUsageJSON(t, want[1].ColdUnits, []ContentUnit{{Lines: &LineRange{Start: 1, End: 3}}})
+	for cut := 0; cut <= len(events); cut++ {
+		newPartial := func() Partial { return newFileUsagePartial("/docs") }
+		merged := newPartial()
+		for _, window := range []summarySource{events[:cut], events[cut:]} {
+			partial := newPartial()
+			for _, event := range window {
+				partial.Add(event)
+			}
+			merged.Merge(restoreUsagePartial(t, partial, newPartial))
+		}
+		got, err := merged.(*fileUsagePartial).usage(t.Context(), facts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertUsageJSON(t, got, want)
+	}
+}
+
 func TestFileUsageMoveRankingsMergeAcrossDays(t *testing.T) {
 	events, facts := moveUsageFixture()
 	p := Params{Extra: map[string]string{"path": "/docs"}}

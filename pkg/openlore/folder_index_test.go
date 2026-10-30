@@ -262,3 +262,58 @@ func TestFolderIndexMovingOptedInIndexKeepsMoveAndFinalProjection(t *testing.T) 
 		t.Fatalf("index refresh must be distinct from the hash-preserving move: %+v", page.Records)
 	}
 }
+
+func TestFolderIndexUnchangedMoveRetainsDestinationCAS(t *testing.T) {
+	for _, exists := range []bool{false, true} {
+		t.Run(map[bool]string{false: "create", true: "overwrite"}[exists], func(t *testing.T) {
+			s, root := folderIndexServer(t)
+			if err := os.Mkdir(filepath.Join(root, "docs", "other"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			folderIndexWrite(t, s, "/docs/index.md", "<!-- lore:index --><!-- /lore:index -->")
+			original, _ := s.merge.ReadFile("/docs/index.md")
+			if exists {
+				folderIndexWrite(t, s, "/docs/other/index.md", string(original))
+			}
+			if err := s.RegisterPlugin(deferMWProvider{gatedPrefix: "/docs/other/index.md", ref: "move"}); err != nil {
+				t.Fatal(err)
+			}
+			_, err := s.AdmitChangeSet(context.Background(), testIdentity("alice"), vfs.ChangeSet{
+				Changes: []vfs.Change{
+					{Target: "/docs/index.md", Action: vfs.ChangeActionRemoveAll, RemoveAll: &vfs.RemoveAllChange{Opts: vfs.RemoveOpts{Expected: &vfs.TreeSnapshot{Root: "/docs/index.md", Ops: []vfs.TreeOp{{RelPath: ".", Kind: "file", Hash: folderIndexHash(original), Size: int64(len(original))}}}}}},
+					{Target: "/docs/other/index.md", Action: vfs.ChangeActionWrite, Write: &vfs.WriteChange{Bytes: original}},
+				}, Moves: []vfs.Move{{From: 0, To: 1}},
+			})
+			var pending *vfs.PendingChangeError
+			if !errors.As(err, &pending) {
+				t.Fatalf("not deferred: %v", err)
+			}
+			// An external edit after admission must not be silently overwritten,
+			// even when the moved section needs no regeneration at its new path.
+			if err := os.WriteFile(filepath.Join(root, "docs", "other", "index.md"), []byte("concurrent"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.CommitChangeSet(context.Background(), Attribution{Principal: "alice"}, pending.ChangeSet); err == nil {
+				t.Fatal("stale move overwrote destination")
+			}
+			if source, err := s.merge.ReadFile("/docs/index.md"); err != nil || !bytes.Equal(source, original) {
+				t.Fatalf("rejected move removed source: %q %v", source, err)
+			}
+		})
+	}
+}
+
+func TestFolderIndexIgnoresPresentationTransforms(t *testing.T) {
+	s, _ := folderIndexServer(t)
+	folderIndexWrite(t, s, "/docs/index.md", folderIndexFixture)
+	s.contentTransforms = append(s.contentTransforms, func(_ string, b []byte) []byte { return append(b, []byte("presentation banner")...) })
+	_, err := s.AdmitChangeSet(context.Background(), testIdentity("alice"), writeCSBytes("/docs/a.md", "---\ntitle: A\n---\n"))
+	if err != nil {
+		t.Fatalf("presentation bytes broke raw index CAS: %v", err)
+	}
+	index, err := s.merge.ReadFile("/docs/index.md")
+	want := strings.Replace(folderIndexFixture, "-->old<!--", "-->\n- [A](a.md)\n<!--", 1)
+	if err != nil || string(index) != want {
+		t.Fatalf("stored index contains presentation bytes: %q %v", index, err)
+	}
+}

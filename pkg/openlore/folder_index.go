@@ -38,7 +38,7 @@ func (s *Server) folderIndexAdmission(next WriteHandler) WriteHandler {
 		// never disclose documents the initiating identity cannot read.
 		var readView vfs.FileSystem = s.merge
 		if op.identity != nil {
-			readView = s.buildCanonicalSessionFS(*op.identity)
+			readView = s.buildCanonicalRawSessionFS(*op.identity)
 		}
 		expanded, err := expandFolderIndexes(readView, cs)
 		if err != nil {
@@ -202,6 +202,7 @@ func expandFolderIndexes(fsys vfs.FileSystem, cs vfs.ChangeSet) (vfs.ChangeSet, 
 				}
 			}
 			leaves[lastWrite].Write = &write
+			changed = true // retain destination CAS even if a move needs no refresh
 			// Usually replace the explicit index write with its final bytes so
 			// rules/baselines see one write, not an obsolete intermediate leaf.
 			// A move's destination must retain its source content hash, however;

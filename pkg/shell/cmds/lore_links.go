@@ -42,8 +42,12 @@ func cmdLoreLinks(ctx CmdContext, args []string, w, errW io.Writer, stdin io.Rea
 // Scan only the caller's content view, not the durable journal or alias copies.
 // Targets need not exist: this is also how agents find references after a move.
 func referencingPaths(ctx CmdContext, target string) ([]string, error) {
+	fsys := ctx.FS()
+	if inspection, ok := ctx.(interface{ InspectionFS() vfs.FileSystem }); ok {
+		fsys = inspection.InspectionFS()
+	}
 	canonical := func(p string) string { return vfs.CleanPath(p) }
-	if c, ok := ctx.FS().(vfs.PathCanonicalizer); ok {
+	if c, ok := fsys.(vfs.PathCanonicalizer); ok {
 		canonical = func(p string) string { return vfs.CleanPath(c.CanonicalPath(p)) }
 	}
 	target = canonical(target)
@@ -65,7 +69,7 @@ func referencingPaths(ctx CmdContext, target string) ([]string, error) {
 			return nil
 		}
 		seen[p] = true
-		info, err := ctx.FS().Stat(p)
+		info, err := fsys.Stat(p)
 		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, fs.ErrPermission) {
 			return nil
 		}
@@ -73,7 +77,7 @@ func referencingPaths(ctx CmdContext, target string) ([]string, error) {
 			return err
 		}
 		if info.Dir {
-			entries, err := ctx.FS().ReadDir(p)
+			entries, err := fsys.ReadDir(p)
 			if errors.Is(err, fs.ErrPermission) {
 				return nil
 			}
@@ -90,7 +94,7 @@ func referencingPaths(ctx CmdContext, target string) ([]string, error) {
 		if !strings.EqualFold(path.Ext(p), ".md") {
 			return nil
 		}
-		content, err := ctx.FS().ReadFile(p)
+		content, err := fsys.ReadFile(p)
 		if errors.Is(err, fs.ErrPermission) {
 			return nil
 		}

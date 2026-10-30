@@ -125,15 +125,33 @@ func (p *ScalarProcessor) processRecord(ctx context.Context, record CommitRecord
 	changes := map[string][]byte{}
 	generated := map[string]bool{}
 	leaves := record.ChangeSet.Leaves()
-	moves, sources := map[string]string{}, map[string]bool{}
+	moves, sources := map[int]bool{}, map[int]bool{}
 	for _, move := range record.ChangeSet.Moves {
-		moves[leaves[move.To].Target] = leaves[move.From].Target
-		sources[leaves[move.From].Target] = true
+		moves[move.To] = true
+		sources[move.From] = true
 	}
-	for _, leaf := range leaves {
+	maintenance := map[string]string{}
+	for i, leaf := range leaves {
+		// Move roles belong to occurrences, not paths: a later authored write
+		// can reuse either endpoint. Generated refreshes retain move identity.
+		switch {
+		case moves[i]:
+			maintenance[leaf.Target] = "move"
+		case sources[i]:
+			maintenance[leaf.Target] = "move_source"
+		case leaf.Write != nil:
+			if !leaf.Write.Generated || maintenance[leaf.Target] != "move" {
+				delete(maintenance, leaf.Target)
+			}
+		case leaf.Action == vfs.ChangeActionRemove || leaf.Action == vfs.ChangeActionRemoveAll:
+			delete(maintenance, leaf.Target)
+		}
 		if leaf.Write != nil {
 			changes[leaf.Target] = leaf.Write.Bytes
 			generated[leaf.Target] = leaf.Write.Generated
+		} else if leaf.Action == vfs.ChangeActionRemove || leaf.Action == vfs.ChangeActionRemoveAll {
+			delete(changes, leaf.Target)
+			delete(generated, leaf.Target)
 		}
 	}
 	for _, leaf := range record.Leaves {
@@ -200,10 +218,8 @@ func (p *ScalarProcessor) processRecord(ctx context.Context, record CommitRecord
 		}
 		// Inventory still needs both sides of a relocation, but neither side
 		// represents newly authored content. Retain this distinction on replay.
-		if _, ok := moves[leaf.Target]; ok {
-			action = "move"
-		} else if sources[leaf.Target] {
-			action = "move_source"
+		if role := maintenance[leaf.Target]; role != "" {
+			action = role
 		}
 		var invocationID, parentID string
 		if correlation != nil {

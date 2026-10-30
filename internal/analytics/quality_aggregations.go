@@ -259,14 +259,14 @@ func (f *fileUsagePartial) Add(e Event) {
 	if e.Type != "doc.read" && e.Type != "doc.hit" && e.Type != "doc.scalars" && e.Type != "doc.write" {
 		return
 	}
-	if e.Type == "doc.write" && fieldString(e, "action") != "move" {
+	if e.Type == "doc.write" && fieldString(e, "action") != "move" && (!fieldBool(e, "generated") || e.Fields["after"] == nil) {
 		return
 	}
 	filePath := vfs.CleanPath(fieldString(e, "path"))
 	if !pathWithin(f.prefix, filePath) {
 		return
 	}
-	if e.Type == "doc.write" {
+	if e.Type == "doc.write" && fieldString(e, "action") == "move" {
 		source, ok := e.Fields["from"].(string)
 		if !ok || source == "" {
 			return
@@ -331,7 +331,9 @@ func (f *fileUsagePartial) Add(e Event) {
 		} else {
 			coverage.Whole = true
 		}
-	case "doc.scalars":
+	case "doc.scalars", "doc.write":
+		// Generated writes carry final scalars at the observer's timestamp,
+		// after move lineage is established, unlike commit-time inventory.
 		if file.Scalars == nil || !e.Time.Before(file.Scalars.Time) {
 			after := scalarFields(e.Fields["after"])
 			observation := &scalarObservation{Time: e.Time, Hash: fieldString(e, "content_hash"), Lines: int(after["lines"])}

@@ -1,6 +1,8 @@
 package openlore
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -62,6 +64,29 @@ func TestReadTracking_OverwriteStaleAfterConcurrentChange_Fails(t *testing.T) {
 	}
 	if got, _ := d.ReadFile("/notes.md"); string(got) != "theirs\n" {
 		t.Fatalf("concurrent change must survive, got %q", got)
+	}
+}
+
+func TestReferenceScansDoNotAdvanceSessionCAS(t *testing.T) {
+	for _, command := range []string{"mv /docs/a.md /docs/b.md", "lore links --to /docs/a.md"} {
+		t.Run(command, func(t *testing.T) {
+			s, root := folderIndexServer(t)
+			folderIndexWrite(t, s, "/docs/a.md", "move me")
+			folderIndexWrite(t, s, "/docs/notes.md", "[old](/docs/a.md)")
+			sh := s.buildSessionShell(testIdentity("alice"))
+			if _, errs, code := run(sh, "cat /docs/notes.md"); code != 0 {
+				t.Fatal(errs)
+			}
+			if err := os.WriteFile(filepath.Join(root, "docs", "notes.md"), []byte("unseen concurrent edit"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, errs, code := run(sh, command); code != 0 {
+				t.Fatalf("reference scan: %s", errs)
+			}
+			if _, errs, code := run(sh, "echo mine > /docs/notes.md"); code == 0 || !strings.Contains(errs, "changed concurrently") {
+				t.Fatalf("reference scan advanced unseen CAS baseline: code=%d stderr=%s", code, errs)
+			}
+		})
 	}
 }
 

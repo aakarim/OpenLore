@@ -391,6 +391,12 @@ func (s *JSONLHistoryStore) followMoves(query HistoryQuery, records []HistoryRec
 		if record.FileKey != tracked && record.From != tracked {
 			continue
 		}
+		if record.Action == "move" && record.From == tracked && record.FileKey != tracked && len(newest) > 0 {
+			// An earlier occupant left this path before the collected lineage
+			// began. Only include an outgoing move as the first record, so a
+			// query of a moved-away path can still show that file's history.
+			break
+		}
 		if record.Action == "move" && record.FileKey == tracked {
 			if !scope.within(record.From) {
 				break // Do not expose the old path or unrelated overwritten history.
