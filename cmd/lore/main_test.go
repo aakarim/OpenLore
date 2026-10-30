@@ -20,6 +20,72 @@ import (
 	"github.com/aakarim/go-openlore/pkg/openlore"
 )
 
+func TestInitRepository(t *testing.T) {
+	for _, dir := range []string{"", "team/knowledge"} {
+		t.Run("directory="+dir, func(t *testing.T) {
+			cwd := t.TempDir()
+			t.Chdir(cwd)
+			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+			// Even when a default repository exists, init must target cwd or
+			// its explicit argument, not the last login's repository.
+			previous := t.TempDir()
+			original := []byte("version: '1'\nport: 2233\n")
+			if err := os.WriteFile(filepath.Join(previous, "openlore.yml"), original, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := lore.SaveDefaultRoot(previous); err != nil {
+				t.Fatal(err)
+			}
+			args := []string{"init"}
+			if dir != "" {
+				args = append(args, dir)
+			}
+			var out bytes.Buffer
+			if err := run(args, &out); err != nil {
+				t.Fatalf("init: %v; %s", err, out.String())
+			}
+			root := filepath.Join(cwd, dir)
+			found, err := lore.FindRoot(root)
+			if err != nil || found != root {
+				t.Fatalf("repository root = %q, %v; want %q", found, err, root)
+			}
+			cfg, err := config.New(config.WithConfigFile(filepath.Join(root, "openlore.yml")))
+			if err != nil {
+				t.Fatal("generated config:", err)
+			}
+			if cfg.ConfigVersion != "1" || cfg.Port != 2222 || cfg.HTTPPort != 8080 || cfg.MetricsPort != 3000 || !cfg.Readonly || !cfg.MCPEnabled || cfg.MCPPath != "/mcp" || !cfg.APIEnabled || cfg.APIPath != "/api" {
+				t.Fatal("generated config does not use default server settings")
+			}
+			// A rerun must preserve even a hand-edited configuration.
+			file := filepath.Join(root, "openlore.yml")
+			if err := os.WriteFile(file, original, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := run(args, &out); err == nil {
+				t.Fatal("init accepted an existing config")
+			}
+			for _, path := range []string{file, filepath.Join(previous, "openlore.yml")} {
+				got, err := os.ReadFile(path)
+				if err != nil || !bytes.Equal(got, original) {
+					t.Fatalf("existing config changed: %s: %q, %v", path, got, err)
+				}
+			}
+		})
+	}
+}
+
+func TestInitRejectsInvalidArguments(t *testing.T) {
+	t.Chdir(t.TempDir())
+	for _, args := range [][]string{{"init", "first", "second"}, {"init", "--unknown"}} {
+		if err := run(args, io.Discard); err == nil {
+			t.Fatalf("accepted invalid args: %v", args)
+		}
+	}
+	if _, err := os.Stat("first"); !os.IsNotExist(err) {
+		t.Fatalf("invalid init created a directory: %v", err)
+	}
+}
+
 func TestFolderSyncAgainstServer(t *testing.T) {
 	root := t.TempDir()
 	t.Chdir(root)

@@ -27,10 +27,20 @@ Point OpenLore at a folder of Markdown and every agent on your team reads the sa
 
 ## Quick start
 
-Install and serve a folder:
+Install and set up a knowledge repository for your team:
 
 ```shell
 brew install --cask aakarim/tap/lore
+lore init my-knowledge
+cd my-knowledge
+```
+
+`lore init` creates the folder and an `openlore.yml` with default server settings.
+Already in your knowledge repository? Run `lore init` without a directory.
+
+Put your Markdown in a `docs/` folder inside the repository, then serve it:
+
+```shell
 openlore ./docs
 ```
 

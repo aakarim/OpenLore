@@ -4,12 +4,13 @@
 
 `lore` is the client binary that syncs external sources to a running OpenLore server; the server itself is the `openlore` binary.
 
-The `openlore` binary has its own [openlore CLI reference](commands.md). Both binaries ship in the same release archive and Homebrew cask. Run `lore` inside your knowledge repository: it walks up from the working directory to the folder that holds `openlore.yml`, or falls back to the repository of your last `lore login` when it reaches the root without finding one, and reads `home/<identity>/sources.yaml` for the identity you logged in with. Every command except `login` needs a completed `lore login`. Flags can follow positional arguments.
+The `openlore` binary has its own [openlore CLI reference](commands.md). Both binaries ship in the same release archive and Homebrew cask. Start with `lore init` to create your knowledge repository. Other commands walk up from the working directory to the folder that holds `openlore.yml`, or fall back to the repository of your last `lore login` when they reach the root without finding one, and read `home/<identity>/sources.yaml` for the identity you logged in with. Source, sync and agent connection commands need a completed `lore login`. Flags can follow positional arguments.
 
 ```text
 Usage: lore <command> [flags]
 
 Commands:
+  init [directory]                Create a knowledge repository with default server settings
   login [server-url] [--token t]   Sign in and store the identity for this repository
   source add <path|git-url>        Add a committed folder or Git source
   source add claude [path]         Add Claude Code groups for a project directory
@@ -26,6 +27,25 @@ Learn how the pieces fit in the [knowledge gateway](../concepts/knowledge-gatewa
 ---
 
 ## Commands
+
+### `lore init`
+
+**Usage:** `lore init [directory]`
+**Default:** `directory` is the current working directory
+
+Creates the directory if needed and writes `openlore.yml` with default ports,
+read-only serving, MCP and the JSON API enabled. Other settings retain the
+server's built-in defaults. It does not overwrite an existing `openlore.yml`,
+initialise Git, or create identities and access policy (`lore.json`). It needs
+neither an existing repository nor a login, and always targets the given
+directory rather than your last login's repository.
+
+```shell
+lore init my-knowledge
+```
+
+See [Create a knowledge repository](../start/create-knowledge-repository.md)
+for Git setup and access controls.
 
 ### `lore login`
 

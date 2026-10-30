@@ -52,7 +52,10 @@ func (c *client) loadCredentials() error {
 
 func run(args []string, out io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: lore login | source add/list/rm | status | sync")
+		return fmt.Errorf("usage: lore init [directory] | login | source add/list/rm | status | sync")
+	}
+	if args[0] == "init" {
+		return initRepository(args[1:], out)
 	}
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -105,6 +108,60 @@ func run(args []string, out io.Writer) error {
 		return c.syncSources(flags.Args(), *dry || args[0] == "status")
 	}
 	return fmt.Errorf("unknown command %q", strings.Join(args, " "))
+}
+
+// initRepository deliberately bypasses FindRoot: init targets the requested
+// directory, never an enclosing repository or the last login's default.
+func initRepository(args []string, out io.Writer) error {
+	f := flag.NewFlagSet("init", flag.ContinueOnError)
+	if err := parseFlags(f, args); err != nil {
+		return err
+	}
+	if f.NArg() > 1 {
+		return fmt.Errorf("usage: lore init [directory]")
+	}
+	dir := f.Arg(0)
+	if dir == "" {
+		dir = "."
+	}
+	root, err := filepath.Abs(dir)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(root, 0755); err != nil {
+		return err
+	}
+	file := filepath.Join(root, "openlore.yml")
+	fh, err := os.OpenFile(file, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+	if err != nil {
+		return fmt.Errorf("creating openlore.yml (existing files are not overwritten): %w", err)
+	}
+	_, writeErr := io.WriteString(fh, `# OpenLore server settings. Omitted settings use the built-in defaults.
+# Access policy (identities, roles and docsets) belongs in lore.json.
+version: "1"
+
+# SSH and HTTP listeners. MCP and the JSON API share the HTTP port.
+port: 2222
+http_port: 8080
+metrics_port: 3000
+
+# The server is read-only by default.
+readonly: true
+
+mcp:
+  enabled: true
+  path: /mcp
+api:
+  enabled: true
+  path: /api
+`)
+	closeErr := fh.Close()
+	if err := errors.Join(writeErr, closeErr); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "Created %s\n", file)
+	fmt.Fprintln(out, "Knowledge repository ready. Add your documents, then run openlore ./docs from this directory to serve them.")
+	return nil
 }
 
 // flag.FlagSet stops at the first positional; the CLI also accepts flags after
