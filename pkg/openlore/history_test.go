@@ -1,6 +1,7 @@
 package openlore
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/aakarim/go-openlore/internal/config"
+	"github.com/aakarim/go-openlore/pkg/shell"
 	"github.com/aakarim/go-openlore/pkg/vfs"
 )
 
@@ -274,6 +276,36 @@ func TestScopedHistoryConsumesAllPages(t *testing.T) {
 	}
 	if lines := strings.Count(string(b), "\n"); lines != len(records) {
 		t.Fatalf("history lines=%d want=%d", lines, len(records))
+	}
+}
+
+func BenchmarkShellHistoryHead(b *testing.B) {
+	for _, count := range []int{10_000, 20_000} {
+		b.Run(strconv.Itoa(count), func(b *testing.B) {
+			store := NewJSONLHistoryStore(b.TempDir())
+			records := make([]HistoryRecord, count)
+			for i := range records {
+				records[i] = HistoryRecord{Time: time.Unix(int64(i), 0), FileKey: "/docs/note.md", Action: "write"}
+			}
+			if err := store.Record(context.Background(), records); err != nil {
+				b.Fatal(err)
+			}
+			sh := shell.NewShell(&wlRecordingFS{})
+			sh.SetHistoryBackend(scopedHistory{store: store, roots: []string{"/docs"}})
+			var out, errOut bytes.Buffer
+			b.ResetTimer()
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				out.Reset()
+				errOut.Reset()
+				if code := sh.ExecPipeline("history | head -n 20", &out, &errOut, nil); code != 0 || errOut.Len() != 0 {
+					b.Fatalf("exit=%d stderr=%s", code, errOut.String())
+				}
+				if lines := bytes.Count(out.Bytes(), []byte{'\n'}); lines != 20 {
+					b.Fatalf("history lines=%d want=20", lines)
+				}
+			}
+		})
 	}
 }
 
