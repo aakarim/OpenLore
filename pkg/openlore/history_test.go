@@ -261,6 +261,13 @@ func TestHistoryRemoveAllPurgesDescendantShardsOnly(t *testing.T) {
 	}
 }
 
+type cappedHistoryStore struct{ HistoryStore }
+
+func (s cappedHistoryStore) Query(ctx context.Context, query HistoryQuery) (HistoryPage, error) {
+	query.Limit = min(query.Limit, 30)
+	return s.HistoryStore.Query(ctx, query)
+}
+
 func TestScopedHistoryConsumesAllPages(t *testing.T) {
 	store := NewJSONLHistoryStore(t.TempDir())
 	records := make([]HistoryRecord, 0, defaultHistoryPageSize+1)
@@ -270,12 +277,29 @@ func TestScopedHistoryConsumesAllPages(t *testing.T) {
 	if err := store.Record(context.Background(), records); err != nil {
 		t.Fatal(err)
 	}
-	b, err := (scopedHistory{store: store, roots: []string{"/docs"}}).Query("", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if lines := strings.Count(string(b), "\n"); lines != len(records) {
-		t.Fatalf("history lines=%d want=%d", lines, len(records))
+	for name, backend := range map[string]HistoryStore{"uncapped": store, "capped": cappedHistoryStore{store}} {
+		t.Run(name, func(t *testing.T) {
+			data, err := (scopedHistory{store: backend, roots: []string{"/docs"}}).Query("", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			lines := bytes.Split(bytes.TrimSpace(data), []byte{'\n'})
+			if len(lines) != len(records) {
+				t.Fatalf("history lines=%d want=%d", len(lines), len(records))
+			}
+			for i, line := range lines {
+				var record struct {
+					Time   time.Time `json:"time"`
+					Target string    `json:"target"`
+				}
+				if err := json.Unmarshal(line, &record); err != nil {
+					t.Fatal(err)
+				}
+				if !record.Time.Equal(time.Unix(int64(len(records)-1-i), 0)) || record.Target != "/docs/note.md" {
+					t.Fatalf("record %d: unexpected order or target: %+v", i, record)
+				}
+			}
+		})
 	}
 }
 
