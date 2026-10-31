@@ -2,6 +2,8 @@ package passkeys
 
 import (
 	"encoding/json"
+	"fmt"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -34,7 +36,7 @@ func TestRenderFileIncludesBreadcrumbsIframeAndParentCloseLink(t *testing.T) {
 	body := rec.Body.String()
 	for _, want := range []string{
 		`rel="manifest" href="/lore/manifest.webmanifest"`,
-		`rel="apple-touch-icon" href="/lore/apple-touch-icon.svg"`,
+		`rel="apple-touch-icon" href="/lore/apple-touch-icon.png" sizes="180x180"`,
 		`apple-mobile-web-app-capable`,
 		`navigator.serviceWorker.register("/lore/service-worker.js")`,
 		`href="/lore/"`,
@@ -90,6 +92,36 @@ func TestLoreBrowserServesPWAAssetsWithoutAuthentication(t *testing.T) {
 		if got := manifest["scope"]; got != "/" {
 			t.Errorf("scope = %q; must include both knowledge and dashboard routes", got)
 		}
+		var install struct {
+			Icons []struct{ Src, Sizes, Type string }
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &install); err != nil {
+			t.Fatal(err)
+		}
+		pngSizes := map[string]bool{"192x192": false, "512x512": false}
+		for _, icon := range install.Icons {
+			if icon.Type != "image/png" {
+				continue
+			}
+			iconRec := httptest.NewRecorder()
+			handler.ServeHTTP(iconRec, httptest.NewRequest(http.MethodGet, icon.Src, nil))
+			if iconRec.Code != http.StatusOK || iconRec.Header().Get("Content-Type") != icon.Type {
+				t.Fatalf("%s: status=%d Content-Type=%q", icon.Src, iconRec.Code, iconRec.Header().Get("Content-Type"))
+			}
+			image, err := png.Decode(iconRec.Body)
+			if err != nil {
+				t.Fatalf("%s: %v", icon.Src, err)
+			}
+			if size := fmt.Sprintf("%dx%d", image.Bounds().Dx(), image.Bounds().Dy()); size != icon.Sizes {
+				t.Errorf("%s: image size=%s, manifest size=%s", icon.Src, size, icon.Sizes)
+			}
+			pngSizes[icon.Sizes] = true
+		}
+		for size, found := range pngSizes {
+			if !found {
+				t.Errorf("manifest missing %s PNG fallback", size)
+			}
+		}
 	})
 
 	t.Run("app icons", func(t *testing.T) {
@@ -99,6 +131,18 @@ func TestLoreBrowserServesPWAAssetsWithoutAuthentication(t *testing.T) {
 			if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "image/svg+xml" {
 				t.Errorf("%s: status=%d Content-Type=%q", path, rec.Code, rec.Header().Get("Content-Type"))
 			}
+		}
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/knowledge/apple-touch-icon.png", nil))
+		if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "image/png" {
+			t.Fatalf("Apple icon: status=%d Content-Type=%q", rec.Code, rec.Header().Get("Content-Type"))
+		}
+		image, err := png.Decode(rec.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if image.Bounds().Dx() != 180 || image.Bounds().Dy() != 180 {
+			t.Errorf("Apple icon size = %v; want 180x180", image.Bounds())
 		}
 	})
 

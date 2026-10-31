@@ -1197,6 +1197,9 @@ func TestDashboardPWAIncludesAllViews(t *testing.T) {
 				if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `rel="manifest" href="`+lorePath+`/manifest.webmanifest"`) || !strings.Contains(w.Body.String(), `apple-mobile-web-app-capable`) {
 					t.Fatalf("%s missing install metadata: %d %s", target, w.Code, w.Body.String())
 				}
+				if !strings.Contains(w.Body.String(), `rel="apple-touch-icon" href="`+lorePath+`/apple-touch-icon.png" sizes="180x180"`) {
+					t.Fatalf("%s missing PNG Home Screen icon", target)
+				}
 			}
 			w := dashboardRequest(mux, "GET", lorePath+"/manifest.webmanifest", "")
 			var manifest struct {
@@ -1213,6 +1216,9 @@ func TestDashboardPWAIncludesAllViews(t *testing.T) {
 				"service-worker.js":    "text/javascript; charset=utf-8",
 				"app-icon.svg":         "image/svg+xml",
 				"apple-touch-icon.svg": "image/svg+xml",
+				"apple-touch-icon.png": "image/png",
+				"app-icon-192.png":     "image/png",
+				"app-icon-512.png":     "image/png",
 			} {
 				w := dashboardRequest(mux, "GET", lorePath+"/"+target, "")
 				if w.Code != http.StatusOK || w.Header().Get("Content-Type") != contentType {

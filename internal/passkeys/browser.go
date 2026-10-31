@@ -308,7 +308,9 @@ func (p *Passkeys) renderDir(w http.ResponseWriter, fsys vfs.FileSystem, lorePat
 	w.Write([]byte(b.String()))
 }
 
-//go:embed app-icon.svg apple-touch-icon.svg
+// PNGs are rasterized from the SVGs for Home Screen support on older browsers.
+//
+//go:embed app-icon.svg apple-touch-icon.svg apple-touch-icon.png app-icon-192.png app-icon-512.png
 var appIcons embed.FS
 
 func pwaHead(lorePath string) string {
@@ -320,8 +322,8 @@ func pwaHead(lorePath string) string {
 // dashboard can use it under its strict Content-Security-Policy.
 func PWAHead(lorePath string) string {
 	manifestURL := html.EscapeString(lorePath + "/manifest.webmanifest")
-	iconURL := html.EscapeString(lorePath + "/apple-touch-icon.svg")
-	return fmt.Sprintf(`<link rel="manifest" href="%s"><link rel="apple-touch-icon" href="%s"><meta name="theme-color" content="#1d1a23"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="OpenLore">`, manifestURL, iconURL)
+	iconURL := html.EscapeString(lorePath + "/apple-touch-icon.png")
+	return fmt.Sprintf(`<link rel="manifest" href="%s"><link rel="apple-touch-icon" href="%s" sizes="180x180"><meta name="theme-color" content="#1d1a23"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="OpenLore">`, manifestURL, iconURL)
 }
 
 // ServePWAAsset serves public install assets and reports whether it handled the request.
@@ -342,6 +344,16 @@ func ServePWAAsset(w http.ResponseWriter, r *http.Request, lorePath string) bool
 			"background_color": "#1d1a23",
 			"theme_color":      "#1d1a23",
 			"icons": []map[string]string{{
+				"src":     lorePath + "/app-icon-192.png",
+				"sizes":   "192x192",
+				"type":    "image/png",
+				"purpose": "any maskable",
+			}, {
+				"src":     lorePath + "/app-icon-512.png",
+				"sizes":   "512x512",
+				"type":    "image/png",
+				"purpose": "any maskable",
+			}, {
 				"src":     lorePath + "/app-icon.svg",
 				"sizes":   "any",
 				"type":    "image/svg+xml",
@@ -354,11 +366,12 @@ func ServePWAAsset(w http.ResponseWriter, r *http.Request, lorePath string) bool
 		w.Header().Set("Cache-Control", "no-cache")
 		fmt.Fprint(w, `self.addEventListener('install',()=>self.skipWaiting());self.addEventListener('activate',event=>event.waitUntil(self.clients.claim()));`)
 		return true
-	case lorePath + "/app-icon.svg", lorePath + "/apple-touch-icon.svg":
-		// iOS rounds Home Screen icons itself, so apple-touch-icon.svg has a
+	case lorePath + "/app-icon.svg", lorePath + "/apple-touch-icon.svg",
+		lorePath + "/apple-touch-icon.png", lorePath + "/app-icon-192.png", lorePath + "/app-icon-512.png":
+		// iOS rounds Home Screen icons itself, so the Apple artwork has a
 		// thicker border that survives the mask.
 		icon, _ := appIcons.ReadFile(path.Base(r.URL.Path))
-		w.Header().Set("Content-Type", "image/svg+xml")
+		w.Header().Set("Content-Type", mime.TypeByExtension(path.Ext(r.URL.Path)))
 		w.Header().Set("Cache-Control", "public, max-age=86400")
 		w.Write(icon)
 		return true
