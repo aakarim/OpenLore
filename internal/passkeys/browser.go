@@ -368,8 +368,7 @@ func ServePWAAsset(w http.ResponseWriter, r *http.Request, lorePath string) bool
 		return true
 	case lorePath + "/app-icon.svg", lorePath + "/apple-touch-icon.svg",
 		lorePath + "/apple-touch-icon.png", lorePath + "/app-icon-192.png", lorePath + "/app-icon-512.png":
-		// iOS rounds Home Screen icons itself, so the Apple artwork has a
-		// thicker border that survives the mask.
+		// Keep the gradient full-bleed; the platform applies its own icon mask.
 		icon, _ := appIcons.ReadFile(path.Base(r.URL.Path))
 		w.Header().Set("Content-Type", mime.TypeByExtension(path.Ext(r.URL.Path)))
 		w.Header().Set("Cache-Control", "public, max-age=86400")
