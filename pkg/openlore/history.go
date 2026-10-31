@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -521,6 +522,11 @@ func (h scopedHistory) query(query HistoryQuery) ([]byte, error) {
 		scope := h.liveQuery()
 		query.Roots, query.Boundaries = scope.Roots, scope.Boundaries
 	}
+	// Shell history already materializes every result. Ask for them together:
+	// the JSONL store scans the journal per page, so default-sized pages make
+	// a full history query quadratic. Still consume cursors for stores that cap
+	// their own page size.
+	query.Limit = math.MaxInt
 	for {
 		page, err := h.store.Query(context.Background(), query)
 		if err != nil {
