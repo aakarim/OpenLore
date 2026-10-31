@@ -973,6 +973,8 @@ select:focus-visible,
   padding: clamp(24px, 4vw, 48px);
   font-family: var(--sans);
   font-size: 17px;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
   line-height: 1.72;
   min-height: 100%;
   overflow-wrap: anywhere;
