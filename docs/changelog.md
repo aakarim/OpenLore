@@ -47,7 +47,7 @@ gateway roadmap. This release delivers client-driven import from Claude Code,
 local folders, and Git repositories, a versioned docstore, and read-only
 projections. Automatic sync, arbitrary source connectors, importing as editable
 documents, and gateway-wide link verification remain future work. Learn how it
-fits together in the [knowledge gateway guide](https://openlore.sh/docs/concepts/knowledge-gateway/).
+fits together in the [knowledge gateway guide](concepts/knowledge-gateway.md).
 
 ### New: the `lore` client
 
