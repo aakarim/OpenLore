@@ -815,7 +815,14 @@ func (s *Shell) execFor(fc *parser.ForClause, w io.Writer, errW io.Writer, stdin
 	varName := fc.Loop.Name.Value
 	var items []string
 	for _, word := range fc.Loop.Items {
-		expanded := s.expandWord(word)
+		expanded, globPattern, hasGlob := s.expandGlobWord(word)
+		if hasGlob {
+			matches := s.globExpand(globPattern)
+			if len(matches) > 0 {
+				items = append(items, matches...)
+				continue
+			}
+		}
 		if parser.ContainsExpansion(word) {
 			items = append(items, strings.Fields(expanded)...)
 		} else {
