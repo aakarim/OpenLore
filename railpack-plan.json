@@ -117,8 +117,8 @@
       ],
       "commands": [
         {
-          "cmd": "sh -c 'rm assets/config/openlore.yml'",
-          "customName": "rm assets/config/openlore.yml"
+          "cmd": "sh -c 'rm -f assets/config/openlore.yml'",
+          "customName": "rm -f assets/config/openlore.yml"
         },
         {
           "cmd": "sh -c 'go build -o out ./cmd/openlore'",

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"encoding/json"
 	"os"
@@ -9,10 +10,37 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aakarim/go-openlore/assets"
 	"github.com/aakarim/go-openlore/internal/config"
 	openlore "github.com/aakarim/go-openlore/pkg/openlore"
 	gossh "golang.org/x/crypto/ssh"
 )
+
+func TestFreshInstallServer(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := os.Mkdir("docs", 0755); err != nil {
+		t.Fatal(err)
+	}
+	embedded, _ := assets.EmbeddedConfig()
+	srv, err := openlore.NewServer("docs",
+		openlore.WithConfigFile("./openlore.yml"),
+		openlore.WithEmbeddedConfig(embedded, assets.DefaultMOTD()),
+	)
+	if err != nil {
+		t.Fatalf("fresh-install server: %v", err)
+	}
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+	cfg := srv.Config()
+	if cfg.Port != 2222 || cfg.HTTPPort != 8080 || !cfg.MCPEnabled || cfg.MCPPath != "/mcp" {
+		t.Fatalf("unexpected listener defaults: SSH=%d HTTP=%d MCP=%t %q", cfg.Port, cfg.HTTPPort, cfg.MCPEnabled, cfg.MCPPath)
+	}
+	if cfg.AuthFile != "" || !cfg.AllowKeyless || (cfg.MCPRequireAuth != nil && *cfg.MCPRequireAuth) {
+		t.Fatalf("fresh install must allow anonymous reads without an auth file")
+	}
+	if !cfg.Readonly || cfg.WritableDir != "" || cfg.Tokens != nil || cfg.Passkeys.RPID == "openlore.sh" {
+		t.Fatal("fresh install inherited production write or authentication settings")
+	}
+}
 
 func policyFile(t *testing.T, auth config.AuthConfig) string {
 	t.Helper()
