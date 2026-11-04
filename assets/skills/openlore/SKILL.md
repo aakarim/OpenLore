@@ -15,6 +15,15 @@ independent session, so use absolute paths.
 - Key: none (keyless) — or `-i <path-to-key>` for an identity
 - Main paths: {{if .Mounts}}{{range $i, $m := .Mounts}}{{if $i}}, {{end}}`{{$m}}`{{end}} (run `lore docsets` for access levels){{else}}`<run 'tree -L 2 /' once and record the layout here>`{{end}}
 
+For keyless access, add `-o BatchMode=no -o KbdInteractiveAuthentication=yes`
+before the SSH target in the commands below. Do not prepend `-o BatchMode=yes`:
+OpenSSH uses the first value for each option, and batch mode disables the
+zero-prompt keyboard-interactive authentication that keyless OpenLore uses.
+For reads and guide fetches, add `</dev/null` to avoid consuming local stdin;
+leave stdin connected when piping content to a write. Keep host-key verification
+enabled and ask the person to verify an unknown host. These options do not
+replace an identity key on servers that require one.
+
 ## Reading and searching
 
 ```shell

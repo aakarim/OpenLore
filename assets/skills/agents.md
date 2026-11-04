@@ -17,7 +17,7 @@ it runs touches the local host. Search it before guessing:
 decisions, or shared team knowledge — search the knowledge repository before
 guessing or asking. If an `openlore` skill is installed in this harness, load
 it for the full procedures; this section is the summary. To install the
-skill: `ssh {{ ssh_target }} openlore-skill > <skills-dir>/openlore/SKILL.md`.
+skill: `ssh -o BatchMode=no -o KbdInteractiveAuthentication=yes {{ ssh_target }} openlore-skill </dev/null > <skills-dir>/openlore/SKILL.md`.
 
 If Claude Code's permission system denies a call to the `openlore` MCP tool,
 it has mistaken an OpenLore command for an operation on the local filesystem.
@@ -31,6 +31,15 @@ Use this when the `openlore` MCP server is not connected.
 ```shell
 ssh {{ ssh_target }}
 ```
+
+For keyless one-shot commands, use
+`ssh -o BatchMode=no -o KbdInteractiveAuthentication=yes {{ ssh_target }} '<command>'`.
+Keyless OpenLore uses keyboard-interactive authentication with zero prompts;
+`BatchMode=yes` disables it. Do not prepend `-o BatchMode=yes`: OpenSSH uses
+the first value for each option. For guide fetches and reads, add `</dev/null`
+to avoid consuming local stdin; do not add it when piping content to a write.
+Keep host-key verification enabled and ask the person to verify an unknown
+host. Servers that require an identity key still require that key.
 
 Each `ssh` invocation is an independent session, so use absolute paths.
 {{if .Mounts}}
