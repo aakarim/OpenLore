@@ -623,6 +623,14 @@ func (t *tokenizer) parseWordParts(s string, inDblQuote bool) []WordPart {
 
 		if ch == '$' {
 			if i+1 < len(s) && s[i+1] == '(' {
+				// Arithmetic is not command substitution: treating its body
+				// as a subshell silently expands it to an empty string.
+				if i+2 < len(s) && s[i+2] == '(' {
+					if t.err == nil {
+						t.err = fmt.Errorf("arithmetic expansion $((...)) is not supported; use expr")
+					}
+					return nil
+				}
 				flushLit()
 				// Command substitution
 				i += 2 // skip $(

@@ -94,6 +94,57 @@ func TestVariableAssignment(t *testing.T) {
 	}
 }
 
+func TestArithmeticExpansionRejected(t *testing.T) {
+	for _, command := range []string{
+		`echo $((2+3))`,
+		`x=$((2+3)); echo "x=[$x] exit=$?"`,
+		`L=5; echo "a=[$((L-1))] b=[$((2+3))]"`,
+		"sed -i \"$((2-1))a\\\nz\" /docs/arithmetic.txt",
+		`head -n $((5-1)) /docs/arithmetic.txt > /docs/arithmetic.txt`,
+		`echo changed > /docs/arithmetic.txt; echo $((2+3))`,
+		`echo $(echo $((2+3))) > /docs/arithmetic.txt`,
+		`echo ${UNSET:-$((2+3))} > /docs/arithmetic.txt`,
+		`for n in $((2+3)); do echo changed > /docs/arithmetic.txt; done`,
+		`echo changed > "$((2+3))"`,
+		`export N=$((2+3))`,
+	} {
+		t.Run(command, func(t *testing.T) {
+			fs := testFS()
+			const original = "a\nb\nc\n"
+			fs.AddFile("/docs/arithmetic.txt", original)
+			out, errOut, code := execCmd(t, fs, command)
+			if code == 0 || out != "" || !strings.Contains(errOut, "arithmetic expansion") || !strings.Contains(errOut, "use expr") {
+				t.Fatalf("code=%d stdout=%q stderr=%q, want arithmetic expansion error", code, out, errOut)
+			}
+			content, err := fs.ReadFile("/docs/arithmetic.txt")
+			if err != nil || string(content) != original {
+				t.Fatalf("file changed: content=%q err=%v", content, err)
+			}
+		})
+	}
+}
+
+func TestArithmeticExpansionLiteralAndCommandSubstitution(t *testing.T) {
+	for _, command := range []string{
+		`echo '$((2+3))'`,
+		`echo "\$((2+3))"`,
+		`TEXT='$((2+3))'; echo "$TEXT"`,
+		"cat <<EOF\n$((2+3))\nEOF",
+		`echo $(echo '$((2+3))')`,
+	} {
+		out, errOut, code := execCmd(t, testFS(), command)
+		if code != 0 || errOut != "" || out != "$((2+3))\n" {
+			t.Errorf("%s: code=%d stdout=%q stderr=%q, want literal arithmetic text", command, code, out, errOut)
+		}
+	}
+	// Command substitution (including a subshell) remains the supported way
+	// to use expr's output as a word.
+	out, errOut, code := execCmd(t, testFS(), `echo $(expr 2 + 3); echo $( (expr 7 - 3) )`)
+	if code != 0 || errOut != "" || out != "5\n4\n" {
+		t.Fatalf("expr substitution: code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+}
+
 func TestVariableDefault(t *testing.T) {
 	sh := shell.NewShell(testFS())
 	var out bytes.Buffer
