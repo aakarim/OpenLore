@@ -169,6 +169,54 @@ func TestForLoop(t *testing.T) {
 	}
 }
 
+func TestForLoopGlobExpansion(t *testing.T) {
+	fs := testFS()
+	fs.AddFile("/docs/active/alpha.md", "alpha\n")
+	fs.AddFile("/docs/active/another file.md", "another\n")
+	fs.AddFile("/docs/active/beta.md", "beta\n")
+	fs.AddFile("/docs/active/.absent.md", "hidden\n")
+	fs.AddFile("/docs/active/alpha.txt", "not markdown\n")
+
+	const matches = "[/docs/active/alpha.md]\n[/docs/active/another file.md]\n"
+	for _, tt := range []struct {
+		name, words, want string
+	}{
+		{"relative", "active/a*.md", matches},
+		{"absolute", "/docs/active/a*.md", matches},
+		{"bare", "a*.md", matches},
+		{"quoted prefix", `"/docs/active/"a*.md`, matches},
+		{"variable pattern", "$PATTERN", matches},
+		{"question mark", "active/alph?.md", "[/docs/active/alpha.md]\n"},
+		{"no match", "active/missing*.md", "[active/missing*.md]\n"},
+		{"single quoted", "'active/a*.md'", "[active/a*.md]\n"},
+		{"double quoted", `"active/a*.md"`, "[active/a*.md]\n"},
+		{"escaped", `active/a\*.md`, "[active/a*.md]\n"},
+		{"quoted variable", `"$PATTERN"`, "[active/a*.md]\n"},
+		{"mixed list", "before active/a*.md after", "[before]\n" + matches + "[after]\n"},
+		{"multiple variable patterns", "$PATTERNS", matches + "[/docs/active/beta.md]\n"},
+		{"multiple command substitution patterns", `$(echo 'active/a*.md active/b*.md')`, matches + "[/docs/active/beta.md]\n"},
+		{"split before glob", "$SPACE_PATTERN", "[active/another]\n[/docs/readme.md]\n"},
+		{"quoted space prefix", `"active/another "*.md`, "[/docs/active/another file.md]\n"},
+		{"split with quoted suffix", `$WORDS" *.md"`, "[one]\n[two *.md]\n"},
+		{"split with literal affixes", `pre${WORDS}post`, "[preone]\n[twopost]\n"},
+		{"whitespace boundaries", `pre${PADDED}post`, "[pre]\n[one]\n[two]\n[post]\n"},
+		{"empty variable", `$UNSET`, ""},
+		{"empty quoted variable", `"$UNSET"`, "[]\n"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cwd := "/docs"
+			if tt.name == "bare" {
+				cwd = "/docs/active"
+			}
+			command := `cd ` + cwd + `; PATTERN='active/a*.md'; PATTERNS='active/a*.md active/b*.md'; SPACE_PATTERN='active/another *.md'; WORDS='one two'; PADDED=' one two '; for f in ` + tt.words + `; do echo "[$f]"; done`
+			out, errOut, code := execCmd(t, fs, command)
+			if code != 0 || errOut != "" || out != tt.want {
+				t.Fatalf("got stdout=%q stderr=%q code=%d; want stdout=%q stderr empty code=0", out, errOut, code, tt.want)
+			}
+		})
+	}
+}
+
 func TestIfThenElse(t *testing.T) {
 	out, _, _ := execCmd(t, testFS(), "if true; then echo yes; else echo no; fi")
 	if strings.TrimSpace(out) != "yes" {
