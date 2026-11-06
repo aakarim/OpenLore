@@ -428,7 +428,7 @@ type tokenizer struct {
 	lex     *lexer
 	peeked  *token
 	prevVal string
-	err     error // nested command-substitution parse failure
+	err     error // word-expansion parse failure
 }
 
 func newTokenizer(src string) *tokenizer {
