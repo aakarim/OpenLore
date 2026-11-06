@@ -139,8 +139,8 @@ func TestArithmeticExpansionLiteralAndCommandSubstitution(t *testing.T) {
 	}
 	// Command substitution (including a subshell) remains the supported way
 	// to use expr's output as a word.
-	out, errOut, code := execCmd(t, testFS(), `echo $(expr 2 + 3); echo $( (expr 7 - 3) )`)
-	if code != 0 || errOut != "" || out != "5\n4\n" {
+	out, errOut, code := execCmd(t, testFS(), `echo $(expr 2 + 3); echo $( (expr 7 - 3) ); echo $((expr 9 - 2) ); echo "$((expr 8 - 5) )"`)
+	if code != 0 || errOut != "" || out != "5\n4\n7\n3\n" {
 		t.Fatalf("expr substitution: code=%d stdout=%q stderr=%q", code, out, errOut)
 	}
 }
