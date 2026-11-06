@@ -364,6 +364,37 @@ func TestSedAppendMultilineInPlace(t *testing.T) {
 	}
 }
 
+func TestSedAppendContinuations(t *testing.T) {
+	tests := []struct {
+		name string
+		expr string
+		want string
+	}{
+		{"two lines", "1a\\\nx\\\ny", "l1\nx\ny\nl2\nl3\n"},
+		{"three lines", "2a\\\n  x; keep\\\ny\\\nz", "l1\nl2\n  x; keep\ny\nz\nl3\n"},
+		{"literal backslash before continuation", "1a\\\nx\\\\\\\ny", "l1\nx\\\ny\nl2\nl3\n"},
+		{"literal backslash at end", "1a\\\nx\\\\", "l1\nx\\\nl2\nl3\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fs := testFS()
+			fs.AddFile("/docs/append.txt", "l1\nl2\nl3\n")
+			out, errOut, code := execCmd(t, fs, "cat /docs/append.txt | sed '"+tt.expr+"'")
+			if code != 0 || errOut != "" || out != tt.want {
+				t.Fatalf("code=%d stdout=%q stderr=%q, want %q", code, out, errOut, tt.want)
+			}
+			out, errOut, code = execCmd(t, fs, "sed -i '"+tt.expr+"' /docs/append.txt")
+			if code != 0 || out != "" || errOut != "" {
+				t.Fatalf("in-place: code=%d stdout=%q stderr=%q", code, out, errOut)
+			}
+			content, err := fs.ReadFile("/docs/append.txt")
+			if err != nil || string(content) != tt.want {
+				t.Fatalf("in-place content=%q err=%v, want %q", content, err, tt.want)
+			}
+		})
+	}
+}
+
 func TestSedRejectsUnsupportedCommands(t *testing.T) {
 	tests := []struct {
 		name    string

@@ -521,6 +521,13 @@ func parseSedExpr(expr string) (sedCmd, error) {
 			cmd.text = strings.TrimPrefix(cmd.text, "\\")
 			cmd.text = strings.TrimPrefix(cmd.text, "\r\n")
 			cmd.text = strings.TrimPrefix(cmd.text, "\n")
+			// Decode pairs in one pass so a literal backslash cannot become
+			// a continuation marker during a later replacement.
+			cmd.text = strings.NewReplacer(
+				`\\`, `\`,
+				"\\\n", "\n",
+				"\\\r\n", "\r\n",
+			).Replace(cmd.text)
 		} else {
 			cmd.text = strings.TrimLeft(cmd.text, " \t")
 		}
