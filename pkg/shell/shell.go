@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/aakarim/go-openlore/internal/analytics"
@@ -637,15 +638,7 @@ func (s *Shell) execCallInner(call *parser.CallExpr, w io.Writer, errW io.Writer
 
 	args := make([]string, 0, len(call.Args))
 	for _, word := range call.Args {
-		expanded, globPattern, hasGlob := s.expandGlobWord(word)
-		if hasGlob {
-			matches := s.globExpand(globPattern)
-			if len(matches) > 0 {
-				args = append(args, matches...)
-				continue
-			}
-		}
-		args = append(args, expanded)
+		args = append(args, s.expandGlobWords(word, false)...)
 	}
 	*command = args[0]
 
@@ -815,19 +808,7 @@ func (s *Shell) execFor(fc *parser.ForClause, w io.Writer, errW io.Writer, stdin
 	varName := fc.Loop.Name.Value
 	var items []string
 	for _, word := range fc.Loop.Items {
-		expanded, globPattern, hasGlob := s.expandGlobWord(word)
-		if hasGlob {
-			matches := s.globExpand(globPattern)
-			if len(matches) > 0 {
-				items = append(items, matches...)
-				continue
-			}
-		}
-		if parser.ContainsExpansion(word) {
-			items = append(items, strings.Fields(expanded)...)
-		} else {
-			items = append(items, expanded)
-		}
+		items = append(items, s.expandGlobWords(word, true)...)
 	}
 
 	var code int
@@ -899,14 +880,37 @@ func (s *Shell) expandWord(word *parser.Word) string {
 	return sb.String()
 }
 
-// expandGlobWord expands a word while retaining which wildcard characters
-// came from unquoted, unescaped parts and are therefore eligible for globbing.
-func (s *Shell) expandGlobWord(word *parser.Word) (expanded, pattern string, hasGlob bool) {
+// expandGlobWords optionally splits unquoted substitutions into fields before
+// globbing. Quoted/escaped characters remain literal, and matched filenames
+// are never split. Command arguments retain their existing non-splitting behavior.
+func (s *Shell) expandGlobWords(word *parser.Word, split bool) []string {
 	if word == nil {
-		return "", "", false
+		return []string{""}
 	}
 
+	var words []string
 	var expandedBuilder, patternBuilder strings.Builder
+	var hasGlob bool
+	present := !split
+	flush := func() {
+		if !present {
+			return
+		}
+		matches := []string(nil)
+		if hasGlob {
+			matches = s.globExpand(patternBuilder.String())
+		}
+		if len(matches) > 0 {
+			words = append(words, matches...)
+		} else {
+			words = append(words, expandedBuilder.String())
+		}
+		expandedBuilder.Reset()
+		patternBuilder.Reset()
+		hasGlob = false
+		present = false
+	}
+
 	for i, part := range word.Parts {
 		str := s.expandPart(part)
 		if i == 0 {
@@ -914,17 +918,39 @@ func (s *Shell) expandGlobWord(word *parser.Word) (expanded, pattern string, has
 				str = s.expandTilde(str)
 			}
 		}
-		expandedBuilder.WriteString(str)
 
 		switch part.(type) {
 		case *parser.SglQuoted, *parser.DblQuoted, *parser.Escaped:
+			expandedBuilder.WriteString(str)
 			patternBuilder.WriteString(escapeGlobPattern(str))
+			present = true
 		default:
+			if split {
+				switch part.(type) {
+				case *parser.ParamExp, *parser.CmdSubst:
+					for {
+						boundary := strings.IndexFunc(str, unicode.IsSpace)
+						if boundary < 0 {
+							break
+						}
+						chunk := str[:boundary]
+						expandedBuilder.WriteString(chunk)
+						patternBuilder.WriteString(chunk)
+						hasGlob = hasGlob || strings.ContainsAny(chunk, "*?")
+						present = present || chunk != ""
+						flush()
+						str = strings.TrimLeftFunc(str[boundary:], unicode.IsSpace)
+					}
+				}
+			}
+			expandedBuilder.WriteString(str)
 			patternBuilder.WriteString(str)
 			hasGlob = hasGlob || strings.ContainsAny(str, "*?")
+			present = present || str != ""
 		}
 	}
-	return expandedBuilder.String(), patternBuilder.String(), hasGlob
+	flush()
+	return words
 }
 
 func escapeGlobPattern(value string) string {

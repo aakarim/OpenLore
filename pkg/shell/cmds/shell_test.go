@@ -142,13 +142,22 @@ func TestForLoopGlobExpansion(t *testing.T) {
 		{"escaped", `active/a\*.md`, "[active/a*.md]\n"},
 		{"quoted variable", `"$PATTERN"`, "[active/a*.md]\n"},
 		{"mixed list", "before active/a*.md after", "[before]\n" + matches + "[after]\n"},
+		{"multiple variable patterns", "$PATTERNS", matches + "[/docs/active/beta.md]\n"},
+		{"multiple command substitution patterns", `$(echo 'active/a*.md active/b*.md')`, matches + "[/docs/active/beta.md]\n"},
+		{"split before glob", "$SPACE_PATTERN", "[active/another]\n[/docs/readme.md]\n"},
+		{"quoted space prefix", `"active/another "*.md`, "[/docs/active/another file.md]\n"},
+		{"split with quoted suffix", `$WORDS" *.md"`, "[one]\n[two *.md]\n"},
+		{"split with literal affixes", `pre${WORDS}post`, "[preone]\n[twopost]\n"},
+		{"whitespace boundaries", `pre${PADDED}post`, "[pre]\n[one]\n[two]\n[post]\n"},
+		{"empty variable", `$UNSET`, ""},
+		{"empty quoted variable", `"$UNSET"`, "[]\n"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			cwd := "/docs"
 			if tt.name == "bare" {
 				cwd = "/docs/active"
 			}
-			command := `cd ` + cwd + `; PATTERN='active/a*.md'; for f in ` + tt.words + `; do echo "[$f]"; done`
+			command := `cd ` + cwd + `; PATTERN='active/a*.md'; PATTERNS='active/a*.md active/b*.md'; SPACE_PATTERN='active/another *.md'; WORDS='one two'; PADDED=' one two '; for f in ` + tt.words + `; do echo "[$f]"; done`
 			out, errOut, code := execCmd(t, fs, command)
 			if code != 0 || errOut != "" || out != tt.want {
 				t.Fatalf("got stdout=%q stderr=%q code=%d; want stdout=%q stderr empty code=0", out, errOut, code, tt.want)
