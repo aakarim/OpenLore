@@ -78,7 +78,14 @@ Directories retain a trailing `/`, hidden entries appear only after an explicit
 | Command | Description |
 |---|---|
 | `grep` | Search patterns (`-E`, `-F`, `-i`, `-n`, `-r`, `-R`, `-o`, `-h`, `-c`, `-v`, `-l`); use `-E 'a|b'` for multiple patterns |
-| `find` | Find files (`-name`, `-type f\|d\|l`). Alias docsets are links: `find` lists each file once under its canonical path; add `-L` to also walk aliases |
+| `find` | Find files (`-name pat`, `-iname pat`, `-path pat`, `-ipath pat`, `-type f\|d\|l`, `-maxdepth N`, `-mindepth N`). Alias docsets are links: `find` lists each file once under its canonical path; add `-L` to also walk aliases |
+
+`find` ANDs its predicates. `-iname` and `-ipath` ignore case; `-path` and
+`-ipath` match the full virtual path, with wildcards matching slashes too.
+Quote patterns to prevent shell glob expansion. Depth is relative to the
+starting point (depth 0); `-maxdepth 0` visits only that point, and
+`-mindepth 1` excludes it. Depth limits must be non-negative integers.
+Use `find --help` or `help find` for the supported options.
 
 ## Text processing
 

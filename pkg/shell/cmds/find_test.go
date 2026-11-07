@@ -1,6 +1,7 @@
 package cmds_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -20,7 +21,7 @@ func TestFindTypeDir(t *testing.T) {
 }
 
 func TestFindRejectsUnsupportedFlag(t *testing.T) {
-	for _, flag := range []string{"-maxdepth", "-mindepth", "-exec"} {
+	for _, flag := range []string{"-exec", "-delete", "-unknown"} {
 		t.Run(flag, func(t *testing.T) {
 			out, errOut, code := execCmd(t, testFS(), "find /docs "+flag+" 1 -type f")
 			if code != 1 {
@@ -32,8 +33,8 @@ func TestFindRejectsUnsupportedFlag(t *testing.T) {
 			if !strings.Contains(errOut, "unsupported flag '"+flag+"'") {
 				t.Errorf("stderr = %q, want unsupported flag name", errOut)
 			}
-			if !strings.Contains(errOut, "tree -L <n>") {
-				t.Errorf("stderr = %q, want supported depth-limiting alternative", errOut)
+			if !strings.Contains(errOut, "-maxdepth N") {
+				t.Errorf("stderr = %q, want supported options", errOut)
 			}
 		})
 	}
@@ -46,6 +47,15 @@ func TestFindValidatesOptionArguments(t *testing.T) {
 		wantErr string
 	}{
 		{name: "missing name pattern", command: "find /docs -name", wantErr: "option requires an argument -- 'name'"},
+		{name: "missing iname pattern", command: "find /docs -iname", wantErr: "option requires an argument -- 'iname'"},
+		{name: "missing path pattern", command: "find /docs -path", wantErr: "option requires an argument -- 'path'"},
+		{name: "missing ipath pattern", command: "find /docs -ipath", wantErr: "option requires an argument -- 'ipath'"},
+		{name: "missing maxdepth", command: "find /docs -maxdepth", wantErr: "option requires an argument -- 'maxdepth'"},
+		{name: "missing mindepth", command: "find /docs -mindepth", wantErr: "option requires an argument -- 'mindepth'"},
+		{name: "negative depth", command: "find /docs -maxdepth -1", wantErr: "invalid depth '-1'"},
+		{name: "nonnumeric depth", command: "find /docs -mindepth abc", wantErr: "invalid depth 'abc'"},
+		{name: "empty depth", command: "find /docs -maxdepth ''", wantErr: "invalid depth ''"},
+		{name: "overflow depth", command: "find /docs -maxdepth 99999999999999999999999", wantErr: "invalid depth"},
 		{name: "missing type", command: "find /docs -type", wantErr: "option requires an argument -- 'type'"},
 		{name: "unsupported type", command: "find /docs -type -maxdepth", wantErr: "unsupported type '-maxdepth'"},
 	} {
@@ -74,6 +84,65 @@ func TestFindAllowsDashPrefixedNamePattern(t *testing.T) {
 	}
 	if out != "/docs/-maxdepth\n" {
 		t.Errorf("stdout = %q, want dash-prefixed filename", out)
+	}
+}
+
+func TestFindPredicates(t *testing.T) {
+	fs := newMapFS()
+	fs.AddDir("/")
+	fs.AddDir("/Skills")
+	fs.AddDir("/Skills/nested")
+	fs.AddFile("/Skills/SKILL.md", "root skill\n")
+	fs.AddFile("/Skills/nested/SKILL.md", "nested skill\n")
+	fs.AddFile("/Skills/nested/notes.txt", "notes\n")
+	fs.AddFile("/Skills/skill.MD", "other case\n")
+	for _, tt := range []struct{ args, want string }{
+		{"/Skills -iname 'skill.md'", "/Skills/SKILL.md\n/Skills/nested/SKILL.md\n/Skills/skill.MD\n"},
+		{"/Skills -name 'skill.md'", ""},
+		{"/ -path '*Skills*' -name SKILL.md", "/Skills/SKILL.md\n/Skills/nested/SKILL.md\n"},
+		{"/ -path '*/SKILL.md'", "/Skills/SKILL.md\n/Skills/nested/SKILL.md\n"},
+		{"/ -path '*/skills/*'", ""},
+		{"/ -ipath '*/skills/*' -iname 'skill.md'", "/Skills/SKILL.md\n/Skills/nested/SKILL.md\n/Skills/skill.MD\n"},
+		{"/ -path '/Skills/?KILL.[mM][dD]'", "/Skills/SKILL.md\n"},
+		{"/ -path '*/nested' -type f", ""},
+		{"/Skills -iname '*.md' -name 'S*' -path '*/nested/*'", "/Skills/nested/SKILL.md\n"},
+		{"/Skills -name SKILL.md -name notes.txt", ""},
+		{"/Skills -name ''", ""},
+		{"/Skills -path ''", ""},
+		{"/Skills -maxdepth 0", "/Skills\n"},
+		{"/Skills -maxdepth 1 -type d", "/Skills\n/Skills/nested\n"},
+		{"/Skills -mindepth 1 -maxdepth 1 -iname '*.md'", "/Skills/SKILL.md\n/Skills/skill.MD\n"},
+		{"/Skills -mindepth 2 -maxdepth 2 -name SKILL.md", "/Skills/nested/SKILL.md\n"},
+		{"/Skills -mindepth 2 -maxdepth 1", ""},
+		{"/Skills/SKILL.md -maxdepth 0", "/Skills/SKILL.md\n"},
+		{"/Skills/SKILL.md -mindepth 1", ""},
+		{"/ -maxdepth 0", "/\n"},
+		{"-maxdepth 0", "/\n"},
+		{"/Skills/ -maxdepth 0", "/Skills\n"},
+	} {
+		t.Run(tt.args, func(t *testing.T) {
+			out, errs, code := execCmd(t, fs, "find "+tt.args)
+			got, want := strings.Split(out, "\n"), strings.Split(tt.want, "\n")
+			slices.Sort(got)
+			slices.Sort(want)
+			if code != 0 || errs != "" || !slices.Equal(got, want) {
+				t.Fatalf("code=%d stderr=%q stdout=%q; want %q", code, errs, out, tt.want)
+			}
+		})
+	}
+}
+
+func TestFindHelp(t *testing.T) {
+	for _, command := range []string{"help find", "find --help"} {
+		out, errs, code := execCmd(t, testFS(), command)
+		if code != 0 || errs != "" {
+			t.Fatalf("%s: code=%d stderr=%q", command, code, errs)
+		}
+		for _, flag := range []string{"-iname", "-path", "-ipath", "-maxdepth", "-mindepth"} {
+			if !strings.Contains(out, flag) {
+				t.Errorf("%s missing %s: %q", command, flag, out)
+			}
+		}
 	}
 }
 
