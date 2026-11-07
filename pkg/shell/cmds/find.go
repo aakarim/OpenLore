@@ -56,12 +56,6 @@ func CmdFind(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 			if flag == "-iname" || flag == "-ipath" {
 				value = strings.ToLower(value)
 			}
-			if flag == "-path" || flag == "-ipath" {
-				// find globs allow wildcards to match slashes. Map slashes
-				// to NUL (not a valid filename byte) on both sides so we can
-				// reuse path.Match without its separator restriction.
-				value = strings.ReplaceAll(value, "/", "\x00")
-			}
 			predicates = append(predicates, struct{ flag, pattern string }{flag, value})
 		default:
 			if strings.HasPrefix(args[i], "-") {
@@ -96,12 +90,16 @@ func CmdFind(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 			}
 			value := info.FileName
 			if predicate.flag == "-path" || predicate.flag == "-ipath" {
-				value = strings.ReplaceAll(p, "/", "\x00")
+				value = p
 			}
 			if predicate.flag == "-iname" || predicate.flag == "-ipath" {
 				value = strings.ToLower(value)
 			}
-			matched, _ = path.Match(predicate.pattern, value)
+			if predicate.flag == "-path" || predicate.flag == "-ipath" {
+				matched = findPathMatch(predicate.pattern, value)
+			} else {
+				matched, _ = path.Match(predicate.pattern, value)
+			}
 		}
 		if matched {
 			fmt.Fprintln(w, p)
@@ -131,4 +129,57 @@ func CmdFind(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 		emitSearchMetric(ctx, namePattern, []string{root}, matchedFiles, 0, matchedResults > 0)
 	}
 	return 0
+}
+
+// findPathMatch uses path.Match's syntax, but lets * and ? match slashes.
+// Character classes are matched unchanged so ranges retain their membership.
+func findPathMatch(pattern, name string) bool {
+	if _, err := path.Match(pattern, ""); err != nil {
+		return false
+	}
+	var tokens []string
+	for p := []rune(pattern); len(p) > 0; {
+		end := 1
+		switch p[0] {
+		case '\\':
+			end = 2
+		case '[':
+			for p[end] != ']' {
+				if p[end] == '\\' {
+					end++
+				}
+				end++
+			}
+			end++
+		}
+		tokens = append(tokens, string(p[:end]))
+		p = p[end:]
+	}
+	chars := []rune(name)
+	i, j, star, retry := 0, 0, -1, 0
+	for j < len(chars) {
+		if i < len(tokens) && tokens[i] == "*" {
+			star, retry = i, j
+			i++
+			continue
+		}
+		if i < len(tokens) {
+			matched, _ := path.Match(tokens[i], string(chars[j]))
+			if tokens[i] == "?" || matched {
+				i++
+				j++
+				continue
+			}
+		}
+		if star < 0 {
+			return false
+		}
+		// Extend the most recent star by one character and retry its suffix.
+		retry++
+		i, j = star+1, retry
+	}
+	for i < len(tokens) && tokens[i] == "*" {
+		i++
+	}
+	return i == len(tokens)
 }

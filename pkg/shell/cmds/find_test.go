@@ -95,7 +95,10 @@ func TestFindPredicates(t *testing.T) {
 	fs.AddFile("/Skills/SKILL.md", "root skill\n")
 	fs.AddFile("/Skills/nested/SKILL.md", "nested skill\n")
 	fs.AddFile("/Skills/nested/notes.txt", "notes\n")
+	fs.AddFile("/Skills/nested/é.md", "unicode\n")
+	fs.AddFile("/Skills/nested/].txt", "bracket\n")
 	fs.AddFile("/Skills/skill.MD", "other case\n")
+	fs.AddFile("/Skills/-", "dash\n")
 	for _, tt := range []struct{ args, want string }{
 		{"/Skills -iname 'skill.md'", "/Skills/SKILL.md\n/Skills/nested/SKILL.md\n/Skills/skill.MD\n"},
 		{"/Skills -name 'skill.md'", ""},
@@ -104,6 +107,20 @@ func TestFindPredicates(t *testing.T) {
 		{"/ -path '*/skills/*'", ""},
 		{"/ -ipath '*/skills/*' -iname 'skill.md'", "/Skills/SKILL.md\n/Skills/nested/SKILL.md\n/Skills/skill.MD\n"},
 		{"/ -path '/Skills/?KILL.[mM][dD]'", "/Skills/SKILL.md\n"},
+		{"/ -path '[.-0]Skills'", "/Skills\n"},
+		{"/ -ipath '[.-0]skills'", "/Skills\n"},
+		{"/Skills -path '/Skills/[/-z]'", ""},
+		{"/Skills -ipath '/skills/[/-z]'", ""},
+		{"/ -path '?Skills'", "/Skills\n"},
+		{"/ -path '[^a-z]Skills'", "/Skills\n"},
+		{"/ -path '[^.-0]Skills'", ""},
+		{"/ -path '/Skills/\\-*'", "/Skills/-\n"},
+		{"/ -path '*n*e*/*.md' -name SKILL.md", "/Skills/nested/SKILL.md\n"},
+		{"/ -path '*é.?d'", "/Skills/nested/é.md\n"},
+		{"/ -path '*/[é].md'", "/Skills/nested/é.md\n"},
+		{"/ -path '*/[\\]].txt'", "/Skills/nested/].txt\n"},
+		{"/ -path '*/\\].txt'", "/Skills/nested/].txt\n"},
+		{"/ -path '[broken'", ""},
 		{"/ -path '*/nested' -type f", ""},
 		{"/Skills -iname '*.md' -name 'S*' -path '*/nested/*'", "/Skills/nested/SKILL.md\n"},
 		{"/Skills -name SKILL.md -name notes.txt", ""},
