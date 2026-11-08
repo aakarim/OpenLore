@@ -15,9 +15,18 @@ func CmdTail(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 	byteCount := -1
 	var files []string
 	for i := 0; i < len(args); i++ {
-		if args[i] == "-n" && i+1 < len(args) {
+		if args[i] == "-n" {
+			if i+1 >= len(args) || args[i+1] == "" {
+				fmt.Fprintln(errW, "tail: option requires an argument -- 'n'")
+				return 1
+			}
+			count, err := strconv.Atoi(args[i+1])
+			if err != nil || count < 0 {
+				fmt.Fprintf(errW, "tail: invalid number of lines: '%s'\n", args[i+1])
+				return 1
+			}
 			fromStart = strings.HasPrefix(args[i+1], "+")
-			fmt.Sscanf(strings.TrimPrefix(args[i+1], "+"), "%d", &n)
+			n = count
 			byteCount = -1
 			i++
 		} else if args[i] == "-c" {
