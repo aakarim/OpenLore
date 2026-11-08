@@ -17,7 +17,7 @@ func TestEmbeddedDeploymentSkills(t *testing.T) {
 	expected := map[string][]string{
 		"teach": {
 			"lore init <team-slug>-lore",
-			"ssh openlore.sh setup",
+			"ssh -o BatchMode=no -o KbdInteractiveAuthentication=yes openlore.sh setup </dev/null",
 		},
 		"setup": {
 			"<team-slug>-lore",

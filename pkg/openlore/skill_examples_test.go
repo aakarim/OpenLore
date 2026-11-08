@@ -209,7 +209,7 @@ func TestSkillDocumentsRenderAgainstRealMounts(t *testing.T) {
 					t.Errorf("%s for %s mentions a folder this server does not have:\n%s", command, who, doc)
 				}
 				if command == "teach" {
-					if !strings.Contains(doc, "ssh -p 2299 localhost\n") {
+					if !strings.Contains(doc, "ssh -o BatchMode=no -o KbdInteractiveAuthentication=yes -p 2299 localhost </dev/null\n") {
 						t.Errorf("teach does not render the ssh target into its examples:\n%s", doc)
 					}
 					return

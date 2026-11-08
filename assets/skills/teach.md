@@ -49,7 +49,7 @@ Then ask the initial question again (options A and B).
    Default port: 2222 (openlore.sh uses 22).
 2. Verify the connection:
    ```shell
-   ssh {{ ssh_target }}
+   ssh -o BatchMode=no -o KbdInteractiveAuthentication=yes {{ ssh_target }} </dev/null
    ```
 3. Show them how to explore:
    ```shell
@@ -62,8 +62,8 @@ Then ask the initial question again (options A and B).
 4. Offer to onboard their agents. The server carries its own instructions —
    fetch and follow them:
    ```shell
-   ssh {{ ssh_target }} openlore-skill  # portable Agent Skills file
-   ssh {{ ssh_target }} agents          # AGENTS.md snippet
+   ssh -o BatchMode=no -o KbdInteractiveAuthentication=yes {{ ssh_target }} openlore-skill </dev/null  # portable Agent Skills file
+   ssh -o BatchMode=no -o KbdInteractiveAuthentication=yes {{ ssh_target }} agents </dev/null          # AGENTS.md snippet
    ```
 5. Finish with a short ✅ plain-language summary of what now works.
 
@@ -80,15 +80,23 @@ the folder or hand-write `openlore.yml` here; let `setup` collect the answers
 and run init once. Fetch it and follow it now:
 
 ```shell
-ssh openlore.sh setup
+ssh -o BatchMode=no -o KbdInteractiveAuthentication=yes openlore.sh setup </dev/null
 ```
+
+Use these SSH options exactly for guide fetches; do not prepend
+`-o BatchMode=yes`. OpenSSH uses the first value for each option. A keyless
+OpenLore connection uses keyboard-interactive authentication with zero prompts,
+which `BatchMode=yes` disables. `</dev/null` keeps the fetch non-interactive.
+Keep normal host-key verification; if it requires confirmation, ask the person
+to verify the host instead of disabling the check. These options do not bypass
+authentication on servers that require an identity key.
 
 Then stop here — the `setup` skill takes over. After it, `onboarding` adds
 identities and `deploy` shares the server with the team:
 
 ```shell
-ssh openlore.sh onboarding
-ssh openlore.sh deploy
+ssh -o BatchMode=no -o KbdInteractiveAuthentication=yes openlore.sh onboarding </dev/null
+ssh -o BatchMode=no -o KbdInteractiveAuthentication=yes openlore.sh deploy </dev/null
 ```
 
 ## Going further
@@ -97,8 +105,8 @@ Every guide ships on the server itself. Fetch what the moment needs instead of
 keeping it all in context:
 
 ```shell
-ssh <address> skills      # list every guide the server carries
-ssh <address> <name>      # fetch one, e.g. passkeys, upgrade, deploy-fly
+ssh -o BatchMode=no -o KbdInteractiveAuthentication=yes <address> skills </dev/null  # list every guide the server carries
+ssh -o BatchMode=no -o KbdInteractiveAuthentication=yes <address> <name> </dev/null  # fetch one, e.g. passkeys, upgrade, deploy-fly
 ```
 
 ## Wrap up

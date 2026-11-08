@@ -513,11 +513,19 @@ ssh -F .local/ssh_config lore-local 'cat /channel/infrastructure/openlore-server
 Offer an initial commit only after explicit approval; never push automatically.
 
 Then ask whether to continue in this session (“run onboarding”) or later with
-`ssh openlore.sh onboarding | <agent-cli>` to add people/folders; deployment is
-similarly “run deploy” or `ssh openlore.sh deploy | <agent-cli>`, and its
+`ssh -o BatchMode=no -o KbdInteractiveAuthentication=yes openlore.sh onboarding </dev/null | <agent-cli>` to add people/folders; deployment is
+similarly “run deploy” or `ssh -o BatchMode=no -o KbdInteractiveAuthentication=yes openlore.sh deploy </dev/null | <agent-cli>`, and its
 benefit is to share the server with the team. Explain that
 setup is complete and onboarding is optional customization. One project is one
 authoritative server; do not create staging environments.
+
+For these guide fetches, keep the explicit SSH options and do not prepend
+`-o BatchMode=yes`: OpenSSH uses the first value for each option. Keyless
+OpenLore uses keyboard-interactive authentication with zero prompts, which
+`BatchMode=yes` disables. Redirecting stdin from `/dev/null` keeps the fetch
+non-interactive. Keep host-key verification enabled; ask the person to verify
+an unknown host instead of disabling the check. Do not change the authenticated
+local verification commands above or remove their identity keys.
 
 If the person stops here, open the finished setup record for them and say so:
 

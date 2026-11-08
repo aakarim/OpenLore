@@ -20,6 +20,21 @@ deployment; you do not need to choose a transport or hand-write `openlore.yml`
 first. If you use another coding agent, give it the output of
 `ssh openlore.sh setup` instead.
 
+When an agent fetches the guide on a machine without SSH keys, use:
+
+```shell
+ssh -o BatchMode=no -o KbdInteractiveAuthentication=yes openlore.sh setup </dev/null
+```
+
+Keyless OpenLore uses keyboard-interactive authentication with zero prompts.
+`BatchMode=yes` disables that method, so an agent that adds it gets
+`Permission denied (publickey,keyboard-interactive)`. Do not prepend a conflicting
+`-o BatchMode=yes`: OpenSSH uses the first value for each option. Redirecting
+stdin from `/dev/null` keeps the fetch non-interactive. Keep host-key verification
+enabled and verify an unknown host before retrying. The same options work for
+`teach`, `onboarding`, `deploy`, and the other instruction commands; servers
+that require an identity key still require it.
+
 The generated repository tracks `openlore.yml`, a thin `Containerfile` based on
 a stable OpenLore release, and provider artifacts under `deploy/`. Initial
 policy and filesystem state live in gitignored `.local/` until the first
