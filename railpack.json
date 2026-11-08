@@ -29,7 +29,7 @@
         }
       ],
       "commands": [
-        "rm assets/config/openlore.yml",
+        "rm -f assets/config/openlore.yml",
         "go build -o out ./cmd/openlore"
       ]
     }

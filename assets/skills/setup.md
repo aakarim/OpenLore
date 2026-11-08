@@ -431,8 +431,10 @@ architecture:
 
 1. Clone OpenLore into a separate temporary directory and check out the
    selected release.
-2. Remove that clone's embedded `assets/config/openlore.yml` before building,
-   because a binary cannot load embedded and external configuration together.
+2. Run `rm -f assets/config/openlore.yml` in that clone before building to
+   remove any production fallback config shipped by older releases. Current
+   releases use built-in defaults; an external config file replaces any
+   custom embedded config.
 3. Build the web UI first so the local server includes the dashboard like the
    published image: in the clone, run `npm --prefix dashboard ci` and
    `npm --prefix dashboard run build`. Without this step Go builds a binary
