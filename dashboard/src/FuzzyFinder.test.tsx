@@ -65,6 +65,9 @@ test("the toolbar button opens the finder with open files first, Escape restores
   await user.keyboard("qzx");
   expect(within(dialog).queryAllByRole("option")).toHaveLength(0);
   expect(within(dialog).getByText("No files match “qzx”.")).toBeVisible();
+  // Clicking non-focusable dialog content can move focus to the document.
+  // Escape must still dismiss the finder when the input no longer has focus.
+  await user.click(within(dialog).getByRole("status"));
   await user.keyboard("{Escape}");
   expect(screen.queryByRole("dialog", { name: "Find file" })).toBeNull();
   expect(button).toHaveFocus();
@@ -147,6 +150,12 @@ test("opening the finder over a sheet and choosing a file releases scroll and fo
   expect(screen.queryByRole("dialog", { name: "Find file" })).toBeNull();
   expect(sheet).toHaveFocus();
   expect(document.body.style.position).toBe("fixed");
+  // Once the finder is gone, Escape belongs to the underlying sheet again.
+  await user.keyboard("{Escape}");
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(document.body.style.position).toBe("");
+  await user.click(folders);
+  await screen.findByRole("dialog", { name: "Folders" });
   await openFinder();
   scrollTo.mockClear();
   await user.keyboard("strt{Enter}");
