@@ -73,6 +73,18 @@ export function FuzzyFinder({
   const list = useRef<HTMLDivElement>(null);
   const listId = useId();
   useModalLock(input);
+  useEffect(() => {
+    const dismiss = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      // A click on non-focusable content can leave focus on the page. Handle
+      // Escape there too, before an underlying sheet can handle the same key.
+      event.preventDefault();
+      event.stopPropagation();
+      onClose();
+    };
+    window.addEventListener("keydown", dismiss, true);
+    return () => window.removeEventListener("keydown", dismiss, true);
+  }, [onClose]);
   const paths = useMemo(
     () => index?.entries.map((entry) => entry.path) ?? [],
     [index],
@@ -98,9 +110,6 @@ export function FuzzyFinder({
   };
   const keyboard = (event: React.KeyboardEvent) => {
     switch (event.key) {
-      case "Escape":
-        onClose();
-        break;
       case "ArrowDown":
         setActive((i) => clamp(i + 1));
         break;
