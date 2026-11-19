@@ -5,7 +5,7 @@
 - `cat` — Display file contents
 - `head` / `tail` — First/last N lines
 - `tree` — Directory tree visualization
-- `find` — Find files by name or type
+- `find` — Find files by name (`-name`, `-iname`), full path (`-path`, `-ipath`), type (`-type`), or depth (`-maxdepth`, `-mindepth`); use `find --help`
 - `stat` — File metadata
 - `wc` — Count lines, words, bytes
 - `du` — File space usage
