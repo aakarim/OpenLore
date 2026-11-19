@@ -12,6 +12,8 @@ func TestHead(t *testing.T) {
 	}{
 		{cmd: "head -n 2 /docs/readme.md", want: "# Hello World\nThis is a test file.\n"},
 		{cmd: "seq 1 15 | head -n 3", want: "1\n2\n3\n"},
+		{cmd: "seq 1 15 | head -n 0", want: ""},
+		{cmd: "head -n 0 /docs/readme.md", want: ""},
 		{cmd: "seq 1 15 | head -c 2 -n +3", want: "1\n2\n3\n"},
 	} {
 		t.Run(tt.cmd, func(t *testing.T) {

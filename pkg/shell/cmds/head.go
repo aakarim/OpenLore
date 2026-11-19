@@ -66,7 +66,9 @@ func CmdHead(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 		if len(lines) > n {
 			lines = lines[:n]
 		}
-		fmt.Fprintln(w, strings.Join(lines, "\n"))
+		if len(lines) > 0 {
+			fmt.Fprintln(w, strings.Join(lines, "\n"))
+		}
 		return 0
 	}
 	if len(files) == 0 {
@@ -95,7 +97,9 @@ func CmdHead(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 		if len(lines) > n {
 			lines = lines[:n]
 		}
-		fmt.Fprintln(w, strings.Join(lines, "\n"))
+		if len(lines) > 0 {
+			fmt.Fprintln(w, strings.Join(lines, "\n"))
+		}
 		end := n
 		if total := contentLineCount(content); end > total {
 			end = total
