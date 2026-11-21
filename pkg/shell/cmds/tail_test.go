@@ -32,6 +32,9 @@ func TestTailLines(t *testing.T) {
 		{name: "single line", cmd: "printf 'a\\nb\\nc\\n' | tail -1", want: "c\n"},
 		{name: "from line with option", cmd: "printf 'a\\nb\\nc\\n' | tail -n +2", want: "b\nc\n"},
 		{name: "from line shorthand", cmd: "printf 'a\\nb\\nc\\n' | tail +2", want: "b\nc\n"},
+		{name: "line count", cmd: "seq 1 15 | tail -n 3", want: "13\n14\n15\n"},
+		{name: "from line eleven", cmd: "seq 1 15 | tail -n +11", want: "11\n12\n13\n14\n15\n"},
+		{name: "line count overrides bytes", cmd: "seq 1 15 | tail -c 2 -n 3", want: "13\n14\n15\n"},
 	}
 
 	for _, tt := range tests {

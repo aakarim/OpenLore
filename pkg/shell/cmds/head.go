@@ -14,8 +14,17 @@ func CmdHead(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 	byteCount := -1
 	var files []string
 	for i := 0; i < len(args); i++ {
-		if args[i] == "-n" && i+1 < len(args) {
-			fmt.Sscanf(args[i+1], "%d", &n)
+		if args[i] == "-n" {
+			if i+1 >= len(args) || args[i+1] == "" {
+				fmt.Fprintln(errW, "head: option requires an argument -- 'n'")
+				return 1
+			}
+			count, err := strconv.Atoi(args[i+1])
+			if err != nil || count < 0 {
+				fmt.Fprintf(errW, "head: invalid number of lines: '%s'\n", args[i+1])
+				return 1
+			}
+			n = count
 			byteCount = -1
 			i++
 		} else if args[i] == "-c" {
@@ -57,7 +66,9 @@ func CmdHead(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 		if len(lines) > n {
 			lines = lines[:n]
 		}
-		fmt.Fprintln(w, strings.Join(lines, "\n"))
+		if len(lines) > 0 {
+			fmt.Fprintln(w, strings.Join(lines, "\n"))
+		}
 		return 0
 	}
 	if len(files) == 0 {
@@ -86,7 +97,9 @@ func CmdHead(ctx CmdContext, args []string, w io.Writer, errW io.Writer, stdin i
 		if len(lines) > n {
 			lines = lines[:n]
 		}
-		fmt.Fprintln(w, strings.Join(lines, "\n"))
+		if len(lines) > 0 {
+			fmt.Fprintln(w, strings.Join(lines, "\n"))
+		}
 		end := n
 		if total := contentLineCount(content); end > total {
 			end = total
